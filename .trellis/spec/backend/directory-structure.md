@@ -1,54 +1,96 @@
 # Directory Structure
 
-> How backend code is organized in this project.
+> How backend code is organized in this project during the IronClaw -> IronCowork migration.
 
 ---
 
 ## Overview
 
-<!--
-Document your project's backend directory structure here.
+The repository is in a transition state:
 
-Questions to answer:
-- How are modules/packages organized?
-- Where does business logic live?
-- Where are API endpoints defined?
-- How are utilities and helpers organized?
--->
+- the main backend still lives in the root `src/` tree
+- desktop and web UI code now live in `src-tauri/` and `ui/`
+- Trellis specs must describe both the current monolith and the target split
 
-(To be filled by the team)
+When adding backend code, prefer extending the current module boundaries cleanly instead of scattering logic across CLI, API, runtime, and storage call sites.
 
 ---
 
 ## Directory Layout
 
-```
-<!-- Replace with your actual structure -->
+```text
 src/
-├── ...
-└── ...
+├── api.rs                 # Local Axum HTTP/SSE API surface
+├── main.rs                # Runtime boot and CLI dispatch
+├── bootstrap.rs           # Environment/bootstrap loading and migration helpers
+├── agent/                 # Agent loop, sessions, routing, routines, approval flow
+├── db/                    # libSQL-backed persistence
+├── workspace/             # Indexing, tree access, search, retrieval helpers
+├── settings/              # Runtime settings model and persistence helpers
+├── runtime_events/        # SSE/event fanout primitives
+└── tools/                 # Built-in tool implementations
+
+tests/
+└── api_http_integration.rs # Cross-layer API regression coverage
+
+src-tauri/
+└── src/main.rs            # Native shell only
+
+ui/
+└── src/                   # Svelte client consuming HTTP/SSE
 ```
+
+Real examples in the current codebase:
+
+- API routing and DTOs: [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs)
+- Runtime boot wiring: [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs)
+- Session lifecycle logic: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/session_manager.rs)
+- Task approval emission: [src/agent/thread_ops.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/thread_ops.rs)
+- Desktop bridge: [src-tauri/src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src-tauri/src/main.rs)
 
 ---
 
 ## Module Organization
 
-<!-- How should new features/modules be organized? -->
+### Current rule
 
-(To be filled by the team)
+- HTTP request parsing, response DTOs, and SSE endpoints belong in `src/api.rs`.
+- Runtime behavior belongs in domain modules under `src/agent/`, `src/workspace/`, `src/settings/`, or `src/db/`.
+- `src/main.rs` is for bootstrapping and dependency wiring only. Do not move feature logic into it.
+- `src-tauri/` must remain a thin bridge to the HTTP backend.
+- `ui/` must not become a second source of business truth.
+
+### Target rule
+
+As the migration continues, logic should move toward:
+
+- `crates/ironcowork-api` for Axum routes
+- retained core/runtime crates for agent, storage, workspace, and tools
+- `src-tauri/` only for native capabilities
+
+Until that split exists, write code so that extraction is straightforward: keep DTOs, runtime state, and persistence concerns separated.
 
 ---
 
 ## Naming Conventions
 
-<!-- File and folder naming rules -->
-
-(To be filled by the team)
+- Rust modules use snake_case file names such as `session_manager.rs`, `thread_ops.rs`, and `api.rs`.
+- Types use descriptive product-facing names such as `ApiState`, `SettingsResponse`, `TaskRecord`, and `WorkspaceTreeResponse`.
+- Route handler helpers should be named by resource/action, not UI concepts.
+- Avoid reusing old "channel" or "gateway" terminology for new desktop-first code.
 
 ---
 
 ## Examples
 
-<!-- Link to well-organized modules as examples -->
+### Good
 
-(To be filled by the team)
+- [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs) keeps request/response types near the route handlers that use them.
+- [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs) wires `ApiState`, `TaskRuntime`, `SseManager`, and session manager together without owning their business rules.
+- [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/IronCowork/tests/api_http_integration.rs) validates the HTTP layer from the outside instead of unit-testing handlers in isolation only.
+
+### Bad
+
+- Adding new task approval logic directly in `src-tauri/src/main.rs`.
+- Hiding storage mutations inside CLI command handlers when the same behavior should be reachable through API/runtime modules.
+- Spreading one feature across `main.rs`, `api.rs`, and UI code without a clear owning backend module.
