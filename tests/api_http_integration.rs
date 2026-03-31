@@ -196,7 +196,7 @@ async fn run_api_rejects_non_localhost_bind() {
 }
 
 #[tokio::test]
-async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
+async fn task_endpoints_patch_mode_and_list_runtime_state() {
     let runtime = Arc::new(TaskRuntime::new());
     let task_id = uuid::Uuid::new_v4();
     let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
@@ -221,19 +221,19 @@ async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
         Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
     ));
 
-    let toggle_response = app
+    let patch_response = app
         .clone()
         .oneshot(
             Request::builder()
-                .method("POST")
-                .uri(format!("/api/v0/tasks/{task_id}/yolo-toggle"))
+                .method("PATCH")
+                .uri(format!("/api/v0/tasks/{task_id}/mode"))
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"enabled":true}"#))
-                .expect("toggle request"),
+                .body(Body::from(r#"{"mode":"yolo"}"#))
+                .expect("patch mode request"),
         )
         .await
-        .expect("toggle response");
-    assert_eq!(toggle_response.status(), StatusCode::OK);
+        .expect("patch mode response");
+    assert_eq!(patch_response.status(), StatusCode::OK);
 
     let list_response = app
         .oneshot(
@@ -254,6 +254,194 @@ async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
     let tasks: serde_json::Value = serde_json::from_slice(&tasks).expect("tasks json");
     assert_eq!(tasks["tasks"][0]["id"], task_id.to_string());
     assert_eq!(tasks["tasks"][0]["mode"], "yolo");
+}
+
+#[tokio::test]
+async fn patch_task_mode_returns_422_on_invalid_mode() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
+        .with_thread(task_id.to_string());
+    runtime.ensure_task(&message, task_id).await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-mode-validation-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime.clone()),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/v0/tasks/{task_id}/mode"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"mode":"auto"}"#))
+                .expect("invalid mode request"),
+        )
+        .await
+        .expect("invalid mode response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn reject_task_happy_path_and_conflict() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "archive downloads")
+        .with_thread(task_id.to_string())
+        .with_owner_id("owner-1")
+        .with_sender_id("sender-1")
+        .with_metadata(serde_json::json!({"source":"api-test"}))
+        .with_timezone("UTC");
+    runtime.ensure_task(&message, task_id).await;
+    let pending = ironclaw::agent::session::PendingApproval {
+        request_id,
+        tool_name: "write_file".to_string(),
+        parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        display_parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        description: "write a file".to_string(),
+        tool_call_id: "call_1".to_string(),
+        context_messages: Vec::new(),
+        deferred_tool_calls: Vec::new(),
+        user_timezone: Some("UTC".to_string()),
+        allow_always: false,
+    };
+    runtime
+        .mark_waiting_approval(&message, task_id, &pending)
+        .await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-reject-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime.clone()),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    // Happy path: reject with correct approval_id
+    let reject_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/tasks/{task_id}/reject"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(
+                    r#"{{"approval_id":"{request_id}","reason":"unsafe"}}"#
+                )))
+                .expect("reject request"),
+        )
+        .await
+        .expect("reject response");
+    assert_eq!(reject_response.status(), StatusCode::OK);
+    let body = reject_response
+        .into_body()
+        .collect()
+        .await
+        .expect("reject body")
+        .to_bytes();
+    let task: serde_json::Value = serde_json::from_slice(&body).expect("reject json");
+    assert_eq!(task["status"], "rejected");
+
+    // 409: reject already-rejected task
+    let conflict_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/tasks/{task_id}/reject"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"reason":"again"}"#))
+                .expect("conflict reject request"),
+        )
+        .await
+        .expect("conflict reject response");
+    assert_eq!(conflict_response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn approve_task_returns_409_on_wrong_approval_id() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "archive downloads")
+        .with_thread(task_id.to_string())
+        .with_owner_id("owner-1")
+        .with_sender_id("sender-1")
+        .with_metadata(serde_json::json!({"source":"api-test"}))
+        .with_timezone("UTC");
+    runtime.ensure_task(&message, task_id).await;
+    let pending = ironclaw::agent::session::PendingApproval {
+        request_id,
+        tool_name: "write_file".to_string(),
+        parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        display_parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        description: "write a file".to_string(),
+        tool_call_id: "call_1".to_string(),
+        context_messages: Vec::new(),
+        deferred_tool_calls: Vec::new(),
+        user_timezone: Some("UTC".to_string()),
+        allow_always: false,
+    };
+    runtime
+        .mark_waiting_approval(&message, task_id, &pending)
+        .await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-approve-stale-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime.clone()),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let stale_id = uuid::Uuid::new_v4();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/tasks/{task_id}/approve"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(format!(r#"{{"approval_id":"{stale_id}"}}"#)))
+                .expect("stale approve request"),
+        )
+        .await
+        .expect("stale approve response");
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]

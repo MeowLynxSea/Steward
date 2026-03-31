@@ -13,7 +13,7 @@ use axum::{
         IntoResponse,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -218,14 +218,20 @@ pub struct WorkspaceSearchResultResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct ApproveTaskRequest {
-    pub request_id: Option<Uuid>,
+    pub approval_id: Option<Uuid>,
     #[serde(default)]
     pub always: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PatchTaskModeRequest {
+    pub mode: String,
+}
+
 #[derive(Debug, Default, Deserialize)]
-pub struct ToggleYoloRequest {
-    pub enabled: Option<bool>,
+pub struct RejectTaskRequest {
+    pub approval_id: Option<Uuid>,
+    pub reason: Option<String>,
 }
 
 pub type ApiResult<T> = Result<T, ApiError>;
@@ -258,6 +264,13 @@ impl ApiError {
         }
     }
 
+    fn unprocessable_entity(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+        }
+    }
+
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -280,7 +293,7 @@ impl IntoResponse for ApiError {
 
 pub fn router(state: ApiState) -> Router {
     let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::PATCH, Method::POST])
+        .allow_methods([Method::DELETE, Method::GET, Method::PATCH, Method::POST])
         .allow_origin(AllowOrigin::predicate(
             |origin: &HeaderValue, _| match origin.to_str() {
                 Ok(origin) => {
@@ -304,7 +317,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/tasks", get(list_tasks))
         .route("/api/v0/tasks/{id}", get(get_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
-        .route("/api/v0/tasks/{id}/yolo-toggle", post(toggle_task_yolo))
+        .route("/api/v0/tasks/{id}/reject", post(reject_task))
+        .route("/api/v0/tasks/{id}/mode", patch(patch_task_mode))
         .route("/api/v0/workspace/index", post(index_workspace))
         .route("/api/v0/workspace/tree", get(get_workspace_tree))
         .route("/api/v0/workspace/search", post(search_workspace))
@@ -561,10 +575,10 @@ async fn approve_task(
         .pending_operation
         .as_ref()
         .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending operation")))?;
-    let request_id = payload.request_id.unwrap_or(pending.request_id);
+    let request_id = payload.approval_id.unwrap_or(pending.request_id);
     if request_id != pending.request_id {
         return Err(ApiError::conflict(
-            "approval request_id does not match current checkpoint",
+            "approval_id does not match current checkpoint",
         ));
     }
 
@@ -584,26 +598,78 @@ async fn approve_task(
     })?))
 }
 
-async fn toggle_task_yolo(
+async fn reject_task(
     State(state): State<ApiState>,
     Path(task_id): Path<Uuid>,
-    payload: Option<Json<ToggleYoloRequest>>,
+    Json(payload): Json<RejectTaskRequest>,
 ) -> ApiResult<Json<TaskRecord>> {
     let runtime = state
         .task_runtime
         .as_ref()
         .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
-    let current = runtime
+    let task = runtime
         .get_task(task_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
-    let enabled = payload
-        .and_then(|Json(body)| body.enabled)
-        .unwrap_or(!matches!(current.mode, TaskMode::Yolo));
-    let target_mode = if enabled {
-        TaskMode::Yolo
-    } else {
-        TaskMode::Ask
+
+    if task.status != TaskStatus::WaitingApproval {
+        return Err(ApiError::conflict(format!(
+            "task {task_id} is not waiting for approval"
+        )));
+    }
+
+    let pending = task
+        .pending_operation
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending operation")))?;
+    if let Some(approval_id) = payload.approval_id {
+        if approval_id != pending.request_id {
+            return Err(ApiError::conflict(
+                "approval_id does not match current checkpoint",
+            ));
+        }
+    }
+
+    let reason = payload
+        .reason
+        .unwrap_or_else(|| "rejected by user".to_string());
+    runtime.mark_rejected(task_id, &reason).await;
+
+    state.sse_manager.broadcast_for_user(
+        &state.owner_id,
+        ironclaw_common::AppEvent::Status {
+            message: format!("task.rejected:{task_id}"),
+            thread_id: Some(task_id.to_string()),
+        },
+    );
+
+    Ok(Json(runtime.get_task(task_id).await.ok_or_else(|| {
+        ApiError::not_found(format!("task {task_id} not found"))
+    })?))
+}
+
+async fn patch_task_mode(
+    State(state): State<ApiState>,
+    Path(task_id): Path<Uuid>,
+    Json(payload): Json<PatchTaskModeRequest>,
+) -> ApiResult<Json<TaskRecord>> {
+    let runtime = state
+        .task_runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
+    let _ = runtime
+        .get_task(task_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
+
+    let target_mode = match payload.mode.as_str() {
+        "ask" => TaskMode::Ask,
+        "yolo" => TaskMode::Yolo,
+        other => {
+            return Err(ApiError::unprocessable_entity(format!(
+                "invalid mode: {other}, must be \"ask\" or \"yolo\""
+            )));
+        }
     };
 
     let task = runtime
@@ -611,7 +677,7 @@ async fn toggle_task_yolo(
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
 
-    if enabled
+    if matches!(target_mode, TaskMode::Yolo)
         && task.status == TaskStatus::WaitingApproval
         && let Some(inject_tx) = state.inject_tx.as_ref()
         && let Some(pending) = task.pending_operation.as_ref()
@@ -936,7 +1002,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn toggle_task_yolo_updates_runtime_mode() {
+    async fn patch_task_mode_updates_runtime_mode() {
         let runtime = Arc::new(TaskRuntime::new());
         let task_id = Uuid::new_v4();
         let message = IncomingMessage::new("test", "test-user", "organize files")
@@ -955,18 +1021,188 @@ mod tests {
             None,
         );
 
-        let Json(task) = toggle_task_yolo(
+        let Json(task) = patch_task_mode(
             State(state),
             Path(task_id),
-            Some(Json(ToggleYoloRequest {
-                enabled: Some(true),
-            })),
+            Json(PatchTaskModeRequest {
+                mode: "yolo".to_string(),
+            }),
         )
         .await
-        .expect("toggle yolo");
+        .expect("patch mode");
 
         assert_eq!(task.mode, TaskMode::Yolo);
         assert_eq!(runtime.mode_for_task(task_id).await, TaskMode::Yolo);
+    }
+
+    #[tokio::test]
+    async fn patch_task_mode_rejects_invalid_mode() {
+        let runtime = Arc::new(TaskRuntime::new());
+        let task_id = Uuid::new_v4();
+        let message = IncomingMessage::new("test", "test-user", "organize files")
+            .with_thread(task_id.to_string());
+        runtime.ensure_task(&message, task_id).await;
+
+        let state = ApiState::new(
+            "test-user".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8765)),
+            test_database().await,
+            Arc::new(SseManager::new()),
+            Some(runtime),
+            None,
+            None,
+            None,
+        );
+
+        let err = patch_task_mode(
+            State(state),
+            Path(task_id),
+            Json(PatchTaskModeRequest {
+                mode: "auto".to_string(),
+            }),
+        )
+        .await
+        .expect_err("should reject invalid mode");
+        assert_eq!(err.status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn reject_task_transitions_to_rejected() {
+        let runtime = Arc::new(TaskRuntime::new());
+        let task_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let message = IncomingMessage::new("test", "test-user", "archive downloads")
+            .with_thread(task_id.to_string())
+            .with_owner_id("owner-1")
+            .with_sender_id("sender-1")
+            .with_metadata(serde_json::json!({"source":"api-test"}))
+            .with_timezone("UTC");
+        runtime.ensure_task(&message, task_id).await;
+        let pending = crate::agent::session::PendingApproval {
+            request_id,
+            tool_name: "write_file".to_string(),
+            parameters: serde_json::json!({"path":"/tmp/report.md"}),
+            display_parameters: serde_json::json!({"path":"/tmp/report.md"}),
+            description: "write a file".to_string(),
+            tool_call_id: "call_1".to_string(),
+            context_messages: Vec::new(),
+            deferred_tool_calls: Vec::new(),
+            user_timezone: Some("UTC".to_string()),
+            allow_always: false,
+        };
+        runtime
+            .mark_waiting_approval(&message, task_id, &pending)
+            .await;
+
+        let state = ApiState::new(
+            "test-user".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8765)),
+            test_database().await,
+            Arc::new(SseManager::new()),
+            Some(runtime),
+            None,
+            None,
+            None,
+        );
+
+        let Json(task) = reject_task(
+            State(state),
+            Path(task_id),
+            Json(RejectTaskRequest {
+                approval_id: Some(request_id),
+                reason: Some("not safe".to_string()),
+            }),
+        )
+        .await
+        .expect("reject task");
+
+        assert_eq!(task.status, TaskStatus::Rejected);
+        assert_eq!(task.last_error.as_deref(), Some("not safe"));
+    }
+
+    #[tokio::test]
+    async fn reject_task_returns_409_when_not_waiting_approval() {
+        let runtime = Arc::new(TaskRuntime::new());
+        let task_id = Uuid::new_v4();
+        let message = IncomingMessage::new("test", "test-user", "archive downloads")
+            .with_thread(task_id.to_string());
+        runtime.ensure_task(&message, task_id).await;
+
+        let state = ApiState::new(
+            "test-user".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8765)),
+            test_database().await,
+            Arc::new(SseManager::new()),
+            Some(runtime),
+            None,
+            None,
+            None,
+        );
+
+        let err = reject_task(
+            State(state),
+            Path(task_id),
+            Json(RejectTaskRequest {
+                approval_id: None,
+                reason: None,
+            }),
+        )
+        .await
+        .expect_err("should fail when not waiting approval");
+        assert_eq!(err.status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn reject_task_returns_409_on_stale_approval_id() {
+        let runtime = Arc::new(TaskRuntime::new());
+        let task_id = Uuid::new_v4();
+        let request_id = Uuid::new_v4();
+        let message = IncomingMessage::new("test", "test-user", "archive downloads")
+            .with_thread(task_id.to_string())
+            .with_owner_id("owner-1")
+            .with_sender_id("sender-1")
+            .with_metadata(serde_json::json!({"source":"api-test"}))
+            .with_timezone("UTC");
+        runtime.ensure_task(&message, task_id).await;
+        let pending = crate::agent::session::PendingApproval {
+            request_id,
+            tool_name: "write_file".to_string(),
+            parameters: serde_json::json!({"path":"/tmp/report.md"}),
+            display_parameters: serde_json::json!({"path":"/tmp/report.md"}),
+            description: "write a file".to_string(),
+            tool_call_id: "call_1".to_string(),
+            context_messages: Vec::new(),
+            deferred_tool_calls: Vec::new(),
+            user_timezone: Some("UTC".to_string()),
+            allow_always: false,
+        };
+        runtime
+            .mark_waiting_approval(&message, task_id, &pending)
+            .await;
+
+        let state = ApiState::new(
+            "test-user".to_string(),
+            SocketAddr::from(([127, 0, 0, 1], 8765)),
+            test_database().await,
+            Arc::new(SseManager::new()),
+            Some(runtime),
+            None,
+            None,
+            None,
+        );
+
+        let stale_id = Uuid::new_v4();
+        let err = reject_task(
+            State(state),
+            Path(task_id),
+            Json(RejectTaskRequest {
+                approval_id: Some(stale_id),
+                reason: None,
+            }),
+        )
+        .await
+        .expect_err("should fail on stale approval_id");
+        assert_eq!(err.status, StatusCode::CONFLICT);
     }
 
     #[tokio::test]
@@ -1012,7 +1248,7 @@ mod tests {
             State(state),
             Path(task_id),
             Json(ApproveTaskRequest {
-                request_id: Some(pending.request_id),
+                approval_id: Some(pending.request_id),
                 always: true,
             }),
         )
