@@ -150,10 +150,14 @@ pub fn router(state: ApiState) -> Router {
         .layer(cors)
 }
 
+pub fn local_api_addr(port: u16) -> SocketAddr {
+    SocketAddr::new(DEFAULT_API_HOST, port)
+}
+
 pub async fn run_api(bind_addr: SocketAddr, state: ApiState) -> anyhow::Result<()> {
-    if !bind_addr.ip().is_loopback() {
+    if bind_addr.ip() != DEFAULT_API_HOST {
         anyhow::bail!(
-            "refusing to bind API to non-loopback address {}; use 127.0.0.1 for Phase 1",
+            "refusing to bind API to {}; Phase 1 only allows 127.0.0.1",
             bind_addr
         );
     }
