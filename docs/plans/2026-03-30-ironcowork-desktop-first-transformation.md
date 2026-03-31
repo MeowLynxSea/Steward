@@ -1,12 +1,14 @@
 # IronCowork Desktop-First Transformation Plan
 
 **Date:** 2026-03-30
-**Status:** Proposed
+**Status:** Foundational plan; follow-up execution now continues in `docs/plans/2026-03-31-ironcowork-post-phase1-execution-roadmap.md`
 **Goal:** Rebuild this fork into IronCowork, a local-first desktop automation product for knowledge workers, while retaining the Rust agent engine, safety controls, MCP support, and workspace retrieval capabilities from IronClaw.
 
 ---
 
 ## Product Direction
+
+> **Update (2026-03-31):** Phase 0 and the first pass of Phase 1 have already landed. Use this document for the fork direction and use `2026-03-31-ironcowork-post-phase1-execution-roadmap.md` for detailed remaining execution work.
 
 ### Why This Fork Exists
 
