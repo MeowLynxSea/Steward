@@ -11,6 +11,7 @@
 //! - Active health diagnostics (`doctor`)
 //! - Checking system health (`status`)
 
+mod api;
 mod completion;
 mod config;
 mod doctor;
@@ -30,6 +31,7 @@ mod skills;
 pub mod status;
 mod tool;
 
+pub use api::{ApiCommand, run_api_command};
 pub use completion::Completion;
 pub use config::{ConfigCommand, run_config_command};
 pub use doctor::run_doctor_command;
@@ -85,6 +87,14 @@ pub enum Command {
         long_about = "Starts the IronCowork transitional runtime.\nExample: ironclaw run"
     )]
     Run,
+
+    /// Run the local HTTP API for desktop/web clients
+    #[command(
+        subcommand,
+        about = "Run local HTTP API",
+        long_about = "Starts the Phase 1 local-only Axum API.\nExample: ironclaw api serve --port 8765"
+    )]
+    Api(ApiCommand),
 
     /// Manage configuration settings
     #[command(

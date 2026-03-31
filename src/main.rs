@@ -10,7 +10,7 @@ use ironclaw::{
     app::{AppBuilder, AppBuilderFlags},
     channels::{ChannelManager, ReplChannel},
     cli::{
-        Cli, Command, run_mcp_command, run_pairing_command, run_service_command,
+        Cli, Command, run_api_command, run_mcp_command, run_pairing_command, run_service_command,
         run_status_command, run_tool_command,
     },
     config::Config,
@@ -84,6 +84,10 @@ async fn async_main() -> anyhow::Result<()> {
         Some(Command::Config(config_cmd)) => {
             init_cli_tracing();
             return ironclaw::cli::run_config_command(config_cmd.clone()).await;
+        }
+        Some(Command::Api(api_cmd)) => {
+            init_cli_tracing();
+            return run_api_command(api_cmd, cli.config.as_deref()).await;
         }
         Some(Command::Registry(registry_cmd)) => {
             init_cli_tracing();
