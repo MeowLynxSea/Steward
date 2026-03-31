@@ -178,6 +178,34 @@ impl TaskRecord {
             result_metadata: None,
         }
     }
+
+    fn workflow(
+        task_id: Uuid,
+        template_id: impl Into<String>,
+        title: impl Into<String>,
+        mode: TaskMode,
+        result_metadata: Option<Value>,
+    ) -> Self {
+        let now = Utc::now();
+        Self {
+            id: task_id,
+            template_id: template_id.into(),
+            mode,
+            status: TaskStatus::Queued,
+            title: title.into(),
+            created_at: now,
+            updated_at: now,
+            current_step: Some(TaskCurrentStep {
+                id: format!("task-{task_id}"),
+                kind: "log".to_string(),
+                title: "Queued".to_string(),
+            }),
+            pending_approval: None,
+            route: TaskRoute::default(),
+            last_error: None,
+            result_metadata,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,6 +278,26 @@ impl TaskRuntime {
             .await;
         }
 
+        task
+    }
+
+    pub async fn create_workflow_task(
+        &self,
+        template_id: impl Into<String>,
+        title: impl Into<String>,
+        mode: TaskMode,
+        result_metadata: Option<Value>,
+    ) -> TaskRecord {
+        let task_id = Uuid::new_v4();
+        let task = TaskRecord::workflow(task_id, template_id, title, mode, result_metadata);
+        self.tasks.write().await.insert(task_id, task.clone());
+        self.persist_task(&task).await;
+        self.append_timeline(
+            &task,
+            "task.created",
+            task.result_metadata.clone().unwrap_or_else(|| json!({})),
+        )
+        .await;
         task
     }
 
@@ -362,7 +410,36 @@ impl TaskRuntime {
         .await;
     }
 
+    pub async fn set_waiting_approval(
+        &self,
+        task_id: Uuid,
+        pending: TaskPendingApproval,
+    ) -> Option<TaskRecord> {
+        let summary = pending.summary.clone();
+        self.apply_update(
+            task_id,
+            None,
+            "task.waiting_approval",
+            json!({ "approval_id": pending.id, "risk": pending.risk }),
+            |task| {
+                task.status = TaskStatus::WaitingApproval;
+                task.current_step = Some(TaskCurrentStep {
+                    id: pending.id.to_string(),
+                    kind: "approval".to_string(),
+                    title: summary,
+                });
+                task.pending_approval = Some(pending);
+            },
+        )
+        .await
+    }
+
     pub async fn mark_completed(&self, task_id: Uuid) {
+        self.mark_completed_with_result(task_id, Some(json!({ "outcome": "completed" })))
+            .await;
+    }
+
+    pub async fn mark_completed_with_result(&self, task_id: Uuid, result_metadata: Option<Value>) {
         self.apply_update(
             task_id,
             None,
@@ -377,13 +454,22 @@ impl TaskRuntime {
                 });
                 task.pending_approval = None;
                 task.last_error = None;
-                task.result_metadata = Some(json!({ "outcome": "completed" }));
+                task.result_metadata = result_metadata.clone();
             },
         )
         .await;
     }
 
     pub async fn mark_failed(&self, task_id: Uuid, error: impl Into<String>) {
+        self.mark_failed_with_result(task_id, error, None).await;
+    }
+
+    pub async fn mark_failed_with_result(
+        &self,
+        task_id: Uuid,
+        error: impl Into<String>,
+        result_metadata: Option<Value>,
+    ) {
         let error = error.into();
         self.apply_update(
             task_id,
@@ -399,7 +485,9 @@ impl TaskRuntime {
                 });
                 task.pending_approval = None;
                 task.last_error = Some(error.clone());
-                task.result_metadata = Some(json!({ "failure_reason": error }));
+                task.result_metadata = result_metadata
+                    .clone()
+                    .or_else(|| Some(json!({ "failure_reason": error })));
             },
         )
         .await;
@@ -440,6 +528,23 @@ impl TaskRuntime {
                     kind: "log".to_string(),
                     title: format!("Mode changed to {}", mode.as_str()),
                 });
+            },
+        )
+        .await
+    }
+
+    pub async fn update_result_metadata(
+        &self,
+        task_id: Uuid,
+        result_metadata: Value,
+    ) -> Option<TaskRecord> {
+        self.apply_update(
+            task_id,
+            None,
+            "task.updated",
+            json!({ "result_metadata": result_metadata }),
+            |task| {
+                task.result_metadata = Some(result_metadata.clone());
             },
         )
         .await

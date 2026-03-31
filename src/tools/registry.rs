@@ -19,10 +19,10 @@ use crate::tools::builder::{
 use crate::tools::builtin::{
     ApplyPatchTool, CancelJobTool, CreateJobTool, EchoTool, ExtensionInfoTool, HttpTool,
     JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, PromptQueue, ReadFileTool,
-    ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
-    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool,
-    ToolUpgradeTool, WriteFileTool,
+    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, MoveFileTool, PromptQueue,
+    ReadFileTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool,
+    TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
+    ToolSearchTool, ToolUpgradeTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -43,6 +43,7 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "shell",
     "read_file",
     "write_file",
+    "move_file",
     "list_dir",
     "apply_patch",
     "memory_search",
@@ -328,10 +329,11 @@ impl ToolRegistry {
         self.register_sync(Arc::new(ShellTool::new()));
         self.register_sync(Arc::new(ReadFileTool::new()));
         self.register_sync(Arc::new(WriteFileTool::new()));
+        self.register_sync(Arc::new(MoveFileTool::new()));
         self.register_sync(Arc::new(ListDirTool::new()));
         self.register_sync(Arc::new(ApplyPatchTool::new()));
 
-        tracing::debug!("Registered 5 development tools");
+        tracing::debug!("Registered 6 development tools");
     }
 
     /// Register memory tools with a workspace resolver.

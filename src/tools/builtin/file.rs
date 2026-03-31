@@ -294,6 +294,119 @@ impl Tool for WriteFileTool {
     }
 }
 
+/// Move a file to a new path.
+#[derive(Debug, Default)]
+pub struct MoveFileTool {
+    base_dir: Option<PathBuf>,
+}
+
+impl MoveFileTool {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_base_dir(mut self, dir: PathBuf) -> Self {
+        self.base_dir = Some(dir);
+        self
+    }
+}
+
+#[async_trait]
+impl Tool for MoveFileTool {
+    fn name(&self) -> &str {
+        "move_file"
+    }
+
+    fn description(&self) -> &str {
+        "Move or rename a file on the LOCAL FILESYSTEM. Creates parent directories for the destination when needed."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source_path": {
+                    "type": "string",
+                    "description": "Existing source file path"
+                },
+                "destination_path": {
+                    "type": "string",
+                    "description": "Destination file path"
+                },
+                "create_parent": {
+                    "type": "boolean",
+                    "description": "Create destination parent directories automatically (default true)"
+                }
+            },
+            "required": ["source_path", "destination_path"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        _ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let source_path = require_str(&params, "source_path")?;
+        let destination_path = require_str(&params, "destination_path")?;
+        let create_parent = params
+            .get("create_parent")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+
+        let start = std::time::Instant::now();
+        let source = validate_path(source_path, self.base_dir.as_deref())?;
+        let destination = validate_path(destination_path, self.base_dir.as_deref())?;
+
+        let metadata = fs::metadata(&source)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Cannot access source file: {}", e)))?;
+        if metadata.is_dir() {
+            return Err(ToolError::InvalidParameters(
+                "move_file only supports regular files".to_string(),
+            ));
+        }
+
+        if create_parent && let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).await.map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "Failed to create destination directories: {}",
+                    e
+                ))
+            })?;
+        }
+
+        fs::rename(&source, &destination)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to move file: {}", e)))?;
+
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "source_path": source.display().to_string(),
+                "destination_path": destination.display().to_string(),
+                "success": true
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn domain(&self) -> ToolDomain {
+        ToolDomain::Container
+    }
+
+    fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
+        Some(crate::tools::tool::ToolRateLimitConfig::new(20, 200))
+    }
+}
+
 /// List directory contents tool.
 #[derive(Debug, Default)]
 pub struct ListDirTool {
@@ -694,6 +807,32 @@ mod tests {
         assert!(result.result.get("success").unwrap().as_bool().unwrap());
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert!(content.contains("println!(\"new\")"));
+    }
+
+    #[tokio::test]
+    async fn test_move_file() {
+        let dir = TempDir::new().unwrap();
+        let source_path = dir.path().join("source.txt");
+        let destination_path = dir.path().join("nested/destination.txt");
+        std::fs::write(&source_path, "hello").unwrap();
+
+        let tool = MoveFileTool::new().with_base_dir(dir.path().to_path_buf());
+        let ctx = JobContext::default();
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "source_path": source_path.to_str().unwrap(),
+                    "destination_path": destination_path.to_str().unwrap(),
+                }),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        assert!(result.result.get("success").unwrap().as_bool().unwrap());
+        assert!(!source_path.exists());
+        assert_eq!(std::fs::read_to_string(destination_path).unwrap(), "hello");
     }
 
     #[tokio::test]

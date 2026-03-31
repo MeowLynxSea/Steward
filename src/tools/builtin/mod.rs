@@ -22,7 +22,7 @@ pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
 };
-pub use file::{ApplyPatchTool, ListDirTool, ReadFileTool, WriteFileTool};
+pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFileTool};
 pub use http::HttpTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,

@@ -55,6 +55,7 @@ pub mod error;
 pub mod estimation;
 pub mod evaluation;
 pub mod extensions;
+pub mod file_archive_workflow;
 pub mod history;
 pub mod hooks;
 #[cfg(feature = "import")]

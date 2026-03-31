@@ -21,10 +21,10 @@ Ship the first complete automation workflow: scan a directory, propose organizat
 
 ## Acceptance Criteria
 
-- [ ] A user can run the archive workflow from the UI without raw JSON.
-- [ ] Ask mode pauses before file mutation with a typed preview payload.
-- [ ] Yolo mode executes the same plan automatically under policy.
-- [ ] Result state records moved, skipped, and failed operations.
+- [x] A user can run the archive workflow from the UI without raw JSON.
+- [x] Ask mode pauses before file mutation with a typed preview payload.
+- [x] Yolo mode executes the same plan automatically under policy.
+- [x] Result state records moved, skipped, and failed operations.
 
 ## Out Of Scope
 

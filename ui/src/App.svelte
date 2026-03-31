@@ -11,6 +11,9 @@
   let appLoading = $state(true);
   let appError = $state("");
   let draftMessage = $state("");
+  let archiveSourcePath = $state("");
+  let archiveTargetRoot = $state("");
+  let archiveMode = $state<"ask" | "yolo">("ask");
 
   async function bootstrap() {
     appLoading = true;
@@ -175,39 +178,99 @@
         </div>
       </section>
     {:else if router.current === "tasks"}
-      <section class="panel">
-        <div class="section-head">
-          <h1>Tasks</h1>
-          <button onclick={() => void tasksStore.refresh()}>Refresh</button>
+      <section class="sessions-layout">
+        <div class="panel session-list">
+          <div class="section-head">
+            <h1>Tasks</h1>
+            <button onclick={() => void tasksStore.refresh()}>Refresh</button>
+          </div>
+
+          <div class="stack compact">
+            <div class="inline-form">
+              <input bind:value={archiveSourcePath} placeholder="Source folder to archive" />
+            </div>
+            <div class="inline-form">
+              <input bind:value={archiveTargetRoot} placeholder="Target root folder" />
+            </div>
+            <div class="inline-form">
+              <select bind:value={archiveMode}>
+                <option value="ask">Ask</option>
+                <option value="yolo">Yolo</option>
+              </select>
+              <button
+                onclick={() =>
+                  void tasksStore.createArchiveTask(archiveSourcePath, archiveTargetRoot, archiveMode)}
+              >
+                Run Archive
+              </button>
+            </div>
+          </div>
+
+          {#if tasksStore.loading}
+            <p class="muted">Loading tasks...</p>
+          {:else if tasksStore.list.length === 0}
+            <p class="muted">No tasks found. Run the archive workflow to create one.</p>
+          {:else}
+            <div class="stack">
+              {#each tasksStore.list as task}
+                <button
+                  class:active={task.id === tasksStore.activeId}
+                  class="session-item"
+                  onclick={() => void tasksStore.select(task.id)}
+                >
+                  <strong>{task.title}</strong>
+                  <span>{task.status} · {task.mode}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
         </div>
 
-        {#if tasksStore.loading}
-          <p class="muted">Loading tasks...</p>
-        {:else if tasksStore.list.length === 0}
-          <p class="muted">No tasks found. Tasks will appear here when created.</p>
-        {:else}
-          <div class="stack">
-            {#each tasksStore.list as task}
-              <article class="task-card">
-                <div>
-                  <strong>{task.title}</strong>
-                  <p>{task.status} · {task.mode}</p>
-                  {#if task.last_error}
-                    <p class="error">{task.last_error}</p>
-                  {/if}
-                </div>
-                <div class="task-actions">
-                  <button onclick={() => void tasksStore.toggleMode(task)}>
-                    {task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
-                  </button>
-                  {#if task.status === "waiting_approval" && task.pending_approval}
-                    <button onclick={() => void tasksStore.approve(task)}>Approve</button>
-                  {/if}
-                </div>
+        <div class="panel chat-panel">
+          {#if tasksStore.detailLoading}
+            <p class="muted">Loading task detail...</p>
+          {:else if tasksStore.detail}
+            <div class="section-head">
+              <h1>{tasksStore.detail.task.title}</h1>
+              <span>{tasksStore.detail.task.status} · {tasksStore.detail.task.mode}</span>
+            </div>
+
+            <div class="task-actions">
+              <button onclick={() => void tasksStore.toggleMode(tasksStore.detail!.task)}>
+                {tasksStore.detail.task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
+              </button>
+              {#if tasksStore.detail.task.status === "waiting_approval" && tasksStore.detail.task.pending_approval}
+                <button onclick={() => void tasksStore.approve(tasksStore.detail!.task)}>Approve</button>
+                <button onclick={() => void tasksStore.reject(tasksStore.detail!.task)}>Reject</button>
+              {/if}
+            </div>
+
+            {#if tasksStore.detail.task.pending_approval}
+              <article class="message-card assistant">
+                <header>Approval Preview</header>
+                <pre>{JSON.stringify(tasksStore.detail.task.pending_approval.operations, null, 2)}</pre>
               </article>
-            {/each}
-          </div>
-        {/if}
+            {/if}
+
+            {#if tasksStore.detail.task.result_metadata}
+              <article class="message-card assistant">
+                <header>Result Metadata</header>
+                <pre>{JSON.stringify(tasksStore.detail.task.result_metadata, null, 2)}</pre>
+              </article>
+            {/if}
+
+            <div class="stack compact">
+              {#each tasksStore.detail.timeline as item}
+                <article class="workspace-entry">
+                  <strong>{item.event}</strong>
+                  <span>{item.status} · {new Date(item.created_at).toLocaleString()}</span>
+                </article>
+              {/each}
+            </div>
+          {:else}
+            <p class="muted">Select a task to inspect its timeline and result.</p>
+          {/if}
+        </div>
       </section>
     {:else if router.current === "templates"}
       <section class="sessions-layout">

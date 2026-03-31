@@ -27,6 +27,9 @@ use crate::agent::SessionManager;
 use crate::agent::submission::Submission;
 use crate::channels::IncomingMessage;
 use crate::db::Database;
+use crate::file_archive_workflow::{
+    create_archive_task, execute_archive_task, is_file_archive_task, validate_archive_params,
+};
 use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
 use crate::settings::Settings;
@@ -130,6 +133,12 @@ pub struct TaskListResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct CreateTaskResponse {
+    pub task_id: Uuid,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct TaskDetailResponse {
     pub task: TaskRecord,
     pub timeline: Vec<crate::task_runtime::TaskTimelineEntry>,
@@ -192,6 +201,13 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize)]
 pub struct SendSessionMessageRequest {
     pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTaskRequest {
+    pub template_id: String,
+    pub mode: String,
+    pub parameters: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -370,7 +386,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/sessions/{id}", get(get_session))
         .route("/api/v0/sessions/{id}/messages", post(post_session_message))
         .route("/api/v0/sessions/{id}/stream", get(stream_session))
-        .route("/api/v0/tasks", get(list_tasks))
+        .route("/api/v0/tasks", get(list_tasks).post(create_task))
         .route("/api/v0/tasks/{id}", get(get_task))
         .route("/api/v0/tasks/{id}/stream", get(stream_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
@@ -653,6 +669,58 @@ async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Json<TaskListRes
     }))
 }
 
+async fn create_task(
+    State(state): State<ApiState>,
+    Json(payload): Json<CreateTaskRequest>,
+) -> ApiResult<(StatusCode, Json<CreateTaskResponse>)> {
+    let runtime = state
+        .task_runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("task runtime is not available"))?
+        .clone();
+
+    let mode = match payload.mode.as_str() {
+        "ask" => TaskMode::Ask,
+        "yolo" => TaskMode::Yolo,
+        other => {
+            return Err(ApiError::unprocessable_entity(format!(
+                "invalid mode: {other}, must be \"ask\" or \"yolo\""
+            )));
+        }
+    };
+
+    match payload.template_id.as_str() {
+        "builtin:file-archive" => {
+            let params = validate_archive_params(&payload.parameters).map_err(|err| {
+                ApiError::unprocessable_with_fields(err.message, err.field_errors)
+            })?;
+            let task = create_archive_task(runtime.clone(), params, mode)
+                .await
+                .map_err(|err| ApiError::unprocessable_entity(err.message))?;
+
+            if matches!(mode, TaskMode::Yolo) && task.status == TaskStatus::Queued {
+                tokio::spawn(async move {
+                    let _ = execute_archive_task(runtime, task.id).await;
+                });
+            }
+
+            Ok((
+                StatusCode::CREATED,
+                Json(CreateTaskResponse {
+                    task_id: task.id,
+                    status: "queued".to_string(),
+                }),
+            ))
+        }
+        template_id if builtin_template(template_id).is_some() => Err(ApiError::conflict(format!(
+            "template {template_id} is defined but execution is not implemented yet"
+        ))),
+        template_id => Err(ApiError::not_found(format!(
+            "template {template_id} not found"
+        ))),
+    }
+}
+
 async fn list_templates(State(state): State<ApiState>) -> ApiResult<Json<TemplateListResponse>> {
     let mut templates = builtin_templates();
     let mut user_templates = state
@@ -818,10 +886,6 @@ async fn approve_task(
         .task_runtime
         .as_ref()
         .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
-    let inject_tx = state
-        .inject_tx
-        .as_ref()
-        .ok_or_else(|| ApiError::conflict("approval injection is not available"))?;
     let task = runtime
         .get_task(task_id)
         .await
@@ -843,6 +907,18 @@ async fn approve_task(
             "approval_id does not match current checkpoint",
         ));
     }
+
+    if is_file_archive_task(&task) {
+        let task = execute_archive_task(runtime.clone(), task_id)
+            .await
+            .map_err(|err| ApiError::internal(err.message))?;
+        return Ok(Json(task));
+    }
+
+    let inject_tx = state
+        .inject_tx
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("approval injection is not available"))?;
 
     inject_approval(
         inject_tx,
@@ -947,21 +1023,26 @@ async fn patch_task_mode(
         },
     );
 
-    if matches!(target_mode, TaskMode::Yolo)
-        && task.status == TaskStatus::WaitingApproval
-        && let Some(inject_tx) = state.inject_tx.as_ref()
-        && let Some(pending) = task.pending_approval.as_ref()
-    {
-        inject_approval(
-            inject_tx,
-            &task,
-            Submission::ExecApproval {
-                request_id: pending.id,
-                approved: true,
-                always: false,
-            },
-        )
-        .await?;
+    if matches!(target_mode, TaskMode::Yolo) && task.status == TaskStatus::WaitingApproval {
+        if is_file_archive_task(&task) {
+            let runtime = runtime.clone();
+            tokio::spawn(async move {
+                let _ = execute_archive_task(runtime, task_id).await;
+            });
+        } else if let Some(inject_tx) = state.inject_tx.as_ref()
+            && let Some(pending) = task.pending_approval.as_ref()
+        {
+            inject_approval(
+                inject_tx,
+                &task,
+                Submission::ExecApproval {
+                    request_id: pending.id,
+                    approved: true,
+                    always: false,
+                },
+            )
+            .await?;
+        }
     }
 
     Ok(Json(runtime.get_task(task_id).await.ok_or_else(|| {

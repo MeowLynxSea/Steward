@@ -176,6 +176,85 @@ Rules:
 - `parameters` must be validated against the template schema before execution starts.
 - Task creation persists the task before agent execution begins.
 
+##### Built-in workflow: `builtin:file-archive`
+
+Accepted `parameters` payload:
+
+```json
+{
+  "source_path": "/Users/alex/Downloads",
+  "target_root": "/Users/alex/Documents",
+  "naming_strategy": "preserve|normalize",
+  "exclude_patterns": ["optional substring match"]
+}
+```
+
+Validation:
+
+- `parameters` must decode as an object.
+- `parameters.source_path` is required and must be an existing directory.
+- `parameters.target_root` is required and must be a non-empty string.
+- `parameters.naming_strategy` defaults to `preserve` and must be `preserve` or `normalize`.
+- `parameters.exclude_patterns` defaults to `[]`.
+
+Ask-mode contract:
+
+- `POST /tasks` still returns `201` with `{ "task_id": "...", "status": "queued" }`.
+- The persisted task transitions to `waiting_approval` before the client fetches detail.
+- `pending_approval.risk` is `file_write`.
+- `pending_approval.operations[*]` must use:
+  - `kind: "move"`
+  - `tool_name: "move_file"`
+  - `parameters.source_path`
+  - `parameters.destination_path`
+  - `parameters.create_parent`
+
+Yolo-mode contract:
+
+- `POST /tasks` persists the plan first, then executes the same `archive_plan` asynchronously.
+- Successful execution records `status: "completed"` and clears `pending_approval`.
+
+Result metadata contract:
+
+```json
+{
+  "workflow": "file_archive",
+  "parameters": {},
+  "archive_plan": [
+    {
+      "kind": "move",
+      "tool_name": "move_file",
+      "parameters": {
+        "source_path": "/Users/alex/Downloads/report.txt",
+        "destination_path": "/Users/alex/Documents/Documents/report.txt",
+        "create_parent": true
+      },
+      "path": "/Users/alex/Downloads/report.txt",
+      "destination_path": "/Users/alex/Documents/Documents/report.txt"
+    }
+  ],
+  "execution": {
+    "moved": [],
+    "skipped": [],
+    "failed": []
+  }
+}
+```
+
+Execution result rules:
+
+- `execution.moved` stores completed move results.
+- `execution.skipped` stores non-fatal plan omissions such as skipped directories, excluded files, or source/destination equality.
+- `execution.failed` stores per-file move failures.
+- A task may still complete with non-empty `execution.failed` when plan execution itself completed and all failures were captured per operation.
+
+Validation and error matrix:
+
+- Invalid `mode` -> `422` with `{ "error": "invalid mode: ..." }`
+- Invalid archive parameters -> `422` with `{ "error": "invalid task parameters", "field_errors": { ... } }`
+- Unknown template id -> `404`
+- Known built-in template without executor -> `409`
+
 #### `POST /api/v0/templates`
 
 Request:
@@ -238,6 +317,7 @@ Rules:
 - Switching from `ask` to `yolo` while waiting approval resumes execution from the current checkpoint once the checkpoint is explicitly approved or auto-resolved by defined policy.
 - Mode changes must be persisted and emitted on the task SSE stream.
 - Mode changes must append a timeline entry visible from `GET /tasks/:id`.
+- For `builtin:file-archive`, switching from `ask` to `yolo` while `waiting_approval` auto-resolves the checkpoint by executing the persisted `archive_plan`.
 
 #### Approval endpoints
 
@@ -257,6 +337,12 @@ Rules:
   "reason": "optional user-visible message"
 }
 ```
+
+Required regression coverage:
+
+- `POST /api/v0/tasks` creates `builtin:file-archive` tasks in Ask mode with persisted `pending_approval.operations`.
+- `POST /api/v0/tasks` creates `builtin:file-archive` tasks in Yolo mode and eventually records `execution.moved`, `execution.skipped`, and cleared source paths on disk.
+- `POST /api/v0/tasks/:id/approve` executes an Ask-mode `builtin:file-archive` task and returns `status: "completed"`.
 
 Rules:
 

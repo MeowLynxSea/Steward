@@ -84,6 +84,17 @@ export const apiClient = {
     return request<{ tasks: TaskRecord[] }>("/tasks");
   },
 
+  createTask(payload: {
+    template_id: string;
+    mode: "ask" | "yolo";
+    parameters: Record<string, unknown>;
+  }) {
+    return request<{ task_id: string; status: string }>("/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
   getTask(id: string) {
     return request<TaskDetail>(`/tasks/${id}`);
   },
@@ -94,6 +105,16 @@ export const apiClient = {
       body: JSON.stringify({
         approval_id: approvalId ?? null,
         always
+      })
+    });
+  },
+
+  rejectTask(id: string, approvalId?: string, reason?: string) {
+    return request<TaskRecord>(`/tasks/${id}/reject`, {
+      method: "POST",
+      body: JSON.stringify({
+        approval_id: approvalId ?? null,
+        reason: reason ?? null
       })
     });
   },
