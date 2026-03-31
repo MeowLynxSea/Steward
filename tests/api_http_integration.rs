@@ -260,6 +260,232 @@ async fn task_endpoints_patch_mode_and_list_runtime_state() {
 }
 
 #[tokio::test]
+async fn template_endpoints_support_builtin_and_user_crud() {
+    let app = test_router().await;
+
+    let builtin_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/templates")
+                .body(Body::empty())
+                .expect("list templates request"),
+        )
+        .await
+        .expect("list templates response");
+    assert_eq!(builtin_response.status(), StatusCode::OK);
+    let builtin_body = builtin_response
+        .into_body()
+        .collect()
+        .await
+        .expect("builtin body")
+        .to_bytes();
+    let builtin_json: serde_json::Value =
+        serde_json::from_slice(&builtin_body).expect("builtin templates json");
+    assert_eq!(builtin_json["templates"][0]["builtin"], true);
+
+    let create_payload = json!({
+        "name": "Custom Archive",
+        "description": "User-defined archive variant",
+        "parameter_schema": {
+            "type": "object",
+            "properties": {
+                "source_path": { "type": "string" }
+            },
+            "required": ["source_path"]
+        },
+        "default_mode": "ask",
+        "output_expectations": {
+            "kind": "file_operation_plan"
+        }
+    });
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/templates")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(create_payload.to_string()))
+                .expect("create template request"),
+        )
+        .await
+        .expect("create template response");
+    assert_eq!(create_response.status(), StatusCode::CREATED);
+    let created_body = create_response
+        .into_body()
+        .collect()
+        .await
+        .expect("created body")
+        .to_bytes();
+    let created_json: serde_json::Value =
+        serde_json::from_slice(&created_body).expect("created template json");
+    let template_id = created_json["id"].as_str().expect("template id");
+    assert_eq!(created_json["builtin"], false);
+    assert_eq!(created_json["name"], "Custom Archive");
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/templates/{template_id}"))
+                .body(Body::empty())
+                .expect("get template request"),
+        )
+        .await
+        .expect("get template response");
+    assert_eq!(get_response.status(), StatusCode::OK);
+
+    let update_payload = json!({
+        "name": "Custom Archive Updated",
+        "description": "Updated description",
+        "parameter_schema": {
+            "type": "object",
+            "properties": {
+                "source_path": { "type": "string" },
+                "target_root": { "type": "string" }
+            },
+            "required": ["source_path", "target_root"]
+        },
+        "default_mode": "yolo",
+        "output_expectations": {
+            "kind": "file_operation_plan",
+            "artifacts": [{"type": "result_summary"}]
+        }
+    });
+
+    let update_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri(format!("/api/v0/templates/{template_id}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(update_payload.to_string()))
+                .expect("update template request"),
+        )
+        .await
+        .expect("update template response");
+    assert_eq!(update_response.status(), StatusCode::OK);
+    let update_body = update_response
+        .into_body()
+        .collect()
+        .await
+        .expect("update body")
+        .to_bytes();
+    let update_json: serde_json::Value =
+        serde_json::from_slice(&update_body).expect("updated template json");
+    assert_eq!(update_json["name"], "Custom Archive Updated");
+    assert_eq!(update_json["default_mode"], "yolo");
+
+    let delete_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v0/templates/{template_id}"))
+                .body(Body::empty())
+                .expect("delete template request"),
+        )
+        .await
+        .expect("delete template response");
+    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+
+    let missing_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/templates/{template_id}"))
+                .body(Body::empty())
+                .expect("missing template request"),
+        )
+        .await
+        .expect("missing template response");
+    assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn template_endpoints_reject_invalid_payloads_and_builtin_mutations() {
+    let app = test_router().await;
+
+    let invalid_payload = json!({
+        "name": "",
+        "description": "",
+        "parameter_schema": {
+            "type": "array"
+        },
+        "default_mode": "maybe",
+        "output_expectations": []
+    });
+
+    let invalid_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/templates")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(invalid_payload.to_string()))
+                .expect("invalid template request"),
+        )
+        .await
+        .expect("invalid template response");
+    assert_eq!(invalid_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let invalid_body = invalid_response
+        .into_body()
+        .collect()
+        .await
+        .expect("invalid body")
+        .to_bytes();
+    let invalid_json: serde_json::Value =
+        serde_json::from_slice(&invalid_body).expect("invalid template json");
+    assert_eq!(invalid_json["error"], "invalid template definition");
+    assert_eq!(invalid_json["field_errors"]["name"], "name is required");
+    assert_eq!(
+        invalid_json["field_errors"]["default_mode"],
+        "default_mode must be \"ask\" or \"yolo\""
+    );
+
+    let builtin_update = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
+                .uri("/api/v0/templates/builtin:file-archive")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Illegal",
+                        "description": "",
+                        "parameter_schema": {
+                            "type": "object",
+                            "properties": {}
+                        },
+                        "default_mode": "ask",
+                        "output_expectations": {}
+                    })
+                    .to_string(),
+                ))
+                .expect("builtin update request"),
+        )
+        .await
+        .expect("builtin update response");
+    assert_eq!(builtin_update.status(), StatusCode::CONFLICT);
+
+    let builtin_delete = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/v0/templates/builtin:file-archive")
+                .body(Body::empty())
+                .expect("builtin delete request"),
+        )
+        .await
+        .expect("builtin delete response");
+    assert_eq!(builtin_delete.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn task_stream_emits_normalized_envelope() {
     let runtime = Arc::new(TaskRuntime::new());
     let task_id = uuid::Uuid::new_v4();
@@ -270,7 +496,9 @@ async fn task_stream_emits_normalized_envelope() {
         .with_metadata(serde_json::json!({"source":"api-test"}))
         .with_timezone("UTC");
     runtime.ensure_task(&message, task_id).await;
-    runtime.toggle_mode(task_id, ironclaw::task_runtime::TaskMode::Yolo).await;
+    runtime
+        .toggle_mode(task_id, ironclaw::task_runtime::TaskMode::Yolo)
+        .await;
 
     let db_path = std::env::temp_dir().join(format!(
         "ironcowork-api-task-stream-test-{}.db",

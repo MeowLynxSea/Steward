@@ -3,6 +3,7 @@ import type {
   SessionSummary,
   SettingsResponse,
   TaskRecord,
+  TaskTemplateRecord,
   WorkspaceEntry,
   WorkspaceSearchResult
 } from "./types";
@@ -101,6 +102,16 @@ export const apiClient = {
       method: "PATCH",
       body: JSON.stringify({ mode })
     });
+  },
+
+  // -- Templates --
+
+  listTemplates() {
+    return request<{ templates: TaskTemplateRecord[] }>("/templates");
+  },
+
+  getTemplate(id: string) {
+    return request<TaskTemplateRecord>(`/templates/${id}`);
   },
 
   // -- Workspace --

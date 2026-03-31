@@ -21,10 +21,10 @@ Introduce task templates as first-class persisted objects so IronCowork becomes 
 
 ## Acceptance Criteria
 
-- [ ] Template records persist and reload through the backend API.
-- [ ] Built-in and user templates are clearly distinguished.
-- [ ] CRUD routes are covered by API tests.
-- [ ] UI can list and inspect available templates.
+- [x] Template records persist and reload through the backend API.
+- [x] Built-in and user templates are clearly distinguished.
+- [x] CRUD routes are covered by API tests.
+- [x] UI can list and inspect available templates.
 
 ## Out Of Scope
 

@@ -4,6 +4,7 @@
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { sessionsStore } from "./lib/stores/sessions.svelte";
   import { tasksStore } from "./lib/stores/tasks.svelte";
+  import { templatesStore } from "./lib/stores/templates.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
   import { listenForFolderDrops } from "./lib/tauri";
 
@@ -19,6 +20,7 @@
         settingsStore.fetch(),
         sessionsStore.fetchList(),
         tasksStore.fetch(),
+        templatesStore.fetch(),
         workspaceStore.fetch()
       ]);
 
@@ -39,6 +41,7 @@
     return (
       sessionsStore.status ||
       tasksStore.status ||
+      templatesStore.status ||
       workspaceStore.status ||
       settingsStore.status ||
       "Ready"
@@ -50,6 +53,7 @@
       appError ||
       sessionsStore.error ||
       tasksStore.error ||
+      templatesStore.error ||
       workspaceStore.error ||
       settingsStore.error ||
       ""
@@ -87,7 +91,7 @@
     </div>
 
     <nav class="nav">
-      {#each (["sessions", "tasks", "workspace", "settings"] as View[]) as view}
+      {#each (["sessions", "tasks", "templates", "workspace", "settings"] as View[]) as view}
         <button
           class:active={router.current === view}
           onclick={() => router.navigate(view)}
@@ -204,6 +208,73 @@
             {/each}
           </div>
         {/if}
+      </section>
+    {:else if router.current === "templates"}
+      <section class="sessions-layout">
+        <div class="panel session-list">
+          <div class="section-head">
+            <h1>Templates</h1>
+            <button onclick={() => void templatesStore.fetch()}>Refresh</button>
+          </div>
+
+          {#if templatesStore.loading}
+            <p class="muted">Loading templates...</p>
+          {:else if templatesStore.list.length === 0}
+            <p class="muted">No templates available yet.</p>
+          {:else}
+            <div class="stack">
+              {#each templatesStore.list as template}
+                <button
+                  class:active={template.id === templatesStore.activeId}
+                  class="session-item"
+                  onclick={() => templatesStore.select(template.id)}
+                >
+                  <strong>{template.name}</strong>
+                  <span>{template.builtin ? "Built-in" : "User"} · {template.default_mode}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+
+        <div class="panel chat-panel">
+          {#if templatesStore.active}
+            <div class="section-head">
+              <h1>{templatesStore.active.name}</h1>
+              <span>{templatesStore.active.builtin ? "Built-in template" : "User template"}</span>
+            </div>
+
+            <p>{templatesStore.active.description || "No description provided."}</p>
+
+            <div class="stack compact">
+              <article class="workspace-entry">
+                <strong>Template ID</strong>
+                <span>{templatesStore.active.id}</span>
+              </article>
+              <article class="workspace-entry">
+                <strong>Default Mode</strong>
+                <span>{templatesStore.active.default_mode}</span>
+              </article>
+              <article class="workspace-entry">
+                <strong>Mutability</strong>
+                <span>{templatesStore.active.mutable ? "Editable" : "Read-only"}</span>
+              </article>
+            </div>
+
+            <div class="stack">
+              <article class="message-card assistant">
+                <header>Parameter Schema</header>
+                <pre>{JSON.stringify(templatesStore.active.parameter_schema, null, 2)}</pre>
+              </article>
+              <article class="message-card assistant">
+                <header>Output Expectations</header>
+                <pre>{JSON.stringify(templatesStore.active.output_expectations, null, 2)}</pre>
+              </article>
+            </div>
+          {:else}
+            <p class="muted">Choose a template to inspect its schema and output contract.</p>
+          {/if}
+        </div>
       </section>
     {:else if router.current === "workspace"}
       <section class="workspace-layout">

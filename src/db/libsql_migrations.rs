@@ -787,6 +787,26 @@ CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
 "#,
     ),
+    (
+        15,
+        "task_templates",
+        r#"
+CREATE TABLE IF NOT EXISTS task_templates (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    parameter_schema TEXT NOT NULL,
+    default_mode TEXT NOT NULL,
+    output_expectations TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_templates_user ON task_templates(user_id);
+CREATE INDEX IF NOT EXISTS idx_task_templates_user_name ON task_templates(user_id, name);
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

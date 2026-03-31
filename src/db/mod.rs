@@ -38,6 +38,7 @@ use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, JobEventRecord,
     LlmCallRecord, SandboxJobRecord, SandboxJobSummary, SettingRow,
 };
+use crate::task_templates::TaskTemplateRecord;
 use crate::workspace::{MemoryChunk, MemoryDocument, WorkspaceEntry};
 use crate::workspace::{SearchConfig, SearchResult};
 
@@ -642,6 +643,30 @@ pub trait SettingsStore: Send + Sync {
 }
 
 #[async_trait]
+pub trait TemplateStore: Send + Sync {
+    async fn list_task_templates(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<TaskTemplateRecord>, DatabaseError>;
+    async fn get_task_template(
+        &self,
+        user_id: &str,
+        id: &str,
+    ) -> Result<Option<TaskTemplateRecord>, DatabaseError>;
+    async fn create_task_template(
+        &self,
+        user_id: &str,
+        template: &TaskTemplateRecord,
+    ) -> Result<(), DatabaseError>;
+    async fn update_task_template(
+        &self,
+        user_id: &str,
+        template: &TaskTemplateRecord,
+    ) -> Result<bool, DatabaseError>;
+    async fn delete_task_template(&self, user_id: &str, id: &str) -> Result<bool, DatabaseError>;
+}
+
+#[async_trait]
 pub trait WorkspaceStore: Send + Sync {
     async fn get_document_by_path(
         &self,
@@ -924,6 +949,7 @@ pub trait Database:
     + RoutineStore
     + ToolFailureStore
     + SettingsStore
+    + TemplateStore
     + WorkspaceStore
     + UserStore
     + Send

@@ -1,5 +1,6 @@
 //! Local HTTP API for the desktop-first runtime.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -30,6 +31,9 @@ use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
 use crate::settings::Settings;
 use crate::task_runtime::{TaskMode, TaskRecord, TaskRuntime, TaskStatus};
+use crate::task_templates::{
+    TaskTemplateRecord, builtin_template, builtin_templates, validate_template_draft,
+};
 use crate::workspace::{SearchResult, Workspace, WorkspaceEntry};
 
 pub const DEFAULT_API_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -116,11 +120,18 @@ pub struct PatchSettingsRequest {
 #[derive(Debug, Serialize)]
 struct ApiErrorBody {
     error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    field_errors: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TemplateListResponse {
+    pub templates: Vec<TaskTemplateRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -238,6 +249,17 @@ pub struct PatchTaskModeRequest {
     pub mode: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpsertTemplateRequest {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub parameter_schema: Value,
+    pub default_mode: String,
+    #[serde(default = "default_template_output_expectations")]
+    pub output_expectations: Value,
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct RejectTaskRequest {
     pub approval_id: Option<Uuid>,
@@ -250,6 +272,7 @@ pub type ApiResult<T> = Result<T, ApiError>;
 pub struct ApiError {
     status: StatusCode,
     message: String,
+    field_errors: Option<HashMap<String, String>>,
 }
 
 impl ApiError {
@@ -257,6 +280,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            field_errors: None,
         }
     }
 
@@ -264,6 +288,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: message.into(),
+            field_errors: None,
         }
     }
 
@@ -271,6 +296,7 @@ impl ApiError {
         Self {
             status: StatusCode::CONFLICT,
             message: message.into(),
+            field_errors: None,
         }
     }
 
@@ -278,6 +304,18 @@ impl ApiError {
         Self {
             status: StatusCode::UNPROCESSABLE_ENTITY,
             message: message.into(),
+            field_errors: None,
+        }
+    }
+
+    fn unprocessable_with_fields(
+        message: impl Into<String>,
+        field_errors: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+            field_errors: Some(field_errors),
         }
     }
 
@@ -285,6 +323,7 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: message.into(),
+            field_errors: None,
         }
     }
 }
@@ -295,6 +334,7 @@ impl IntoResponse for ApiError {
             self.status,
             Json(ApiErrorBody {
                 error: self.message,
+                field_errors: self.field_errors,
             }),
         )
             .into_response()
@@ -330,6 +370,16 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
         .route("/api/v0/tasks/{id}/reject", post(reject_task))
         .route("/api/v0/tasks/{id}/mode", patch(patch_task_mode))
+        .route(
+            "/api/v0/templates",
+            get(list_templates).post(create_template),
+        )
+        .route(
+            "/api/v0/templates/{id}",
+            get(get_template)
+                .put(update_template)
+                .delete(delete_template),
+        )
         .route("/api/v0/workspace/index", post(index_workspace))
         .route("/api/v0/workspace/tree", get(get_workspace_tree))
         .route("/api/v0/workspace/search", post(search_workspace))
@@ -533,11 +583,9 @@ async fn stream_session(
             async move { normalize_session_event(thread_id, event) }
         })
         .enumerate()
-        .filter_map(
-            |(idx, (thread_id, normalized))| async move {
-                serialize_stream_envelope(thread_id, idx as u64 + 1, normalized)
-            },
-        );
+        .filter_map(|(idx, (thread_id, normalized))| async move {
+            serialize_stream_envelope(thread_id, idx as u64 + 1, normalized)
+        });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("")))
 }
@@ -578,14 +626,13 @@ async fn stream_task(
             async move { normalize_task_event(task_id, runtime, event).await }
         });
 
-    let stream = initial
-        .chain(live)
-        .enumerate()
-        .filter_map(
-            |(idx, (thread_id, normalized))| async move {
+    let stream =
+        initial
+            .chain(live)
+            .enumerate()
+            .filter_map(|(idx, (thread_id, normalized))| async move {
                 serialize_stream_envelope(thread_id, idx as u64 + 1, normalized)
-            },
-        );
+            });
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("")))
 }
@@ -598,6 +645,147 @@ async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Json<TaskListRes
     Ok(Json(TaskListResponse {
         tasks: runtime.list_tasks().await,
     }))
+}
+
+async fn list_templates(State(state): State<ApiState>) -> ApiResult<Json<TemplateListResponse>> {
+    let mut templates = builtin_templates();
+    let mut user_templates = state
+        .store
+        .list_task_templates(&state.owner_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to list templates: {e}")))?;
+    templates.append(&mut user_templates);
+    templates.sort_by(|left, right| {
+        right.builtin.cmp(&left.builtin).then_with(|| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        })
+    });
+    Ok(Json(TemplateListResponse { templates }))
+}
+
+async fn get_template(
+    State(state): State<ApiState>,
+    Path(template_id): Path<String>,
+) -> ApiResult<Json<TaskTemplateRecord>> {
+    if let Some(template) = builtin_template(&template_id) {
+        return Ok(Json(template));
+    }
+
+    let template = state
+        .store
+        .get_task_template(&state.owner_id, &template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to load template: {e}")))?
+        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
+    Ok(Json(template))
+}
+
+async fn create_template(
+    State(state): State<ApiState>,
+    Json(payload): Json<UpsertTemplateRequest>,
+) -> ApiResult<(StatusCode, Json<TaskTemplateRecord>)> {
+    let draft = validate_template_payload(&payload)?;
+    let template_id = Uuid::new_v4().to_string();
+    let template = TaskTemplateRecord::from_user_row(
+        template_id.clone(),
+        draft.name,
+        draft.description,
+        draft.parameter_schema,
+        draft.default_mode,
+        draft.output_expectations,
+        chrono::Utc::now(),
+        chrono::Utc::now(),
+    );
+
+    state
+        .store
+        .create_task_template(&state.owner_id, &template)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to create template: {e}")))?;
+
+    let created = state
+        .store
+        .get_task_template(&state.owner_id, &template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to reload template: {e}")))?
+        .ok_or_else(|| ApiError::internal("created template could not be reloaded"))?;
+
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn update_template(
+    State(state): State<ApiState>,
+    Path(template_id): Path<String>,
+    Json(payload): Json<UpsertTemplateRequest>,
+) -> ApiResult<Json<TaskTemplateRecord>> {
+    if builtin_template(&template_id).is_some() {
+        return Err(ApiError::conflict(format!(
+            "template {template_id} is built-in and cannot be modified"
+        )));
+    }
+
+    let existing = state
+        .store
+        .get_task_template(&state.owner_id, &template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to load template: {e}")))?
+        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
+    let draft = validate_template_payload(&payload)?;
+
+    let updated = TaskTemplateRecord {
+        id: existing.id,
+        name: draft.name,
+        description: draft.description,
+        parameter_schema: draft.parameter_schema,
+        default_mode: draft.default_mode,
+        output_expectations: draft.output_expectations,
+        builtin: false,
+        mutable: true,
+        clonable: true,
+        created_at: existing.created_at,
+        updated_at: Some(chrono::Utc::now()),
+    };
+
+    state
+        .store
+        .update_task_template(&state.owner_id, &updated)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to update template: {e}")))?;
+
+    let template = state
+        .store
+        .get_task_template(&state.owner_id, &template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to reload template: {e}")))?
+        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
+
+    Ok(Json(template))
+}
+
+async fn delete_template(
+    State(state): State<ApiState>,
+    Path(template_id): Path<String>,
+) -> ApiResult<StatusCode> {
+    if builtin_template(&template_id).is_some() {
+        return Err(ApiError::conflict(format!(
+            "template {template_id} is built-in and cannot be deleted"
+        )));
+    }
+
+    let deleted = state
+        .store
+        .delete_task_template(&state.owner_id, &template_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to delete template: {e}")))?;
+    if !deleted {
+        return Err(ApiError::not_found(format!(
+            "template {template_id} not found"
+        )));
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_task(
@@ -862,6 +1050,23 @@ async fn load_settings(state: &ApiState) -> ApiResult<Settings> {
     Ok(Settings::from_db_map(&map))
 }
 
+fn default_template_output_expectations() -> Value {
+    json!({})
+}
+
+fn validate_template_payload(
+    payload: &UpsertTemplateRequest,
+) -> ApiResult<crate::task_templates::TaskTemplateDraft> {
+    validate_template_draft(
+        &payload.name,
+        &payload.description,
+        &payload.parameter_schema,
+        &payload.default_mode,
+        &payload.output_expectations,
+    )
+    .map_err(|err| ApiError::unprocessable_with_fields(err.message, err.field_errors))
+}
+
 fn validate_settings_patch(payload: &PatchSettingsRequest) -> ApiResult<()> {
     if let Some(backend) = &payload.llm_backend
         && backend.trim().is_empty()
@@ -967,9 +1172,10 @@ fn normalize_session_event(
     event: ironclaw_common::AppEvent,
 ) -> Option<(String, (String, Value))> {
     let normalized = match event {
-        ironclaw_common::AppEvent::Response { content, .. } => {
-            ("session.response".to_string(), json!({ "content": content }))
-        }
+        ironclaw_common::AppEvent::Response { content, .. } => (
+            "session.response".to_string(),
+            json!({ "content": content }),
+        ),
         ironclaw_common::AppEvent::ApprovalNeeded {
             request_id,
             tool_name,

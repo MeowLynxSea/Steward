@@ -73,6 +73,20 @@ export interface TaskRecord {
   last_error: string | null;
 }
 
+export interface TaskTemplateRecord {
+  id: string;
+  name: string;
+  description: string;
+  parameter_schema: Record<string, unknown>;
+  default_mode: TaskMode;
+  output_expectations: Record<string, unknown>;
+  builtin: boolean;
+  mutable: boolean;
+  clonable: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 export interface WorkspaceEntry {
   path: string;
   is_directory: boolean;

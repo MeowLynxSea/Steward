@@ -38,6 +38,27 @@ PUT    /api/v0/templates/:id
 DELETE /api/v0/templates/:id
 ```
 
+#### Template response shape
+
+```json
+{
+  "id": "builtin:file-archive|uuid",
+  "name": "File Archive",
+  "description": "Scan a source directory and propose organization actions.",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {}
+  },
+  "default_mode": "ask|yolo",
+  "output_expectations": {},
+  "builtin": true,
+  "mutable": false,
+  "clonable": true,
+  "created_at": "RFC3339 timestamp or null",
+  "updated_at": "RFC3339 timestamp or null"
+}
+```
+
 #### Core task mode enum
 
 ```rust
@@ -103,6 +124,52 @@ Rules:
 - `mode` is required and must be `ask` or `yolo`.
 - `parameters` must be validated against the template schema before execution starts.
 - Task creation persists the task before agent execution begins.
+
+#### `POST /api/v0/templates`
+
+Request:
+
+```json
+{
+  "name": "Custom Archive",
+  "description": "User-defined archive variant",
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "source_path": { "type": "string" }
+    },
+    "required": ["source_path"]
+  },
+  "default_mode": "ask",
+  "output_expectations": {
+    "kind": "file_operation_plan"
+  }
+}
+```
+
+Rules:
+
+- Creates a user-owned template with a generated UUID id.
+- `parameter_schema.type` must be `object`.
+- `parameter_schema.properties` must be an object.
+- `output_expectations` must be an object.
+- Validation failures return `422` with `{ "error": "...", "field_errors": { ... } }`.
+
+#### `PUT /api/v0/templates/:id`
+
+Rules:
+
+- Built-in templates are readable but not mutable.
+- Updating a built-in template must return `409`.
+- Updating a missing user template must return `404`.
+
+#### `DELETE /api/v0/templates/:id`
+
+Rules:
+
+- Built-in templates are readable but not deletable.
+- Deleting a built-in template must return `409`.
+- Deleting a missing user template must return `404`.
 
 #### `PATCH /api/v0/tasks/:id/mode`
 
@@ -175,6 +242,9 @@ Required task event types:
 |----------------------|-------------------|--------|
 | `POST /tasks` with unknown template | reject before enqueue | `404` |
 | `POST /tasks` with invalid parameters | return field validation errors | `422` |
+| `POST /templates` with invalid schema | reject with field-level validation errors | `422` |
+| `PUT /templates/:id` for built-in template | reject mutation | `409` |
+| `DELETE /templates/:id` for built-in template | reject mutation | `409` |
 | `PATCH /tasks/:id/mode` with invalid mode | reject | `422` |
 | `POST /tasks/:id/approve` when no approval is pending | reject | `409` |
 | `POST /tasks/:id/approve` with stale `approval_id` | reject as stale checkpoint | `409` |
@@ -189,6 +259,7 @@ Required task event types:
 - File archive task in `ask` mode pauses before file writes and emits a structured preview payload.
 - User flips a running task from `ask` to `yolo`, and the stream emits `task.mode_changed`.
 - Periodic briefing task in `yolo` mode completes and writes markdown output without opening any approval checkpoint for low-risk local writes that policy has classified as safe.
+- Template library returns both built-in and user-defined templates in one typed list, with built-ins marked read-only.
 
 #### Base
 
@@ -200,10 +271,12 @@ Required task event types:
 - Approval is represented as a free-form chat message instead of a typed event.
 - UI assumes any paused task means approval is pending.
 - Tools decide on their own whether they are in Ask or Yolo without consulting persisted task mode.
+- Template schema validation relies on opaque `400` text without field-level keys the UI can render.
 
 ### 6. Tests Required
 
 - Integration test for `POST /tasks` with valid and invalid template parameters.
+- Integration test for template CRUD covering built-in read-only semantics and `422` field errors.
 - Agent-loop test proving risky tool calls pause in `ask` mode and continue in `yolo` mode.
 - API test for approve/reject race handling with stale `approval_id`.
 - SSE test asserting `task.waiting_approval` and `task.mode_changed` events are emitted in order.
