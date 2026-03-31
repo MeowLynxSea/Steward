@@ -7,6 +7,7 @@ use clap::Parser;
 
 use ironclaw::{
     agent::{Agent, AgentDeps},
+    api::{ApiState, DEFAULT_API_PORT, local_api_addr, run_api},
     app::{AppBuilder, AppBuilderFlags},
     channels::{ChannelManager, ReplChannel},
     cli::{
@@ -17,6 +18,7 @@ use ironclaw::{
     hooks::bootstrap_hooks,
     llm::create_session_manager,
     orchestrator::{ReaperConfig, SandboxReaper},
+    task_runtime::TaskRuntime,
     tracing_fmt::{init_app_tracing, init_cli_tracing, init_worker_tracing},
 };
 /// Synchronous entry point. Loads `.env` files before the Tokio runtime
@@ -452,6 +454,24 @@ async fn async_main() -> anyhow::Result<()> {
         .map(|r| r.http_interceptor());
     // Clone context_manager for the reaper before it's moved into Agent::new()
     let reaper_context_manager = Arc::clone(&components.context_manager);
+    let task_runtime = Arc::new(TaskRuntime::new());
+
+    if let Some(settings_store) = components.db.clone() {
+        let api_bind_addr = local_api_addr(DEFAULT_API_PORT);
+        let api_state = ApiState::new(
+            config.owner_id.clone(),
+            api_bind_addr,
+            settings_store,
+            Arc::new(ironclaw::runtime_events::SseManager::new()),
+            Some(task_runtime.clone()),
+            Some(channels.inject_sender()),
+        );
+        tokio::spawn(async move {
+            if let Err(error) = run_api(api_bind_addr, api_state).await {
+                tracing::error!(%error, "local api service exited");
+            }
+        });
+    }
 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
@@ -490,6 +510,7 @@ async fn async_main() -> anyhow::Result<()> {
             config.agent.max_llm_concurrent_per_user.unwrap_or(4),
             config.agent.max_jobs_concurrent_per_user.unwrap_or(3),
         )),
+        task_runtime: Some(task_runtime),
     };
 
     let channels_for_warnings = Arc::clone(&channels);

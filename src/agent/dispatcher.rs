@@ -20,6 +20,7 @@ use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction,
 };
 use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
+use crate::task_runtime::TaskMode;
 use crate::tools::redact_params;
 
 /// Result of the agentic loop execution.
@@ -663,7 +664,9 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             }
 
             // Check if tool requires approval
-            if !self.agent.config.auto_approve_tools
+            let task_mode = self.agent.task_mode_for_thread(self.thread_id).await;
+            if task_mode != TaskMode::Yolo
+                && !self.agent.config.auto_approve_tools
                 && let Some(tool) = tool_opt
             {
                 use crate::tools::ApprovalRequirement;
@@ -1378,6 +1381,7 @@ mod tests {
             builder: None,
             llm_backend: "nearai".to_string(),
             tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            task_runtime: None,
         };
 
         Agent::new(
@@ -2260,6 +2264,7 @@ mod tests {
             builder: None,
             llm_backend: "nearai".to_string(),
             tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            task_runtime: None,
         };
 
         Agent::new(
@@ -2388,6 +2393,7 @@ mod tests {
                 builder: None,
                 llm_backend: "nearai".to_string(),
                 tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+                task_runtime: None,
             };
 
             Agent::new(

@@ -7,8 +7,10 @@ use axum::{
 use http_body_util::BodyExt;
 use ironclaw::{
     api::{ApiState, local_api_addr, router, run_api},
+    channels::IncomingMessage,
     db::{Database, SettingsStore, libsql::LibSqlBackend},
     runtime_events::SseManager,
+    task_runtime::TaskRuntime,
 };
 use serde_json::json;
 use tower::util::ServiceExt;
@@ -26,6 +28,8 @@ async fn test_router() -> axum::Router {
         local_api_addr(8765),
         db,
         Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        None,
     );
 
     router(state)
@@ -172,6 +176,8 @@ async fn run_api_rejects_non_localhost_bind() {
         bind_addr,
         db as Arc<dyn SettingsStore>,
         Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        None,
     );
 
     let err = run_api(bind_addr, state)
@@ -181,4 +187,63 @@ async fn run_api_rejects_non_localhost_bind() {
         err.to_string().contains("Phase 1 only allows 127.0.0.1"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
+        .with_thread(task_id.to_string());
+    runtime.ensure_task(&message, task_id).await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db,
+        Arc::new(SseManager::new()),
+        Some(runtime.clone()),
+        None,
+    ));
+
+    let toggle_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/tasks/{task_id}/yolo-toggle"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"enabled":true}"#))
+                .expect("toggle request"),
+        )
+        .await
+        .expect("toggle response");
+    assert_eq!(toggle_response.status(), StatusCode::OK);
+
+    let list_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/tasks")
+                .body(Body::empty())
+                .expect("list request"),
+        )
+        .await
+        .expect("list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let tasks = list_response
+        .into_body()
+        .collect()
+        .await
+        .expect("list body")
+        .to_bytes();
+    let tasks: serde_json::Value = serde_json::from_slice(&tasks).expect("tasks json");
+    assert_eq!(tasks["tasks"][0]["id"], task_id.to_string());
+    assert_eq!(tasks["tasks"][0]["mode"], "yolo");
 }

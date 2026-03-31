@@ -187,6 +187,11 @@ impl Agent {
             "Processing user input"
         );
 
+        if let Some(task_runtime) = self.task_runtime() {
+            task_runtime.ensure_task(message, thread_id).await;
+            task_runtime.mark_running(message, thread_id).await;
+        }
+
         // First check thread state without holding lock during I/O
         let (thread_state, approval_context) = {
             let sess = session.lock().await;
@@ -585,6 +590,10 @@ impl Agent {
                         .await;
                 }
 
+                if let Some(task_runtime) = self.task_runtime() {
+                    task_runtime.mark_completed(thread_id).await;
+                }
+
                 Ok(SubmissionResult::response(response))
             }
             Ok(AgenticLoopResult::NeedApproval { pending }) => {
@@ -595,6 +604,13 @@ impl Agent {
                 let parameters = pending.display_parameters.clone();
                 let allow_always = pending.allow_always;
                 thread.await_approval(*pending);
+                if let Some(task_runtime) = self.task_runtime()
+                    && let Some(pending_approval) = thread.pending_approval.as_ref()
+                {
+                    task_runtime
+                        .mark_waiting_approval(message, thread_id, pending_approval)
+                        .await;
+                }
                 let _ = self
                     .channels
                     .send_status(
@@ -619,6 +635,9 @@ impl Agent {
             }
             Err(e) => {
                 thread.fail_turn(e.to_string());
+                if let Some(task_runtime) = self.task_runtime() {
+                    task_runtime.mark_failed(thread_id, e.to_string()).await;
+                }
                 // User message already persisted at turn start; nothing else to save
                 Ok(SubmissionResult::error(e.to_string()))
             }
@@ -1043,6 +1062,9 @@ impl Agent {
                     thread.state = ThreadState::Processing;
                 }
             }
+            if let Some(task_runtime) = self.task_runtime() {
+                task_runtime.mark_running(message, thread_id).await;
+            }
 
             // Execute the approved tool and continue the loop
             let mut job_ctx =
@@ -1193,7 +1215,11 @@ impl Agent {
                 if let Some(tool) = self.tools().get(&tc.name).await {
                     // Match dispatcher.rs: when auto_approve_tools is true, skip
                     // all approval checks (including ApprovalRequirement::Always).
-                    let (needs_approval, allow_always) = if self.config.auto_approve_tools {
+                    let task_mode = self.task_mode_for_thread(thread_id).await;
+                    let (needs_approval, allow_always) = if task_mode
+                        == crate::task_runtime::TaskMode::Yolo
+                        || self.config.auto_approve_tools
+                    {
                         (false, true)
                     } else {
                         use crate::tools::ApprovalRequirement;
@@ -1445,6 +1471,13 @@ impl Agent {
                     let mut sess = session.lock().await;
                     if let Some(thread) = sess.threads.get_mut(&thread_id) {
                         thread.await_approval(new_pending);
+                        if let Some(task_runtime) = self.task_runtime()
+                            && let Some(pending_approval) = thread.pending_approval.as_ref()
+                        {
+                            task_runtime
+                                .mark_waiting_approval(message, thread_id, pending_approval)
+                                .await;
+                        }
                     }
                 }
 
@@ -1535,6 +1568,9 @@ impl Agent {
                             )
                             .await;
                     }
+                    if let Some(task_runtime) = self.task_runtime() {
+                        task_runtime.mark_completed(thread_id).await;
+                    }
                     Ok(SubmissionResult::response(response))
                 }
                 Ok(AgenticLoopResult::NeedApproval {
@@ -1546,6 +1582,13 @@ impl Agent {
                     let parameters = new_pending.display_parameters.clone();
                     let allow_always = new_pending.allow_always;
                     thread.await_approval(*new_pending);
+                    if let Some(task_runtime) = self.task_runtime()
+                        && let Some(pending_approval) = thread.pending_approval.as_ref()
+                    {
+                        task_runtime
+                            .mark_waiting_approval(message, thread_id, pending_approval)
+                            .await;
+                    }
                     let _ = self
                         .channels
                         .send_status(
@@ -1570,6 +1613,9 @@ impl Agent {
                 }
                 Err(e) => {
                     thread.fail_turn(e.to_string());
+                    if let Some(task_runtime) = self.task_runtime() {
+                        task_runtime.mark_failed(thread_id, e.to_string()).await;
+                    }
                     // User message already persisted at turn start
                     Ok(SubmissionResult::error(e.to_string()))
                 }
@@ -1595,6 +1641,12 @@ impl Agent {
                     )
                     .await;
                 }
+            }
+
+            if let Some(task_runtime) = self.task_runtime() {
+                task_runtime
+                    .mark_rejected(thread_id, "tool execution rejected")
+                    .await;
             }
 
             let _ = self

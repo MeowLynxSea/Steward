@@ -30,6 +30,7 @@ use crate::hooks::HookRegistry;
 use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
+use crate::task_runtime::{TaskMode, TaskRuntime};
 use crate::tools::ToolRegistry;
 use crate::workspace::Workspace;
 
@@ -184,6 +185,8 @@ pub struct AgentDeps {
     pub llm_backend: String,
     /// Per-tenant rate limiting registry (lazily creates rate state per user).
     pub tenant_rates: Arc<crate::tenant::TenantRateRegistry>,
+    /// Task-mode runtime for Ask/Yolo approvals and task API bridging.
+    pub task_runtime: Option<Arc<TaskRuntime>>,
 }
 
 /// The main agent that coordinates all components.
@@ -206,6 +209,17 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub(super) fn task_runtime(&self) -> Option<&Arc<TaskRuntime>> {
+        self.deps.task_runtime.as_ref()
+    }
+
+    pub(super) async fn task_mode_for_thread(&self, thread_id: Uuid) -> TaskMode {
+        match self.task_runtime() {
+            Some(runtime) => runtime.mode_for_task(thread_id).await,
+            None => TaskMode::Ask,
+        }
+    }
+
     pub(super) fn owner_id(&self) -> &str {
         if let Some(workspace) = self.deps.workspace.as_ref() {
             debug_assert_eq!(

@@ -10,6 +10,7 @@ use crate::api::{ApiState, DEFAULT_API_HOST, DEFAULT_API_PORT, run_api};
 use crate::config::Config;
 use crate::db::{SettingsStore, connect_from_config};
 use crate::runtime_events::SseManager;
+use crate::task_runtime::TaskRuntime;
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ApiCommand {
@@ -51,6 +52,8 @@ async fn run_api_serve(
         bind_addr,
         settings_store,
         Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        None,
     );
 
     run_api(bind_addr, state)

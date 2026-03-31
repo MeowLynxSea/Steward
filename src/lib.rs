@@ -72,6 +72,7 @@ pub mod secrets;
 pub mod service;
 pub mod settings;
 pub mod skills;
+pub mod task_runtime;
 pub mod tenant;
 pub mod timezone;
 pub mod tools;
