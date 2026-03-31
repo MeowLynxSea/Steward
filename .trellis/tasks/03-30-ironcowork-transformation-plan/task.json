@@ -3,14 +3,14 @@
   "name": "ironcowork-transformation-plan",
   "title": "Plan IronCowork desktop-first transformation",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "priority": "P2",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
   "createdAt": "2026-03-30",
-  "completedAt": null,
+  "completedAt": "2026-03-31",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -33,12 +33,12 @@
       "action": "create-pr"
     }
   ],
-  "commit": null,
+  "commit": "39050af",
   "pr_url": null,
   "subtasks": [],
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
+  "notes": "Foundational transformation plan persisted under docs/plans and superseded for execution by the post-Phase-1 roadmap.",
   "meta": {}
 }
