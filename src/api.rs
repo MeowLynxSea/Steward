@@ -491,8 +491,7 @@ async fn post_session_message(
             "source": "api",
             "surface": "web"
         }))
-        .with_timezone("UTC")
-        .into_internal();
+        .with_timezone("UTC");
     inject_tx
         .send(message)
         .await

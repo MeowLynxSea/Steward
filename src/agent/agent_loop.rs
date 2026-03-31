@@ -942,29 +942,35 @@ impl Agent {
                         Ok(crate::hooks::HookOutcome::Continue {
                             modified: Some(new_content),
                         }) => {
-                            if let Err(e) = self
-                                .channels
-                                .respond(&message, OutgoingResponse::text(new_content))
-                                .await
-                            {
-                                tracing::error!(
-                                    channel = %message.channel,
-                                    error = %e,
-                                    "Failed to send response to channel"
-                                );
+                            // Skip channel delivery for "api" — SSE already delivered the response above.
+                            if message.channel != "api" {
+                                if let Err(e) = self
+                                    .channels
+                                    .respond(&message, OutgoingResponse::text(new_content))
+                                    .await
+                                {
+                                    tracing::error!(
+                                        channel = %message.channel,
+                                        error = %e,
+                                        "Failed to send response to channel"
+                                    );
+                                }
                             }
                         }
                         _ => {
-                            if let Err(e) = self
-                                .channels
-                                .respond(&message, OutgoingResponse::text(response))
-                                .await
-                            {
-                                tracing::error!(
-                                    channel = %message.channel,
-                                    error = %e,
-                                    "Failed to send response to channel"
-                                );
+                            // Skip channel delivery for "api" — SSE already delivered the response above.
+                            if message.channel != "api" {
+                                if let Err(e) = self
+                                    .channels
+                                    .respond(&message, OutgoingResponse::text(response))
+                                    .await
+                                {
+                                    tracing::error!(
+                                        channel = %message.channel,
+                                        error = %e,
+                                        "Failed to send response to channel"
+                                    );
+                                }
                             }
                         }
                     }

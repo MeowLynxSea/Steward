@@ -1,5 +1,4 @@
 import type {
-  RuntimeEvent,
   SessionDetail,
   SessionSummary,
   SettingsResponse,
@@ -40,6 +39,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
+  // -- Settings --
+
   getSettings() {
     return request<SettingsResponse>("/settings");
   },
@@ -50,6 +51,8 @@ export const apiClient = {
       body: JSON.stringify(payload)
     });
   },
+
+  // -- Sessions --
 
   listSessions() {
     return request<{ sessions: SessionSummary[] }>("/sessions");
@@ -73,6 +76,8 @@ export const apiClient = {
     });
   },
 
+  // -- Tasks --
+
   listTasks() {
     return request<{ tasks: TaskRecord[] }>("/tasks");
   },
@@ -81,19 +86,24 @@ export const apiClient = {
     return request<TaskRecord>(`/tasks/${id}`);
   },
 
-  approveTask(id: string, requestId?: string, always = false) {
+  approveTask(id: string, approvalId?: string, always = false) {
     return request<TaskRecord>(`/tasks/${id}/approve`, {
       method: "POST",
-      body: JSON.stringify({ request_id: requestId, always })
+      body: JSON.stringify({
+        approval_id: approvalId ?? null,
+        always
+      })
     });
   },
 
-  toggleTaskYolo(id: string, enabled: boolean) {
-    return request<TaskRecord>(`/tasks/${id}/yolo-toggle`, {
-      method: "POST",
-      body: JSON.stringify({ enabled })
+  patchTaskMode(id: string, mode: "ask" | "yolo") {
+    return request<TaskRecord>(`/tasks/${id}/mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ mode })
     });
   },
+
+  // -- Workspace --
 
   indexWorkspace(path: string) {
     return request<{ path: string; document_path: string }>("/workspace/index", {
@@ -112,20 +122,5 @@ export const apiClient = {
       method: "POST",
       body: JSON.stringify({ query })
     });
-  },
-
-  streamEvents(path: string, onEvent: (event: RuntimeEvent) => void) {
-    const source = new EventSource(`${API_BASE}${path}`);
-    const handle = (event: MessageEvent<string>) => {
-      const payload = JSON.parse(event.data) as RuntimeEvent;
-      onEvent(payload);
-    };
-
-    source.addEventListener("response", handle as EventListener);
-    source.addEventListener("approval_needed", handle as EventListener);
-    source.addEventListener("status", handle as EventListener);
-    source.addEventListener("error", handle as EventListener);
-
-    return () => source.close();
   }
 };

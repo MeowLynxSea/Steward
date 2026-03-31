@@ -1,220 +1,75 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { apiClient } from "./lib/api";
-  import { listenForFolderDrops, notify } from "./lib/tauri";
-  import type {
-    RuntimeEvent,
-    SessionDetail,
-    SessionMessage,
-    SessionSummary,
-    SettingsResponse,
-    TaskRecord,
-    WorkspaceEntry,
-    WorkspaceSearchResult
-  } from "./lib/types";
+  import { router, type View } from "./lib/router.svelte";
+  import { settingsStore } from "./lib/stores/settings.svelte";
+  import { sessionsStore } from "./lib/stores/sessions.svelte";
+  import { tasksStore } from "./lib/stores/tasks.svelte";
+  import { workspaceStore } from "./lib/stores/workspace.svelte";
+  import { listenForFolderDrops } from "./lib/tauri";
 
-  type View = "sessions" | "tasks" | "workspace" | "settings";
+  let appLoading = $state(true);
+  let appError = $state("");
+  let draftMessage = $state("");
 
-  let currentView: View = "sessions";
-  let loading = true;
-  let error = "";
-  let status = "";
-
-  let settings: SettingsResponse = {
-    llm_backend: null,
-    selected_model: null,
-    ollama_base_url: null,
-    openai_compatible_base_url: null,
-    llm_custom_providers: [],
-    llm_builtin_overrides: {}
-  };
-
-  let sessions: SessionSummary[] = [];
-  let activeSessionId = "";
-  let activeSession: SessionDetail | null = null;
-  let draftMessage = "";
-  let sessionUnsubscribe: (() => void) | null = null;
-
-  let tasks: TaskRecord[] = [];
-  let previousTaskStates = new Map<string, string>();
-
-  let workspacePath = "";
-  let workspaceEntries: WorkspaceEntry[] = [];
-  let workspaceQuery = "";
-  let workspaceResults: WorkspaceSearchResult[] = [];
-
-  async function refreshAll() {
-    loading = true;
-    error = "";
+  async function bootstrap() {
+    appLoading = true;
+    appError = "";
     try {
-      const [settingsResponse, sessionsResponse, tasksResponse, treeResponse] = await Promise.all([
-        apiClient.getSettings(),
-        apiClient.listSessions(),
-        apiClient.listTasks(),
-        apiClient.getWorkspaceTree()
+      await Promise.all([
+        settingsStore.fetch(),
+        sessionsStore.fetchList(),
+        tasksStore.fetch(),
+        workspaceStore.fetch()
       ]);
 
-      settings = settingsResponse;
-      sessions = sessionsResponse.sessions;
-      tasks = tasksResponse.tasks;
-      workspaceEntries = treeResponse.entries;
-      workspacePath = treeResponse.path;
-
-      if (!activeSessionId && sessions.length > 0) {
-        await selectSession(sessions[0].id);
+      // Auto-select first session if none active.
+      if (!sessionsStore.activeId && sessionsStore.list.length > 0) {
+        await sessionsStore.select(sessionsStore.list[0].id);
       }
-    } catch (cause) {
-      error = cause instanceof Error ? cause.message : "Failed to load IronCowork";
+    } catch (e) {
+      appError = e instanceof Error
+        ? e.message
+        : "Failed to connect to IronCowork backend. Is the server running?";
     } finally {
-      loading = false;
+      appLoading = false;
     }
   }
 
-  async function selectSession(id: string) {
-    activeSessionId = id;
-    activeSession = await apiClient.getSession(id);
-    sessionUnsubscribe?.();
-    sessionUnsubscribe = apiClient.streamEvents(`/sessions/${id}/stream`, handleSessionEvent);
+  function combinedStatus(): string {
+    return (
+      sessionsStore.status ||
+      tasksStore.status ||
+      workspaceStore.status ||
+      settingsStore.status ||
+      "Ready"
+    );
   }
 
-  function handleSessionEvent(event: RuntimeEvent) {
-    if (!activeSession) {
-      return;
-    }
-
-    if (event.type === "response") {
-      activeSession = {
-        ...activeSession,
-        messages: [
-          ...activeSession.messages,
-          {
-            id: crypto.randomUUID(),
-            role: "assistant",
-            content: event.content,
-            created_at: new Date().toISOString()
-          }
-        ]
-      };
-    } else if (event.type === "approval_needed") {
-      status = `Approval needed: ${event.tool_name}`;
-      void notify("IronCowork needs confirmation", `${event.tool_name}: ${event.description}`);
-    } else if (event.type === "error") {
-      error = event.message;
-    } else if (event.type === "status") {
-      status = event.message;
-    }
-  }
-
-  function updateSetting<K extends keyof SettingsResponse>(key: K, value: string) {
-    settings = {
-      ...settings,
-      [key]: value || null
-    };
-  }
-
-  async function createSession() {
-    const created = await apiClient.createSession("New Session");
-    await refreshSessions();
-    await selectSession(created.id);
-  }
-
-  async function refreshSessions() {
-    const response = await apiClient.listSessions();
-    sessions = response.sessions;
-  }
-
-  async function sendMessage() {
-    const content = draftMessage.trim();
-    if (!content || !activeSessionId || !activeSession) {
-      return;
-    }
-
-    const optimistic: SessionMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content,
-      created_at: new Date().toISOString()
-    };
-    activeSession = {
-      ...activeSession,
-      messages: [...activeSession.messages, optimistic]
-    };
-    draftMessage = "";
-    await apiClient.sendSessionMessage(activeSessionId, content);
-    status = "Message queued";
-  }
-
-  async function saveSettings() {
-    settings = await apiClient.patchSettings({
-      llm_backend: settings.llm_backend,
-      selected_model: settings.selected_model,
-      ollama_base_url: settings.ollama_base_url,
-      openai_compatible_base_url: settings.openai_compatible_base_url,
-      llm_builtin_overrides: settings.llm_builtin_overrides
-    });
-    status = "Settings saved";
-  }
-
-  async function refreshTasks() {
-    const response = await apiClient.listTasks();
-    for (const task of response.tasks) {
-      const previous = previousTaskStates.get(task.id);
-      if (previous && previous !== task.status) {
-        if (task.status === "waiting_approval") {
-          void notify("Task waiting for approval", task.title);
-        }
-        if (task.status === "completed") {
-          void notify("Task completed", task.title);
-        }
-      }
-      previousTaskStates.set(task.id, task.status);
-    }
-    tasks = response.tasks;
-  }
-
-  async function toggleTaskMode(task: TaskRecord) {
-    await apiClient.toggleTaskYolo(task.id, task.mode !== "yolo");
-    await refreshTasks();
-  }
-
-  async function approveTask(task: TaskRecord) {
-    await apiClient.approveTask(task.id, task.pending_operation?.request_id);
-    await refreshTasks();
-  }
-
-  async function refreshWorkspace(path = workspacePath) {
-    const tree = await apiClient.getWorkspaceTree(path);
-    workspacePath = tree.path;
-    workspaceEntries = tree.entries;
-  }
-
-  async function searchWorkspace() {
-    if (!workspaceQuery.trim()) {
-      workspaceResults = [];
-      return;
-    }
-    const response = await apiClient.searchWorkspace(workspaceQuery.trim());
-    workspaceResults = response.results;
-  }
-
-  async function indexWorkspace(path: string) {
-    const indexed = await apiClient.indexWorkspace(path);
-    status = `Indexed ${indexed.path}`;
-    await refreshWorkspace();
+  function combinedError(): string {
+    return (
+      appError ||
+      sessionsStore.error ||
+      tasksStore.error ||
+      workspaceStore.error ||
+      settingsStore.error ||
+      ""
+    );
   }
 
   onMount(async () => {
-    await refreshAll();
+    await bootstrap();
+
     const taskInterval = window.setInterval(() => {
-      void refreshTasks();
+      void tasksStore.refresh();
     }, 5000);
+
     const unlistenDrops = await listenForFolderDrops(async (path) => {
-      await indexWorkspace(path);
+      await workspaceStore.index(path);
     });
 
     return () => {
       window.clearInterval(taskInterval);
-      sessionUnsubscribe?.();
+      sessionsStore.disconnect();
       void unlistenDrops();
     };
   });
@@ -232,41 +87,49 @@
     </div>
 
     <nav class="nav">
-      <button class:active={currentView === "sessions"} on:click={() => (currentView = "sessions")}>Sessions</button>
-      <button class:active={currentView === "tasks"} on:click={() => (currentView = "tasks")}>Tasks</button>
-      <button class:active={currentView === "workspace"} on:click={() => (currentView = "workspace")}>Workspace</button>
-      <button class:active={currentView === "settings"} on:click={() => (currentView = "settings")}>Settings</button>
+      {#each (["sessions", "tasks", "workspace", "settings"] as View[]) as view}
+        <button
+          class:active={router.current === view}
+          onclick={() => router.navigate(view)}
+        >
+          {view.charAt(0).toUpperCase() + view.slice(1)}
+        </button>
+      {/each}
     </nav>
 
     <div class="sidebar-foot">
-      <p>{status || "Ready"}</p>
-      {#if error}
-        <p class="error">{error}</p>
+      <p>{combinedStatus()}</p>
+      {#if combinedError()}
+        <p class="error">{combinedError()}</p>
       {/if}
     </div>
   </aside>
 
   <main class="content">
-    {#if loading}
+    {#if appLoading}
       <section class="panel">
-        <h1>Loading local workspace…</h1>
+        <h1>Loading local workspace...</h1>
+        <p class="muted">Fetching settings, sessions, tasks, and workspace data.</p>
       </section>
-    {:else if currentView === "sessions"}
+    {:else if router.current === "sessions"}
       <section class="sessions-layout">
         <div class="panel session-list">
           <div class="section-head">
             <h1>Sessions</h1>
-            <button on:click={createSession}>New</button>
+            <button onclick={() => void sessionsStore.create()}>New</button>
           </div>
-          {#if sessions.length === 0}
-            <p class="muted">No sessions yet.</p>
+
+          {#if sessionsStore.listLoading}
+            <p class="muted">Loading sessions...</p>
+          {:else if sessionsStore.list.length === 0}
+            <p class="muted">No sessions yet. Click "New" to create one.</p>
           {:else}
             <div class="stack">
-              {#each sessions as session}
+              {#each sessionsStore.list as session}
                 <button
-                  class:active={session.id === activeSessionId}
+                  class:active={session.id === sessionsStore.activeId}
                   class="session-item"
-                  on:click={() => void selectSession(session.id)}
+                  onclick={() => void sessionsStore.select(session.id)}
                 >
                   <strong>{session.title}</strong>
                   <span>{session.channel} · {session.message_count} msgs</span>
@@ -277,80 +140,98 @@
         </div>
 
         <div class="panel chat-panel">
-          {#if activeSession}
+          {#if sessionsStore.loading}
+            <p class="muted">Loading session...</p>
+          {:else if sessionsStore.active}
             <div class="section-head">
-              <h1>{activeSession.session.title}</h1>
-              <span>{activeSession.session.channel}</span>
+              <h1>{sessionsStore.active.session.title}</h1>
+              <span>{sessionsStore.active.session.channel}</span>
             </div>
 
-            <div class="chat-stream">
-              {#each activeSession.messages as message}
-                <article class:assistant={message.role !== "user"} class="message-card">
-                  <header>{message.role}</header>
-                  <pre>{message.content}</pre>
-                </article>
-              {/each}
-            </div>
+            {#if sessionsStore.active.messages.length === 0}
+              <p class="muted">No messages yet. Send one below.</p>
+            {:else}
+              <div class="chat-stream">
+                {#each sessionsStore.active.messages as message}
+                  <article class:assistant={message.role !== "user"} class="message-card">
+                    <header>{message.role}</header>
+                    <pre>{message.content}</pre>
+                  </article>
+                {/each}
+              </div>
+            {/if}
 
             <div class="composer">
               <textarea bind:value={draftMessage} rows="4" placeholder="Send a message to the local agent"></textarea>
-              <button on:click={sendMessage}>Send</button>
+              <button onclick={() => { sessionsStore.sendMessage(draftMessage); draftMessage = ""; }}>Send</button>
             </div>
           {:else}
             <p class="muted">Choose a session to start chatting.</p>
           {/if}
         </div>
       </section>
-    {:else if currentView === "tasks"}
+    {:else if router.current === "tasks"}
       <section class="panel">
         <div class="section-head">
           <h1>Tasks</h1>
-          <button on:click={() => void refreshTasks()}>Refresh</button>
+          <button onclick={() => void tasksStore.refresh()}>Refresh</button>
         </div>
 
-        <div class="stack">
-          {#each tasks as task}
-            <article class="task-card">
-              <div>
-                <strong>{task.title}</strong>
-                <p>{task.status} · {task.mode}</p>
-                {#if task.last_error}
-                  <p class="error">{task.last_error}</p>
-                {/if}
-              </div>
-              <div class="task-actions">
-                <button on:click={() => void toggleTaskMode(task)}>
-                  {task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
-                </button>
-                {#if task.status === "waiting_approval" && task.pending_operation}
-                  <button on:click={() => void approveTask(task)}>Approve</button>
-                {/if}
-              </div>
-            </article>
-          {/each}
-        </div>
+        {#if tasksStore.loading}
+          <p class="muted">Loading tasks...</p>
+        {:else if tasksStore.list.length === 0}
+          <p class="muted">No tasks found. Tasks will appear here when created.</p>
+        {:else}
+          <div class="stack">
+            {#each tasksStore.list as task}
+              <article class="task-card">
+                <div>
+                  <strong>{task.title}</strong>
+                  <p>{task.status} · {task.mode}</p>
+                  {#if task.last_error}
+                    <p class="error">{task.last_error}</p>
+                  {/if}
+                </div>
+                <div class="task-actions">
+                  <button onclick={() => void tasksStore.toggleMode(task)}>
+                    {task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
+                  </button>
+                  {#if task.status === "waiting_approval" && task.pending_operation}
+                    <button onclick={() => void tasksStore.approve(task)}>Approve</button>
+                  {/if}
+                </div>
+              </article>
+            {/each}
+          </div>
+        {/if}
       </section>
-    {:else if currentView === "workspace"}
+    {:else if router.current === "workspace"}
       <section class="workspace-layout">
         <div class="panel">
           <div class="section-head">
             <h1>Workspace</h1>
-            <button on:click={() => void refreshWorkspace()}>Refresh</button>
+            <button onclick={() => void workspaceStore.refresh()}>Refresh</button>
           </div>
 
           <div class="inline-form">
-            <input bind:value={workspacePath} placeholder="Folder path to index" />
-            <button on:click={() => void indexWorkspace(workspacePath)}>Index Folder</button>
+            <input bind:value={workspaceStore.path} placeholder="Folder path to index" />
+            <button onclick={() => void workspaceStore.index(workspaceStore.path)}>Index Folder</button>
           </div>
 
-          <div class="stack compact">
-            {#each workspaceEntries as entry}
-              <article class="workspace-entry">
-                <strong>{entry.path}</strong>
-                <span>{entry.is_directory ? "dir" : "file"}</span>
-              </article>
-            {/each}
-          </div>
+          {#if workspaceStore.loading}
+            <p class="muted">Loading workspace...</p>
+          {:else if workspaceStore.entries.length === 0}
+            <p class="muted">Workspace is empty. Index a folder to get started.</p>
+          {:else}
+            <div class="stack compact">
+              {#each workspaceStore.entries as entry}
+                <article class="workspace-entry">
+                  <strong>{entry.path}</strong>
+                  <span>{entry.is_directory ? "dir" : "file"}</span>
+                </article>
+              {/each}
+            </div>
+          {/if}
         </div>
 
         <div class="panel">
@@ -359,44 +240,70 @@
           </div>
 
           <div class="inline-form">
-            <input bind:value={workspaceQuery} placeholder="Search indexed notes and documents" />
-            <button on:click={searchWorkspace}>Search</button>
+            <input bind:value={workspaceStore.searchQuery} placeholder="Search indexed notes and documents" />
+            <button onclick={() => void workspaceStore.search(workspaceStore.searchQuery)}>Search</button>
           </div>
 
-          <div class="stack compact">
-            {#each workspaceResults as result}
-              <article class="search-result">
-                <strong>{result.document_path}</strong>
-                <span>score {result.score.toFixed(3)}</span>
-                <p>{result.content}</p>
-              </article>
-            {/each}
-          </div>
+          {#if workspaceStore.searchLoading}
+            <p class="muted">Searching...</p>
+          {:else if workspaceStore.searchResults.length === 0}
+            <p class="muted">No search results yet. Enter a query above.</p>
+          {:else}
+            <div class="stack compact">
+              {#each workspaceStore.searchResults as result}
+                <article class="search-result">
+                  <strong>{result.document_path}</strong>
+                  <span>score {result.score.toFixed(3)}</span>
+                  <p>{result.content}</p>
+                </article>
+              {/each}
+            </div>
+          {/if}
         </div>
       </section>
-    {:else}
+    {:else if router.current === "settings"}
       <section class="panel settings-panel">
         <div class="section-head">
           <h1>Settings</h1>
-          <button on:click={saveSettings}>Save</button>
+          <button onclick={() => void settingsStore.save()}>Save</button>
         </div>
 
-        <label>
-          <span>LLM Backend</span>
-          <input value={settings.llm_backend ?? ""} on:input={(event) => updateSetting("llm_backend", (event.currentTarget as HTMLInputElement).value)} placeholder="openai / ollama / openai_compatible" />
-        </label>
-        <label>
-          <span>Selected Model</span>
-          <input value={settings.selected_model ?? ""} on:input={(event) => updateSetting("selected_model", (event.currentTarget as HTMLInputElement).value)} placeholder="gpt-4.1 / qwen2.5-coder" />
-        </label>
-        <label>
-          <span>Ollama Base URL</span>
-          <input value={settings.ollama_base_url ?? ""} on:input={(event) => updateSetting("ollama_base_url", (event.currentTarget as HTMLInputElement).value)} placeholder="http://127.0.0.1:11434" />
-        </label>
-        <label>
-          <span>OpenAI Compatible Base URL</span>
-          <input value={settings.openai_compatible_base_url ?? ""} on:input={(event) => updateSetting("openai_compatible_base_url", (event.currentTarget as HTMLInputElement).value)} placeholder="http://127.0.0.1:11434/v1" />
-        </label>
+        {#if settingsStore.loading}
+          <p class="muted">Loading settings...</p>
+        {:else}
+          <label>
+            <span>LLM Backend</span>
+            <input
+              value={settingsStore.data.llm_backend ?? ""}
+              oninput={(event) => settingsStore.updateField("llm_backend", (event.currentTarget as HTMLInputElement).value)}
+              placeholder="openai / ollama / openai_compatible"
+            />
+          </label>
+          <label>
+            <span>Selected Model</span>
+            <input
+              value={settingsStore.data.selected_model ?? ""}
+              oninput={(event) => settingsStore.updateField("selected_model", (event.currentTarget as HTMLInputElement).value)}
+              placeholder="gpt-4.1 / qwen2.5-coder"
+            />
+          </label>
+          <label>
+            <span>Ollama Base URL</span>
+            <input
+              value={settingsStore.data.ollama_base_url ?? ""}
+              oninput={(event) => settingsStore.updateField("ollama_base_url", (event.currentTarget as HTMLInputElement).value)}
+              placeholder="http://127.0.0.1:11434"
+            />
+          </label>
+          <label>
+            <span>OpenAI Compatible Base URL</span>
+            <input
+              value={settingsStore.data.openai_compatible_base_url ?? ""}
+              oninput={(event) => settingsStore.updateField("openai_compatible_base_url", (event.currentTarget as HTMLInputElement).value)}
+              placeholder="http://127.0.0.1:11434/v1"
+            />
+          </label>
+        {/if}
       </section>
     {/if}
   </main>
