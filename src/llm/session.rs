@@ -4,6 +4,7 @@
 //! OAuth flow. Tokens are stored in `~/.ironclaw/session.json` and refreshed
 //! automatically when expired.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -389,11 +390,10 @@ impl SessionManager {
         println!("  3. Create or copy an existing API key");
         println!();
 
-        let key_secret =
-            crate::setup::secret_input("API key").map_err(|e| LlmError::SessionRenewalFailed {
-                provider: "nearai".to_string(),
-                reason: format!("Failed to read input: {}", e),
-            })?;
+        let key_secret = prompt_secret("API key").map_err(|e| LlmError::SessionRenewalFailed {
+            provider: "nearai".to_string(),
+            reason: format!("Failed to read input: {}", e),
+        })?;
 
         use secrecy::ExposeSecret;
         let key = key_secret.expose_secret().to_string();
@@ -418,7 +418,7 @@ impl SessionManager {
         }
 
         println!();
-        crate::setup::print_success("NEAR AI Cloud API key saved.");
+        print_success_line("NEAR AI Cloud API key saved.");
         println!();
 
         Ok(())
@@ -599,6 +599,19 @@ impl SessionManager {
         let mut guard = self.token.write().await;
         *guard = Some(token);
     }
+}
+
+fn prompt_secret(label: &str) -> io::Result<SecretString> {
+    print!("{label}: ");
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(SecretString::from(input.trim().to_string()))
+}
+
+fn print_success_line(message: &str) {
+    println!("✓ {message}");
 }
 
 /// Create a session manager from a config, loading env var if present.

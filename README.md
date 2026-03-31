@@ -5,16 +5,11 @@
 <h1 align="center">IronClaw</h1>
 
 <p align="center">
-  <strong>Your secure personal AI assistant, always on your side</strong>
+  <strong>Desktop-first, local-first AI automation for knowledge work</strong>
 </p>
 
 <p align="center">
   <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache%202.0-blue.svg" alt="License: MIT OR Apache-2.0" /></a>
-  <a href="https://t.me/ironclawAI"><img src="https://img.shields.io/badge/Telegram-%40ironclawAI-26A5E4?style=flat&logo=telegram&logoColor=white" alt="Telegram: @ironclawAI" /></a>
-  <a href="https://www.reddit.com/r/ironclawAI/"><img src="https://img.shields.io/badge/Reddit-r%2FironclawAI-FF4500?style=flat&logo=reddit&logoColor=white" alt="Reddit: r/ironclawAI" /></a>
-  <a href="https://gitcgr.com/nearai/ironclaw">
-    <img src="https://gitcgr.com/badge/nearai/ironclaw.svg" alt="gitcgr" />
-  </a>
 </p>
 
 <p align="center">
@@ -35,18 +30,16 @@
 
 ---
 
-## Philosophy
+## Phase 0 Status
 
-IronClaw is built on a simple principle: **your AI assistant should work for you, not against you**.
+This repository is in the middle of a fork transformation from IronClaw to IronCowork.
 
-In a world where AI systems are increasingly opaque about data handling and aligned with corporate interests, IronClaw takes a different approach:
+Phase 0 intentionally changes the project baseline:
 
-- **Your data stays yours** - All information is stored locally, encrypted, and never leaves your control
-- **Transparency by design** - Open source, auditable, no hidden telemetry or data harvesting
-- **Self-expanding capabilities** - Build new tools on the fly without waiting for vendor updates
-- **Defense in depth** - Multiple security layers protect against prompt injection and data exfiltration
-
-IronClaw is the AI assistant you can actually trust with your personal and professional life.
+- libSQL is the default local storage backend
+- channel source bundles and deploy scripts have been removed
+- interactive onboarding is being retired in favor of local config and env vars
+- the long-term target is Axum + Svelte + Tauri with task/template-driven execution
 
 ## Features
 
@@ -57,11 +50,10 @@ IronClaw is the AI assistant you can actually trust with your personal and profe
 - **Prompt Injection Defense** - Pattern detection, content sanitization, and policy enforcement
 - **Endpoint Allowlisting** - HTTP requests only to explicitly approved hosts and paths
 
-### Always Available
+### Core Runtime
 
-- **Multi-channel** - REPL, HTTP webhooks, WASM channels (Telegram, Slack), and web gateway
+- **Local-first runtime** - Embedded libSQL storage with no required external database
 - **Docker Sandbox** - Isolated container execution with per-job tokens and orchestrator/worker pattern
-- **Web Gateway** - Browser UI with real-time SSE/WebSocket streaming
 - **Routines** - Cron schedules, event triggers, webhook handlers for background automation
 - **Heartbeat System** - Proactive background execution for monitoring and maintenance tasks
 - **Parallel Jobs** - Handle multiple requests concurrently with isolated contexts
@@ -71,7 +63,7 @@ IronClaw is the AI assistant you can actually trust with your personal and profe
 
 - **Dynamic Tool Building** - Describe what you need, and IronClaw builds it as a WASM tool
 - **MCP Protocol** - Connect to Model Context Protocol servers for additional capabilities
-- **Plugin Architecture** - Drop in new WASM tools and channels without restarting
+- **Plugin Architecture** - Drop in new WASM tools without restarting
 
 ### Persistent Memory
 
@@ -83,9 +75,8 @@ IronClaw is the AI assistant you can actually trust with your personal and profe
 
 ### Prerequisites
 
-- Rust 1.85+
-- PostgreSQL 15+ with [pgvector](https://github.com/pgvector/pgvector) extension
-- NEAR AI account (authentication handled via setup wizard)
+- Rust 1.92
+- No external database is required for Phase 0
 
 ## Download or Build
 
@@ -141,42 +132,31 @@ cargo build --release
 cargo test
 ```
 
-For **full release** (after modifying channel sources), run `./scripts/build-all.sh` to rebuild channels first.
-
 </details>
-
-### Database Setup
-
-```bash
-# Create database
-createdb ironclaw
-
-# Enable pgvector
-psql ironclaw -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
 
 ## Configuration
 
-Run the setup wizard to configure IronClaw:
+Set local bootstrap configuration directly:
 
-```bash
-ironclaw onboard
+```env
+DATABASE_BACKEND=libsql
+LIBSQL_PATH=~/.ironclaw/ironclaw.db
+LLM_BACKEND=openai_compatible
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=sk-or-...
 ```
 
-The wizard handles database connection, NEAR AI authentication (via browser OAuth),
-and secrets encryption (using your system keychain). Settings are persisted in the
-connected database; bootstrap variables (e.g. `DATABASE_URL`, `LLM_BACKEND`) are
-written to `~/.ironclaw/.env` so they are available before the database connects.
+Bootstrap values can also be written to `~/.ironclaw/.env` or a project config file.
 
 ### Alternative LLM Providers
 
-IronClaw defaults to NEAR AI but supports many LLM providers out of the box.
+IronClaw supports many LLM providers out of the box.
 Built-in providers include **Anthropic**, **OpenAI**, **GitHub Copilot**, **Google Gemini**, **MiniMax**,
 **Mistral**, and **Ollama** (local). OpenAI-compatible services like **OpenRouter**
 (300+ models), **Together AI**, **Fireworks AI**, and self-hosted servers (**vLLM**,
 **LiteLLM**) are also supported.
 
-Select your provider in the wizard, or set environment variables directly:
+Set your provider through environment variables or config directly:
 
 ```env
 # Example: MiniMax (built-in, 204K context)
@@ -278,7 +258,7 @@ External content passes through multiple security layers:
 | **Scheduler** | Manages parallel job execution with priorities |
 | **Worker** | Executes jobs with LLM reasoning and tool calls |
 | **Orchestrator** | Container lifecycle, LLM proxying, per-job auth |
-| **Web Gateway** | Browser UI with chat, memory, jobs, logs, extensions, routines |
+| **HTTP Runtime** | Transitional local service layer during the IronCowork migration |
 | **Routines Engine** | Scheduled (cron) and reactive (event, webhook) background tasks |
 | **Workspace** | Persistent memory with hybrid search |
 | **Safety Layer** | Prompt injection defense and content sanitization |
@@ -286,10 +266,7 @@ External content passes through multiple security layers:
 ## Usage
 
 ```bash
-# First-time setup (configures database, auth, etc.)
-ironclaw onboard
-
-# Start interactive REPL
+# Start the local runtime
 cargo run
 
 # With debug logging
@@ -306,15 +283,11 @@ cargo fmt
 cargo clippy --all --benches --tests --examples --all-features
 
 # Run tests
-createdb ironclaw_test
-cargo test
+cargo +1.92.0-aarch64-apple-darwin test
 
 # Run specific test
-cargo test test_name
+cargo +1.92.0-aarch64-apple-darwin test test_name
 ```
-
-- **Telegram channel**: See [docs/TELEGRAM_SETUP.md](docs/TELEGRAM_SETUP.md) for setup and DM pairing.
-- **Changing channel sources**: Run `./channels-src/telegram/build.sh` before `cargo build` so the updated WASM is bundled.
 
 ## OpenClaw Heritage
 
@@ -324,7 +297,7 @@ Key differences:
 
 - **Rust vs TypeScript** - Native performance, memory safety, single binary
 - **WASM sandbox vs Docker** - Lightweight, capability-based security
-- **PostgreSQL vs SQLite** - Production-ready persistence
+- **libSQL-first persistence** - Embedded local storage as the default path
 - **Security-first design** - Multiple defense layers, credential protection
 
 ## License

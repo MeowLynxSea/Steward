@@ -1377,7 +1377,7 @@ pub struct JobPromptTool {
     context_manager: Arc<ContextManager>,
 }
 
-/// Type alias matching `crate::channels::web::server::PromptQueue`.
+/// Shared in-memory prompt queue for interactive sandbox follow-up prompts.
 pub type PromptQueue = Arc<
     tokio::sync::Mutex<
         std::collections::HashMap<

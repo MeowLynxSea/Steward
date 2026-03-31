@@ -17,6 +17,7 @@ use crate::channels::wasm::{
 use crate::channels::{ChannelManager, OutgoingResponse};
 use crate::extensions::discovery::OnlineDiscovery;
 use crate::extensions::registry::ExtensionRegistry;
+use crate::extensions::setup_schema::{SecretFieldInfo, SetupFieldInfo};
 use crate::extensions::{
     ActivateResult, AuthResult, ConfigureResult, ExtensionError, ExtensionKind, ExtensionSource,
     InstallResult, InstalledExtension, RegistryEntry, ResultSource, SearchResult, ToolAuthState,
@@ -125,8 +126,8 @@ struct ChannelRuntimeState {
 
 /// Setup schema returned to web UI for extension configuration.
 pub struct ExtensionSetupSchema {
-    pub secrets: Vec<crate::channels::web::types::SecretFieldInfo>,
-    pub fields: Vec<crate::channels::web::types::SetupFieldInfo>,
+    pub secrets: Vec<SecretFieldInfo>,
+    pub fields: Vec<SetupFieldInfo>,
 }
 
 /// Only these global (non-namespaced) setting paths may be written by extension
@@ -428,7 +429,7 @@ pub struct ExtensionManager {
     /// Last activation error for each WASM channel (ephemeral, cleared on success).
     activation_errors: RwLock<HashMap<String, String>>,
     /// SSE broadcast manager (set post-construction via `set_sse_sender()`).
-    sse_manager: RwLock<Option<Arc<crate::channels::web::sse::SseManager>>>,
+    sse_manager: RwLock<Option<Arc<crate::runtime_events::SseManager>>>,
     /// Shared registry of pending OAuth flows for gateway-routed callbacks.
     ///
     /// Keyed by CSRF `state` parameter. Populated in `start_wasm_oauth()`
@@ -1144,7 +1145,7 @@ impl ExtensionManager {
     }
 
     /// Set the SSE broadcast sender for pushing extension status events to the web UI.
-    pub async fn set_sse_sender(&self, sse: Arc<crate::channels::web::sse::SseManager>) {
+    pub async fn set_sse_sender(&self, sse: Arc<crate::runtime_events::SseManager>) {
         *self.sse_manager.write().await = Some(sse);
     }
 
@@ -5128,7 +5129,7 @@ impl ExtensionManager {
                         .exists(user_id, &secret.name)
                         .await
                         .unwrap_or(false);
-                    secrets.push(crate::channels::web::types::SecretFieldInfo {
+                    secrets.push(SecretFieldInfo {
                         name: secret.name.clone(),
                         prompt: secret.prompt.clone(),
                         optional: secret.optional,
@@ -5165,7 +5166,7 @@ impl ExtensionManager {
                             .exists(user_id, &secret.name)
                             .await
                             .unwrap_or(false);
-                        secrets.push(crate::channels::web::types::SecretFieldInfo {
+                        secrets.push(SecretFieldInfo {
                             name: secret.name.clone(),
                             prompt: secret.prompt.clone(),
                             optional: secret.optional,
@@ -5178,7 +5179,7 @@ impl ExtensionManager {
                         let provided = self
                             .is_tool_setup_field_provided(name, field, &saved_fields)
                             .await;
-                        fields.push(crate::channels::web::types::SetupFieldInfo {
+                        fields.push(SetupFieldInfo {
                             name: field.name.clone(),
                             prompt: field.prompt.clone(),
                             optional: field.optional,
@@ -5212,7 +5213,7 @@ impl ExtensionManager {
                 let env_url = self.relay_config.as_ref().map(|c| c.url.as_str());
                 Ok(ExtensionSetupSchema {
                     secrets: Vec::new(),
-                    fields: vec![crate::channels::web::types::SetupFieldInfo {
+                    fields: vec![SetupFieldInfo {
                         name: "relay_url".to_string(),
                         prompt: format!(
                             "Channel-relay service URL (leave empty to use env default{})",

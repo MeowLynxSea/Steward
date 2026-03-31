@@ -12,13 +12,14 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+use ironclaw_common::{AppEvent, ToolDecisionDto};
+
 use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
     truncate_for_preview,
 };
 use crate::agent::scheduler::WorkerMessage;
 use crate::agent::task::TaskOutput;
-use crate::channels::web::types::ToolDecisionDto;
 use crate::context::{ContextManager, JobState};
 use crate::error::Error;
 use crate::hooks::HookRegistry;
@@ -37,8 +38,6 @@ use crate::worker::autonomous_recovery::{
     AutonomousRecoveryAction, AutonomousRecoveryState, EMPTY_TOOL_COMPLETION_FAILURE,
     EMPTY_TOOL_COMPLETION_NUDGE, FORCE_TEXT_RECOVERY_PROMPT,
 };
-use ironclaw_common::AppEvent;
-
 /// Shared dependencies for worker execution.
 ///
 /// This bundles the dependencies that are shared across all workers,
@@ -54,7 +53,7 @@ pub struct WorkerDeps {
     pub timeout: Duration,
     pub use_planning: bool,
     /// Broadcast sender for live job event streaming to the web gateway.
-    pub sse_tx: Option<Arc<crate::channels::web::sse::SseManager>>,
+    pub sse_tx: Option<Arc<crate::runtime_events::SseManager>>,
     /// Approval context for tool execution. When `None`, all non-`Never` tools are
     /// blocked (legacy behavior). When `Some`, the context determines which tools
     /// are pre-approved for autonomous execution.

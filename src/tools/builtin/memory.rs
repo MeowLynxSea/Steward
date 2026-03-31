@@ -50,6 +50,71 @@ impl WorkspaceResolver for FixedWorkspaceResolver {
     }
 }
 
+/// Per-user workspace cache retained after removing the legacy web gateway.
+pub struct WorkspacePool {
+    db: Arc<dyn crate::db::Database>,
+    embeddings: Option<Arc<dyn crate::workspace::EmbeddingProvider>>,
+    embedding_cache_config: crate::workspace::EmbeddingCacheConfig,
+    search_config: crate::config::WorkspaceSearchConfig,
+    workspace_config: crate::config::WorkspaceConfig,
+    cache: tokio::sync::RwLock<std::collections::HashMap<String, Arc<Workspace>>>,
+}
+
+impl WorkspacePool {
+    pub fn new(
+        db: Arc<dyn crate::db::Database>,
+        embeddings: Option<Arc<dyn crate::workspace::EmbeddingProvider>>,
+        embedding_cache_config: crate::workspace::EmbeddingCacheConfig,
+        search_config: crate::config::WorkspaceSearchConfig,
+        workspace_config: crate::config::WorkspaceConfig,
+    ) -> Self {
+        Self {
+            db,
+            embeddings,
+            embedding_cache_config,
+            search_config,
+            workspace_config,
+            cache: tokio::sync::RwLock::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn build_workspace(&self, user_id: &str) -> Workspace {
+        let mut ws = Workspace::new_with_db(user_id, Arc::clone(&self.db))
+            .with_search_config(&self.search_config);
+
+        if let Some(ref emb) = self.embeddings {
+            ws = ws.with_embeddings_cached(Arc::clone(emb), self.embedding_cache_config.clone());
+        }
+
+        if !self.workspace_config.read_scopes.is_empty() {
+            ws = ws.with_additional_read_scopes(self.workspace_config.read_scopes.clone());
+        }
+
+        ws.with_memory_layers(self.workspace_config.memory_layers.clone())
+    }
+}
+
+#[async_trait]
+impl WorkspaceResolver for WorkspacePool {
+    async fn resolve(&self, user_id: &str) -> Arc<Workspace> {
+        {
+            let cache = self.cache.read().await;
+            if let Some(ws) = cache.get(user_id) {
+                return Arc::clone(ws);
+            }
+        }
+
+        let mut cache = self.cache.write().await;
+        if let Some(ws) = cache.get(user_id) {
+            return Arc::clone(ws);
+        }
+
+        let ws = Arc::new(self.build_workspace(user_id));
+        cache.insert(user_id.to_string(), Arc::clone(&ws));
+        ws
+    }
+}
+
 /// Detect paths that are clearly local filesystem references, not workspace-memory docs.
 ///
 /// Examples:
@@ -935,7 +1000,7 @@ mod tests {
         async fn test_workspace_pool_resolver_returns_different_workspaces() {
             let db = make_test_db().await;
 
-            let pool = crate::channels::web::server::WorkspacePool::new(
+            let pool = WorkspacePool::new(
                 db,
                 None,
                 crate::workspace::EmbeddingCacheConfig::default(),
@@ -956,7 +1021,7 @@ mod tests {
         async fn test_workspace_pool_resolver_caches_workspace() {
             let db = make_test_db().await;
 
-            let pool = crate::channels::web::server::WorkspacePool::new(
+            let pool = WorkspacePool::new(
                 db,
                 None,
                 crate::workspace::EmbeddingCacheConfig::default(),

@@ -2,6 +2,39 @@ use crate::config::helpers::optional_env;
 use crate::error::ConfigError;
 use crate::settings::Settings;
 
+#[derive(Debug, Clone, Default)]
+pub struct CloudflareTunnelConfig {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TailscaleTunnelConfig {
+    pub funnel: bool,
+    pub hostname: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct NgrokTunnelConfig {
+    pub auth_token: String,
+    pub domain: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CustomTunnelConfig {
+    pub start_command: String,
+    pub health_url: Option<String>,
+    pub url_pattern: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TunnelProviderConfig {
+    pub provider: String,
+    pub cloudflare: Option<CloudflareTunnelConfig>,
+    pub tailscale: Option<TailscaleTunnelConfig>,
+    pub ngrok: Option<NgrokTunnelConfig>,
+    pub custom: Option<CustomTunnelConfig>,
+}
+
 /// Tunnel configuration for exposing the agent to the internet.
 ///
 /// Used by channels and tools that need public webhook endpoints.
@@ -20,7 +53,7 @@ pub struct TunnelConfig {
     pub public_url: Option<String>,
     /// Provider configuration for lifecycle-managed tunnels.
     /// `None` when using a static URL or no tunnel at all.
-    pub provider: Option<crate::tunnel::TunnelProviderConfig>,
+    pub provider: Option<TunnelProviderConfig>,
 }
 
 impl TunnelConfig {
@@ -46,12 +79,12 @@ impl TunnelConfig {
         let provider = if provider_name.is_empty() || provider_name == "none" {
             None
         } else {
-            Some(crate::tunnel::TunnelProviderConfig {
+            Some(TunnelProviderConfig {
                 provider: provider_name.clone(),
                 cloudflare: optional_env("TUNNEL_CF_TOKEN")?
                     .or_else(|| settings.tunnel.cf_token.clone())
-                    .map(|token| crate::tunnel::CloudflareTunnelConfig { token }),
-                tailscale: Some(crate::tunnel::TailscaleTunnelConfig {
+                    .map(|token| CloudflareTunnelConfig { token }),
+                tailscale: Some(TailscaleTunnelConfig {
                     funnel: optional_env("TUNNEL_TS_FUNNEL")?
                         .map(|s| s == "true" || s == "1")
                         .unwrap_or(settings.tunnel.ts_funnel),
@@ -63,7 +96,7 @@ impl TunnelConfig {
                         .or_else(|| settings.tunnel.ngrok_domain.clone());
                     optional_env("TUNNEL_NGROK_TOKEN")?
                         .or_else(|| settings.tunnel.ngrok_token.clone())
-                        .map(|auth_token| crate::tunnel::NgrokTunnelConfig {
+                        .map(|auth_token| NgrokTunnelConfig {
                             auth_token,
                             domain: ngrok_domain,
                         })
@@ -75,7 +108,7 @@ impl TunnelConfig {
                         .or_else(|| settings.tunnel.custom_url_pattern.clone());
                     optional_env("TUNNEL_CUSTOM_COMMAND")?
                         .or_else(|| settings.tunnel.custom_command.clone())
-                        .map(|start_command| crate::tunnel::CustomTunnelConfig {
+                        .map(|start_command| CustomTunnelConfig {
                             start_command,
                             health_url,
                             url_pattern,
@@ -107,10 +140,9 @@ impl TunnelConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::tunnel::TunnelConfig;
-    use crate::tunnel::{
+    use crate::config::tunnel::{
         CloudflareTunnelConfig, CustomTunnelConfig, NgrokTunnelConfig, TailscaleTunnelConfig,
-        TunnelProviderConfig,
+        TunnelConfig, TunnelProviderConfig,
     };
 
     // ── Default ─────────────────────────────────────────────────────

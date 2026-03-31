@@ -9,18 +9,18 @@ use crate::error::ConfigError;
 /// Which database backend to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DatabaseBackend {
-    /// PostgreSQL via deadpool-postgres (default).
-    #[default]
-    Postgres,
     /// libSQL/Turso embedded database.
+    #[default]
     LibSql,
+    /// Legacy PostgreSQL backend retained only for migration compatibility.
+    Postgres,
 }
 
 impl std::fmt::Display for DatabaseBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Postgres => write!(f, "postgres"),
             Self::LibSql => write!(f, "libsql"),
+            Self::Postgres => write!(f, "postgres"),
         }
     }
 }
@@ -111,12 +111,9 @@ impl DatabaseConfig {
                 message: e,
             })?
         } else {
-            DatabaseBackend::default()
+            DatabaseBackend::LibSql
         };
 
-        // PostgreSQL URL is required only when using the postgres backend.
-        // For libsql backend, default to an empty placeholder.
-        // DATABASE_URL is loaded from ~/.ironclaw/.env via dotenvy early in startup.
         let url = optional_env("DATABASE_URL")?
             .or_else(|| {
                 if backend == DatabaseBackend::LibSql {
@@ -127,7 +124,8 @@ impl DatabaseConfig {
             })
             .ok_or_else(|| ConfigError::MissingRequired {
                 key: "DATABASE_URL".to_string(),
-                hint: "Run 'ironclaw onboard' or set DATABASE_URL environment variable".to_string(),
+                hint: "PostgreSQL bootstrap is no longer supported; use libSQL settings instead"
+                    .to_string(),
             })?;
 
         let pool_size = parse_optional_env("DATABASE_POOL_SIZE", 10)?;
@@ -170,7 +168,7 @@ impl DatabaseConfig {
         })
     }
 
-    /// Create a config from a raw PostgreSQL URL (for wizard/testing).
+    /// Create a config from a raw PostgreSQL URL (legacy compatibility only).
     pub fn from_postgres_url(url: &str, pool_size: usize) -> Self {
         Self {
             backend: DatabaseBackend::Postgres,

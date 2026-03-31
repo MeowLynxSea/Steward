@@ -2,19 +2,15 @@
 //!
 //! Provides subcommands for:
 //! - Running the agent (`run`)
-//! - Interactive onboarding wizard (`onboard`)
 //! - Managing configuration (`config list`, `config get`, `config set`)
 //! - Managing WASM tools (`tool install`, `tool list`, `tool remove`)
 //! - Managing MCP servers (`mcp add`, `mcp auth`, `mcp list`, `mcp test`)
 //! - Querying workspace memory (`memory search`, `memory read`, `memory write`)
 //! - Managing routines (`routines list`, `routines create`, `routines edit`, ...)
 //! - Managing OS service (`service install`, `service start`, `service stop`)
-//! - Listing configured channels (`channels list`)
 //! - Active health diagnostics (`doctor`)
-//! - Viewing gateway logs (`logs`)
 //! - Checking system health (`status`)
 
-mod channels;
 mod completion;
 mod config;
 mod doctor;
@@ -22,7 +18,6 @@ pub mod fmt;
 mod hooks;
 #[cfg(feature = "import")]
 pub mod import;
-mod logs;
 mod mcp;
 pub mod memory;
 mod models;
@@ -35,14 +30,12 @@ mod skills;
 pub mod status;
 mod tool;
 
-pub use channels::{ChannelsCommand, run_channels_command};
 pub use completion::Completion;
 pub use config::{ConfigCommand, run_config_command};
 pub use doctor::run_doctor_command;
 pub use hooks::{HooksCommand, run_hooks_command};
 #[cfg(feature = "import")]
 pub use import::{ImportCommand, run_import_command};
-pub use logs::{LogsCommand, run_logs_command};
 pub use mcp::{McpCommand, run_mcp_command};
 pub use memory::MemoryCommand;
 pub use memory::run_memory_command_with_db;
@@ -61,21 +54,15 @@ use clap::{ColorChoice, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "ironclaw")]
+#[command(about = "Local-first AI automation runtime")]
 #[command(
-    about = "Secure personal AI assistant that protects your data and expands its capabilities"
-)]
-#[command(
-    long_about = "IronClaw is a secure AI assistant. Use 'ironclaw <subcommand> --help' for details.\nExamples:\n  ironclaw run  # Start the agent\n  ironclaw config list  # List configs"
+    long_about = "IronCowork Phase 0 runtime commands. Use 'ironclaw <subcommand> --help' for details.\nExamples:\n  ironclaw run\n  ironclaw config list"
 )]
 #[command(version)]
 #[command(color = ColorChoice::Auto)] // Enable auto-color for help (if the terminal supports it)
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
-
-    /// Run in interactive CLI mode only (disable other channels)
-    #[arg(long, global = true)]
-    pub cli_only: bool,
 
     /// Skip database connection (for testing)
     #[arg(long, global = true)]
@@ -88,10 +75,6 @@ pub struct Cli {
     /// Configuration file path (optional, uses env vars by default)
     #[arg(short, long, global = true)]
     pub config: Option<std::path::PathBuf>,
-
-    /// Skip first-run onboarding check
-    #[arg(long, global = true)]
-    pub no_onboard: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -99,36 +82,9 @@ pub enum Command {
     /// Run the agent (default if no subcommand given)
     #[command(
         about = "Run the AI agent",
-        long_about = "Starts the IronClaw agent in default mode.\nExample: ironclaw run"
+        long_about = "Starts the IronCowork transitional runtime.\nExample: ironclaw run"
     )]
     Run,
-
-    /// Interactive onboarding wizard
-    #[command(
-        about = "Run interactive setup wizard",
-        long_about = "Guides through initial configuration.\nExamples:\n  ironclaw onboard --skip-auth  # Skip auth step\n  ironclaw onboard --channels-only  # Reconfigure channels\n  ironclaw onboard --provider-only  # Change LLM provider and model"
-    )]
-    Onboard {
-        /// Skip authentication (use existing session)
-        #[arg(long)]
-        skip_auth: bool,
-
-        /// Reconfigure channels only
-        #[arg(long, conflicts_with_all = ["provider_only", "quick", "step"], help = "Deprecated: use --step channels")]
-        channels_only: bool,
-
-        /// Reconfigure LLM provider and model only
-        #[arg(long, conflicts_with_all = ["channels_only", "quick", "step"], help = "Deprecated: use --step provider")]
-        provider_only: bool,
-
-        /// Quick setup: auto-defaults everything except LLM provider and model
-        #[arg(long, conflicts_with_all = ["channels_only", "provider_only", "step"])]
-        quick: bool,
-
-        /// Run only specific setup steps (comma-separated: provider, channels, model, database, security)
-        #[arg(long, value_delimiter = ',', conflicts_with_all = ["channels_only", "provider_only", "quick"])]
-        step: Vec<String>,
-    },
 
     /// Manage configuration settings
     #[command(
@@ -153,14 +109,6 @@ pub enum Command {
         long_about = "Interact with extension registry.\nExample: ironclaw registry list"
     )]
     Registry(RegistryCommand),
-
-    /// List and inspect messaging channels
-    #[command(
-        subcommand,
-        about = "Manage channels",
-        long_about = "List configured messaging channels.\nExamples:\n  ironclaw channels list\n  ironclaw channels list --verbose\n  ironclaw channels list --json"
-    )]
-    Channels(ChannelsCommand),
 
     /// Manage routines (scheduled, event-driven, webhook, manual)
     #[command(
@@ -233,13 +181,6 @@ pub enum Command {
         long_about = "Checks dependencies and config validity.\nExample: ironclaw doctor"
     )]
     Doctor,
-
-    /// View and manage gateway logs
-    #[command(
-        about = "View and manage gateway logs",
-        long_about = "Tail gateway logs, stream live output, or adjust log level.\nExamples:\n  ironclaw logs                 # Show last 200 lines from gateway.log\n  ironclaw logs --follow        # Stream live logs via SSE\n  ironclaw logs --level         # Show current log level\n  ironclaw logs --level debug   # Set log level to debug"
-    )]
-    Logs(LogsCommand),
 
     /// Show system health and diagnostics
     #[command(
@@ -330,7 +271,7 @@ pub async fn init_secrets_store()
     let config = crate::config::Config::from_env().await?;
     let master_key = config.secrets.master_key().ok_or_else(|| {
         anyhow::anyhow!(
-            "SECRETS_MASTER_KEY not set. Run 'ironclaw onboard' first or set it in .env"
+            "SECRETS_MASTER_KEY not set. Configure it directly in .env or rely on the OS keychain"
         )
     })?;
 

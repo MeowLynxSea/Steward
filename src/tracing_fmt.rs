@@ -42,6 +42,16 @@ pub fn init_worker_tracing() {
         .init();
 }
 
+/// Initialize tracing for the local runtime entrypoint.
+pub fn init_app_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("ironclaw=info")),
+        )
+        .with_writer(TruncatingStderr::default())
+        .init();
+}
+
 /// Maximum bytes per tracing event written to the terminal.
 const TERMINAL_MAX_EVENT_BYTES: usize = 500;
 

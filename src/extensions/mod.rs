@@ -20,6 +20,7 @@
 pub mod discovery;
 pub mod manager;
 pub mod registry;
+pub mod setup_schema;
 
 pub use discovery::OnlineDiscovery;
 pub use manager::ExtensionManager;

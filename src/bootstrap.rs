@@ -1,8 +1,8 @@
 //! Bootstrap helpers for IronClaw.
 //!
-//! The only setting that truly needs disk persistence before the database is
-//! available is `DATABASE_URL` (chicken-and-egg: can't connect to DB without
-//! it). Everything else is auto-detected or read from env vars.
+//! IronCowork Phase 0 uses libSQL as the default local backend. The bootstrap
+//! layer now mainly persists local-first settings such as `LIBSQL_PATH`,
+//! `LLM_BACKEND`, and related credentials before the database is available.
 //!
 //! File: `~/.ironclaw/.env` (standard dotenvy format)
 
@@ -87,8 +87,8 @@ pub fn ironclaw_env_path() -> PathBuf {
 ///   explicit env vars > `./.env` > `~/.ironclaw/.env` > auto-detect
 ///
 /// If `~/.ironclaw/.env` doesn't exist but the legacy `bootstrap.json` does,
-/// extracts `DATABASE_URL` from it and writes the `.env` file (one-time
-/// upgrade from the old config format).
+/// extracts bootstrap values and writes the `.env` file (one-time upgrade
+/// from the old config format).
 ///
 /// After loading the `.env` file, auto-detects the libsql backend: if
 /// `DATABASE_BACKEND` is still unset and `~/.ironclaw/ironclaw.db` exists,
@@ -173,12 +173,11 @@ fn migrate_bootstrap_json_to_env(env_path: &std::path::Path) {
     }
 }
 
-/// Write database bootstrap vars to `~/.ironclaw/.env`.
+/// Write bootstrap vars to `~/.ironclaw/.env`.
 ///
-/// These settings form the chicken-and-egg layer: they must be available
-/// from the filesystem (env vars) BEFORE any database connection, because
-/// they determine which database to connect to. Everything else is stored
-/// in the database itself.
+/// These settings form the chicken-and-egg layer: they must be available from
+/// the filesystem (env vars) before any database connection. In IronCowork
+/// Phase 0 this is primarily the libSQL path and provider credentials.
 ///
 /// Creates the parent directory if it doesn't exist.
 /// Values are double-quoted so that `#` (common in URL-encoded passwords)

@@ -1,14 +1,14 @@
 # LLM Provider Configuration
 
-IronClaw defaults to NEAR AI for model access, but supports any OpenAI-compatible
-endpoint as well as Anthropic, Ollama, and Google Gemini directly. This guide covers
-the most common configurations.
+IronCowork Phase 0 no longer assumes NEAR AI onboarding. Configure the selected
+provider directly through environment variables or config files. This guide
+covers the most common configurations.
 
 ## Provider Overview
 
 | Provider | Backend value | Requires API key | Notes |
 |---|---|---|---|
-| NEAR AI | `nearai` | OAuth (browser) | Default; multi-model |
+| NEAR AI | `nearai` | OAuth (browser) | Legacy-compatible option |
 | Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | Claude models |
 | OpenAI | `openai` | `OPENAI_API_KEY` | GPT models |
 | Google Gemini | `gemini_oauth` | OAuth (browser) | Gemini models; function calling |
@@ -28,10 +28,10 @@ the most common configurations.
 
 ---
 
-## NEAR AI (default)
+## NEAR AI
 
-No additional configuration required. On first run, `ironclaw onboard` opens a browser
-for OAuth authentication. Credentials are saved to `~/.ironclaw/session.json`.
+Authenticate separately, then point the runtime at the stored session or
+provider-specific credentials.
 
 ```env
 NEARAI_MODEL=claude-3-5-sonnet-20241022
@@ -121,8 +121,7 @@ GITHUB_COPILOT_MODEL=gpt-4o
 # GITHUB_COPILOT_EXTRA_HEADERS=Copilot-Integration-Id:vscode-chat
 ```
 
-`ironclaw onboard` can acquire this token for you using GitHub device login. If you
-already signed into Copilot through VS Code or a JetBrains IDE, you can also reuse
+If you already signed into Copilot through VS Code or a JetBrains IDE, you can also reuse
 the `oauth_token` stored in `~/.config/github-copilot/apps.json`. If you prefer,
 `LLM_BACKEND=github-copilot` also works as an alias.
 
@@ -308,14 +307,14 @@ LLM_MODEL=llama-3.2-3b-instruct-q4_K_M
 
 ---
 
-## Using the Setup Wizard
+## Local Configuration
 
-Instead of editing `.env` manually, run the onboarding wizard:
+For OpenAI-compatible providers, set the bootstrap values directly in `.env`,
+`~/.ironclaw/.env`, or your config file:
 
-```bash
-ironclaw onboard
+```env
+LLM_BACKEND=openai_compatible
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=...
+LLM_MODEL=anthropic/claude-sonnet-4
 ```
-
-Select **"OpenAI-compatible"** for OpenRouter, Together AI, Fireworks, vLLM, LiteLLM,
-or LM Studio. You will be prompted for the base URL and (optionally) an API key.
-The model name is configured in the following step.

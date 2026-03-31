@@ -274,7 +274,7 @@ async fn check_nearai_session(settings: &Settings) -> CheckResult {
             return CheckResult::Pass("API key configured".into());
         }
         return CheckResult::Fail(format!(
-            "session file not found at {}. Run `ironclaw onboard`",
+            "session file not found at {}. Configure NEAR AI credentials directly",
             session_path.display()
         ));
     }
@@ -313,7 +313,7 @@ fn check_llm_config(settings: &Settings) -> CheckResult {
 async fn check_database() -> CheckResult {
     let backend = std::env::var("DATABASE_BACKEND")
         .ok()
-        .unwrap_or_else(|| "postgres".into());
+        .unwrap_or_else(|| "libsql".into());
 
     match backend.as_str() {
         "libsql" | "turso" | "sqlite" => {
@@ -330,47 +330,8 @@ async fn check_database() -> CheckResult {
                 ))
             }
         }
-        _ => {
-            if std::env::var("DATABASE_URL").is_ok() {
-                // Try to connect
-                match try_pg_connect().await {
-                    Ok(()) => CheckResult::Pass("PostgreSQL connected".into()),
-                    Err(e) => CheckResult::Fail(format!("PostgreSQL connection failed: {e}")),
-                }
-            } else {
-                CheckResult::Fail("DATABASE_URL not set".into())
-            }
-        }
+        _ => CheckResult::Fail("unsupported legacy backend configured".into()),
     }
-}
-
-#[cfg(feature = "postgres")]
-async fn try_pg_connect() -> Result<(), String> {
-    let url = std::env::var("DATABASE_URL").map_err(|_| "DATABASE_URL not set".to_string())?;
-
-    let config = deadpool_postgres::Config {
-        url: Some(url),
-        ..Default::default()
-    };
-    let pool = crate::db::tls::create_pool(&config, crate::config::SslMode::from_env())
-        .map_err(|e| format!("pool error: {e}"))?;
-
-    let client = tokio::time::timeout(std::time::Duration::from_secs(5), pool.get())
-        .await
-        .map_err(|_| "connection timeout (5s)".to_string())?
-        .map_err(|e| format!("{e}"))?;
-
-    client
-        .execute("SELECT 1", &[])
-        .await
-        .map_err(|e| format!("{e}"))?;
-
-    Ok(())
-}
-
-#[cfg(not(feature = "postgres"))]
-async fn try_pg_connect() -> Result<(), String> {
-    Err("postgres feature not compiled in".into())
 }
 
 // ── Workspace directory ─────────────────────────────────────
@@ -419,7 +380,7 @@ fn check_embeddings(settings: &Settings) -> CheckResult {
                 ))
             } else {
                 let hint = match config.provider.as_str() {
-                    "nearai" => "run `ironclaw onboard` to create a session",
+                    "nearai" => "configure a NEAR AI session or set NEARAI_API_KEY",
                     _ => "set OPENAI_API_KEY",
                 };
                 CheckResult::Fail(format!(
@@ -556,9 +517,9 @@ fn check_secrets(settings: &Settings) -> CheckResult {
                 )
             }
         }
-        crate::settings::KeySource::None => {
-            CheckResult::Skip("secrets not configured (run `ironclaw onboard`)".into())
-        }
+        crate::settings::KeySource::None => CheckResult::Skip(
+            "secrets not configured (set SECRETS_MASTER_KEY or rely on keychain)".into(),
+        ),
     }
 }
 

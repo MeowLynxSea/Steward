@@ -471,6 +471,34 @@ pub struct PollConfigSchema {
 mod tests {
     use crate::channels::wasm::schema::ChannelCapabilitiesFile;
 
+    const DISCORD_CAPABILITIES_FIXTURE: &str = r#"{
+        "name": "discord",
+        "setup": {
+            "required_secrets": [
+                {
+                    "name": "discord_bot_token",
+                    "prompt": "Enter your Discord bot token from https://discord.com/developers/applications"
+                },
+                {
+                    "name": "discord_public_key",
+                    "prompt": "Enter your Discord public key from https://discord.com/developers/applications"
+                }
+            ],
+            "setup_url": "https://discord.com/developers/applications"
+        },
+        "capabilities": {
+            "channel": {
+                "allowed_paths": ["/webhook/discord"],
+                "webhook": {
+                    "signature_key_secret_name": "discord_public_key"
+                }
+            },
+            "secrets": {
+                "allowed_names": ["discord_public_key", "discord_bot_token"]
+            }
+        }
+    }"#;
+
     #[test]
     fn test_parse_minimal() {
         let json = r#"{
@@ -765,8 +793,7 @@ mod tests {
 
     #[test]
     fn test_discord_capabilities_has_public_key_secret() {
-        let json = include_str!("../../../channels-src/discord/discord.capabilities.json");
-        let file = ChannelCapabilitiesFile::from_json(json).unwrap();
+        let file = ChannelCapabilitiesFile::from_json(DISCORD_CAPABILITIES_FIXTURE).unwrap();
 
         let secret_names: Vec<&str> = file
             .setup
@@ -821,8 +848,7 @@ mod tests {
 
     #[test]
     fn test_discord_capabilities_signature_key() {
-        let json = include_str!("../../../channels-src/discord/discord.capabilities.json");
-        let file = ChannelCapabilitiesFile::from_json(json).unwrap();
+        let file = ChannelCapabilitiesFile::from_json(DISCORD_CAPABILITIES_FIXTURE).unwrap();
         assert_eq!(
             file.signature_key_secret_name(),
             Some("discord_public_key"),
@@ -832,8 +858,7 @@ mod tests {
 
     #[test]
     fn test_discord_capabilities_secrets_allowlist() {
-        let json = include_str!("../../../channels-src/discord/discord.capabilities.json");
-        let file = ChannelCapabilitiesFile::from_json(json).unwrap();
+        let file = ChannelCapabilitiesFile::from_json(DISCORD_CAPABILITIES_FIXTURE).unwrap();
 
         let caps = file.to_capabilities();
         let secrets_caps = caps

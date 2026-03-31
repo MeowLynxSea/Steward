@@ -56,7 +56,7 @@ pub async fn run_status_command() -> anyhow::Result<()> {
     // Database
     let db_backend = std::env::var("DATABASE_BACKEND")
         .ok()
-        .unwrap_or_else(|| "postgres".to_string());
+        .unwrap_or_else(|| "libsql".to_string());
     let db_value = match db_backend.as_str() {
         "libsql" | "turso" | "sqlite" => {
             let path = std::env::var("LIBSQL_PATH")
@@ -73,16 +73,7 @@ pub async fn run_status_command() -> anyhow::Result<()> {
                 format!("libSQL (file missing: {})", path.display())
             }
         }
-        _ => {
-            if std::env::var("DATABASE_URL").is_ok() {
-                match check_database().await {
-                    Ok(()) => "connected (PostgreSQL)".to_string(),
-                    Err(e) => format!("error ({})", e),
-                }
-            } else {
-                "not configured".to_string()
-            }
-        }
+        _ => "unsupported legacy backend configured".to_string(),
     };
     println!("{}", fmt::kv_line("Database", &db_value, 12));
 
@@ -91,7 +82,7 @@ pub async fn run_status_command() -> anyhow::Result<()> {
     let session_value = if session_path.exists() {
         format!("found ({})", session_path.display())
     } else {
-        "not found (run `ironclaw onboard`)".to_string()
+        "not found (configure the selected provider directly)".to_string()
     };
     println!("{}", fmt::kv_line("Session", &session_value, 12));
 
@@ -193,36 +184,6 @@ pub async fn run_status_command() -> anyhow::Result<()> {
         )
     );
 
-    Ok(())
-}
-
-#[cfg(feature = "postgres")]
-async fn check_database() -> anyhow::Result<()> {
-    let url = std::env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL not set"))?;
-
-    let config: deadpool_postgres::Config = deadpool_postgres::Config {
-        url: Some(url),
-        ..Default::default()
-    };
-    let pool = crate::db::tls::create_pool(&config, crate::config::SslMode::from_env())
-        .map_err(|e| anyhow::anyhow!("pool error: {}", e))?;
-
-    let client = tokio::time::timeout(std::time::Duration::from_secs(5), pool.get())
-        .await
-        .map_err(|_| anyhow::anyhow!("timeout"))?
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    client
-        .execute("SELECT 1", &[])
-        .await
-        .map_err(|e| anyhow::anyhow!("{}", e))?;
-
-    Ok(())
-}
-
-#[cfg(not(feature = "postgres"))]
-async fn check_database() -> anyhow::Result<()> {
-    // For non-postgres backends, just report configured
     Ok(())
 }
 

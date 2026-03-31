@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use ironclaw::agent::{Agent, AgentDeps};
 use ironclaw::app::{AppBuilder, AppBuilderFlags};
-use ironclaw::channels::web::log_layer::LogBroadcaster;
 use ironclaw::channels::{OutgoingResponse, StatusUpdate};
 use ironclaw::config::Config;
 use ironclaw::db::Database;
@@ -583,9 +582,8 @@ impl TestRigBuilder {
             config.agent.auto_approve_tools = v;
         }
 
-        // 3. Create SessionManager + LogBroadcaster.
+        // 3. Create SessionManager.
         let session = Arc::new(SessionManager::new(SessionConfig::default()));
-        let log_broadcaster = Arc::new(LogBroadcaster::new());
 
         // 4. Create TraceLlm + InstrumentedLlm, extract HTTP exchanges for replay.
         let trace_http_exchanges = trace
@@ -622,13 +620,7 @@ impl TestRigBuilder {
         let llm: Arc<dyn LlmProvider> = Arc::clone(&instrumented) as Arc<dyn LlmProvider>;
 
         // 5. Build AppComponents via AppBuilder with injected DB and LLM.
-        let mut builder = AppBuilder::new(
-            config,
-            AppBuilderFlags::default(),
-            None,
-            session,
-            log_broadcaster,
-        );
+        let mut builder = AppBuilder::new(config, AppBuilderFlags::default(), None, session);
         builder.with_database(Arc::clone(&db));
         builder.with_llm(llm);
         let mut components = builder

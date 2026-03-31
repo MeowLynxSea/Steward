@@ -1,16 +1,18 @@
-//! NEAR AI Agentic Worker Framework
+//! IronCowork core runtime.
 //!
-//! An LLM-powered autonomous agent that operates on the NEAR AI marketplace.
+//! Phase 0 keeps the Rust agent engine, safety model, tool runtime, and
+//! workspace retrieval stack while the product shell is being transformed into
+//! a local-first desktop automation system.
 //!
 //! # Architecture
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────────────────────┐
-//! │                              User Interaction Layer                              │
-//! │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                         │
-//! │  │   CLI    │  │  Slack   │  │ Telegram │  │   HTTP   │                         │
-//! │  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘                         │
-//! │       └─────────────┴────────────┬┴─────────────┘                               │
+//! │                              Runtime Entry Layer                                 │
+//! │  ┌──────────┐  ┌──────────┐  ┌─────────────┐                                     │
+//! │  │   CLI    │  │   HTTP   │  │ Future UI   │                                     │
+//! │  └────┬─────┘  └────┬─────┘  └──────┬──────┘                                     │
+//! │       └─────────────┴───────────────┴─────────────────────────────────────────── │
 //! └──────────────────────────────────┼──────────────────────────────────────────────┘
 //!                                    ▼
 //! ┌──────────────────────────────────────────────────────────────────────────────────┐
@@ -31,7 +33,7 @@
 //!
 //! # Features
 //!
-//! - **Multi-channel interaction** - CLI, Slack, Telegram, HTTP webhooks
+//! - **Local-first runtime** - Embedded libSQL storage and direct local configuration
 //! - **Parallel job execution** - Run multiple jobs with isolated contexts
 //! - **Pluggable tools** - MCP, 3rd party services, dynamic tools
 //! - **Self-repair** - Detect and fix stuck jobs and broken tools
@@ -62,20 +64,18 @@ pub mod orchestrator;
 pub mod pairing;
 pub mod profile;
 pub mod registry;
+pub mod runtime_events;
 pub mod safety;
 pub mod sandbox;
 pub mod secrets;
 pub mod service;
 pub mod settings;
-pub mod setup;
 pub mod skills;
 pub mod tenant;
 pub mod timezone;
 pub mod tools;
 pub mod tracing_fmt;
-pub mod tunnel;
 pub mod util;
-pub mod webhooks;
 pub mod worker;
 pub mod workspace;
 

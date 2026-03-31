@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use crate::agent::SessionManager as AgentSessionManager;
-use crate::channels::web::log_layer::LogBroadcaster;
 use crate::config::Config;
 use crate::context::ContextManager;
 use crate::db::Database;
@@ -44,7 +43,6 @@ pub struct AppComponents {
     pub mcp_session_manager: Arc<McpSessionManager>,
     pub mcp_process_manager: Arc<McpProcessManager>,
     pub wasm_tool_runtime: Option<Arc<WasmToolRuntime>>,
-    pub log_broadcaster: Arc<LogBroadcaster>,
     pub context_manager: Arc<ContextManager>,
     pub hooks: Arc<HookRegistry>,
     /// Shared thread/session manager used by the standard agent runtime.
@@ -71,7 +69,6 @@ pub struct AppBuilder {
     flags: AppBuilderFlags,
     toml_path: Option<std::path::PathBuf>,
     session: Arc<SessionManager>,
-    log_broadcaster: Arc<LogBroadcaster>,
 
     // Accumulated state
     db: Option<Arc<dyn Database>>,
@@ -86,23 +83,17 @@ pub struct AppBuilder {
 
 impl AppBuilder {
     /// Create a new builder.
-    ///
-    /// The `session` and `log_broadcaster` are created before the builder
-    /// because tracing must be initialized before any init phase runs,
-    /// and the log broadcaster is part of the tracing layer.
     pub fn new(
         config: Config,
         flags: AppBuilderFlags,
         toml_path: Option<std::path::PathBuf>,
         session: Arc<SessionManager>,
-        log_broadcaster: Arc<LogBroadcaster>,
     ) -> Self {
         Self {
             config,
             flags,
             toml_path,
             session,
-            log_broadcaster,
             db: None,
             secrets_store: None,
             llm_override: None,
@@ -353,28 +344,7 @@ impl AppBuilder {
             ws = ws.with_memory_layers(self.config.workspace.memory_layers.clone());
             let ws = Arc::new(ws);
 
-            // Detect multi-tenant mode: when the database has registered users,
-            // each authenticated user needs their own workspace scope. Use
-            // WorkspacePool (which implements WorkspaceResolver) to create
-            // per-user workspaces on demand instead of sharing the startup
-            // workspace across all users.
-            let is_multi_tenant = db.has_any_users().await.unwrap_or(false);
-
-            if is_multi_tenant {
-                let pool = Arc::new(crate::channels::web::server::WorkspacePool::new(
-                    Arc::clone(db),
-                    embeddings.clone(),
-                    emb_cache_config,
-                    self.config.search.clone(),
-                    self.config.workspace.clone(),
-                ));
-                tools.register_memory_tools_with_resolver(pool);
-                tracing::info!(
-                    "Memory tools configured with per-user workspace resolver (multi-tenant mode)"
-                );
-            } else {
-                tools.register_memory_tools(Arc::clone(&ws));
-            }
+            tools.register_memory_tools(Arc::clone(&ws));
 
             Some(ws)
         } else {
@@ -785,7 +755,7 @@ impl AppBuilder {
             let backend = &self.config.llm.backend;
             anyhow::bail!(
                 "LLM_BACKEND={backend} is configured but no credentials were found. \
-                 Set the appropriate API key environment variable or run the setup wizard."
+                 Set the appropriate API key environment variable or local config file."
             );
         }
 
@@ -916,7 +886,6 @@ impl AppBuilder {
             mcp_session_manager,
             mcp_process_manager,
             wasm_tool_runtime,
-            log_broadcaster: self.log_broadcaster,
             context_manager,
             hooks,
             agent_session_manager,
