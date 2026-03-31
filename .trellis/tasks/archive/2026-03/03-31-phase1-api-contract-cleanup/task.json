@@ -1,20 +1,20 @@
 {
-  "id": "phase1-runtime-validation",
-  "name": "phase1-runtime-validation",
-  "title": "Phase 1 runtime validation and browser/desktop smoke closeout",
+  "id": "phase1-api-contract-cleanup",
+  "name": "phase1-api-contract-cleanup",
+  "title": "Phase 1 API contract cleanup for tasks sessions and SSE",
   "description": "",
-  "status": "planning",
-  "dev_type": "fullstack",
+  "status": "completed",
+  "dev_type": "backend",
   "scope": null,
   "priority": "P1",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
   "createdAt": "2026-03-31",
-  "completedAt": null,
+  "completedAt": "2026-03-31",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
-  "current_phase": 0,
+  "current_phase": 2,
   "next_action": [
     {
       "phase": 1,
@@ -40,11 +40,9 @@
   "parent": null,
   "relatedFiles": [
     "src/api.rs",
-    "src/main.rs",
-    "src-tauri/src/main.rs",
-    "ui/src/App.svelte",
-    "docs/plans/2026-03-31-ironcowork-post-phase1-execution-roadmap.md"
+    "tests/api_http_integration.rs",
+    ".trellis/spec/backend/task-runtime-contracts.md"
   ],
-  "notes": "Covers roadmap issue 1.6.",
+  "notes": "Covers roadmap issue 1.7.",
   "meta": {}
 }

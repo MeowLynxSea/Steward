@@ -70,3 +70,35 @@ Completed `phase1-frontend-state-hygiene`:
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Phase 1 closeout
+
+**Date**: 2026-03-31
+**Task**: Phase 1 closeout
+
+### Summary
+
+Normalized task/SSE contracts, aligned the Svelte UI, added a repeatable Phase 1 smoke checklist, ignored static build outputs, and archived the remaining Phase 1 tasks.
+
+### Main Changes
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `f0ea6a4` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
