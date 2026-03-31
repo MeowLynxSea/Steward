@@ -3,18 +3,18 @@
   "name": "phase2-approval-ux-and-e2e",
   "title": "Phase 2 approval UX mode control and MVP end to end coverage",
   "description": "",
-  "status": "planning",
+  "status": "completed",
   "dev_type": "fullstack",
   "scope": null,
   "priority": "P1",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
   "createdAt": "2026-03-31",
-  "completedAt": null,
+  "completedAt": "2026-04-01",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
-  "current_phase": 0,
+  "current_phase": 2,
   "next_action": [
     {
       "phase": 1,
@@ -33,7 +33,7 @@
       "action": "create-pr"
     }
   ],
-  "commit": null,
+  "commit": "da50f13",
   "pr_url": null,
   "subtasks": [],
   "children": [],
