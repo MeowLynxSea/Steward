@@ -219,6 +219,51 @@ impl SessionManager {
         (session, thread_id)
     }
 
+    /// Create a thread with an explicit UUID and bind it to an external thread key.
+    ///
+    /// This is used by the local HTTP API so browser and desktop clients can
+    /// treat the returned UUID as both the persisted conversation ID and the
+    /// runtime thread ID.
+    pub async fn create_bound_thread(
+        &self,
+        user_id: &str,
+        channel: &str,
+        external_thread_id: &str,
+        thread_id: Uuid,
+    ) -> Arc<Mutex<Session>> {
+        let session = self.get_or_create_session(user_id).await;
+        {
+            let mut sess = session.lock().await;
+            let session_id = sess.id;
+            sess.active_thread = Some(thread_id);
+            sess.last_active_at = chrono::Utc::now();
+            sess.threads
+                .entry(thread_id)
+                .or_insert_with(|| crate::agent::session::Thread::with_id(thread_id, session_id));
+        }
+
+        {
+            let mut thread_map = self.thread_map.write().await;
+            thread_map.insert(
+                ThreadKey {
+                    user_id: user_id.to_string(),
+                    channel: channel.to_string(),
+                    external_thread_id: Some(external_thread_id.to_string()),
+                },
+                thread_id,
+            );
+        }
+
+        {
+            let mut undo_managers = self.undo_managers.write().await;
+            undo_managers
+                .entry(thread_id)
+                .or_insert_with(|| Arc::new(Mutex::new(UndoManager::new())));
+        }
+
+        session
+    }
+
     /// Register a hydrated thread so subsequent `resolve_thread` calls find it.
     ///
     /// Inserts into the thread_map and creates an undo manager for the thread.

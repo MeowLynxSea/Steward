@@ -1,25 +1,35 @@
 //! Local HTTP API for the desktop-first runtime.
 
+use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderValue, Method, StatusCode},
-    response::IntoResponse,
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::services::ServeDir;
 use uuid::Uuid;
 
+use crate::agent::SessionManager;
 use crate::agent::submission::Submission;
 use crate::channels::IncomingMessage;
-use crate::db::SettingsStore;
+use crate::db::Database;
+use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
 use crate::settings::Settings;
 use crate::task_runtime::{TaskMode, TaskRecord, TaskRuntime, TaskStatus};
+use crate::workspace::{SearchResult, Workspace, WorkspaceEntry};
 
 pub const DEFAULT_API_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 pub const DEFAULT_API_PORT: u16 = 8765;
@@ -28,28 +38,34 @@ pub const DEFAULT_API_PORT: u16 = 8765;
 pub struct ApiState {
     owner_id: String,
     bind_addr: SocketAddr,
-    settings_store: Arc<dyn SettingsStore>,
+    store: Arc<dyn Database>,
     sse_manager: Arc<SseManager>,
     task_runtime: Option<Arc<TaskRuntime>>,
     inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
+    session_manager: Option<Arc<SessionManager>>,
+    workspace: Option<Arc<Workspace>>,
 }
 
 impl ApiState {
     pub fn new(
         owner_id: String,
         bind_addr: SocketAddr,
-        settings_store: Arc<dyn SettingsStore>,
+        store: Arc<dyn Database>,
         sse_manager: Arc<SseManager>,
         task_runtime: Option<Arc<TaskRuntime>>,
         inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
+        session_manager: Option<Arc<SessionManager>>,
+        workspace: Option<Arc<Workspace>>,
     ) -> Self {
         Self {
             owner_id,
             bind_addr,
-            settings_store,
+            store,
             sse_manager,
             task_runtime,
             inject_tx,
+            session_manager,
+            workspace,
         }
     }
 }
@@ -104,6 +120,100 @@ struct ApiErrorBody {
 #[derive(Debug, Serialize)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionListResponse {
+    pub sessions: Vec<SessionSummaryResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionSummaryResponse {
+    pub id: Uuid,
+    pub title: String,
+    pub message_count: i64,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub last_activity: chrono::DateTime<chrono::Utc>,
+    pub thread_type: Option<String>,
+    pub channel: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionMessageResponse {
+    pub id: Uuid,
+    pub role: String,
+    pub content: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SessionDetailResponse {
+    pub session: SessionSummaryResponse,
+    pub messages: Vec<SessionMessageResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateSessionResponse {
+    pub id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSessionRequest {
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SendSessionMessageRequest {
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SendSessionMessageResponse {
+    pub accepted: bool,
+    pub session_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceIndexRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceIndexResponse {
+    pub path: String,
+    pub document_path: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct WorkspaceTreeQuery {
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceTreeResponse {
+    pub path: String,
+    pub entries: Vec<WorkspaceEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceSearchRequest {
+    pub query: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceSearchResponse {
+    pub results: Vec<WorkspaceSearchResultResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceSearchResultResponse {
+    pub document_id: Uuid,
+    pub document_path: String,
+    pub chunk_id: Uuid,
+    pub content: String,
+    pub score: f32,
+    pub fts_rank: Option<u32>,
+    pub vector_rank: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,10 +297,18 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/health", get(get_health))
         .route("/api/v0/settings", get(get_settings).patch(patch_settings))
         .route("/api/v0/events", get(get_events))
+        .route("/api/v0/sessions", get(list_sessions).post(create_session))
+        .route("/api/v0/sessions/{id}", get(get_session))
+        .route("/api/v0/sessions/{id}/messages", post(post_session_message))
+        .route("/api/v0/sessions/{id}/stream", get(stream_session))
         .route("/api/v0/tasks", get(list_tasks))
         .route("/api/v0/tasks/{id}", get(get_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
         .route("/api/v0/tasks/{id}/yolo-toggle", post(toggle_task_yolo))
+        .route("/api/v0/workspace/index", post(index_workspace))
+        .route("/api/v0/workspace/tree", get(get_workspace_tree))
+        .route("/api/v0/workspace/search", post(search_workspace))
+        .fallback_service(ServeDir::new("static").append_index_html_on_directories(true))
         .with_state(state)
         .layer(cors)
 }
@@ -236,7 +354,7 @@ async fn patch_settings(
     apply_settings_patch(&mut settings, payload);
 
     state
-        .settings_store
+        .store
         .set_all_settings(&state.owner_id, &settings.to_db_map())
         .await
         .map_err(|e| ApiError::internal(format!("failed to persist settings: {e}")))?;
@@ -266,6 +384,128 @@ async fn get_events(
         .sse_manager
         .subscribe(Some(state.owner_id))
         .ok_or(StatusCode::SERVICE_UNAVAILABLE)
+}
+
+async fn list_sessions(State(state): State<ApiState>) -> ApiResult<Json<SessionListResponse>> {
+    let sessions = state
+        .store
+        .list_conversations_all_channels(&state.owner_id, 100)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to list sessions: {e}")))?;
+    Ok(Json(SessionListResponse {
+        sessions: sessions
+            .into_iter()
+            .map(SessionSummaryResponse::from)
+            .collect(),
+    }))
+}
+
+async fn create_session(
+    State(state): State<ApiState>,
+    payload: Option<Json<CreateSessionRequest>>,
+) -> ApiResult<Json<CreateSessionResponse>> {
+    let session_id = Uuid::new_v4();
+    let session_manager = state
+        .session_manager
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("session manager is not available"))?;
+    let external_id = session_id.to_string();
+    session_manager
+        .create_bound_thread(&state.owner_id, "api", &external_id, session_id)
+        .await;
+    state
+        .store
+        .ensure_conversation(session_id, "api", &state.owner_id, Some(&external_id))
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to create session: {e}")))?;
+    if let Some(Json(body)) = payload
+        && let Some(title) = body.title
+        && !title.trim().is_empty()
+    {
+        state
+            .store
+            .update_conversation_metadata_field(
+                session_id,
+                "title",
+                &serde_json::Value::String(title.trim().to_string()),
+            )
+            .await
+            .map_err(|e| ApiError::internal(format!("failed to persist session title: {e}")))?;
+    }
+    Ok(Json(CreateSessionResponse { id: session_id }))
+}
+
+async fn get_session(
+    State(state): State<ApiState>,
+    Path(session_id): Path<Uuid>,
+) -> ApiResult<Json<SessionDetailResponse>> {
+    ensure_session_belongs_to_user(&state, session_id).await?;
+    let summary = load_session_summary(&state, session_id).await?;
+    let messages = state
+        .store
+        .list_conversation_messages(session_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to load session messages: {e}")))?;
+    Ok(Json(SessionDetailResponse {
+        session: summary,
+        messages: messages
+            .into_iter()
+            .map(SessionMessageResponse::from)
+            .collect(),
+    }))
+}
+
+async fn post_session_message(
+    State(state): State<ApiState>,
+    Path(session_id): Path<Uuid>,
+    Json(payload): Json<SendSessionMessageRequest>,
+) -> ApiResult<Json<SendSessionMessageResponse>> {
+    ensure_session_belongs_to_user(&state, session_id).await?;
+    let inject_tx = state
+        .inject_tx
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("session injection is not available"))?;
+    if payload.content.trim().is_empty() {
+        return Err(ApiError::bad_request("message content cannot be empty"));
+    }
+
+    let message = IncomingMessage::new("api", &state.owner_id, payload.content)
+        .with_owner_id(state.owner_id.clone())
+        .with_sender_id(state.owner_id.clone())
+        .with_thread(session_id.to_string())
+        .with_metadata(serde_json::json!({
+            "source": "api",
+            "surface": "web"
+        }))
+        .with_timezone("UTC")
+        .into_internal();
+    inject_tx
+        .send(message)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to enqueue session message: {e}")))?;
+
+    Ok(Json(SendSessionMessageResponse {
+        accepted: true,
+        session_id,
+    }))
+}
+
+async fn stream_session(
+    State(state): State<ApiState>,
+    Path(session_id): Path<Uuid>,
+) -> ApiResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static>> {
+    ensure_session_belongs_to_user(&state, session_id).await?;
+    let thread_id = session_id.to_string();
+    let stream = state
+        .sse_manager
+        .subscribe_raw(Some(state.owner_id.clone()))
+        .ok_or_else(|| ApiError::conflict("sse capacity reached"))?
+        .filter(move |event| {
+            futures::future::ready(event_thread_id(event) == Some(thread_id.as_str()))
+        })
+        .filter_map(|event| async move { serialize_event(event) });
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("")))
 }
 
 async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Json<TaskListResponse>> {
@@ -393,9 +633,87 @@ async fn toggle_task_yolo(
     })?))
 }
 
+async fn index_workspace(
+    State(state): State<ApiState>,
+    Json(payload): Json<WorkspaceIndexRequest>,
+) -> ApiResult<Json<WorkspaceIndexResponse>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let path = payload.path.trim();
+    if path.is_empty() {
+        return Err(ApiError::bad_request("path cannot be empty"));
+    }
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| ApiError::bad_request(format!("path is not accessible: {e}")))?;
+    if !metadata.is_dir() {
+        return Err(ApiError::bad_request("path must be a directory"));
+    }
+
+    let document_path = format!("indexes/{}.md", Uuid::new_v4());
+    workspace
+        .write(
+            &document_path,
+            &format!(
+                "# Indexed Folder\n\n- source_path: {}\n- indexed_at: {}\n",
+                path,
+                chrono::Utc::now().to_rfc3339(),
+            ),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!("failed to record workspace index request: {e}"))
+        })?;
+
+    Ok(Json(WorkspaceIndexResponse {
+        path: path.to_string(),
+        document_path,
+    }))
+}
+
+async fn get_workspace_tree(
+    State(state): State<ApiState>,
+    Query(query): Query<WorkspaceTreeQuery>,
+) -> ApiResult<Json<WorkspaceTreeResponse>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let path = query.path.unwrap_or_default();
+    let entries = workspace
+        .list(&path)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to list workspace tree: {e}")))?;
+    Ok(Json(WorkspaceTreeResponse { path, entries }))
+}
+
+async fn search_workspace(
+    State(state): State<ApiState>,
+    Json(payload): Json<WorkspaceSearchRequest>,
+) -> ApiResult<Json<WorkspaceSearchResponse>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    if payload.query.trim().is_empty() {
+        return Err(ApiError::bad_request("query cannot be empty"));
+    }
+    let results = workspace
+        .search(payload.query.trim(), 20)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to search workspace: {e}")))?;
+    Ok(Json(WorkspaceSearchResponse {
+        results: results
+            .into_iter()
+            .map(WorkspaceSearchResultResponse::from)
+            .collect(),
+    }))
+}
+
 async fn load_settings(state: &ApiState) -> ApiResult<Settings> {
     let map = state
-        .settings_store
+        .store
         .get_all_settings(&state.owner_id)
         .await
         .map_err(|e| ApiError::internal(format!("failed to load settings: {e}")))?;
@@ -453,6 +771,101 @@ async fn inject_approval(
     Ok(())
 }
 
+async fn ensure_session_belongs_to_user(state: &ApiState, session_id: Uuid) -> ApiResult<()> {
+    let belongs = state
+        .store
+        .conversation_belongs_to_user(session_id, &state.owner_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to verify session ownership: {e}")))?;
+    if belongs {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(format!(
+            "session {session_id} not found"
+        )))
+    }
+}
+
+async fn load_session_summary(
+    state: &ApiState,
+    session_id: Uuid,
+) -> ApiResult<SessionSummaryResponse> {
+    let session = state
+        .store
+        .list_conversations_all_channels(&state.owner_id, 200)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to load session summaries: {e}")))?
+        .into_iter()
+        .find(|conversation| conversation.id == session_id)
+        .ok_or_else(|| ApiError::not_found(format!("session {session_id} not found")))?;
+    Ok(SessionSummaryResponse::from(session))
+}
+
+fn event_thread_id(event: &ironclaw_common::AppEvent) -> Option<&str> {
+    match event {
+        ironclaw_common::AppEvent::Response { thread_id, .. } => Some(thread_id.as_str()),
+        ironclaw_common::AppEvent::Thinking { thread_id, .. }
+        | ironclaw_common::AppEvent::ToolStarted { thread_id, .. }
+        | ironclaw_common::AppEvent::ToolCompleted { thread_id, .. }
+        | ironclaw_common::AppEvent::ToolResult { thread_id, .. }
+        | ironclaw_common::AppEvent::StreamChunk { thread_id, .. }
+        | ironclaw_common::AppEvent::Status { thread_id, .. }
+        | ironclaw_common::AppEvent::ApprovalNeeded { thread_id, .. }
+        | ironclaw_common::AppEvent::Error { thread_id, .. }
+        | ironclaw_common::AppEvent::ImageGenerated { thread_id, .. }
+        | ironclaw_common::AppEvent::Suggestions { thread_id, .. }
+        | ironclaw_common::AppEvent::TurnCost { thread_id, .. }
+        | ironclaw_common::AppEvent::ReasoningUpdate { thread_id, .. } => thread_id.as_deref(),
+        _ => None,
+    }
+}
+
+fn serialize_event(event: ironclaw_common::AppEvent) -> Option<Result<Event, Infallible>> {
+    let data = serde_json::to_string(&event).ok()?;
+    Some(Ok(Event::default().event(event.event_type()).data(data)))
+}
+
+impl From<ConversationSummary> for SessionSummaryResponse {
+    fn from(value: ConversationSummary) -> Self {
+        Self {
+            id: value.id,
+            title: value
+                .title
+                .unwrap_or_else(|| "Untitled Session".to_string()),
+            message_count: value.message_count,
+            started_at: value.started_at,
+            last_activity: value.last_activity,
+            thread_type: value.thread_type,
+            channel: value.channel,
+        }
+    }
+}
+
+impl From<ConversationMessage> for SessionMessageResponse {
+    fn from(value: ConversationMessage) -> Self {
+        Self {
+            id: value.id,
+            role: value.role,
+            content: value.content,
+            created_at: value.created_at,
+        }
+    }
+}
+
+impl From<SearchResult> for WorkspaceSearchResultResponse {
+    fn from(value: SearchResult) -> Self {
+        Self {
+            document_id: value.document_id,
+            document_path: value.document_path,
+            chunk_id: value.chunk_id,
+            content: value.content,
+            score: value.score,
+            fts_rank: value.fts_rank,
+            vector_rank: value.vector_rank,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,17 +879,23 @@ mod tests {
     use crate::task_runtime::{TaskMode, TaskRuntime, TaskStatus};
     use tokio::sync::mpsc;
 
-    async fn test_state() -> ApiState {
+    async fn test_database() -> Arc<dyn Database> {
         let db_path =
             std::env::temp_dir().join(format!("ironcowork-api-test-{}.db", uuid::Uuid::new_v4()));
         let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
         db.run_migrations().await.expect("migrations");
+        db
+    }
+
+    async fn test_state() -> ApiState {
         ApiState::new(
             "test-user".to_string(),
             SocketAddr::from(([127, 0, 0, 1], 8765)),
-            db,
+            test_database().await,
             Arc::new(SseManager::new()),
             Some(Arc::new(TaskRuntime::new())),
+            None,
+            None,
             None,
         )
     }
@@ -507,7 +926,7 @@ mod tests {
         assert_eq!(updated.llm_backend.as_deref(), Some("openai"));
 
         let stored = state
-            .settings_store
+            .store
             .get_all_settings("test-user")
             .await
             .expect("stored");
@@ -528,9 +947,11 @@ mod tests {
         let state = ApiState::new(
             "test-user".to_string(),
             SocketAddr::from(([127, 0, 0, 1], 8765)),
-            test_state().await.settings_store,
+            test_database().await,
             Arc::new(SseManager::new()),
             Some(runtime.clone()),
+            None,
+            None,
             None,
         );
 
@@ -579,10 +1000,12 @@ mod tests {
         let state = ApiState::new(
             "test-user".to_string(),
             SocketAddr::from(([127, 0, 0, 1], 8765)),
-            test_state().await.settings_store,
+            test_database().await,
             Arc::new(SseManager::new()),
             Some(runtime),
             Some(inject_tx),
+            None,
+            None,
         );
 
         let Json(task) = approve_task(

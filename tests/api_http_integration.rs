@@ -6,11 +6,13 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use ironclaw::{
+    agent::SessionManager,
     api::{ApiState, local_api_addr, router, run_api},
     channels::IncomingMessage,
-    db::{Database, SettingsStore, libsql::LibSqlBackend},
+    db::{ConversationStore, Database, libsql::LibSqlBackend},
     runtime_events::SseManager,
     task_runtime::TaskRuntime,
+    workspace::Workspace,
 };
 use serde_json::json;
 use tower::util::ServiceExt;
@@ -26,10 +28,12 @@ async fn test_router() -> axum::Router {
     let state = ApiState::new(
         "http-test-user".to_string(),
         local_api_addr(8765),
-        db,
+        db.clone(),
         Arc::new(SseManager::new()),
         Some(Arc::new(TaskRuntime::new())),
         None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
     );
 
     router(state)
@@ -174,9 +178,11 @@ async fn run_api_rejects_non_localhost_bind() {
     let state = ApiState::new(
         "bind-test-user".to_string(),
         bind_addr,
-        db as Arc<dyn SettingsStore>,
+        db,
         Arc::new(SseManager::new()),
         Some(Arc::new(TaskRuntime::new())),
+        None,
+        None,
         None,
     );
 
@@ -207,10 +213,12 @@ async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
     let app = router(ApiState::new(
         "http-test-user".to_string(),
         local_api_addr(8765),
-        db,
+        db.clone(),
         Arc::new(SseManager::new()),
         Some(runtime.clone()),
         None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
     ));
 
     let toggle_response = app
@@ -246,4 +254,142 @@ async fn task_endpoints_toggle_yolo_and_list_runtime_state() {
     let tasks: serde_json::Value = serde_json::from_slice(&tasks).expect("tasks json");
     assert_eq!(tasks["tasks"][0]["id"], task_id.to_string());
     assert_eq!(tasks["tasks"][0]["mode"], "yolo");
+}
+
+#[tokio::test]
+async fn sessions_endpoints_create_and_load_history() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-session-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let inject_tx = tokio::sync::mpsc::channel(8).0;
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        Some(inject_tx),
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db(
+            "http-test-user",
+            db.clone(),
+        ))),
+    ));
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"title":"Inbox triage"}"#))
+                .expect("create request"),
+        )
+        .await
+        .expect("create response");
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let body = create_response
+        .into_body()
+        .collect()
+        .await
+        .expect("create body")
+        .to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&body).expect("create json");
+    let session_id = created["id"].as_str().expect("session id").to_string();
+
+    db.add_conversation_message(
+        session_id.parse::<uuid::Uuid>().expect("uuid"),
+        "assistant",
+        "Archive plan ready",
+    )
+    .await
+    .expect("add message");
+
+    let get_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/sessions/{session_id}"))
+                .body(Body::empty())
+                .expect("get session request"),
+        )
+        .await
+        .expect("get session response");
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let body = get_response
+        .into_body()
+        .collect()
+        .await
+        .expect("get session body")
+        .to_bytes();
+    let session: serde_json::Value = serde_json::from_slice(&body).expect("session json");
+    assert_eq!(session["session"]["id"], session_id);
+    assert_eq!(session["messages"][0]["content"], "Archive plan ready");
+}
+
+#[tokio::test]
+async fn workspace_endpoints_index_and_list_tree() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-workspace-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let source_dir = tempfile::tempdir().expect("tempdir");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let index_payload = json!({ "path": source_dir.path().display().to_string() });
+    let index_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/workspace/index")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(index_payload.to_string()))
+                .expect("index request"),
+        )
+        .await
+        .expect("index response");
+    assert_eq!(index_response.status(), StatusCode::OK);
+
+    let tree_response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/workspace/tree")
+                .body(Body::empty())
+                .expect("tree request"),
+        )
+        .await
+        .expect("tree response");
+    assert_eq!(tree_response.status(), StatusCode::OK);
+    let body = tree_response
+        .into_body()
+        .collect()
+        .await
+        .expect("tree body")
+        .to_bytes();
+    let tree: serde_json::Value = serde_json::from_slice(&body).expect("tree json");
+    assert!(
+        tree["entries"]
+            .as_array()
+            .expect("entries")
+            .iter()
+            .any(|entry| !entry["path"].as_str().unwrap_or_default().is_empty())
+    );
 }

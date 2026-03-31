@@ -8,7 +8,7 @@ use clap::{Args, Subcommand};
 
 use crate::api::{ApiState, DEFAULT_API_HOST, DEFAULT_API_PORT, run_api};
 use crate::config::Config;
-use crate::db::{SettingsStore, connect_from_config};
+use crate::db::connect_from_config;
 use crate::runtime_events::SseManager;
 use crate::task_runtime::TaskRuntime;
 
@@ -45,14 +45,15 @@ async fn run_api_serve(
     let bind_addr = SocketAddr::new(args.host, args.port);
     let config = Config::from_env_with_toml(toml_path).await?;
     let database = connect_from_config(&config.database).await?;
-    let settings_store: Arc<dyn SettingsStore> = database;
 
     let state = ApiState::new(
         config.owner_id,
         bind_addr,
-        settings_store,
+        database,
         Arc::new(SseManager::new()),
         Some(Arc::new(TaskRuntime::new())),
+        None,
+        None,
         None,
     );
 

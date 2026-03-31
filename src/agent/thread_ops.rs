@@ -611,6 +611,17 @@ impl Agent {
                         .mark_waiting_approval(message, thread_id, pending_approval)
                         .await;
                 }
+                self.emit_sse_event_for_message(
+                    message,
+                    ironclaw_common::AppEvent::ApprovalNeeded {
+                        request_id: request_id.to_string(),
+                        tool_name: tool_name.clone(),
+                        description: description.clone(),
+                        parameters: parameters.to_string(),
+                        thread_id: Some(thread_id.to_string()),
+                        allow_always,
+                    },
+                );
                 let _ = self
                     .channels
                     .send_status(
@@ -1496,6 +1507,18 @@ impl Agent {
                     )
                     .await;
 
+                self.emit_sse_event_for_message(
+                    message,
+                    ironclaw_common::AppEvent::ApprovalNeeded {
+                        request_id: request_id.to_string(),
+                        tool_name: tool_name.clone(),
+                        description: description.clone(),
+                        parameters: parameters.to_string(),
+                        thread_id: Some(thread_id.to_string()),
+                        allow_always,
+                    },
+                );
+
                 return Ok(SubmissionResult::NeedApproval {
                     request_id,
                     tool_name,
@@ -1589,6 +1612,17 @@ impl Agent {
                             .mark_waiting_approval(message, thread_id, pending_approval)
                             .await;
                     }
+                    self.emit_sse_event_for_message(
+                        message,
+                        ironclaw_common::AppEvent::ApprovalNeeded {
+                            request_id: request_id.to_string(),
+                            tool_name: tool_name.clone(),
+                            description: description.clone(),
+                            parameters: parameters.to_string(),
+                            thread_id: Some(thread_id.to_string()),
+                            allow_always,
+                        },
+                    );
                     let _ = self
                         .channels
                         .send_status(

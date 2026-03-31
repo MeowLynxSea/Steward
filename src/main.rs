@@ -455,16 +455,19 @@ async fn async_main() -> anyhow::Result<()> {
     // Clone context_manager for the reaper before it's moved into Agent::new()
     let reaper_context_manager = Arc::clone(&components.context_manager);
     let task_runtime = Arc::new(TaskRuntime::new());
+    let sse_manager = Arc::new(ironclaw::runtime_events::SseManager::new());
 
-    if let Some(settings_store) = components.db.clone() {
+    if let Some(store) = components.db.clone() {
         let api_bind_addr = local_api_addr(DEFAULT_API_PORT);
         let api_state = ApiState::new(
             config.owner_id.clone(),
             api_bind_addr,
-            settings_store,
-            Arc::new(ironclaw::runtime_events::SseManager::new()),
+            store,
+            sse_manager.clone(),
             Some(task_runtime.clone()),
             Some(channels.inject_sender()),
+            Some(session_manager.clone()),
+            components.workspace.clone(),
         );
         tokio::spawn(async move {
             if let Err(error) = run_api(api_bind_addr, api_state).await {
@@ -487,7 +490,7 @@ async fn async_main() -> anyhow::Result<()> {
         skills_config: config.skills.clone(),
         hooks: components.hooks,
         cost_guard: components.cost_guard,
-        sse_tx: None,
+        sse_tx: Some(sse_manager),
         http_interceptor,
         transcription: config.transcription.create_provider().map(|p| {
             Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(

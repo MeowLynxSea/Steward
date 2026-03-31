@@ -213,6 +213,20 @@ impl Agent {
         self.deps.task_runtime.as_ref()
     }
 
+    pub(super) fn sse(&self) -> Option<&Arc<crate::runtime_events::SseManager>> {
+        self.deps.sse_tx.as_ref()
+    }
+
+    pub(super) fn emit_sse_event_for_message(
+        &self,
+        message: &IncomingMessage,
+        event: ironclaw_common::AppEvent,
+    ) {
+        if let Some(sse) = self.sse() {
+            sse.broadcast_for_user(&message.user_id, event);
+        }
+    }
+
     pub(super) async fn task_mode_for_thread(&self, thread_id: Uuid) -> TaskMode {
         match self.task_runtime() {
             Some(runtime) => runtime.mode_for_task(thread_id).await,
@@ -907,6 +921,13 @@ impl Agent {
 
             match self.handle_message(&message).await {
                 Ok(Some(response)) if !response.is_empty() => {
+                    self.emit_sse_event_for_message(
+                        &message,
+                        ironclaw_common::AppEvent::Response {
+                            content: response.clone(),
+                            thread_id: message.thread_id.clone().unwrap_or_default(),
+                        },
+                    );
                     // Hook: BeforeOutbound — allow hooks to modify or suppress outbound
                     let event = crate::hooks::HookEvent::Outbound {
                         user_id: message.user_id.clone(),
@@ -963,6 +984,13 @@ impl Agent {
                     break;
                 }
                 Err(e) => {
+                    self.emit_sse_event_for_message(
+                        &message,
+                        ironclaw_common::AppEvent::Error {
+                            message: e.to_string(),
+                            thread_id: message.thread_id.clone(),
+                        },
+                    );
                     tracing::error!("Error handling message: {}", e);
                     if let Err(send_err) = self
                         .channels
