@@ -33,7 +33,7 @@
       "action": "create-pr"
     }
   ],
-  "commit": null,
+  "commit": "bffc6d3",
   "pr_url": null,
   "subtasks": [],
   "children": [],
