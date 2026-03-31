@@ -471,6 +471,12 @@ The task state is explicit, typed, and resumable.
 
 **Why**: The UI needs deterministic rendering and future policy engines need machine-readable payloads.
 
+### Convention: Active Task Views May Subscribe To `/tasks/:id/stream`
+
+**What**: The frontend may keep an active task detail panel synchronized by subscribing to `GET /api/v0/tasks/:id/stream` and then reloading `GET /api/v0/tasks/:id` on typed task events such as `task.waiting_approval`, `task.mode_changed`, `task.completed`, and `task.rejected`.
+
+**Why**: This keeps mode changes and approval checkpoints visible immediately while preserving REST as the authoritative snapshot source.
+
 ### Convention: SSE Complements REST, It Does Not Replace It
 
 **What**: REST gives the current resource snapshot; SSE gives ordered updates.

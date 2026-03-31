@@ -18,7 +18,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -128,7 +129,9 @@ textarea {
 .task-card,
 .workspace-entry,
 .search-result,
-.message-card {
+.message-card,
+.operation-card,
+.timeline-card {
   border: 1px solid rgba(23, 34, 44, 0.08);
   border-radius: 18px;
   padding: 14px;
@@ -180,7 +183,9 @@ textarea {
 
 .composer textarea,
 .settings-panel input,
-.inline-form input {
+.inline-form input,
+.inline-form select,
+.approval-form textarea {
   width: 100%;
   border: 1px solid rgba(23, 34, 44, 0.14);
   border-radius: 16px;
@@ -206,6 +211,76 @@ textarea {
   flex-wrap: wrap;
   gap: 10px;
   align-items: flex-start;
+}
+
+.status-banner {
+  display: grid;
+  gap: 6px;
+  border-radius: 18px;
+  padding: 14px 16px;
+}
+
+.status-banner.warning {
+  background: rgba(255, 196, 86, 0.22);
+  border: 1px solid rgba(168, 108, 0, 0.18);
+}
+
+.status-banner.success {
+  background: rgba(102, 181, 110, 0.18);
+  border: 1px solid rgba(53, 117, 61, 0.18);
+}
+
+.status-banner.danger {
+  background: rgba(214, 98, 78, 0.16);
+  border: 1px solid rgba(149, 53, 36, 0.18);
+}
+
+.status-banner.neutral {
+  background: rgba(23, 34, 44, 0.05);
+  border: 1px solid rgba(23, 34, 44, 0.08);
+}
+
+.task-facts {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.approval-summary,
+.timeline-card p {
+  margin: 0;
+}
+
+.approval-form {
+  display: grid;
+  gap: 8px;
+}
+
+.approval-form span {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.operation-card,
+.timeline-card {
+  display: grid;
+  gap: 8px;
+}
+
+.operation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operation-head span,
+.operation-paths span,
+.timeline-card span {
+  color: #5e6973;
+}
+
+.operation-paths {
+  display: grid;
+  gap: 6px;
 }
 
 .settings-panel {

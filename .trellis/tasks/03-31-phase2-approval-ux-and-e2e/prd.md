@@ -21,10 +21,10 @@ Finish the user-facing Ask/Yolo loop and freeze the MVP contract with end-to-end
 
 ## Acceptance Criteria
 
-- [ ] Waiting tasks can be approved or rejected from the UI deterministically.
-- [ ] Mode changes are visible in real time and in persisted history.
-- [ ] Approval UI is not driven by log scraping.
-- [ ] MVP-critical cross-layer flows have automated coverage.
+- [x] Waiting tasks can be approved or rejected from the UI deterministically.
+- [x] Mode changes are visible in real time and in persisted history.
+- [x] Approval UI is not driven by log scraping.
+- [x] MVP-critical cross-layer flows have automated coverage.
 
 ## Out Of Scope
 

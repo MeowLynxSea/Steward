@@ -657,6 +657,113 @@ async fn task_stream_emits_normalized_envelope() {
 }
 
 #[tokio::test]
+async fn task_stream_emits_waiting_approval_then_mode_changed() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "archive downloads")
+        .with_thread(task_id.to_string())
+        .with_owner_id("owner-1")
+        .with_sender_id("sender-1")
+        .with_metadata(serde_json::json!({"source":"api-test"}))
+        .with_timezone("UTC");
+    runtime.ensure_task(&message, task_id).await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-stream-live-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let sse_manager = Arc::new(SseManager::new());
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        sse_manager.clone(),
+        Some(runtime.clone()),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/tasks/{task_id}/stream"))
+                .body(Body::empty())
+                .expect("task stream request"),
+        )
+        .await
+        .expect("task stream response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+
+    let pending = ironclaw::agent::session::PendingApproval {
+        request_id,
+        tool_name: "write_file".to_string(),
+        parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        display_parameters: serde_json::json!({"path":"/tmp/report.md"}),
+        description: "write a file".to_string(),
+        tool_call_id: "call_1".to_string(),
+        context_messages: Vec::new(),
+        deferred_tool_calls: Vec::new(),
+        user_timezone: Some("UTC".to_string()),
+        allow_always: false,
+    };
+    runtime
+        .mark_waiting_approval(&message, task_id, &pending)
+        .await;
+    sse_manager.broadcast_for_user(
+        "http-test-user",
+        ironclaw_common::AppEvent::ApprovalNeeded {
+            request_id: request_id.to_string(),
+            tool_name: "write_file".to_string(),
+            description: "write a file".to_string(),
+            parameters: "{\"path\":\"/tmp/report.md\"}".to_string(),
+            thread_id: Some(task_id.to_string()),
+            allow_always: false,
+        },
+    );
+    runtime
+        .toggle_mode(task_id, ironclaw::task_runtime::TaskMode::Yolo)
+        .await;
+    sse_manager.broadcast_for_user(
+        "http-test-user",
+        ironclaw_common::AppEvent::Status {
+            message: "task.mode_changed:yolo".to_string(),
+            thread_id: Some(task_id.to_string()),
+        },
+    );
+
+    let _initial = body
+        .frame()
+        .await
+        .expect("initial frame present")
+        .expect("initial frame ok");
+    let waiting_frame = body
+        .frame()
+        .await
+        .expect("waiting frame present")
+        .expect("waiting frame ok");
+    let waiting_bytes = waiting_frame.into_data().expect("waiting data");
+    let waiting_text = std::str::from_utf8(&waiting_bytes).expect("utf8");
+    assert!(waiting_text.contains("event: task.waiting_approval"));
+    assert!(waiting_text.contains("\"status\":\"waiting_approval\""));
+
+    let mode_frame = body
+        .frame()
+        .await
+        .expect("mode frame present")
+        .expect("mode frame ok");
+    let mode_bytes = mode_frame.into_data().expect("mode data");
+    let mode_text = std::str::from_utf8(&mode_bytes).expect("utf8");
+    assert!(mode_text.contains("event: task.mode_changed"));
+    assert!(mode_text.contains("\"mode\":\"yolo\""));
+}
+
+#[tokio::test]
 async fn patch_task_mode_returns_422_on_invalid_mode() {
     let runtime = Arc::new(TaskRuntime::new());
     let task_id = uuid::Uuid::new_v4();

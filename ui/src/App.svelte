@@ -14,6 +14,42 @@
   let archiveSourcePath = $state("");
   let archiveTargetRoot = $state("");
   let archiveMode = $state<"ask" | "yolo">("ask");
+  let rejectReason = $state("Rejected by user");
+
+  function taskStatusTone(status: string): string {
+    switch (status) {
+      case "waiting_approval":
+        return "warning";
+      case "completed":
+        return "success";
+      case "failed":
+      case "rejected":
+        return "danger";
+      default:
+        return "neutral";
+    }
+  }
+
+  function taskStatusCopy(status: string): string {
+    switch (status) {
+      case "waiting_approval":
+        return "Waiting for approval";
+      case "completed":
+        return "Completed";
+      case "failed":
+        return "Failed";
+      case "rejected":
+        return "Rejected";
+      case "running":
+        return "Running";
+      default:
+        return "Queued";
+    }
+  }
+
+  function timelineTitle(item: { current_step: { title: string } | null; event: string }): string {
+    return item.current_step?.title || item.event;
+  }
 
   async function bootstrap() {
     appLoading = true;
@@ -76,6 +112,7 @@
 
     return () => {
       window.clearInterval(taskInterval);
+      tasksStore.dispose();
       sessionsStore.disconnect();
       void unlistenDrops();
     };
@@ -241,14 +278,60 @@
               </button>
               {#if tasksStore.detail.task.status === "waiting_approval" && tasksStore.detail.task.pending_approval}
                 <button onclick={() => void tasksStore.approve(tasksStore.detail!.task)}>Approve</button>
-                <button onclick={() => void tasksStore.reject(tasksStore.detail!.task)}>Reject</button>
+                <button onclick={() => void tasksStore.reject(tasksStore.detail!.task, rejectReason)}>Reject</button>
               {/if}
+            </div>
+
+            <article class={`status-banner ${taskStatusTone(tasksStore.detail.task.status)}`}>
+              <strong>{taskStatusCopy(tasksStore.detail.task.status)}</strong>
+              <span>{tasksStore.detail.task.current_step?.title ?? "Task state updated"}</span>
+            </article>
+
+            <div class="stack compact task-facts">
+              <article class="workspace-entry">
+                <strong>Template</strong>
+                <span>{tasksStore.detail.task.template_id}</span>
+              </article>
+              <article class="workspace-entry">
+                <strong>Mode</strong>
+                <span>{tasksStore.detail.task.mode}</span>
+              </article>
+              <article class="workspace-entry">
+                <strong>Updated</strong>
+                <span>{new Date(tasksStore.detail.task.updated_at).toLocaleString()}</span>
+              </article>
             </div>
 
             {#if tasksStore.detail.task.pending_approval}
               <article class="message-card assistant">
                 <header>Approval Preview</header>
-                <pre>{JSON.stringify(tasksStore.detail.task.pending_approval.operations, null, 2)}</pre>
+                <p class="approval-summary">{tasksStore.detail.task.pending_approval.summary}</p>
+                <div class="stack compact">
+                  {#each tasksStore.detail.task.pending_approval.operations as operation, index}
+                    <article class="operation-card">
+                      <div class="operation-head">
+                        <strong>#{index + 1} {operation.kind}</strong>
+                        <span>{operation.tool_name}</span>
+                      </div>
+                      <div class="operation-paths">
+                        <span>{operation.path ?? "Unknown source"}</span>
+                        <span>{operation.destination_path ?? "No destination"}</span>
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+
+                <label class="approval-form">
+                  <span>Reject reason</span>
+                  <textarea bind:value={rejectReason} rows="3" placeholder="Explain why this task should stop"></textarea>
+                </label>
+              </article>
+            {/if}
+
+            {#if tasksStore.detail.task.status === "rejected" || tasksStore.detail.task.status === "failed"}
+              <article class="message-card assistant">
+                <header>{tasksStore.detail.task.status === "rejected" ? "Rejection Reason" : "Failure Reason"}</header>
+                <p>{tasksStore.detail.task.last_error ?? "No reason recorded."}</p>
               </article>
             {/if}
 
@@ -261,9 +344,15 @@
 
             <div class="stack compact">
               {#each tasksStore.detail.timeline as item}
-                <article class="workspace-entry">
-                  <strong>{item.event}</strong>
-                  <span>{item.status} · {new Date(item.created_at).toLocaleString()}</span>
+                <article class="timeline-card">
+                  <div class="operation-head">
+                    <strong>{timelineTitle(item)}</strong>
+                    <span>{item.mode}</span>
+                  </div>
+                  <span>{item.event} · {item.status} · {new Date(item.created_at).toLocaleString()}</span>
+                  {#if item.last_error}
+                    <p>{item.last_error}</p>
+                  {/if}
                 </article>
               {/each}
             </div>
