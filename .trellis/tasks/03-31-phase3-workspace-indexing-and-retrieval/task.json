@@ -43,6 +43,6 @@
     "src/api.rs",
     ".trellis/spec/backend/database-guidelines.md"
   ],
-  "notes": "Covers roadmap issues 3.1 and 3.2.",
+  "notes": "Supports the general agent workbench with real workspace retrieval.",
   "meta": {}
 }

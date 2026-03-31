@@ -1,77 +1,71 @@
 # IronCowork Post-Phase-1 Execution Roadmap
 
-**Date:** 2026-03-31
-**Status:** Active planning baseline
-**Scope:** Detailed execution plan for work after Phase 1.5
+**Date:** 2026-03-31  
+**Status:** Active planning baseline  
+**Scope:** Work after the initial Axum + Svelte + Tauri shell exists
 
 ---
 
 ## Current State Snapshot
 
-As of 2026-03-31, the repository has completed the minimum structural work for Phase 0 and the first pass of Phase 1:
+As of 2026-03-31, the repo already has the rough shell of the target system:
 
-- libSQL-only local runtime is established as the storage baseline.
-- `/api/v0/health`, settings, session, task, workspace, and SSE skeleton routes exist.
-- Ask/Yolo runtime interception exists in first-pass form.
-- `ui/` exists as a Svelte shell with settings, sessions, tasks, and workspace views.
-- `src-tauri/` exists as a Tauri shell with notifications, tray, and folder-drop forwarding.
+- libSQL-first local runtime
+- health/settings/session/task/workspace API skeletons
+- first-pass Ask/Yolo interception
+- Svelte shell for settings, sessions, tasks, and workspace
+- Tauri shell with notifications, tray, and folder-drop forwarding
 
-This means the project has moved past "architecture declaration" and into "product completion". The remaining work is no longer about shell creation. It is about turning the shell into a usable desktop workflow product.
-
----
-
-## Delivery Principles For Remaining Work
-
-- Do not reopen deleted product surfaces such as channels, gateway, or NEAR login flows.
-- Keep HTTP/SSE as the only business contract between frontend and backend.
-- Prefer shipping complete vertical slices over expanding shallow surface area.
-- Treat task templates, approvals, and execution history as authoritative persisted objects.
-- Every phase must end with one or more user-visible workflows that can be manually exercised end to end.
+The remaining work is not "invent a shell". It is "correct the product model and make the shell behave like a desktop autonomous agent".
 
 ---
 
-## Remaining Phase Structure
+## Delivery Principles
+
+- Keep sessions as the main user-facing object.
+- Keep tasks/runs as durable execution records and background units.
+- Delete predefined-workflow-centric product and API assumptions instead of layering over them.
+- Optimize for general-purpose agent behavior before vertical workflows.
+- Preserve the HTTP/SSE contract as the only business interface.
+- Treat Ask/Yolo as core runtime policy.
+
+---
+
+## Phase Structure
 
 ### Phase 1 Closeout
 
-**Goal:** Convert the current shell from "compile-time complete" to "manually usable for local development".
+Goal: make the current shell usable and align contracts with the corrected product direction.
 
-### Phase 2 MVP Delivery
+### Phase 2 Autonomous Agent Core
 
-**Goal:** Ship two complete workflows:
+Goal: ship a general desktop agent that can work inside persistent sessions and produce inspectable runs.
 
-- file organization / archive
-- periodic briefing / report generation
+### Phase 3 Stability And Background Operation
 
-### Phase 3 Stabilization
+Goal: make the agent reliable across restart, indexing, long-running work, and future routine execution.
 
-**Goal:** Make the MVP dependable enough for repeated local use.
+### Phase 4 Packaging, Rebrand, And Docs
 
-### Phase 4 Packaging And Release Readiness
-
-**Goal:** Make IronCowork distributable as a local desktop product with clear setup and upgrade paths.
+Goal: finish the product identity and make the system understandable to developers and users.
 
 ---
 
-## Trellis Task Registry
+## Active Trellis Task Registry
 
-The roadmap is split into active execution tasks under `.trellis/tasks/`:
-
-- `03-31-phase1-runtime-validation`
-- `03-31-phase1-api-contract-cleanup`
-- `03-31-phase1-frontend-state-hygiene`
-- `03-31-phase2-template-persistence`
-- `03-31-phase2-task-history-and-detail`
-- `03-31-phase2-file-archive-workflow`
-- `03-31-phase2-briefing-and-scheduler`
-- `03-31-phase2-approval-ux-and-e2e`
+- `04-01-phase2-session-first-agent-runtime`
+- `04-01-phase2-run-history-and-approval-center`
+- `04-01-phase2-general-agent-workbench`
 - `03-31-phase3-workspace-indexing-and-retrieval`
 - `03-31-phase3-settings-and-recovery`
 - `03-31-phase3-observability-and-safety`
 - `03-31-phase4-rebrand-and-bootstrap`
 - `03-31-phase4-packaging-and-user-docs`
 
-The original planning task `03-31-ironcowork-post-phase1-roadmap` exists only to capture the roadmap and should be archived once these execution tasks are committed.
+Deleted from the active plan:
+
+- predefined-workflow persistence direction
+- specialized recurring automation as a primary phase target
 
 ---
 
@@ -79,374 +73,198 @@ The original planning task `03-31-ironcowork-post-phase1-roadmap` exists only to
 
 ### Exit Criteria
 
-- Local browser mode can complete settings save, session send/receive, task list refresh, and workspace indexing manually.
-- Desktop mode can complete the same flows, plus notifications and folder-drop indexing.
-- SSE reconnect behavior is stable enough that page refresh does not leave orphaned UI state.
-- The current API/UI naming drift around task mode switching is resolved.
+- Browser mode can save settings, create/select sessions, send messages, and observe run state changes.
+- Desktop mode can do the same flows and additionally show notifications and accept folder drops.
+- API naming and SSE payloads reflect a session/run mental model rather than predefined workflow execution.
+- The UI survives refresh without losing authoritative session/run state.
 
 ### Issue 1.6: Manual Runtime Validation And Gap Fixes
 
-**Purpose:** Close the gap between "builds" and "usable for developers".
+Purpose: close the gap between "shell exists" and "developers can actually use it".
 
-**Work items**
+Work items:
 
-- Boot the Axum service and verify browser access against `127.0.0.1`.
-- Boot the Tauri shell against the same backend and verify the desktop path.
-- Fix any broken assumptions in the current Svelte pages, especially optimistic session updates and stream re-subscription.
-- Add an explicit capability flag or graceful fallback contract for browser mode when Tauri-only APIs are missing.
-- Replace the temporary workspace-index placeholder with a clearer "stub" status if full ingestion is not yet present.
+- validate browser mode against `127.0.0.1`
+- validate Tauri mode against the same backend
+- fix stream resubscribe and refresh-state rebuild issues
+- define capability fallback behavior for browser-only mode
+- remove UI wording that implies the product is predefined-workflow-driven
 
-**Acceptance**
+### Issue 1.7: API Contract Cleanup Around Sessions And Runs
 
-- Manual smoke script exists in docs.
-- One clean run in browser mode and one clean run in Tauri mode are both documented.
+Purpose: normalize the current implementation before Phase 2 builds on it.
 
-### Issue 1.7: API Contract Cleanup
+Work items:
 
-**Purpose:** Align the current implementation with the intended v0 contract before Phase 2 builds on it.
-
-**Work items**
-
-- Normalize task mode switching to one route shape.
-- Ensure task stream events use stable event names and envelope fields.
-- Add missing session detail route and task detail route shape checks.
-- Add explicit error payloads for `404`, `409`, and `422` responses used by UI workflows.
-- Decide whether approval endpoints accept `request_id`, `approval_id`, or both; remove ambiguity.
-
-**Acceptance**
-
-- A single API contract document reflects the actual route shapes.
-- API integration tests cover the normalized behavior.
+- standardize `task` vs `run` terminology in API and UI
+- normalize Ask/Yolo route shapes and error payloads
+- remove predefined workflow CRUD from the intended v0 contract
+- ensure run detail and run stream payloads are stable enough for typed frontend handling
 
 ### Issue 1.8: Frontend State Hygiene
 
-**Purpose:** Prevent Phase 2 work from collapsing under duplicated or ad hoc state handling.
+Purpose: keep the session-first UI from collapsing into ad hoc state.
 
-**Work items**
+Work items:
 
-- Extract Svelte view state into focused modules for settings, sessions, tasks, and workspace.
-- Add a shared SSE event adapter that converts raw event envelopes into typed frontend events.
-- Add loading, empty, and error states for all current views.
-- Add a basic route model so direct links to sessions or tasks do not require full-app manual navigation.
-
-**Acceptance**
-
-- `App.svelte` is no longer a large all-in-one controller.
-- Frontend build remains static-output compatible for Tauri and backend static serving.
-
-### Phase 1 Test Gate
-
-- `cargo test --test api_http_integration`
-- `cargo check --manifest-path src-tauri/Cargo.toml`
-- `npm run build`
-- One manual smoke checklist for browser mode
-- One manual smoke checklist for desktop mode
+- isolate stores for settings, sessions, runs, and workspace
+- centralize SSE envelope parsing
+- add loading, empty, and error states
+- support direct links into a session or run detail view
 
 ---
 
-## Phase 2 MVP Delivery
+## Phase 2 Autonomous Agent Core
 
 ### Exit Criteria
 
-- Users can create, edit, inspect, run, and review task templates.
-- File archive task works in both Ask and Yolo modes with explicit operation previews.
-- Periodic briefing task can run on schedule and write a Markdown file to disk.
-- Task detail UI shows step logs, approvals, mode, and final outputs.
+- Users can stay inside a persistent session and drive the system through natural language goals.
+- The agent can inspect workspace context, use tools, and emit visible step/run history.
+- Ask mode surfaces actionable approval payloads for risky operations.
+- Yolo mode can continue autonomously under the same safety constraints.
 
 ### Dependency Order
 
-1. Template data model and CRUD
-2. Task execution persistence and detail view
-3. File archive vertical slice
-4. Briefing vertical slice
-5. Scheduling and recurring execution
-6. UI refinement for approval and history
+1. Session-first runtime semantics
+2. Durable run history and approval center
+3. General workspace/tool orchestration
+4. Conversation UX and agent visibility
 
-### Issue 2.1: Template Persistence Model
+### Issue 2.1: Session-First Agent Runtime
 
-**Purpose:** Introduce the core object that makes IronCowork task-driven instead of message-driven.
+Purpose: make sessions authoritative and make run creation an implementation detail of the agent loop.
 
-**Work items**
+Work items:
 
-- Define template storage schema in libSQL.
-- Distinguish built-in templates from user-authored templates.
-- Persist parameter schema, display metadata, default mode, and output expectations.
-- Add template CRUD routes and validation rules.
-- Add frontend template list and template detail editor scaffolding.
+- define how session messages create or attach to runs
+- persist session state needed for restart and replay
+- make current agent action visible as part of the session experience
+- ensure the API does not force users through predefined forms
 
-**Acceptance**
+Acceptance:
 
-- Built-in templates are read-only unless explicitly cloned.
-- User templates can be created, edited, and deleted.
-- Invalid template schemas return field-level validation errors.
+- a user can create a session, send a goal, and observe the agent progress
+- session history survives refresh and restart
+- new execution records can be traced back to the initiating session turn
 
-### Issue 2.2: Task Instance Model And History
+### Issue 2.2: Run History And Approval Center
 
-**Purpose:** Make task execution durable and inspectable.
+Purpose: make autonomy inspectable instead of opaque.
 
-**Work items**
+Work items:
 
-- Persist task instances, execution steps, checkpoints, and final outputs.
-- Add task detail API that returns timeline-ready data.
-- Persist mode changes and approval decisions as part of task history.
-- Expose task result metadata such as output paths, summary text, and failure reason.
+- persist run timeline, steps, approvals, mode changes, and outputs
+- provide run detail API and stream payloads
+- show pending approvals as structured proposed side effects
+- allow approval, rejection, cancellation, and mode switching without losing auditability
 
-**Acceptance**
+Acceptance:
 
-- Refreshing the UI retains task history and current execution state.
-- Completed and failed tasks are fully inspectable after process restart.
+- runs remain inspectable after completion or restart
+- Ask/Yolo decisions are preserved in history
+- the UI can reconstruct run state without scraping raw logs
 
-### Issue 2.3: File Archive Template Runtime
+### Issue 2.3: General Agent Workbench
 
-**Purpose:** Deliver the first real knowledge-work automation loop.
+Purpose: support broad desktop knowledge-work goals instead of narrow workflow-specific paths.
 
-**Work items**
+Work items:
 
-- Add directory scanning and classification pipeline.
-- Generate proposed rename/move operations with confidence and category metadata.
-- Persist preview operations before execution.
-- Route all file mutations through the safe tool layer.
-- Distinguish low-risk preview generation from high-risk file mutation checkpoints.
+- improve workspace browsing and retrieval integration inside sessions
+- expose tool and MCP capability visibility to the agent UI
+- support agent planning/execution around files, notes, summaries, and research-style tasks
+- avoid hard-coding one or two specialized workflows as the primary path
 
-**Acceptance**
+Acceptance:
 
-- Ask mode pauses before mutating files and displays a structured preview.
-- Yolo mode runs the same operations without extra UI approval, subject to policy.
-- Result state includes moved files, skipped files, and failure reasons.
+- a session can use workspace context and tools to complete a broad goal
+- the UI shows enough context for the user to understand what the agent is doing next
+- product copy and API contracts no longer assume specialization
 
-### Issue 2.4: File Archive UX
+### Issue 2.4: Conversation UX And Agent Visibility
 
-**Purpose:** Make the first template understandable and reversible from the UI perspective.
+Purpose: make autonomy legible to users.
 
-**Work items**
+Work items:
 
-- Add template parameter form for source directory, target root, naming strategy, and exclusions.
-- Add operation preview table with old path, new path, action, and risk.
-- Add task detail panel sections for progress, approval, and final summary.
-- Add "run again with same parameters" action.
+- display agent thinking/step state at a product-safe level
+- show current plan, current action, pending approval, and final outputs
+- keep the chat surface central while exposing deeper run detail on demand
 
-**Acceptance**
+Acceptance:
 
-- A user can launch the archive workflow without typing raw JSON.
-- Approval UI is driven by typed operations, not log text parsing.
-
-### Issue 2.5: Periodic Briefing Template Runtime
-
-**Purpose:** Deliver the second workflow that proves scheduled synthesis, not just file operations.
-
-**Work items**
-
-- Define a built-in template for recurring reports.
-- Support source configuration for MCP-backed sources and local workspace notes.
-- Add prompt assembly for summary generation with deterministic output sections.
-- Write Markdown output to a target path through the safe file-writing tool path.
-- Record generated report metadata and output path in task history.
-
-**Acceptance**
-
-- A configured report task can run once manually and produce a Markdown file.
-- Ask mode pauses before network or external side effects when policy marks them risky.
-
-### Issue 2.6: Scheduler And Recurring Runs
-
-**Purpose:** Turn the briefing workflow into a real periodic automation feature.
-
-**Work items**
-
-- Define a schedule record model.
-- Support cron validation and next-run calculation.
-- Add a scheduler loop that instantiates tasks from templates on schedule.
-- Ensure recurring runs produce separate task instances linked to the schedule.
-- Add UI for enabling, disabling, and inspecting recurring schedules.
-
-**Acceptance**
-
-- A scheduled briefing creates independent historical task runs.
-- Invalid cron expressions fail early with actionable errors.
-
-### Issue 2.7: Approval UX And Mode Control
-
-**Purpose:** Finish the Ask/Yolo user-facing loop.
-
-**Work items**
-
-- Add task-level mode switch with persistence and immediate UI feedback.
-- Add approval modal or side panel with approve/reject flow.
-- Add rejection reason capture and rejected-task rendering.
-- Surface notification events when attention is required.
-
-**Acceptance**
-
-- A waiting task can be approved or rejected from the UI and resume or terminate deterministically.
-- Mode changes are visible in history and stream updates.
-
-### Issue 2.8: Template And Task E2E Coverage
-
-**Purpose:** Freeze the MVP contract before stabilization work.
-
-**Work items**
-
-- Add end-to-end API tests for template CRUD and task creation.
-- Add backend runtime tests for Ask vs Yolo behavior in file archive and briefing paths.
-- Add UI integration tests for approval rendering and task timeline rendering.
-- Add one reproducible fixture set for file-archive dry runs and report generation.
-
-**Acceptance**
-
-- MVP workflows can be exercised in automated tests without manual setup drift.
-
-### Phase 2 Test Gate
-
-- Template CRUD API tests
-- Task creation/detail/history tests
-- Ask/Yolo approval state machine tests
-- File archive fixture test
-- Report generation fixture test
-- UI integration tests for settings, task detail, and approval flow
+- users can follow agent progress without switching mental models
+- run detail feels like a drill-down from the conversation, not a separate product
 
 ---
 
-## Phase 3 Stabilization
+## Phase 3 Stability And Background Operation
 
 ### Exit Criteria
 
-- Repeated local use does not lose task state, corrupt workspace data, or leave broken UI streams.
-- Startup, shutdown, and restart behavior are deterministic.
-- Safety and observability are sufficient to diagnose failures without attaching a debugger.
+- settings, sessions, approvals, and runs recover cleanly after restart
+- workspace indexing is real and dependable, not a stub
+- background runs and future routines have clear lifecycle rules
+- logs and audit records are enough to debug failures without guesswork
 
-### Issue 3.1: Workspace Indexing Upgrade
+### Issue 3.1: Workspace Indexing And Retrieval
 
-**Purpose:** Replace the current placeholder indexing path with a real ingestion pipeline.
+Handled by the existing Trellis task `03-31-phase3-workspace-indexing-and-retrieval`.
 
-**Work items**
+Focus:
 
-- Recursively walk selected directories.
-- Persist file metadata, extracted text, and chunk records into libSQL.
-- Rebuild hybrid retrieval around the actual stored corpus.
-- Add progress reporting for long-running index jobs.
+- recursive ingestion
+- extracted text persistence
+- search snippets and metadata
+- progress and freshness handling
 
-### Issue 3.2: Retrieval Quality And Search UX
+### Issue 3.2: Settings, Recovery, And Background Operation
 
-**Purpose:** Make workspace search meaningful for briefing and future template workflows.
+Handled by `03-31-phase3-settings-and-recovery`.
 
-**Work items**
+Focus:
 
-- Add FTS weighting and vector ranking tuning.
-- Add search result snippets and source metadata.
-- Add explicit re-index and stale-index handling.
+- provider validation
+- restart behavior for sessions, approvals, and runs
+- recovery of in-flight background work
+- future-compatible routine support without making routines the primary product
 
-### Issue 3.3: Settings Hardening
+### Issue 3.3: Observability And Safety
 
-**Purpose:** Make provider setup dependable for real users.
+Handled by `03-31-phase3-observability-and-safety`.
 
-**Work items**
+Focus:
 
-- Add provider-specific validation and connectivity checks.
-- Add secret storage policy for desktop mode versus browser-only mode.
-- Add migration path for settings schema changes.
-
-### Issue 3.4: Reliability And Recovery
-
-**Purpose:** Make long-running tasks survivable across refreshes and restarts.
-
-**Work items**
-
-- Add task recovery semantics on process restart.
-- Add stream replay or snapshot-plus-resubscribe behavior.
-- Define restart behavior for waiting approvals and scheduled tasks.
-
-### Issue 3.5: Observability
-
-**Purpose:** Make the runtime inspectable without reopening the old gateway/operator surface.
-
-**Work items**
-
-- Add structured logs around task lifecycle, approvals, scheduler events, and tool execution boundaries.
-- Add developer-facing diagnostics page or log export entry point.
-- Add correlation IDs that tie REST, SSE, and runtime events together.
-
-### Issue 3.6: Security Regression Pass
-
-**Purpose:** Ensure the new product shape did not bypass the retained safety model.
-
-**Work items**
-
-- Audit all file and network side effects for tool-layer enforcement.
-- Add tests for approval bypass attempts.
-- Revalidate secret handling for settings and MCP credentials.
-
-### Phase 3 Test Gate
-
-- Restart recovery tests
-- Workspace indexing and search regression tests
-- Provider validation tests
-- Safety regression tests for file/network mutation paths
+- structured logs across session/run/approval lifecycles
+- correlation between REST, SSE, and runtime events
+- regression tests proving no risky side effects bypass Ask/Yolo and safety boundaries
 
 ---
 
-## Phase 4 Packaging And Release Readiness
+## Phase 4 Packaging, Rebrand, And Docs
 
 ### Exit Criteria
 
-- A new contributor can boot the project locally without hidden knowledge.
-- A local user can install, configure, and use the app with a documented setup path.
-- The repository no longer presents itself as a half-migrated fork.
+- repository identity consistently reflects IronCowork
+- developer startup and architecture docs reflect the session-first agent direction
+- user docs explain desktop mode, browser mode, workspace usage, approvals, and safety
+- packaging targets and release metadata are coherent
 
-### Issue 4.1: Repository Rebrand Completion
+### Issue 4.1: Rebrand And Bootstrap
 
-**Work items**
+Handled by `03-31-phase4-rebrand-and-bootstrap`.
 
-- Finish project naming updates across README, package metadata, binary names, and release assets.
-- Remove stale upstream references that imply channels, PostgreSQL, or NEAR account dependency.
+### Issue 4.2: Packaging And User Docs
 
-### Issue 4.2: Developer Bootstrap
-
-**Work items**
-
-- Add one-command local dev startup for backend plus UI and, where practical, Tauri.
-- Document required environment variables and optional local config file paths.
-
-### Issue 4.3: Desktop Packaging
-
-**Work items**
-
-- Define Tauri packaging targets for macOS, Windows, and Linux where supported.
-- Replace placeholder icons and bundle metadata.
-- Add release checklist for signing, packaging, and artifact verification.
-
-### Issue 4.4: User Documentation
-
-**Work items**
-
-- Write setup docs for API keys, local storage path, browser mode, and desktop mode.
-- Write usage docs for file archive and periodic briefing templates.
-- Document explicit non-goals such as built-in remote exposure.
-
-### Phase 4 Test Gate
-
-- Clean local bootstrap from a fresh clone
-- Package build checks for supported desktop targets
-- README and user-doc walkthrough validation
+Handled by `03-31-phase4-packaging-and-user-docs`.
 
 ---
 
-## Critical Path Summary
+## Sequence
 
-The minimum path to a real MVP is:
-
-1. Finish Phase 1 closeout so the shell is manually usable.
-2. Build template persistence and task history.
-3. Ship file archive as the first complete vertical slice.
-4. Ship periodic briefing with scheduling.
-5. Stabilize indexing, recovery, and observability.
-
-Any work outside that path should be treated as optional until those five steps are complete.
-
----
-
-## Explicit Non-Goals For Remaining Phases
-
-- No revival of Telegram, Slack, web gateway, or REPL-first product surfaces.
-- No in-app public exposure, tunnel setup, or LAN discovery.
-- No direct shell-command execution path outside the approved tool/safety boundary.
-- No heavy visual redesign before the two MVP workflows are dependable.
+1. Finish Phase 1 cleanup around naming and API contracts.
+2. Ship session-first runtime behavior.
+3. Ship durable run history and approval center.
+4. Turn the shell into a general agent workbench.
+5. Harden indexing, recovery, and safety.
+6. Finish packaging, rebrand, and docs.

@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the current placeholder indexing path with a real ingestion and hybrid-retrieval baseline for repeated local use.
+Replace the current placeholder indexing path with a real ingestion and hybrid-retrieval baseline for the general desktop agent.
 
 ## Scope
 
@@ -11,6 +11,7 @@ Replace the current placeholder indexing path with a real ingestion and hybrid-r
 - Hybrid search tuning
 - Search result metadata and snippets
 - Index freshness and progress reporting
+- Session/run-facing retrieval quality
 
 ## Requirements
 

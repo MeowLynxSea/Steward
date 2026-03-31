@@ -1,7 +1,7 @@
 {
   "id": "phase3-settings-and-recovery",
   "name": "phase3-settings-and-recovery",
-  "title": "Phase 3 settings validation and runtime recovery",
+  "title": "Phase 3 settings, recovery, and background operation",
   "description": "",
   "status": "planning",
   "dev_type": "fullstack",
@@ -42,8 +42,9 @@
     "src/settings/",
     "src/bootstrap.rs",
     "src/api.rs",
-    "ui/src/lib/api.ts"
+    "ui/src/lib/api.ts",
+    ".trellis/spec/backend/task-runtime-contracts.md"
   ],
-  "notes": "Covers roadmap issues 3.3 and 3.4.",
+  "notes": "Covers restart behavior for sessions, runs, approvals, and future background operation.",
   "meta": {}
 }

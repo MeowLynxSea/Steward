@@ -43,8 +43,9 @@
     "src/tools/",
     "src/sandbox/",
     ".trellis/spec/backend/logging-guidelines.md",
-    ".trellis/spec/backend/quality-guidelines.md"
+    ".trellis/spec/backend/quality-guidelines.md",
+    ".trellis/spec/backend/task-runtime-contracts.md"
   ],
-  "notes": "Covers roadmap issues 3.5 and 3.6.",
+  "notes": "Covers session/run logging, approval audits, and safety regression coverage.",
   "meta": {}
 }

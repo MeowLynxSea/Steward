@@ -2,7 +2,7 @@
 
 ## Goal
 
-Finish the visible fork identity shift and make local development setup obvious from a fresh clone.
+Finish the visible identity shift to IronCowork and make local development setup obvious from a fresh clone.
 
 ## Scope
 
@@ -13,7 +13,7 @@ Finish the visible fork identity shift and make local development setup obvious 
 
 ## Requirements
 
-- Remove stale upstream naming where it misrepresents the product direction.
+- Remove stale upstream naming where it misrepresents the session-first autonomous-agent direction.
 - Document backend, UI, and desktop startup expectations.
 - Provide one-command or clearly sequenced local development startup guidance.
 - Keep bootstrap compatible with the local-first desktop model.
@@ -22,7 +22,7 @@ Finish the visible fork identity shift and make local development setup obvious 
 
 - [ ] Fresh-clone setup is documented and reproducible.
 - [ ] Remaining stale product identity references are cleaned up or explicitly tracked.
-- [ ] Developer bootstrap docs align with current repository structure.
+- [ ] Developer bootstrap docs align with the corrected repository structure and product direction.
 
 ## Out Of Scope
 

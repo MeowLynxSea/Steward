@@ -1,15 +1,15 @@
 {
-  "id": "phase4-rebrand-and-bootstrap",
-  "name": "phase4-rebrand-and-bootstrap",
-  "title": "Phase 4 rebrand completion and developer bootstrap",
+  "id": "phase2-run-history-and-approval-center",
+  "name": "phase2-run-history-and-approval-center",
+  "title": "Phase 2 run history and approval center",
   "description": "",
   "status": "planning",
-  "dev_type": "docs",
+  "dev_type": "fullstack",
   "scope": null,
-  "priority": "P2",
+  "priority": "P1",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
-  "createdAt": "2026-03-31",
+  "createdAt": "2026-04-01",
   "completedAt": null,
   "branch": null,
   "base_branch": "main",
@@ -39,11 +39,12 @@
   "children": [],
   "parent": null,
   "relatedFiles": [
-    "README.md",
-    "Cargo.toml",
-    "src/main.rs",
-    "docs/plans/2026-03-31-ironcowork-post-phase1-execution-roadmap.md"
+    "src/agent/",
+    "src/task_runtime.rs",
+    "src/db/libsql/tasks.rs",
+    "ui/src/lib/stores/tasks.svelte.ts",
+    ".trellis/spec/backend/task-runtime-contracts.md"
   ],
-  "notes": "Covers rebrand cleanup and developer bootstrap for the corrected product direction.",
+  "notes": "Turns tasks/runs into durable execution records centered around approvals and inspectability.",
   "meta": {}
 }

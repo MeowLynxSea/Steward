@@ -2,26 +2,26 @@
 
 ## Goal
 
-Harden diagnostics and confirm that the desktop-first fork still routes risky side effects through the retained safety model.
+Harden diagnostics and confirm that the desktop autonomous-agent runtime still routes risky side effects through the retained safety model.
 
 ## Scope
 
-- Structured task lifecycle logging
-- Correlation IDs across REST/SSE/runtime events
+- Structured session/run lifecycle logging
+- Correlation IDs across REST, SSE, and runtime events
 - Developer-facing diagnostics or export hooks
 - File/network side-effect audit
 - Approval bypass regression tests
 
 ## Requirements
 
-- Log task, approval, scheduler, and tool execution transitions with stable identifiers.
-- Confirm no new workflow bypasses the tool/safety boundary.
+- Log session, run, approval, and tool execution transitions with stable identifiers.
+- Confirm no new agent path bypasses the tool/safety boundary.
 - Revalidate secret handling for settings and MCP credentials.
-- Add tests that prove approval checks still gate risky actions.
+- Add tests that prove Ask/Yolo still gates risky actions.
 
 ## Acceptance Criteria
 
-- [ ] Logs are sufficient to diagnose task failures without a debugger.
+- [ ] Logs are sufficient to diagnose session/run failures without a debugger.
 - [ ] REST, SSE, and runtime events can be correlated.
 - [ ] Safety regressions around file and network mutations are covered by tests.
 - [ ] No new direct shell-side mutation path exists outside the tool layer.

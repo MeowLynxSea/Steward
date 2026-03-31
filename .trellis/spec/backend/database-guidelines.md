@@ -58,9 +58,9 @@ Required workflow:
 
 ## Naming Conventions
 
-- Use stable, descriptive names for persisted domain entities: settings, sessions, tasks, task_steps, template records, schedule records, workspace documents.
+- Use stable, descriptive names for persisted domain entities: settings, sessions, runs, run_steps, approvals, routines, workspace documents.
 - Column names should stay snake_case and map cleanly to Rust struct fields.
-- Avoid names that preserve old product assumptions such as `channel_*`, `gateway_*`, or provider-specific login tables unless they are still genuinely needed.
+- Avoid names that preserve old product assumptions such as `channel_*`, `gateway_*`, `workflow_*`, or provider-specific login tables unless they are still genuinely needed.
 
 ---
 

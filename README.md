@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="ironclaw.png?v=2" alt="IronClaw" width="200"/>
+  <img src="ironclaw.png?v=2" alt="IronCowork" width="200"/>
 </p>
 
-<h1 align="center">IronClaw</h1>
+<h1 align="center">IronCowork</h1>
 
 <p align="center">
-  <strong>Desktop-first, local-first AI automation for knowledge work</strong>
+  <strong>Desktop-first autonomous AI coworker for local knowledge work</strong>
 </p>
 
 <p align="center">
@@ -20,9 +20,9 @@
 </p>
 
 <p align="center">
-  <a href="#philosophy">Philosophy</a> •
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
+  <a href="#positioning">Positioning</a> •
+  <a href="#principles">Principles</a> •
+  <a href="#current-direction">Current Direction</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#security">Security</a> •
   <a href="#architecture">Architecture</a>
@@ -30,281 +30,144 @@
 
 ---
 
-## Phase 0 Status
+## Positioning
 
-This repository is in the middle of a fork transformation from IronClaw to IronCowork.
+IronCowork is not a GUI wrapper around a coding CLI, and it is not being built as a predefined-workflow product.
 
-Phase 0 intentionally changes the project baseline:
+The target experience is closer to a desktop-native autonomous agent for knowledge work:
 
-- libSQL is the default local storage backend
-- channel source bundles and deploy scripts have been removed
-- interactive onboarding is being retired in favor of local config and env vars
-- the long-term target is Axum + Svelte + Tauri with task/template-driven execution
+- you give the agent a goal in a persistent desktop session
+- the agent explores files, notes, and MCP-connected sources
+- it plans and executes multi-step work
+- Ask/Yolo controls decide whether risky side effects require approval
+- the same backend can run inside a local desktop shell or in a browser against `127.0.0.1`
+
+Saved routines may exist later as accelerators, but they are not the product center. The primary interaction model is an ongoing agent session with durable context, tool use, and background execution.
+
+## Principles
+
+- **Desktop-first**: the product should feel native on macOS, Windows, and Linux through Tauri, without coupling business logic to Tauri IPC.
+- **Local-first**: libSQL is the embedded storage baseline; no PostgreSQL, no required cloud account, no mandatory external services.
+- **Autonomous but reviewable**: the agent should act independently, but Ask/Yolo and event logs keep risky actions inspectable.
+- **Workspace-centric**: local files, indexed notes, reports, and external MCP tools are agent context, not an afterthought.
+- **Fork, not skin**: this project keeps useful Rust runtime/safety pieces from IronClaw but deliberately diverges from its old channel-first product model.
+
+## Current Direction
+
+This repository is mid-migration from IronClaw to IronCowork.
+
+What stays:
+
+- Rust agent loop and orchestration
+- WASM sandbox and prompt-safety controls
+- MCP/tool registry support
+- workspace indexing and hybrid retrieval
+- multi-provider LLM support
+
+What is being removed or demoted:
+
+- channel-first interaction surfaces
+- NEAR-account-oriented onboarding
+- PostgreSQL assumptions
+- docs that describe IronCowork as a predefined-workflow runner
+
+What replaces the old center of gravity:
+
+- persistent agent sessions
+- delegated runs/tasks as execution records
+- Ask/Yolo approval checkpoints
+- optional saved routines for recurring background work
+- Svelte UI over HTTP/SSE, optionally hosted inside Tauri
 
 ## Features
 
-### Security First
+### Runtime
 
-- **WASM Sandbox** - Untrusted tools run in isolated WebAssembly containers with capability-based permissions
-- **Credential Protection** - Secrets are never exposed to tools; injected at the host boundary with leak detection
-- **Prompt Injection Defense** - Pattern detection, content sanitization, and policy enforcement
-- **Endpoint Allowlisting** - HTTP requests only to explicitly approved hosts and paths
+- **Autonomous agent sessions** for multi-step desktop work
+- **Ask/Yolo execution control** for risky file or network side effects
+- **Background routines** for recurring jobs once the core agent loop is stable
+- **libSQL storage** for settings, sessions, runs, approvals, and workspace state
+- **Workspace retrieval** with full-text and vector search
 
-### Core Runtime
+### Safety
 
-- **Local-first runtime** - Embedded libSQL storage with no required external database
-- **Docker Sandbox** - Isolated container execution with per-job tokens and orchestrator/worker pattern
-- **Routines** - Cron schedules, event triggers, webhook handlers for background automation
-- **Heartbeat System** - Proactive background execution for monitoring and maintenance tasks
-- **Parallel Jobs** - Handle multiple requests concurrently with isolated contexts
-- **Self-repair** - Automatic detection and recovery of stuck operations
+- **WASM sandbox** for untrusted tools
+- **Credential boundary protection** with injection and leak scanning
+- **Prompt-injection defenses** for external content
+- **Endpoint allowlisting** for networked tool access
+- **Audit-friendly event streams** across session, run, and approval lifecycles
 
-### Self-Expanding
+### Extensibility
 
-- **Dynamic Tool Building** - Describe what you need, and IronClaw builds it as a WASM tool
-- **MCP Protocol** - Connect to Model Context Protocol servers for additional capabilities
-- **Plugin Architecture** - Drop in new WASM tools without restarting
-
-### Persistent Memory
-
-- **Hybrid Search** - Full-text + vector search using Reciprocal Rank Fusion
-- **Workspace Filesystem** - Flexible path-based storage for notes, logs, and context
-- **Identity Files** - Maintain consistent personality and preferences across sessions
-
-## Installation
-
-### Prerequisites
-
-- Rust 1.92
-- No external database is required for Phase 0
-
-## Download or Build
-
-Visit [Releases page](https://github.com/nearai/ironclaw/releases/) to see the latest updates.
-
-<details>
-  <summary>Install via Windows Installer (Windows)</summary>
-
-Download the [Windows Installer](https://github.com/nearai/ironclaw/releases/latest/download/ironclaw-x86_64-pc-windows-msvc.msi) and run it.
-
-</details>
-
-<details>
-  <summary>Install via powershell script (Windows)</summary>
-
-```sh
-irm https://github.com/nearai/ironclaw/releases/latest/download/ironclaw-installer.ps1 | iex
-```
-
-</details>
-
-<details>
-  <summary>Install via shell script (macOS, Linux, Windows/WSL)</summary>
-
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/nearai/ironclaw/releases/latest/download/ironclaw-installer.sh | sh
-```
-</details>
-
-<details>
-  <summary>Install via Homebrew (macOS/Linux)</summary>
-
-```sh
-brew install ironclaw
-```
-
-</details>
-
-<details>
-  <summary>Compile the source code (Cargo on Windows, Linux, macOS)</summary>
-
-Install it with `cargo`, just make sure you have [Rust](https://rustup.rs) installed on your computer.
-
-```bash
-# Clone the repository
-git clone https://github.com/nearai/ironclaw.git
-cd ironclaw
-
-# Build
-cargo build --release
-
-# Run tests
-cargo test
-```
-
-</details>
+- **MCP protocol support** for external capability providers
+- **Plugin/tool architecture** for new local capabilities
+- **Multiple LLM backends** through direct provider adapters or OpenAI-compatible APIs
 
 ## Configuration
 
-Set local bootstrap configuration directly:
+The local bootstrap path is config-file and env-var driven:
 
 ```env
 DATABASE_BACKEND=libsql
-LIBSQL_PATH=~/.ironclaw/ironclaw.db
-LLM_BACKEND=openai_compatible
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_API_KEY=sk-or-...
-```
-
-Bootstrap values can also be written to `~/.ironclaw/.env` or a project config file.
-
-### Alternative LLM Providers
-
-IronClaw supports many LLM providers out of the box.
-Built-in providers include **Anthropic**, **OpenAI**, **GitHub Copilot**, **Google Gemini**, **MiniMax**,
-**Mistral**, and **Ollama** (local). OpenAI-compatible services like **OpenRouter**
-(300+ models), **Together AI**, **Fireworks AI**, and self-hosted servers (**vLLM**,
-**LiteLLM**) are also supported.
-
-Set your provider through environment variables or config directly:
-
-```env
-# Example: MiniMax (built-in, 204K context)
-LLM_BACKEND=minimax
-MINIMAX_API_KEY=...
-
-# Example: OpenAI-compatible endpoint
+LIBSQL_PATH=~/.ironcowork/ironcowork.db
 LLM_BACKEND=openai_compatible
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=sk-or-...
 LLM_MODEL=anthropic/claude-sonnet-4
 ```
 
-See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for a full provider guide.
+No NEAR login or PostgreSQL bootstrap should be required for the target product.
+
+See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for provider details.
 
 ## Security
 
-IronClaw implements defense in depth to protect your data and prevent misuse.
+IronCowork keeps the original defense-in-depth posture and applies it to desktop automation:
 
-### WASM Sandbox
-
-All untrusted tools run in isolated WebAssembly containers:
-
-- **Capability-based permissions** - Explicit opt-in for HTTP, secrets, tool invocation
-- **Endpoint allowlisting** - HTTP requests only to approved hosts/paths
-- **Credential injection** - Secrets injected at host boundary, never exposed to WASM code
-- **Leak detection** - Scans requests and responses for secret exfiltration attempts
-- **Rate limiting** - Per-tool request limits to prevent abuse
-- **Resource limits** - Memory, CPU, and execution time constraints
-
-```
-WASM ──► Allowlist ──► Leak Scan ──► Credential ──► Execute ──► Leak Scan ──► WASM
-         Validator     (request)     Injector       Request     (response)
-```
-
-### Prompt Injection Defense
-
-External content passes through multiple security layers:
-
-- Pattern-based detection of injection attempts
-- Content sanitization and escaping
-- Policy rules with severity levels (Block/Warn/Review/Sanitize)
-- Tool output wrapping for safe LLM context injection
-
-### Data Protection
-
-- All data stored locally in your PostgreSQL database
-- Secrets encrypted with AES-256-GCM
-- No telemetry, analytics, or data sharing
-- Full audit log of all tool executions
+- risky side effects must go through the retained tool/safety boundary
+- Ask mode can suspend execution for approval before mutation
+- Yolo mode still runs inside the same policy and sandbox constraints
+- secrets remain outside tool-visible execution environments
+- local-first storage does not imply unrestricted shell access
 
 ## Architecture
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                          Channels                              │
-│  ┌──────┐  ┌──────┐   ┌─────────────┐  ┌─────────────┐         │
-│  │ REPL │  │ HTTP │   │WASM Channels│  │ Web Gateway │         │
-│  └──┬───┘  └──┬───┘   └──────┬──────┘  │ (SSE + WS)  │         │
-│     │         │              │         └──────┬──────┘         │
-│     └─────────┴──────────────┴────────────────┘                │
-│                              │                                 │
-│                    ┌─────────▼─────────┐                       │
-│                    │    Agent Loop     │  Intent routing       │
-│                    └────┬──────────┬───┘                       │
-│                         │          │                           │
-│              ┌──────────▼────┐  ┌──▼───────────────┐           │
-│              │  Scheduler    │  │ Routines Engine  │           │
-│              │(parallel jobs)│  │(cron, event, wh) │           │
-│              └──────┬────────┘  └────────┬─────────┘           │
-│                     │                    │                     │
-│       ┌─────────────┼────────────────────┘                     │
-│       │             │                                          │
-│   ┌───▼─────┐  ┌────▼────────────────┐                         │
-│   │ Local   │  │    Orchestrator     │                         │
-│   │Workers  │  │  ┌───────────────┐  │                         │
-│   │(in-proc)│  │  │ Docker Sandbox│  │                         │
-│   └───┬─────┘  │  │   Containers  │  │                         │
-│       │        │  │ ┌───────────┐ │  │                         │
-│       │        │  │ │Worker / CC│ │  │                         │
-│       │        │  │ └───────────┘ │  │                         │
-│       │        │  └───────────────┘  │                         │
-│       │        └─────────┬───────────┘                         │
-│       └──────────────────┤                                     │
-│                          │                                     │
-│              ┌───────────▼──────────┐                          │
-│              │    Tool Registry     │                          │
-│              │  Built-in, MCP, WASM │                          │
-│              └──────────────────────┘                          │
-└────────────────────────────────────────────────────────────────┘
++------------------------+      HTTP/SSE      +------------------------+
+|  Svelte UI             | <----------------> |  Axum API              |
+|  - sessions            |                    |  127.0.0.1 by default  |
+|  - runs                |                    |  settings/sessions     |
+|  - approvals           |                    |  tasks/workspace       |
++-----------+------------+                    +-----------+------------+
+            |                                             |
+            | optional Tauri shell                        |
+            v                                             v
++------------------------+                    +------------------------+
+|  Native bridge         |                    |  Rust runtime          |
+|  notifications         |                    |  agent loop            |
+|  tray                  |                    |  tools + MCP           |
+|  drag-and-drop         |                    |  safety + storage      |
++------------------------+                    +------------------------+
+                                                         |
+                                                         v
+                                              +------------------------+
+                                              |  libSQL                |
+                                              |  local embedded DB     |
+                                              +------------------------+
 ```
 
-### Core Components
+## Status
 
-| Component | Purpose |
-|-----------|---------|
-| **Agent Loop** | Main message handling and job coordination |
-| **Router** | Classifies user intent (command, query, task) |
-| **Scheduler** | Manages parallel job execution with priorities |
-| **Worker** | Executes jobs with LLM reasoning and tool calls |
-| **Orchestrator** | Container lifecycle, LLM proxying, per-job auth |
-| **HTTP Runtime** | Transitional local service layer during the IronCowork migration |
-| **Routines Engine** | Scheduled (cron) and reactive (event, webhook) background tasks |
-| **Workspace** | Persistent memory with hybrid search |
-| **Safety Layer** | Prompt injection defense and content sanitization |
+The documentation is being updated to match the corrected product direction:
 
-## Usage
-
-```bash
-# Start the local runtime
-cargo run
-
-# With debug logging
-RUST_LOG=ironclaw=debug cargo run
-```
-
-## Development
-
-```bash
-# Format code
-cargo fmt
-
-# Lint
-cargo clippy --all --benches --tests --examples --all-features
-
-# Run tests
-cargo +1.92.0-aarch64-apple-darwin test
-
-# Run specific test
-cargo +1.92.0-aarch64-apple-darwin test test_name
-```
-
-## OpenClaw Heritage
-
-IronClaw is a Rust reimplementation inspired by [OpenClaw](https://github.com/openclaw/openclaw). See [FEATURE_PARITY.md](FEATURE_PARITY.md) for the complete tracking matrix.
-
-Key differences:
-
-- **Rust vs TypeScript** - Native performance, memory safety, single binary
-- **WASM sandbox vs Docker** - Lightweight, capability-based security
-- **libSQL-first persistence** - Embedded local storage as the default path
-- **Security-first design** - Multiple defense layers, credential protection
+- desktop-native autonomous agent first
+- sessions/runs first
+- routines second
+- no predefined workflow system at the center of the product
 
 ## License
 
-Licensed under either of:
+Licensed under either of
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
+- Apache License, Version 2.0
+- MIT license

@@ -110,5 +110,5 @@ Expected:
 ## Known Phase 1 Limits
 
 - Workspace indexing is still a recorded stub, not full ingestion.
-- Task creation is still backed by legacy thread-driven runtime state, not persisted template instances.
+- Task/run creation is still backed by legacy thread-driven runtime state, not a fully durable session-first run model.
 - Task SSE is normalized for typed frontend handling, but Phase 2 will expand the event taxonomy with persisted step history.

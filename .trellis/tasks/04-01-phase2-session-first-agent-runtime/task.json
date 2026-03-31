@@ -1,15 +1,15 @@
 {
-  "id": "phase4-rebrand-and-bootstrap",
-  "name": "phase4-rebrand-and-bootstrap",
-  "title": "Phase 4 rebrand completion and developer bootstrap",
+  "id": "phase2-session-first-agent-runtime",
+  "name": "phase2-session-first-agent-runtime",
+  "title": "Phase 2 session-first agent runtime",
   "description": "",
   "status": "planning",
-  "dev_type": "docs",
+  "dev_type": "fullstack",
   "scope": null,
-  "priority": "P2",
+  "priority": "P1",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
-  "createdAt": "2026-03-31",
+  "createdAt": "2026-04-01",
   "completedAt": null,
   "branch": null,
   "base_branch": "main",
@@ -39,11 +39,11 @@
   "children": [],
   "parent": null,
   "relatedFiles": [
-    "README.md",
-    "Cargo.toml",
-    "src/main.rs",
-    "docs/plans/2026-03-31-ironcowork-post-phase1-execution-roadmap.md"
+    "src/agent/",
+    "src/api.rs",
+    "ui/src/lib/stores/",
+    ".trellis/spec/backend/task-runtime-contracts.md"
   ],
-  "notes": "Covers rebrand cleanup and developer bootstrap for the corrected product direction.",
+  "notes": "Introduces the session-first runtime semantics for the corrected product direction.",
   "meta": {}
 }
