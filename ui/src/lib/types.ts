@@ -1,6 +1,6 @@
 export type TaskMode = "ask" | "yolo";
 export type TaskStatus =
-  | "idle"
+  | "queued"
   | "running"
   | "waiting_approval"
   | "completed"
@@ -38,21 +38,38 @@ export interface SessionDetail {
   messages: SessionMessage[];
 }
 
-export interface TaskPendingOperation {
-  request_id: string;
+export interface TaskOperation {
+  kind: string;
   tool_name: string;
-  description: string;
   parameters: Record<string, unknown>;
+  path: string | null;
+  destination_path: string | null;
+}
+
+export interface TaskPendingApproval {
+  id: string;
+  risk: string;
+  summary: string;
+  operations: TaskOperation[];
   allow_always: boolean;
+}
+
+export interface TaskCurrentStep {
+  id: string;
+  kind: string;
+  title: string;
 }
 
 export interface TaskRecord {
   id: string;
+  template_id: string;
   mode: TaskMode;
   status: TaskStatus;
   title: string;
+  created_at: string;
   updated_at: string;
-  pending_operation: TaskPendingOperation | null;
+  current_step: TaskCurrentStep | null;
+  pending_approval: TaskPendingApproval | null;
   last_error: string | null;
 }
 
@@ -73,9 +90,10 @@ export interface WorkspaceSearchResult {
   vector_rank: number | null;
 }
 
-export type RuntimeEvent =
-  | { type: "response"; content: string; thread_id: string }
-  | { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean }
-  | { type: "status"; message: string; thread_id?: string | null }
-  | { type: "error"; message: string; thread_id?: string | null }
-  | { type: string; [key: string]: unknown };
+export interface StreamEnvelope<T = Record<string, unknown>> {
+  event: string;
+  thread_id: string;
+  sequence: number;
+  timestamp: string;
+  payload: T;
+}

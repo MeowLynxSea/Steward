@@ -1,7 +1,7 @@
 import { apiClient } from "../api";
 import { notify } from "../tauri";
 import { createEventStream, type StreamHandle } from "../stream";
-import type { SessionDetail, SessionMessage, SessionSummary, RuntimeEvent } from "../types";
+import type { SessionDetail, SessionMessage, SessionSummary, StreamEnvelope } from "../types";
 
 class SessionsState {
   list = $state<SessionSummary[]>([]);
@@ -87,11 +87,11 @@ class SessionsState {
     }
   }
 
-  #handleEvent(event: RuntimeEvent) {
+  #handleEvent(event: StreamEnvelope) {
     if (!this.active) return;
 
-    if (event.type === "response") {
-      const { content } = event as { type: "response"; content: string; thread_id: string };
+    if (event.event === "session.response") {
+      const { content } = event.payload as { content: string };
       this.active = {
         ...this.active,
         messages: [
@@ -104,15 +104,15 @@ class SessionsState {
           }
         ]
       };
-    } else if (event.type === "approval_needed") {
-      const { tool_name, description } = event as { type: "approval_needed"; request_id: string; tool_name: string; description: string; parameters: string; thread_id?: string | null; allow_always: boolean };
+    } else if (event.event === "session.approval_needed") {
+      const { tool_name, summary } = event.payload as { tool_name: string; summary: string };
       this.status = `Approval needed: ${tool_name}`;
-      void notify("IronCowork needs confirmation", `${tool_name}: ${description}`);
-    } else if (event.type === "error") {
-      const { message } = event as { type: "error"; message: string; thread_id?: string | null };
+      void notify("IronCowork needs confirmation", `${tool_name}: ${summary}`);
+    } else if (event.event === "session.error") {
+      const { message } = event.payload as { message: string };
       this.error = message;
-    } else if (event.type === "status") {
-      const { message } = event as { type: "status"; message: string; thread_id?: string | null };
+    } else if (event.event === "session.status") {
+      const { message } = event.payload as { message: string };
       this.status = message;
     }
   }

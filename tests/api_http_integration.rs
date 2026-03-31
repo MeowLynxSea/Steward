@@ -253,7 +253,74 @@ async fn task_endpoints_patch_mode_and_list_runtime_state() {
         .to_bytes();
     let tasks: serde_json::Value = serde_json::from_slice(&tasks).expect("tasks json");
     assert_eq!(tasks["tasks"][0]["id"], task_id.to_string());
+    assert_eq!(tasks["tasks"][0]["template_id"], "legacy:session-thread");
     assert_eq!(tasks["tasks"][0]["mode"], "yolo");
+    assert_eq!(tasks["tasks"][0]["status"], "queued");
+    assert_eq!(tasks["tasks"][0]["current_step"]["kind"], "log");
+}
+
+#[tokio::test]
+async fn task_stream_emits_normalized_envelope() {
+    let runtime = Arc::new(TaskRuntime::new());
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "archive downloads")
+        .with_thread(task_id.to_string())
+        .with_owner_id("owner-1")
+        .with_sender_id("sender-1")
+        .with_metadata(serde_json::json!({"source":"api-test"}))
+        .with_timezone("UTC");
+    runtime.ensure_task(&message, task_id).await;
+    runtime.toggle_mode(task_id, ironclaw::task_runtime::TaskMode::Yolo).await;
+
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-stream-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let sse_manager = Arc::new(SseManager::new());
+    sse_manager.broadcast_for_user(
+        "http-test-user",
+        ironclaw_common::AppEvent::Status {
+            message: "task.mode_changed:yolo".to_string(),
+            thread_id: Some(task_id.to_string()),
+        },
+    );
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        sse_manager,
+        Some(runtime.clone()),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/tasks/{task_id}/stream"))
+                .body(Body::empty())
+                .expect("task stream request"),
+        )
+        .await
+        .expect("task stream response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+
+    let first_frame = body
+        .frame()
+        .await
+        .expect("first frame present")
+        .expect("first frame ok");
+    let first_bytes = first_frame.into_data().expect("first data");
+    let first_text = std::str::from_utf8(&first_bytes).expect("first utf8");
+    assert!(first_text.contains("event: task.created"));
+    assert!(first_text.contains("\"event\":\"task.created\""));
+    assert!(first_text.contains("\"thread_id\":\""));
 }
 
 #[tokio::test]

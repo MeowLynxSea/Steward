@@ -17,6 +17,7 @@ use axum::{
 };
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
@@ -120,6 +121,15 @@ struct ApiErrorBody {
 #[derive(Debug, Serialize)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamEnvelope {
+    event: String,
+    thread_id: String,
+    sequence: u64,
+    timestamp: String,
+    payload: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -316,6 +326,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/sessions/{id}/stream", get(stream_session))
         .route("/api/v0/tasks", get(list_tasks))
         .route("/api/v0/tasks/{id}", get(get_task))
+        .route("/api/v0/tasks/{id}/stream", get(stream_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
         .route("/api/v0/tasks/{id}/reject", post(reject_task))
         .route("/api/v0/tasks/{id}/mode", patch(patch_task_mode))
@@ -509,14 +520,72 @@ async fn stream_session(
 ) -> ApiResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static>> {
     ensure_session_belongs_to_user(&state, session_id).await?;
     let thread_id = session_id.to_string();
+    let filter_thread_id = thread_id.clone();
     let stream = state
         .sse_manager
         .subscribe_raw(Some(state.owner_id.clone()))
         .ok_or_else(|| ApiError::conflict("sse capacity reached"))?
         .filter(move |event| {
-            futures::future::ready(event_thread_id(event) == Some(thread_id.as_str()))
+            futures::future::ready(event_thread_id(event) == Some(filter_thread_id.as_str()))
         })
-        .filter_map(|event| async move { serialize_event(event) });
+        .filter_map(move |event| {
+            let thread_id = thread_id.clone();
+            async move { normalize_session_event(thread_id, event) }
+        })
+        .enumerate()
+        .filter_map(
+            |(idx, (thread_id, normalized))| async move {
+                serialize_stream_envelope(thread_id, idx as u64 + 1, normalized)
+            },
+        );
+
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("")))
+}
+
+async fn stream_task(
+    State(state): State<ApiState>,
+    Path(task_id): Path<Uuid>,
+) -> ApiResult<Sse<impl futures::Stream<Item = Result<Event, Infallible>> + Send + 'static>> {
+    let runtime = state
+        .task_runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
+    let current_task = runtime
+        .get_task(task_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
+
+    let runtime = Arc::clone(runtime);
+    let thread_id = task_id.to_string();
+    let initial_thread_id = thread_id.clone();
+    let filter_thread_id = thread_id.clone();
+    let initial = futures::stream::once(async move {
+        (
+            initial_thread_id,
+            ("task.created".to_string(), json!({ "task": current_task })),
+        )
+    });
+
+    let live = state
+        .sse_manager
+        .subscribe_raw(Some(state.owner_id.clone()))
+        .ok_or_else(|| ApiError::conflict("sse capacity reached"))?
+        .filter(move |event| {
+            futures::future::ready(event_thread_id(event) == Some(filter_thread_id.as_str()))
+        })
+        .filter_map(move |event| {
+            let runtime = Arc::clone(&runtime);
+            async move { normalize_task_event(task_id, runtime, event).await }
+        });
+
+    let stream = initial
+        .chain(live)
+        .enumerate()
+        .filter_map(
+            |(idx, (thread_id, normalized))| async move {
+                serialize_stream_envelope(thread_id, idx as u64 + 1, normalized)
+            },
+        );
 
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)).text("")))
 }
@@ -571,11 +640,11 @@ async fn approve_task(
     }
 
     let pending = task
-        .pending_operation
+        .pending_approval
         .as_ref()
-        .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending operation")))?;
-    let request_id = payload.approval_id.unwrap_or(pending.request_id);
-    if request_id != pending.request_id {
+        .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending approval")))?;
+    let approval_id = payload.approval_id.unwrap_or(pending.id);
+    if approval_id != pending.id {
         return Err(ApiError::conflict(
             "approval_id does not match current checkpoint",
         ));
@@ -585,7 +654,7 @@ async fn approve_task(
         inject_tx,
         &task,
         Submission::ExecApproval {
-            request_id,
+            request_id: approval_id,
             approved: true,
             always: payload.always,
         },
@@ -618,11 +687,11 @@ async fn reject_task(
     }
 
     let pending = task
-        .pending_operation
+        .pending_approval
         .as_ref()
-        .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending operation")))?;
+        .ok_or_else(|| ApiError::conflict(format!("task {task_id} has no pending approval")))?;
     if let Some(approval_id) = payload.approval_id {
-        if approval_id != pending.request_id {
+        if approval_id != pending.id {
             return Err(ApiError::conflict(
                 "approval_id does not match current checkpoint",
             ));
@@ -637,7 +706,7 @@ async fn reject_task(
     state.sse_manager.broadcast_for_user(
         &state.owner_id,
         ironclaw_common::AppEvent::Status {
-            message: format!("task.rejected:{task_id}"),
+            message: "task.rejected".to_string(),
             thread_id: Some(task_id.to_string()),
         },
     );
@@ -676,16 +745,24 @@ async fn patch_task_mode(
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
 
+    state.sse_manager.broadcast_for_user(
+        &state.owner_id,
+        ironclaw_common::AppEvent::Status {
+            message: format!("task.mode_changed:{}", payload.mode),
+            thread_id: Some(task_id.to_string()),
+        },
+    );
+
     if matches!(target_mode, TaskMode::Yolo)
         && task.status == TaskStatus::WaitingApproval
         && let Some(inject_tx) = state.inject_tx.as_ref()
-        && let Some(pending) = task.pending_operation.as_ref()
+        && let Some(pending) = task.pending_approval.as_ref()
     {
         inject_approval(
             inject_tx,
             &task,
             Submission::ExecApproval {
-                request_id: pending.request_id,
+                request_id: pending.id,
                 approved: true,
                 always: false,
             },
@@ -885,9 +962,114 @@ fn event_thread_id(event: &ironclaw_common::AppEvent) -> Option<&str> {
     }
 }
 
-fn serialize_event(event: ironclaw_common::AppEvent) -> Option<Result<Event, Infallible>> {
-    let data = serde_json::to_string(&event).ok()?;
-    Some(Ok(Event::default().event(event.event_type()).data(data)))
+fn normalize_session_event(
+    thread_id: String,
+    event: ironclaw_common::AppEvent,
+) -> Option<(String, (String, Value))> {
+    let normalized = match event {
+        ironclaw_common::AppEvent::Response { content, .. } => {
+            ("session.response".to_string(), json!({ "content": content }))
+        }
+        ironclaw_common::AppEvent::ApprovalNeeded {
+            request_id,
+            tool_name,
+            description,
+            parameters,
+            allow_always,
+            ..
+        } => (
+            "session.approval_needed".to_string(),
+            json!({
+                "approval_id": request_id,
+                "tool_name": tool_name,
+                "summary": description,
+                "parameters": parameters,
+                "allow_always": allow_always,
+            }),
+        ),
+        ironclaw_common::AppEvent::Status { message, .. } => {
+            ("session.status".to_string(), json!({ "message": message }))
+        }
+        ironclaw_common::AppEvent::Error { message, .. } => {
+            ("session.error".to_string(), json!({ "message": message }))
+        }
+        other => (
+            format!("session.{}", other.event_type()),
+            strip_event_type_field(event_to_value(other)),
+        ),
+    };
+
+    Some((thread_id, normalized))
+}
+
+async fn normalize_task_event(
+    task_id: Uuid,
+    runtime: Arc<TaskRuntime>,
+    event: ironclaw_common::AppEvent,
+) -> Option<(String, (String, Value))> {
+    let task = runtime.get_task(task_id).await?;
+    let thread_id = task_id.to_string();
+
+    let normalized = match event {
+        ironclaw_common::AppEvent::ApprovalNeeded { .. } => {
+            ("task.waiting_approval".to_string(), json!({ "task": task }))
+        }
+        ironclaw_common::AppEvent::Status { message, .. } if message == "task.completed" => {
+            ("task.completed".to_string(), json!({ "task": task }))
+        }
+        ironclaw_common::AppEvent::Status { message, .. } if message == "task.rejected" => {
+            ("task.rejected".to_string(), json!({ "task": task }))
+        }
+        ironclaw_common::AppEvent::Status { message, .. }
+            if message.starts_with("task.mode_changed:") =>
+        {
+            let mode = message
+                .split_once(':')
+                .map(|(_, mode)| mode.to_string())
+                .unwrap_or_else(|| "ask".to_string());
+            (
+                "task.mode_changed".to_string(),
+                json!({ "mode": mode, "task": task }),
+            )
+        }
+        ironclaw_common::AppEvent::Error { message, .. } => (
+            "task.failed".to_string(),
+            json!({ "message": message, "task": task }),
+        ),
+        other => (
+            "task.updated".to_string(),
+            json!({ "source_event": other.event_type(), "task": task }),
+        ),
+    };
+
+    Some((thread_id, normalized))
+}
+
+fn serialize_stream_envelope(
+    thread_id: String,
+    sequence: u64,
+    normalized: (String, Value),
+) -> Option<Result<Event, Infallible>> {
+    let envelope = StreamEnvelope {
+        event: normalized.0.clone(),
+        thread_id,
+        sequence,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        payload: normalized.1,
+    };
+    let data = serde_json::to_string(&envelope).ok()?;
+    Some(Ok(Event::default().event(&normalized.0).data(data)))
+}
+
+fn event_to_value(event: ironclaw_common::AppEvent) -> Value {
+    serde_json::to_value(event).unwrap_or_else(|_| json!({}))
+}
+
+fn strip_event_type_field(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.remove("type");
+    }
+    value
 }
 
 impl From<ConversationSummary> for SessionSummaryResponse {

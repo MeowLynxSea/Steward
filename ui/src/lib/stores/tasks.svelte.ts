@@ -48,7 +48,7 @@ class TasksState {
   async approve(task: TaskRecord) {
     this.error = null;
     try {
-      await apiClient.approveTask(task.id, task.pending_operation?.request_id);
+      await apiClient.approveTask(task.id, task.pending_approval?.id);
       await this.refresh();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to approve task";

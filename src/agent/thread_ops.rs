@@ -593,6 +593,13 @@ impl Agent {
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime.mark_completed(thread_id).await;
                 }
+                self.emit_sse_event_for_message(
+                    message,
+                    ironclaw_common::AppEvent::Status {
+                        message: "task.completed".to_string(),
+                        thread_id: Some(thread_id.to_string()),
+                    },
+                );
 
                 Ok(SubmissionResult::response(response))
             }
@@ -649,6 +656,13 @@ impl Agent {
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime.mark_failed(thread_id, e.to_string()).await;
                 }
+                self.emit_sse_event_for_message(
+                    message,
+                    ironclaw_common::AppEvent::Error {
+                        message: e.to_string(),
+                        thread_id: Some(thread_id.to_string()),
+                    },
+                );
                 // User message already persisted at turn start; nothing else to save
                 Ok(SubmissionResult::error(e.to_string()))
             }
@@ -1594,6 +1608,13 @@ impl Agent {
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime.mark_completed(thread_id).await;
                     }
+                    self.emit_sse_event_for_message(
+                        message,
+                        ironclaw_common::AppEvent::Status {
+                            message: "task.completed".to_string(),
+                            thread_id: Some(thread_id.to_string()),
+                        },
+                    );
                     Ok(SubmissionResult::response(response))
                 }
                 Ok(AgenticLoopResult::NeedApproval {
@@ -1650,6 +1671,13 @@ impl Agent {
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime.mark_failed(thread_id, e.to_string()).await;
                     }
+                    self.emit_sse_event_for_message(
+                        message,
+                        ironclaw_common::AppEvent::Error {
+                            message: e.to_string(),
+                            thread_id: Some(thread_id.to_string()),
+                        },
+                    );
                     // User message already persisted at turn start
                     Ok(SubmissionResult::error(e.to_string()))
                 }
@@ -1682,6 +1710,13 @@ impl Agent {
                     .mark_rejected(thread_id, "tool execution rejected")
                     .await;
             }
+            self.emit_sse_event_for_message(
+                message,
+                ironclaw_common::AppEvent::Status {
+                    message: "task.rejected".to_string(),
+                    thread_id: Some(thread_id.to_string()),
+                },
+            );
 
             let _ = self
                 .channels

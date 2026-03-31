@@ -196,7 +196,7 @@
                   <button onclick={() => void tasksStore.toggleMode(task)}>
                     {task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
                   </button>
-                  {#if task.status === "waiting_approval" && task.pending_operation}
+                  {#if task.status === "waiting_approval" && task.pending_approval}
                     <button onclick={() => void tasksStore.approve(task)}>Approve</button>
                   {/if}
                 </div>

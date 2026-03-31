@@ -22,7 +22,7 @@ pub enum TaskMode {
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     #[default]
-    Idle,
+    Queued,
     Running,
     WaitingApproval,
     Completed,
@@ -31,15 +31,31 @@ pub enum TaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskPendingOperation {
-    pub request_id: Uuid,
+pub struct TaskOperation {
+    pub kind: String,
     pub tool_name: String,
-    pub description: String,
     pub parameters: serde_json::Value,
+    pub path: Option<String>,
+    pub destination_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskPendingApproval {
+    pub id: Uuid,
+    pub risk: String,
+    pub summary: String,
+    pub operations: Vec<TaskOperation>,
     pub allow_always: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskCurrentStep {
+    pub id: String,
+    pub kind: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskRoute {
     pub channel: String,
     pub user_id: String,
@@ -80,24 +96,36 @@ impl TaskRoute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: Uuid,
+    pub template_id: String,
     pub mode: TaskMode,
     pub status: TaskStatus,
     pub title: String,
+    pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub pending_operation: Option<TaskPendingOperation>,
+    pub current_step: Option<TaskCurrentStep>,
+    pub pending_approval: Option<TaskPendingApproval>,
+    #[serde(skip_serializing, skip_deserializing)]
     pub route: TaskRoute,
     pub last_error: Option<String>,
 }
 
 impl TaskRecord {
     fn new(message: &IncomingMessage, thread_id: Uuid) -> Self {
+        let now = Utc::now();
         Self {
             id: thread_id,
+            template_id: "legacy:session-thread".to_string(),
             mode: TaskMode::Ask,
-            status: TaskStatus::Idle,
+            status: TaskStatus::Queued,
             title: crate::agent::truncate_for_preview(&message.content, 80),
-            updated_at: Utc::now(),
-            pending_operation: None,
+            created_at: now,
+            updated_at: now,
+            current_step: Some(TaskCurrentStep {
+                id: format!("task-{thread_id}"),
+                kind: "log".to_string(),
+                title: "Queued".to_string(),
+            }),
+            pending_approval: None,
             route: TaskRoute::from_message(message, thread_id),
             last_error: None,
         }
@@ -152,7 +180,12 @@ impl TaskRuntime {
             .or_insert_with(|| TaskRecord::new(message, task_id));
         task.route = TaskRoute::from_message(message, task_id);
         task.status = TaskStatus::Running;
-        task.pending_operation = None;
+        task.current_step = Some(TaskCurrentStep {
+            id: format!("run-{task_id}"),
+            kind: "log".to_string(),
+            title: "Running".to_string(),
+        });
+        task.pending_approval = None;
         task.last_error = None;
         task.updated_at = Utc::now();
     }
@@ -169,11 +202,22 @@ impl TaskRuntime {
             .or_insert_with(|| TaskRecord::new(message, task_id));
         task.route = TaskRoute::from_message(message, task_id);
         task.status = TaskStatus::WaitingApproval;
-        task.pending_operation = Some(TaskPendingOperation {
-            request_id: pending.request_id,
-            tool_name: pending.tool_name.clone(),
-            description: pending.description.clone(),
-            parameters: pending.display_parameters.clone(),
+        task.current_step = Some(TaskCurrentStep {
+            id: pending.request_id.to_string(),
+            kind: "approval".to_string(),
+            title: pending.description.clone(),
+        });
+        task.pending_approval = Some(TaskPendingApproval {
+            id: pending.request_id,
+            risk: infer_risk(&pending.tool_name).to_string(),
+            summary: pending.description.clone(),
+            operations: vec![TaskOperation {
+                kind: "tool_call".to_string(),
+                tool_name: pending.tool_name.clone(),
+                path: extract_path(&pending.display_parameters),
+                destination_path: extract_destination_path(&pending.display_parameters),
+                parameters: pending.display_parameters.clone(),
+            }],
             allow_always: pending.allow_always,
         });
         task.updated_at = Utc::now();
@@ -182,7 +226,12 @@ impl TaskRuntime {
     pub async fn mark_completed(&self, task_id: Uuid) {
         if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
             task.status = TaskStatus::Completed;
-            task.pending_operation = None;
+            task.current_step = Some(TaskCurrentStep {
+                id: format!("completed-{task_id}"),
+                kind: "result".to_string(),
+                title: "Completed".to_string(),
+            });
+            task.pending_approval = None;
             task.last_error = None;
             task.updated_at = Utc::now();
         }
@@ -190,18 +239,30 @@ impl TaskRuntime {
 
     pub async fn mark_failed(&self, task_id: Uuid, error: impl Into<String>) {
         if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
+            let error = error.into();
             task.status = TaskStatus::Failed;
-            task.pending_operation = None;
-            task.last_error = Some(error.into());
+            task.current_step = Some(TaskCurrentStep {
+                id: format!("failed-{task_id}"),
+                kind: "result".to_string(),
+                title: "Failed".to_string(),
+            });
+            task.pending_approval = None;
+            task.last_error = Some(error);
             task.updated_at = Utc::now();
         }
     }
 
     pub async fn mark_rejected(&self, task_id: Uuid, reason: impl Into<String>) {
         if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
+            let reason = reason.into();
             task.status = TaskStatus::Rejected;
-            task.pending_operation = None;
-            task.last_error = Some(reason.into());
+            task.current_step = Some(TaskCurrentStep {
+                id: format!("rejected-{task_id}"),
+                kind: "result".to_string(),
+                title: "Rejected".to_string(),
+            });
+            task.pending_approval = None;
+            task.last_error = Some(reason);
             task.updated_at = Utc::now();
         }
     }
@@ -210,8 +271,55 @@ impl TaskRuntime {
         let mut tasks = self.tasks.write().await;
         let task = tasks.get_mut(&task_id)?;
         task.mode = mode;
+        task.current_step = Some(TaskCurrentStep {
+            id: format!("mode-{task_id}"),
+            kind: "log".to_string(),
+            title: format!("Mode changed to {}", serialize_mode(mode)),
+        });
         task.updated_at = Utc::now();
         Some(task.clone())
+    }
+}
+
+fn infer_risk(tool_name: &str) -> &'static str {
+    let normalized = tool_name.to_ascii_lowercase();
+    if normalized.contains("delete") || normalized.contains("remove") {
+        "file_delete"
+    } else if normalized.contains("write")
+        || normalized.contains("move")
+        || normalized.contains("rename")
+        || normalized.contains("copy")
+    {
+        "file_write"
+    } else if normalized.contains("http")
+        || normalized.contains("fetch")
+        || normalized.contains("request")
+        || normalized.contains("web")
+    {
+        "network_request"
+    } else {
+        "external_side_effect"
+    }
+}
+
+fn extract_path(parameters: &serde_json::Value) -> Option<String> {
+    extract_string_field(parameters, &["path", "source_path", "file_path"])
+}
+
+fn extract_destination_path(parameters: &serde_json::Value) -> Option<String> {
+    extract_string_field(parameters, &["destination_path", "target_path", "to"])
+}
+
+fn extract_string_field(parameters: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    let object = parameters.as_object()?;
+    keys.iter()
+        .find_map(|key| object.get(*key)?.as_str().map(str::to_string))
+}
+
+fn serialize_mode(mode: TaskMode) -> &'static str {
+    match mode {
+        TaskMode::Ask => "ask",
+        TaskMode::Yolo => "yolo",
     }
 }
 
@@ -228,7 +336,7 @@ mod tests {
         let task = runtime.ensure_task(&message, task_id).await;
         assert_eq!(task.id, task_id);
         assert_eq!(task.mode, TaskMode::Ask);
-        assert_eq!(task.status, TaskStatus::Idle);
+        assert_eq!(task.status, TaskStatus::Queued);
     }
 
     #[tokio::test]

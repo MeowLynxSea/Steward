@@ -1,13 +1,19 @@
-import type { RuntimeEvent } from "./types";
+import type { StreamEnvelope } from "./types";
 
 const API_BASE = (globalThis as { __IRONCOWORK_API_BASE__?: string }).__IRONCOWORK_API_BASE__ ?? "/api/v0";
 
-/** Set of SSE event types the backend emits for session streams. */
-const SESSION_EVENT_TYPES = new Set([
-  "response",
-  "approval_needed",
-  "status",
-  "error"
+const STREAM_EVENT_TYPES = new Set([
+  "session.response",
+  "session.approval_needed",
+  "session.status",
+  "session.error",
+  "task.created",
+  "task.updated",
+  "task.waiting_approval",
+  "task.mode_changed",
+  "task.completed",
+  "task.failed",
+  "task.rejected"
 ]);
 
 export interface StreamHandle {
@@ -29,7 +35,7 @@ export interface StreamHandle {
  */
 export function createEventStream(
   path: string,
-  onEvent: (event: RuntimeEvent) => void
+  onEvent: (event: StreamEnvelope) => void
 ): StreamHandle {
   const url = `${API_BASE}${path}`;
   const source = new EventSource(url);
@@ -37,7 +43,7 @@ export function createEventStream(
 
   function handleMessage(event: MessageEvent<string>) {
     try {
-      const payload = JSON.parse(event.data) as RuntimeEvent;
+      const payload = JSON.parse(event.data) as StreamEnvelope;
       onEvent(payload);
     } catch {
       // Silently ignore malformed payloads so the stream stays alive.
@@ -54,13 +60,13 @@ export function createEventStream(
 
   function cleanup() {
     source.removeEventListener("error", handleError as EventListener);
-    for (const type of SESSION_EVENT_TYPES) {
+    for (const type of STREAM_EVENT_TYPES) {
       source.removeEventListener(type, handleMessage as EventListener);
     }
   }
 
   // Subscribe to all known event types.
-  for (const type of SESSION_EVENT_TYPES) {
+  for (const type of STREAM_EVENT_TYPES) {
     source.addEventListener(type, handleMessage as EventListener);
   }
   source.addEventListener("error", handleError as EventListener);
