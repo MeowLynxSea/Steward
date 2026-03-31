@@ -1,16 +1,16 @@
 {
-  "id": "ironcowork-post-phase1-roadmap",
-  "name": "ironcowork-post-phase1-roadmap",
-  "title": "Plan post-Phase-1 IronCowork execution roadmap",
+  "id": "phase3-settings-and-recovery",
+  "name": "phase3-settings-and-recovery",
+  "title": "Phase 3 settings validation and runtime recovery",
   "description": "",
-  "status": "completed",
-  "dev_type": null,
+  "status": "planning",
+  "dev_type": "fullstack",
   "scope": null,
-  "priority": "P1",
+  "priority": "P2",
   "creator": "meowlynxsea",
   "assignee": "meowlynxsea",
   "createdAt": "2026-03-31",
-  "completedAt": "2026-03-31",
+  "completedAt": null,
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -39,8 +39,11 @@
   "children": [],
   "parent": null,
   "relatedFiles": [
-    "docs/plans/2026-03-31-ironcowork-post-phase1-execution-roadmap.md"
+    "src/settings/",
+    "src/bootstrap.rs",
+    "src/api.rs",
+    "ui/src/lib/api.ts"
   ],
-  "notes": "Roadmap planning is complete and has been split into phase execution tasks under .trellis/tasks/03-31-phase*.",
+  "notes": "Covers roadmap issues 3.3 and 3.4.",
   "meta": {}
 }

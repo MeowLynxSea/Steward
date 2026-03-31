@@ -53,6 +53,28 @@ This means the project has moved past "architecture declaration" and into "produ
 
 ---
 
+## Trellis Task Registry
+
+The roadmap is split into active execution tasks under `.trellis/tasks/`:
+
+- `03-31-phase1-runtime-validation`
+- `03-31-phase1-api-contract-cleanup`
+- `03-31-phase1-frontend-state-hygiene`
+- `03-31-phase2-template-persistence`
+- `03-31-phase2-task-history-and-detail`
+- `03-31-phase2-file-archive-workflow`
+- `03-31-phase2-briefing-and-scheduler`
+- `03-31-phase2-approval-ux-and-e2e`
+- `03-31-phase3-workspace-indexing-and-retrieval`
+- `03-31-phase3-settings-and-recovery`
+- `03-31-phase3-observability-and-safety`
+- `03-31-phase4-rebrand-and-bootstrap`
+- `03-31-phase4-packaging-and-user-docs`
+
+The original planning task `03-31-ironcowork-post-phase1-roadmap` exists only to capture the roadmap and should be archived once these execution tasks are committed.
+
+---
+
 ## Phase 1 Closeout
 
 ### Exit Criteria
