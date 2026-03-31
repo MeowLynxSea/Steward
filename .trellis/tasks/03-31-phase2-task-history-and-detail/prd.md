@@ -21,10 +21,10 @@ Make task execution durable, restart-safe, and inspectable before shipping real 
 
 ## Acceptance Criteria
 
-- [ ] Completed and failed tasks remain inspectable after restart.
-- [ ] Approval decisions and mode changes are visible in task history.
-- [ ] Task detail API returns enough data to drive a dedicated detail view.
-- [ ] Task history behavior is covered by regression tests.
+- [x] Completed and failed tasks remain inspectable after restart.
+- [x] Approval decisions and mode changes are visible in task history.
+- [x] Task detail API returns enough data to drive a dedicated detail view.
+- [x] Task history behavior is covered by regression tests.
 
 ## Out Of Scope
 

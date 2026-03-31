@@ -38,6 +38,7 @@ use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, JobEventRecord,
     LlmCallRecord, SandboxJobRecord, SandboxJobSummary, SettingRow,
 };
+use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
 use crate::workspace::{MemoryChunk, MemoryDocument, WorkspaceEntry};
 use crate::workspace::{SearchConfig, SearchResult};
@@ -667,6 +668,34 @@ pub trait TemplateStore: Send + Sync {
 }
 
 #[async_trait]
+pub trait TaskStore: Send + Sync {
+    async fn upsert_task_record(
+        &self,
+        user_id: &str,
+        task: &TaskRecord,
+    ) -> Result<(), DatabaseError>;
+    async fn get_task_record(
+        &self,
+        user_id: &str,
+        task_id: Uuid,
+    ) -> Result<Option<TaskRecord>, DatabaseError>;
+    async fn list_task_records(&self, user_id: &str) -> Result<Vec<TaskRecord>, DatabaseError>;
+    async fn append_task_timeline(
+        &self,
+        user_id: &str,
+        task_id: Uuid,
+        event: &str,
+        task: &TaskRecord,
+        metadata: &serde_json::Value,
+    ) -> Result<(), DatabaseError>;
+    async fn list_task_timeline(
+        &self,
+        user_id: &str,
+        task_id: Uuid,
+    ) -> Result<Vec<TaskTimelineEntry>, DatabaseError>;
+}
+
+#[async_trait]
 pub trait WorkspaceStore: Send + Sync {
     async fn get_document_by_path(
         &self,
@@ -950,6 +979,7 @@ pub trait Database:
     + ToolFailureStore
     + SettingsStore
     + TemplateStore
+    + TaskStore
     + WorkspaceStore
     + UserStore
     + Send

@@ -11,7 +11,7 @@ use ironclaw::{
     channels::IncomingMessage,
     db::{ConversationStore, Database, libsql::LibSqlBackend},
     runtime_events::SseManager,
-    task_runtime::TaskRuntime,
+    task_runtime::{TaskDetail, TaskRuntime},
     workspace::Workspace,
 };
 use serde_json::json;
@@ -30,7 +30,10 @@ async fn test_router() -> axum::Router {
         local_api_addr(8765),
         db.clone(),
         Arc::new(SseManager::new()),
-        Some(Arc::new(TaskRuntime::new())),
+        Some(Arc::new(TaskRuntime::with_store(
+            "http-test-user".to_string(),
+            db.clone(),
+        ))),
         None,
         Some(Arc::new(SessionManager::new())),
         Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
@@ -197,18 +200,21 @@ async fn run_api_rejects_non_localhost_bind() {
 
 #[tokio::test]
 async fn task_endpoints_patch_mode_and_list_runtime_state() {
-    let runtime = Arc::new(TaskRuntime::new());
-    let task_id = uuid::Uuid::new_v4();
-    let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
-        .with_thread(task_id.to_string());
-    runtime.ensure_task(&message, task_id).await;
-
     let db_path = std::env::temp_dir().join(format!(
         "ironcowork-api-task-test-{}.db",
         uuid::Uuid::new_v4()
     ));
     let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
     db.run_migrations().await.expect("migrations");
+
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
+        .with_thread(task_id.to_string());
+    runtime.ensure_task(&message, task_id).await;
 
     let app = router(ApiState::new(
         "http-test-user".to_string(),
@@ -257,6 +263,70 @@ async fn task_endpoints_patch_mode_and_list_runtime_state() {
     assert_eq!(tasks["tasks"][0]["mode"], "yolo");
     assert_eq!(tasks["tasks"][0]["status"], "queued");
     assert_eq!(tasks["tasks"][0]["current_step"]["kind"], "log");
+}
+
+#[tokio::test]
+async fn task_detail_persists_timeline_across_runtime_restart() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-detail-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let task_id = uuid::Uuid::new_v4();
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let message = IncomingMessage::new("test", "http-test-user", "sort downloads")
+        .with_thread(task_id.to_string())
+        .with_metadata(serde_json::json!({"source":"api-test"}));
+    runtime.ensure_task(&message, task_id).await;
+    runtime.mark_running(&message, task_id).await;
+    runtime.mark_failed(task_id, "disk unavailable").await;
+
+    let restarted_runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(restarted_runtime),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/tasks/{task_id}"))
+                .body(Body::empty())
+                .expect("task detail request"),
+        )
+        .await
+        .expect("task detail response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("detail body")
+        .to_bytes();
+    let detail: TaskDetail = serde_json::from_slice(&body).expect("task detail json");
+    assert_eq!(
+        detail.task.status,
+        ironclaw::task_runtime::TaskStatus::Failed
+    );
+    assert_eq!(detail.task.last_error.as_deref(), Some("disk unavailable"));
+    assert_eq!(detail.timeline.len(), 3);
+    assert_eq!(detail.timeline[0].event, "task.created");
+    assert_eq!(detail.timeline[1].event, "task.step.started");
+    assert_eq!(detail.timeline[2].event, "task.failed");
 }
 
 #[tokio::test]

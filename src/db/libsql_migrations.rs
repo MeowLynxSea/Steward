@@ -807,6 +807,48 @@ CREATE INDEX IF NOT EXISTS idx_task_templates_user ON task_templates(user_id);
 CREATE INDEX IF NOT EXISTS idx_task_templates_user_name ON task_templates(user_id, name);
 "#,
     ),
+    (
+        16,
+        "task_history",
+        r#"
+CREATE TABLE IF NOT EXISTS task_records (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    current_step TEXT,
+    pending_approval TEXT,
+    route TEXT NOT NULL,
+    last_error TEXT,
+    result_metadata TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_records_user_updated
+    ON task_records(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS task_timeline_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL,
+    task_id TEXT NOT NULL REFERENCES task_records(id) ON DELETE CASCADE,
+    event TEXT NOT NULL,
+    status TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    current_step TEXT,
+    pending_approval TEXT,
+    last_error TEXT,
+    result_metadata TEXT,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_timeline_events_task
+    ON task_timeline_events(user_id, task_id, id ASC);
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

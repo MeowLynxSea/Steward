@@ -2,6 +2,7 @@ import type {
   SessionDetail,
   SessionSummary,
   SettingsResponse,
+  TaskDetail,
   TaskRecord,
   TaskTemplateRecord,
   WorkspaceEntry,
@@ -84,7 +85,7 @@ export const apiClient = {
   },
 
   getTask(id: string) {
-    return request<TaskRecord>(`/tasks/${id}`);
+    return request<TaskDetail>(`/tasks/${id}`);
   },
 
   approveTask(id: string, approvalId?: string, always = false) {

@@ -95,6 +95,57 @@ enum TaskMode {
 }
 ```
 
+#### `GET /api/v0/tasks/:id`
+
+Response:
+
+```json
+{
+  "task": {
+    "id": "uuid",
+    "template_id": "builtin:file-archive",
+    "mode": "ask",
+    "status": "failed",
+    "title": "Archive Downloads",
+    "created_at": "RFC3339 timestamp",
+    "updated_at": "RFC3339 timestamp",
+    "current_step": {
+      "id": "failed-uuid",
+      "kind": "result",
+      "title": "Failed"
+    },
+    "pending_approval": null,
+    "last_error": "disk unavailable",
+    "result_metadata": {
+      "failure_reason": "disk unavailable"
+    }
+  },
+  "timeline": [
+    {
+      "sequence": 1,
+      "event": "task.created",
+      "status": "queued",
+      "mode": "ask",
+      "current_step": {
+        "id": "task-uuid",
+        "kind": "log",
+        "title": "Queued"
+      },
+      "pending_approval": null,
+      "last_error": null,
+      "result_metadata": null,
+      "created_at": "RFC3339 timestamp"
+    }
+  ]
+}
+```
+
+Rules:
+
+- `GET /tasks/:id` is the task detail API, not only a shallow task header lookup.
+- Timeline entries are append-only and ordered by `sequence`.
+- Detail responses must survive process restart by loading persisted task records and timeline events from storage.
+
 #### `POST /api/v0/tasks`
 
 Request:
@@ -186,6 +237,7 @@ Rules:
 - Mode changes are allowed while a task is `queued`, `running`, or `waiting_approval`.
 - Switching from `ask` to `yolo` while waiting approval resumes execution from the current checkpoint once the checkpoint is explicitly approved or auto-resolved by defined policy.
 - Mode changes must be persisted and emitted on the task SSE stream.
+- Mode changes must append a timeline entry visible from `GET /tasks/:id`.
 
 #### Approval endpoints
 
@@ -211,6 +263,7 @@ Rules:
 - Approval/rejection must target the currently pending approval only.
 - Approve resumes execution.
 - Reject transitions task to `rejected` unless future rollback semantics are explicitly implemented.
+- Approval checkpoints and rejection outcomes must be persisted in task timeline history.
 
 #### SSE event envelope
 
@@ -260,6 +313,7 @@ Required task event types:
 - User flips a running task from `ask` to `yolo`, and the stream emits `task.mode_changed`.
 - Periodic briefing task in `yolo` mode completes and writes markdown output without opening any approval checkpoint for low-risk local writes that policy has classified as safe.
 - Template library returns both built-in and user-defined templates in one typed list, with built-ins marked read-only.
+- Restarting the runtime still allows `GET /tasks/:id` to return the terminal task state and ordered timeline.
 
 #### Base
 
@@ -272,11 +326,13 @@ Required task event types:
 - UI assumes any paused task means approval is pending.
 - Tools decide on their own whether they are in Ask or Yolo without consulting persisted task mode.
 - Template schema validation relies on opaque `400` text without field-level keys the UI can render.
+- Task detail is reconstructed from logs instead of a persisted task record plus explicit timeline rows.
 
 ### 6. Tests Required
 
 - Integration test for `POST /tasks` with valid and invalid template parameters.
 - Integration test for template CRUD covering built-in read-only semantics and `422` field errors.
+- Integration test proving task detail and timeline survive runtime restart against the same libSQL database.
 - Agent-loop test proving risky tool calls pause in `ask` mode and continue in `yolo` mode.
 - API test for approve/reject race handling with stale `approval_id`.
 - SSE test asserting `task.waiting_approval` and `task.mode_changed` events are emitted in order.

@@ -30,7 +30,7 @@ use crate::db::Database;
 use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
 use crate::settings::Settings;
-use crate::task_runtime::{TaskMode, TaskRecord, TaskRuntime, TaskStatus};
+use crate::task_runtime::{TaskDetail, TaskMode, TaskRecord, TaskRuntime, TaskStatus};
 use crate::task_templates::{
     TaskTemplateRecord, builtin_template, builtin_templates, validate_template_draft,
 };
@@ -127,6 +127,12 @@ struct ApiErrorBody {
 #[derive(Debug, Serialize)]
 pub struct TaskListResponse {
     pub tasks: Vec<TaskRecord>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaskDetailResponse {
+    pub task: TaskRecord,
+    pub timeline: Vec<crate::task_runtime::TaskTimelineEntry>,
 }
 
 #[derive(Debug, Serialize)]
@@ -791,16 +797,16 @@ async fn delete_template(
 async fn get_task(
     State(state): State<ApiState>,
     Path(task_id): Path<Uuid>,
-) -> ApiResult<Json<TaskRecord>> {
+) -> ApiResult<Json<TaskDetailResponse>> {
     let runtime = state
         .task_runtime
         .as_ref()
         .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
-    let task = runtime
-        .get_task(task_id)
+    let detail = runtime
+        .get_task_detail(task_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
-    Ok(Json(task))
+    Ok(Json(TaskDetailResponse::from(detail)))
 }
 
 async fn approve_task(
@@ -1164,6 +1170,15 @@ fn event_thread_id(event: &ironclaw_common::AppEvent) -> Option<&str> {
         | ironclaw_common::AppEvent::TurnCost { thread_id, .. }
         | ironclaw_common::AppEvent::ReasoningUpdate { thread_id, .. } => thread_id.as_deref(),
         _ => None,
+    }
+}
+
+impl From<TaskDetail> for TaskDetailResponse {
+    fn from(value: TaskDetail) -> Self {
+        Self {
+            task: value.task,
+            timeline: value.timeline,
+        }
     }
 }
 

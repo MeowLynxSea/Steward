@@ -47,11 +47,11 @@ async fn run_api_serve(
     let database = connect_from_config(&config.database).await?;
 
     let state = ApiState::new(
-        config.owner_id,
+        config.owner_id.clone(),
         bind_addr,
-        database,
+        database.clone(),
         Arc::new(SseManager::new()),
-        Some(Arc::new(TaskRuntime::new())),
+        Some(Arc::new(TaskRuntime::with_store(config.owner_id, database))),
         None,
         None,
         None,

@@ -1,14 +1,17 @@
 //! Runtime task state used by the desktop-first API.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::agent::session::PendingApproval;
 use crate::channels::IncomingMessage;
+use crate::db::Database;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +19,22 @@ pub enum TaskMode {
     #[default]
     Ask,
     Yolo,
+}
+
+impl TaskMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Yolo => "yolo",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "yolo" => Self::Yolo,
+            _ => Self::Ask,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -27,14 +46,41 @@ pub enum TaskStatus {
     WaitingApproval,
     Completed,
     Failed,
+    Cancelled,
     Rejected,
+}
+
+impl TaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::WaitingApproval => "waiting_approval",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value {
+            "running" => Self::Running,
+            "waiting_approval" => Self::WaitingApproval,
+            "completed" => Self::Completed,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            "rejected" => Self::Rejected,
+            _ => Self::Queued,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskOperation {
     pub kind: String,
     pub tool_name: String,
-    pub parameters: serde_json::Value,
+    pub parameters: Value,
     pub path: Option<String>,
     pub destination_path: Option<String>,
 }
@@ -62,7 +108,7 @@ pub struct TaskRoute {
     pub owner_id: String,
     pub sender_id: String,
     pub thread_id: String,
-    pub metadata: serde_json::Value,
+    pub metadata: Value,
     pub timezone: Option<String>,
 }
 
@@ -107,6 +153,7 @@ pub struct TaskRecord {
     #[serde(skip_serializing, skip_deserializing)]
     pub route: TaskRoute,
     pub last_error: Option<String>,
+    pub result_metadata: Option<Value>,
 }
 
 impl TaskRecord {
@@ -128,13 +175,35 @@ impl TaskRecord {
             pending_approval: None,
             route: TaskRoute::from_message(message, thread_id),
             last_error: None,
+            result_metadata: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskTimelineEntry {
+    pub sequence: u64,
+    pub event: String,
+    pub status: TaskStatus,
+    pub mode: TaskMode,
+    pub current_step: Option<TaskCurrentStep>,
+    pub pending_approval: Option<TaskPendingApproval>,
+    pub last_error: Option<String>,
+    pub result_metadata: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskDetail {
+    pub task: TaskRecord,
+    pub timeline: Vec<TaskTimelineEntry>,
 }
 
 #[derive(Default)]
 pub struct TaskRuntime {
     tasks: RwLock<HashMap<Uuid, TaskRecord>>,
+    store: Option<Arc<dyn Database>>,
+    owner_id: Option<String>,
 }
 
 impl TaskRuntime {
@@ -142,52 +211,116 @@ impl TaskRuntime {
         Self::default()
     }
 
+    pub fn with_store(owner_id: String, store: Arc<dyn Database>) -> Self {
+        Self {
+            tasks: RwLock::new(HashMap::new()),
+            store: Some(store),
+            owner_id: Some(owner_id),
+        }
+    }
+
     pub async fn ensure_task(&self, message: &IncomingMessage, thread_id: Uuid) -> TaskRecord {
-        let mut tasks = self.tasks.write().await;
-        let entry = tasks
-            .entry(thread_id)
-            .or_insert_with(|| TaskRecord::new(message, thread_id));
-        entry.title = crate::agent::truncate_for_preview(&message.content, 80);
-        entry.route = TaskRoute::from_message(message, thread_id);
-        entry.updated_at = Utc::now();
-        entry.clone()
+        let mut created = false;
+        let task = {
+            let mut tasks = self.tasks.write().await;
+            match tasks.entry(thread_id) {
+                Entry::Occupied(mut entry) => {
+                    let task = entry.get_mut();
+                    task.title = crate::agent::truncate_for_preview(&message.content, 80);
+                    task.route = TaskRoute::from_message(message, thread_id);
+                    task.updated_at = Utc::now();
+                    task.clone()
+                }
+                Entry::Vacant(entry) => {
+                    let task = TaskRecord::new(message, thread_id);
+                    created = true;
+                    entry.insert(task.clone());
+                    task
+                }
+            }
+        };
+
+        self.persist_task(&task).await;
+        if created {
+            self.append_timeline(
+                &task,
+                "task.created",
+                task.result_metadata.clone().unwrap_or_else(|| json!({})),
+            )
+            .await;
+        }
+
+        task
     }
 
     pub async fn get_task(&self, task_id: Uuid) -> Option<TaskRecord> {
-        self.tasks.read().await.get(&task_id).cloned()
+        if let Some(task) = self.tasks.read().await.get(&task_id).cloned() {
+            return Some(task);
+        }
+
+        let task = self.load_task_from_store(task_id).await?;
+        self.tasks.write().await.insert(task_id, task.clone());
+        Some(task)
+    }
+
+    pub async fn get_task_detail(&self, task_id: Uuid) -> Option<TaskDetail> {
+        let task = self.get_task(task_id).await?;
+        let timeline = self.load_timeline(task_id).await;
+        Some(TaskDetail { task, timeline })
     }
 
     pub async fn list_tasks(&self) -> Vec<TaskRecord> {
-        let mut tasks: Vec<_> = self.tasks.read().await.values().cloned().collect();
+        let mut merged = HashMap::new();
+
+        if let Some((store, owner_id)) = self.persistence() {
+            match store.list_task_records(owner_id).await {
+                Ok(tasks) => {
+                    for task in tasks {
+                        merged.insert(task.id, task);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to list persisted task records");
+                }
+            }
+        }
+
+        for task in self.tasks.read().await.values().cloned() {
+            merged.insert(task.id, task);
+        }
+
+        let mut tasks: Vec<_> = merged.into_values().collect();
         tasks.sort_by_key(|task| task.updated_at);
         tasks.reverse();
         tasks
     }
 
     pub async fn mode_for_task(&self, task_id: Uuid) -> TaskMode {
-        self.tasks
-            .read()
+        self.get_task(task_id)
             .await
-            .get(&task_id)
             .map(|task| task.mode)
             .unwrap_or_default()
     }
 
     pub async fn mark_running(&self, message: &IncomingMessage, task_id: Uuid) {
-        let mut tasks = self.tasks.write().await;
-        let task = tasks
-            .entry(task_id)
-            .or_insert_with(|| TaskRecord::new(message, task_id));
-        task.route = TaskRoute::from_message(message, task_id);
-        task.status = TaskStatus::Running;
-        task.current_step = Some(TaskCurrentStep {
-            id: format!("run-{task_id}"),
-            kind: "log".to_string(),
-            title: "Running".to_string(),
-        });
-        task.pending_approval = None;
-        task.last_error = None;
-        task.updated_at = Utc::now();
+        self.apply_update(
+            task_id,
+            Some(message),
+            "task.step.started",
+            json!({ "title": "Running" }),
+            |task| {
+                task.status = TaskStatus::Running;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("run-{task_id}"),
+                    kind: "log".to_string(),
+                    title: "Running".to_string(),
+                });
+                task.pending_approval = None;
+                task.last_error = None;
+                task.result_metadata = None;
+            },
+        )
+        .await;
     }
 
     pub async fn mark_waiting_approval(
@@ -196,88 +329,193 @@ impl TaskRuntime {
         task_id: Uuid,
         pending: &PendingApproval,
     ) {
-        let mut tasks = self.tasks.write().await;
-        let task = tasks
-            .entry(task_id)
-            .or_insert_with(|| TaskRecord::new(message, task_id));
-        task.route = TaskRoute::from_message(message, task_id);
-        task.status = TaskStatus::WaitingApproval;
-        task.current_step = Some(TaskCurrentStep {
-            id: pending.request_id.to_string(),
-            kind: "approval".to_string(),
-            title: pending.description.clone(),
-        });
-        task.pending_approval = Some(TaskPendingApproval {
-            id: pending.request_id,
-            risk: infer_risk(&pending.tool_name).to_string(),
-            summary: pending.description.clone(),
-            operations: vec![TaskOperation {
-                kind: "tool_call".to_string(),
-                tool_name: pending.tool_name.clone(),
-                path: extract_path(&pending.display_parameters),
-                destination_path: extract_destination_path(&pending.display_parameters),
-                parameters: pending.display_parameters.clone(),
-            }],
-            allow_always: pending.allow_always,
-        });
-        task.updated_at = Utc::now();
+        self.apply_update(
+            task_id,
+            Some(message),
+            "task.waiting_approval",
+            json!({
+                "approval_id": pending.request_id,
+                "risk": infer_risk(&pending.tool_name),
+            }),
+            |task| {
+                task.status = TaskStatus::WaitingApproval;
+                task.current_step = Some(TaskCurrentStep {
+                    id: pending.request_id.to_string(),
+                    kind: "approval".to_string(),
+                    title: pending.description.clone(),
+                });
+                task.pending_approval = Some(TaskPendingApproval {
+                    id: pending.request_id,
+                    risk: infer_risk(&pending.tool_name).to_string(),
+                    summary: pending.description.clone(),
+                    operations: vec![TaskOperation {
+                        kind: "tool_call".to_string(),
+                        tool_name: pending.tool_name.clone(),
+                        path: extract_path(&pending.display_parameters),
+                        destination_path: extract_destination_path(&pending.display_parameters),
+                        parameters: pending.display_parameters.clone(),
+                    }],
+                    allow_always: pending.allow_always,
+                });
+            },
+        )
+        .await;
     }
 
     pub async fn mark_completed(&self, task_id: Uuid) {
-        if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
-            task.status = TaskStatus::Completed;
-            task.current_step = Some(TaskCurrentStep {
-                id: format!("completed-{task_id}"),
-                kind: "result".to_string(),
-                title: "Completed".to_string(),
-            });
-            task.pending_approval = None;
-            task.last_error = None;
-            task.updated_at = Utc::now();
-        }
+        self.apply_update(
+            task_id,
+            None,
+            "task.completed",
+            json!({ "result": "completed" }),
+            |task| {
+                task.status = TaskStatus::Completed;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("completed-{task_id}"),
+                    kind: "result".to_string(),
+                    title: "Completed".to_string(),
+                });
+                task.pending_approval = None;
+                task.last_error = None;
+                task.result_metadata = Some(json!({ "outcome": "completed" }));
+            },
+        )
+        .await;
     }
 
     pub async fn mark_failed(&self, task_id: Uuid, error: impl Into<String>) {
-        if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
-            let error = error.into();
-            task.status = TaskStatus::Failed;
-            task.current_step = Some(TaskCurrentStep {
-                id: format!("failed-{task_id}"),
-                kind: "result".to_string(),
-                title: "Failed".to_string(),
-            });
-            task.pending_approval = None;
-            task.last_error = Some(error);
-            task.updated_at = Utc::now();
-        }
+        let error = error.into();
+        self.apply_update(
+            task_id,
+            None,
+            "task.failed",
+            json!({ "error": error }),
+            |task| {
+                task.status = TaskStatus::Failed;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("failed-{task_id}"),
+                    kind: "result".to_string(),
+                    title: "Failed".to_string(),
+                });
+                task.pending_approval = None;
+                task.last_error = Some(error.clone());
+                task.result_metadata = Some(json!({ "failure_reason": error }));
+            },
+        )
+        .await;
     }
 
     pub async fn mark_rejected(&self, task_id: Uuid, reason: impl Into<String>) {
-        if let Some(task) = self.tasks.write().await.get_mut(&task_id) {
-            let reason = reason.into();
-            task.status = TaskStatus::Rejected;
-            task.current_step = Some(TaskCurrentStep {
-                id: format!("rejected-{task_id}"),
-                kind: "result".to_string(),
-                title: "Rejected".to_string(),
-            });
-            task.pending_approval = None;
-            task.last_error = Some(reason);
-            task.updated_at = Utc::now();
-        }
+        let reason = reason.into();
+        self.apply_update(
+            task_id,
+            None,
+            "task.rejected",
+            json!({ "reason": reason }),
+            |task| {
+                task.status = TaskStatus::Rejected;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("rejected-{task_id}"),
+                    kind: "result".to_string(),
+                    title: "Rejected".to_string(),
+                });
+                task.pending_approval = None;
+                task.last_error = Some(reason.clone());
+                task.result_metadata = Some(json!({ "rejection_reason": reason }));
+            },
+        )
+        .await;
     }
 
     pub async fn toggle_mode(&self, task_id: Uuid, mode: TaskMode) -> Option<TaskRecord> {
-        let mut tasks = self.tasks.write().await;
-        let task = tasks.get_mut(&task_id)?;
-        task.mode = mode;
-        task.current_step = Some(TaskCurrentStep {
-            id: format!("mode-{task_id}"),
-            kind: "log".to_string(),
-            title: format!("Mode changed to {}", serialize_mode(mode)),
-        });
+        self.apply_update(
+            task_id,
+            None,
+            "task.mode_changed",
+            json!({ "mode": mode.as_str() }),
+            |task| {
+                task.mode = mode;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("mode-{task_id}"),
+                    kind: "log".to_string(),
+                    title: format!("Mode changed to {}", mode.as_str()),
+                });
+            },
+        )
+        .await
+    }
+
+    async fn apply_update<F>(
+        &self,
+        task_id: Uuid,
+        message: Option<&IncomingMessage>,
+        event: &str,
+        metadata: Value,
+        mutate: F,
+    ) -> Option<TaskRecord>
+    where
+        F: FnOnce(&mut TaskRecord),
+    {
+        let mut task = self.get_task(task_id).await?;
+        if let Some(message) = message {
+            task.route = TaskRoute::from_message(message, task_id);
+        }
+        mutate(&mut task);
         task.updated_at = Utc::now();
-        Some(task.clone())
+
+        self.tasks.write().await.insert(task_id, task.clone());
+        self.persist_task(&task).await;
+        self.append_timeline(&task, event, metadata).await;
+        Some(task)
+    }
+
+    async fn load_task_from_store(&self, task_id: Uuid) -> Option<TaskRecord> {
+        let (store, owner_id) = self.persistence()?;
+        match store.get_task_record(owner_id, task_id).await {
+            Ok(task) => task,
+            Err(error) => {
+                tracing::warn!(%task_id, %error, "failed to load task record");
+                None
+            }
+        }
+    }
+
+    async fn load_timeline(&self, task_id: Uuid) -> Vec<TaskTimelineEntry> {
+        let Some((store, owner_id)) = self.persistence() else {
+            return Vec::new();
+        };
+        match store.list_task_timeline(owner_id, task_id).await {
+            Ok(timeline) => timeline,
+            Err(error) => {
+                tracing::warn!(%task_id, %error, "failed to load task timeline");
+                Vec::new()
+            }
+        }
+    }
+
+    async fn persist_task(&self, task: &TaskRecord) {
+        let Some((store, owner_id)) = self.persistence() else {
+            return;
+        };
+        if let Err(error) = store.upsert_task_record(owner_id, task).await {
+            tracing::warn!(task_id = %task.id, %error, "failed to persist task record");
+        }
+    }
+
+    async fn append_timeline(&self, task: &TaskRecord, event: &str, metadata: Value) {
+        let Some((store, owner_id)) = self.persistence() else {
+            return;
+        };
+        if let Err(error) = store
+            .append_task_timeline(owner_id, task.id, event, task, &metadata)
+            .await
+        {
+            tracing::warn!(task_id = %task.id, event, %error, "failed to persist task timeline");
+        }
+    }
+
+    fn persistence(&self) -> Option<(&Arc<dyn Database>, &str)> {
+        Some((self.store.as_ref()?, self.owner_id.as_deref()?))
     }
 }
 
@@ -302,25 +540,18 @@ fn infer_risk(tool_name: &str) -> &'static str {
     }
 }
 
-fn extract_path(parameters: &serde_json::Value) -> Option<String> {
+fn extract_path(parameters: &Value) -> Option<String> {
     extract_string_field(parameters, &["path", "source_path", "file_path"])
 }
 
-fn extract_destination_path(parameters: &serde_json::Value) -> Option<String> {
+fn extract_destination_path(parameters: &Value) -> Option<String> {
     extract_string_field(parameters, &["destination_path", "target_path", "to"])
 }
 
-fn extract_string_field(parameters: &serde_json::Value, keys: &[&str]) -> Option<String> {
+fn extract_string_field(parameters: &Value, keys: &[&str]) -> Option<String> {
     let object = parameters.as_object()?;
     keys.iter()
         .find_map(|key| object.get(*key)?.as_str().map(str::to_string))
-}
-
-fn serialize_mode(mode: TaskMode) -> &'static str {
-    match mode {
-        TaskMode::Ask => "ask",
-        TaskMode::Yolo => "yolo",
-    }
 }
 
 #[cfg(test)]

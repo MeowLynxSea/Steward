@@ -454,7 +454,11 @@ async fn async_main() -> anyhow::Result<()> {
         .map(|r| r.http_interceptor());
     // Clone context_manager for the reaper before it's moved into Agent::new()
     let reaper_context_manager = Arc::clone(&components.context_manager);
-    let task_runtime = Arc::new(TaskRuntime::new());
+    let task_runtime = if let Some(store) = components.db.clone() {
+        Arc::new(TaskRuntime::with_store(config.owner_id.clone(), store))
+    } else {
+        Arc::new(TaskRuntime::new())
+    };
     let sse_manager = Arc::new(ironclaw::runtime_events::SseManager::new());
 
     if let Some(store) = components.db.clone() {

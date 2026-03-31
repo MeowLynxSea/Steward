@@ -5,6 +5,7 @@ export type TaskStatus =
   | "waiting_approval"
   | "completed"
   | "failed"
+  | "cancelled"
   | "rejected";
 
 export interface SettingsResponse {
@@ -71,6 +72,24 @@ export interface TaskRecord {
   current_step: TaskCurrentStep | null;
   pending_approval: TaskPendingApproval | null;
   last_error: string | null;
+  result_metadata: Record<string, unknown> | null;
+}
+
+export interface TaskTimelineEntry {
+  sequence: number;
+  event: string;
+  status: TaskStatus;
+  mode: TaskMode;
+  current_step: TaskCurrentStep | null;
+  pending_approval: TaskPendingApproval | null;
+  last_error: string | null;
+  result_metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface TaskDetail {
+  task: TaskRecord;
+  timeline: TaskTimelineEntry[];
 }
 
 export interface TaskTemplateRecord {
