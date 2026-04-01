@@ -56,6 +56,7 @@ Goal: finish the product identity and make the system understandable to develope
 - `04-01-phase2-session-first-agent-runtime`
 - `04-01-phase2-run-history-and-approval-center`
 - `04-01-phase2-general-agent-workbench`
+- `04-01-phase2-conversation-ux-and-agent-visibility`
 - `03-31-phase3-workspace-indexing-and-retrieval`
 - `03-31-phase3-settings-and-recovery`
 - `03-31-phase3-observability-and-safety`
@@ -184,6 +185,8 @@ Acceptance:
 ### Issue 2.4: Conversation UX And Agent Visibility
 
 Purpose: make autonomy legible to users.
+
+Handled by `04-01-phase2-conversation-ux-and-agent-visibility`.
 
 Work items:
 

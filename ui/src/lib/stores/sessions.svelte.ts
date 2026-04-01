@@ -1,12 +1,20 @@
 import { apiClient } from "../api";
 import { notify } from "../tauri";
 import { createEventStream, type StreamHandle } from "../stream";
-import type { SessionDetail, SessionMessage, SessionSummary, StreamEnvelope } from "../types";
+import type {
+  SessionDetail,
+  SessionMessage,
+  SessionSummary,
+  StreamEnvelope,
+  TaskDetail
+} from "../types";
 
 class SessionsState {
   list = $state<SessionSummary[]>([]);
   activeId = $state<string>("");
   active = $state<SessionDetail | null>(null);
+  activeTaskDetail = $state<TaskDetail | null>(null);
+  activeTaskLoading = $state(false);
   messageMode = $state<"ask" | "yolo">("ask");
   loading = $state(false);
   listLoading = $state(false);
@@ -37,6 +45,7 @@ class SessionsState {
     this.error = null;
     try {
       this.active = await apiClient.getSession(id);
+      await this.refreshActiveTaskDetail();
       this.#streamHandle = createEventStream(
         `/sessions/${id}/stream`,
         this.#handleEvent.bind(this)
@@ -83,6 +92,7 @@ class SessionsState {
         ...this.active,
         current_task: response.task ?? this.active.current_task
       };
+      await this.refreshActiveTaskDetail();
       this.status = response.task_id
         ? `Message queued in ${this.messageMode} mode`
         : "Message queued";
@@ -95,6 +105,29 @@ class SessionsState {
     if (this.#streamHandle) {
       this.#streamHandle.close();
       this.#streamHandle = null;
+    }
+  }
+
+  async refreshActiveTaskDetail() {
+    const taskId = this.active?.current_task?.id;
+    if (!taskId || !this.active) {
+      this.activeTaskDetail = null;
+      this.activeTaskLoading = false;
+      return;
+    }
+
+    this.activeTaskLoading = true;
+    try {
+      const detail = await apiClient.getTask(taskId);
+      this.activeTaskDetail = detail;
+      this.active = {
+        ...this.active,
+        current_task: detail.task
+      };
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to load active run detail";
+    } finally {
+      this.activeTaskLoading = false;
     }
   }
 
@@ -126,6 +159,8 @@ class SessionsState {
       const { message } = event.payload as { message: string };
       this.status = message;
     }
+
+    void this.refreshActiveTaskDetail();
   }
 }
 

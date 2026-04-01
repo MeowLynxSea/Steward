@@ -186,6 +186,49 @@ select {
   align-content: start;
 }
 
+.session-visibility {
+  display: grid;
+  gap: 14px;
+}
+
+.visibility-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.visibility-card {
+  border: 1px solid rgba(23, 34, 44, 0.08);
+  border-radius: 18px;
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(245, 248, 251, 0.95));
+  display: grid;
+  gap: 8px;
+}
+
+.visibility-card strong {
+  font-size: 1rem;
+}
+
+.visibility-card p {
+  margin: 0;
+  color: #5e6973;
+}
+
+.outline-list {
+  display: grid;
+  gap: 8px;
+}
+
+.outline-list span {
+  display: block;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(23, 34, 44, 0.05);
+  color: #24313c;
+}
+
 .rail-panel {
   display: grid;
   gap: 14px;
@@ -303,6 +346,10 @@ select {
 .timeline-card {
   display: grid;
   gap: 8px;
+}
+
+.timeline-card.compact {
+  padding: 12px;
 }
 
 .operation-head {

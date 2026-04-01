@@ -7,7 +7,7 @@
   import { workspaceStore } from "./lib/stores/workspace.svelte";
   import { workbenchStore } from "./lib/stores/workbench.svelte";
   import { listenForFolderDrops } from "./lib/tauri";
-  import type { TaskRecord, WorkspaceSearchResult } from "./lib/types";
+  import type { TaskDetail, TaskRecord, TaskTimelineEntry, WorkspaceSearchResult } from "./lib/types";
 
   let appLoading = $state(true);
   let appError = $state("");
@@ -71,6 +71,18 @@
     return tasksStore.list.find((task) => task.id === active.session.id) ?? active.current_task;
   }
 
+  function currentSessionTaskDetail() {
+    const activeTask = currentSessionTask();
+    if (!activeTask) return null;
+    if (sessionsStore.activeTaskDetail?.task.id === activeTask.id) {
+      return sessionsStore.activeTaskDetail;
+    }
+    if (tasksStore.detail?.task.id === activeTask.id) {
+      return tasksStore.detail;
+    }
+    return null;
+  }
+
   function nextRunFocus(task: TaskRecord | null): string {
     if (!task) return "Start with a goal in the composer.";
     if (task.pending_approval) return task.pending_approval.summary;
@@ -95,6 +107,79 @@
 
   function recentRuns() {
     return tasksStore.list.slice(0, 6);
+  }
+
+  function outlineSteps(detail: TaskDetail | null): string[] {
+    if (!detail) return [];
+
+    const titles = detail.timeline
+      .map((item) => item.current_step?.title?.trim() ?? "")
+      .filter((title) => title.length > 0 && title !== "Queued");
+
+    const deduped: string[] = [];
+    for (const title of titles) {
+      if (deduped[deduped.length - 1] !== title) {
+        deduped.push(title);
+      }
+    }
+    return deduped.slice(-4);
+  }
+
+  function recentTimeline(detail: TaskDetail | null): TaskTimelineEntry[] {
+    if (!detail) return [];
+    return [...detail.timeline].slice(-4).reverse();
+  }
+
+  function resultNotes(detail: TaskDetail | null): string[] {
+    const metadata = detail?.task.result_metadata;
+    if (!metadata || typeof metadata !== "object") return [];
+
+    const notes: string[] = [];
+    const noteValue = metadata.notes;
+    if (typeof noteValue === "string" && noteValue.trim()) {
+      notes.push(noteValue.trim());
+    }
+
+    const artifacts = metadata.artifacts;
+    if (Array.isArray(artifacts)) {
+      for (const artifact of artifacts) {
+        if (
+          artifact &&
+          typeof artifact === "object" &&
+          "path" in artifact &&
+          typeof artifact.path === "string" &&
+          artifact.path.trim()
+        ) {
+          notes.push(artifact.path.trim());
+        }
+      }
+    }
+
+    if (notes.length === 0) {
+      notes.push(JSON.stringify(metadata, null, 2));
+    }
+
+    return notes.slice(0, 4);
+  }
+
+  async function approveSessionTask(task: TaskRecord) {
+    await tasksStore.approve(task);
+    await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
+  }
+
+  async function rejectSessionTask(task: TaskRecord) {
+    await tasksStore.reject(task, rejectReason);
+    await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
+  }
+
+  async function toggleSessionTaskMode(task: TaskRecord) {
+    await tasksStore.toggleMode(task);
+    await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
+  }
+
+  async function cancelSessionTask(task: TaskRecord) {
+    await tasksStore.cancel(task);
+    await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
   }
 
   async function bootstrap() {
@@ -239,6 +324,7 @@
             </div>
 
             {@const sessionTask = currentSessionTask()}
+            {@const sessionTaskDetail = currentSessionTaskDetail()}
             <article class={`status-banner ${taskStatusTone(sessionTask?.status ?? "queued")}`}>
               <strong>{sessionTask ? taskStatusCopy(sessionTask.status) : "Ready for a new goal"}</strong>
               <span>{nextRunFocus(sessionTask)}</span>
@@ -253,6 +339,113 @@
                 </button>
               {/if}
             </article>
+
+            {#if sessionTask}
+              <section class="session-visibility">
+                <div class="section-head">
+                  <h1>Agent Visibility</h1>
+                  <div class="task-actions">
+                    <button onclick={() => void toggleSessionTaskMode(sessionTask)}>
+                      {sessionTask.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
+                    </button>
+                    {#if sessionTask.status !== "completed" && sessionTask.status !== "failed" && sessionTask.status !== "rejected" && sessionTask.status !== "cancelled"}
+                      <button onclick={() => void cancelSessionTask(sessionTask)}>Cancel</button>
+                    {/if}
+                  </div>
+                </div>
+
+                {#if sessionsStore.activeTaskLoading && !sessionTaskDetail}
+                  <p class="muted">Loading live run detail for this session...</p>
+                {:else}
+                  <div class="visibility-grid">
+                    <article class="visibility-card">
+                      <span class="section-label">Current Action</span>
+                      <strong>{sessionTask.current_step?.title ?? "Waiting for the next agent step"}</strong>
+                      <p>{taskStatusCopy(sessionTask.status)} · {sessionTask.mode.toUpperCase()}</p>
+                    </article>
+
+                    <article class="visibility-card">
+                      <span class="section-label">Execution Outline</span>
+                      {#if outlineSteps(sessionTaskDetail).length > 0}
+                        <div class="outline-list">
+                          {#each outlineSteps(sessionTaskDetail) as step}
+                            <span>{step}</span>
+                          {/each}
+                        </div>
+                      {:else}
+                        <p>No execution outline yet. The run will populate this as state advances.</p>
+                      {/if}
+                    </article>
+
+                    <article class="visibility-card">
+                      <span class="section-label">Result Snapshot</span>
+                      {#if resultNotes(sessionTaskDetail).length > 0}
+                        <div class="outline-list">
+                          {#each resultNotes(sessionTaskDetail) as note}
+                            <span>{note}</span>
+                          {/each}
+                        </div>
+                      {:else if sessionTask.last_error}
+                        <p>{sessionTask.last_error}</p>
+                      {:else}
+                        <p>No final output yet. Result metadata will appear here after completion.</p>
+                      {/if}
+                    </article>
+                  </div>
+
+                  {#if sessionTask.pending_approval}
+                    <article class="message-card assistant">
+                      <header>Pending Approval</header>
+                      <p class="approval-summary">{sessionTask.pending_approval.summary}</p>
+                      <div class="stack compact">
+                        {#each sessionTask.pending_approval.operations as operation, index}
+                          <article class="operation-card">
+                            <div class="operation-head">
+                              <strong>#{index + 1} {operation.kind}</strong>
+                              <span>{operation.tool_name}</span>
+                            </div>
+                            <div class="operation-paths">
+                              <span>{operation.path ?? "Unknown source"}</span>
+                              <span>{operation.destination_path ?? "No destination"}</span>
+                            </div>
+                          </article>
+                        {/each}
+                      </div>
+
+                      <div class="task-actions">
+                        <button onclick={() => void approveSessionTask(sessionTask)}>Approve</button>
+                        <button onclick={() => void rejectSessionTask(sessionTask)}>Reject</button>
+                      </div>
+
+                      <label class="approval-form">
+                        <span>Reject reason</span>
+                        <textarea bind:value={rejectReason} rows="3" placeholder="Explain why this run should stop"></textarea>
+                      </label>
+                    </article>
+                  {/if}
+
+                  {#if recentTimeline(sessionTaskDetail).length > 0}
+                    <article class="message-card assistant">
+                      <header>Recent Run Timeline</header>
+                      <div class="stack compact">
+                        {#each recentTimeline(sessionTaskDetail) as item}
+                          <article class="timeline-card compact">
+                            <div class="operation-head">
+                              <strong>{timelineTitle(item)}</strong>
+                              <span>{item.mode}</span>
+                            </div>
+                            <span>{item.event} · {item.status} · {new Date(item.created_at).toLocaleString()}</span>
+                            {#if item.last_error}
+                              <p>{item.last_error}</p>
+                            {/if}
+                          </article>
+                        {/each}
+                      </div>
+                    </article>
+                  {/if}
+                {/if}
+              </section>
+            {/if}
 
             {#if sessionsStore.active.messages.length === 0}
               <p class="muted">Describe a desktop knowledge-work goal and the agent will attach a run to this session.</p>
