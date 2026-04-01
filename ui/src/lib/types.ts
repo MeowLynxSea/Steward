@@ -37,6 +37,7 @@ export interface SessionMessage {
 export interface SessionDetail {
   session: SessionSummary;
   messages: SessionMessage[];
+  current_task: TaskRecord | null;
 }
 
 export interface TaskOperation {
@@ -129,4 +130,11 @@ export interface StreamEnvelope<T = Record<string, unknown>> {
   sequence: number;
   timestamp: string;
   payload: T;
+}
+
+export interface SendSessionMessageResponse {
+  accepted: boolean;
+  session_id: string;
+  task_id: string | null;
+  task: TaskRecord | null;
 }

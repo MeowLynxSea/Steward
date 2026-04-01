@@ -51,6 +51,12 @@
     return item.current_step?.title || item.event;
   }
 
+  function currentSessionTask() {
+    const active = sessionsStore.active;
+    if (!active) return null;
+    return tasksStore.list.find((task) => task.id === active.session.id) ?? active.current_task;
+  }
+
   async function bootstrap() {
     appLoading = true;
     appError = "";
@@ -192,6 +198,22 @@
               <span>{sessionsStore.active.session.channel}</span>
             </div>
 
+            {@const sessionTask = currentSessionTask()}
+            {#if sessionTask}
+              <article class={`status-banner ${taskStatusTone(sessionTask.status)}`}>
+                <strong>{taskStatusCopy(sessionTask.status)}</strong>
+                <span>{sessionTask.current_step?.title ?? "Execution record attached to this session"}</span>
+                <button
+                  onclick={() => {
+                    router.navigate("tasks");
+                    void tasksStore.select(sessionTask.id);
+                  }}
+                >
+                  Open Task
+                </button>
+              </article>
+            {/if}
+
             {#if sessionsStore.active.messages.length === 0}
               <p class="muted">No messages yet. Send one below.</p>
             {:else}
@@ -206,6 +228,12 @@
             {/if}
 
             <div class="composer">
+              <div class="inline-form">
+                <select bind:value={sessionsStore.messageMode}>
+                  <option value="ask">Ask</option>
+                  <option value="yolo">Yolo</option>
+                </select>
+              </div>
               <textarea bind:value={draftMessage} rows="4" placeholder="Send a message to the local agent"></textarea>
               <button onclick={() => { sessionsStore.sendMessage(draftMessage); draftMessage = ""; }}>Send</button>
             </div>

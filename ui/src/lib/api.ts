@@ -1,5 +1,6 @@
 import type {
   SessionDetail,
+  SendSessionMessageResponse,
   SessionSummary,
   SettingsResponse,
   TaskDetail,
@@ -71,10 +72,13 @@ export const apiClient = {
     return request<SessionDetail>(`/sessions/${id}`);
   },
 
-  sendSessionMessage(id: string, content: string) {
-    return request<{ accepted: boolean; session_id: string }>(`/sessions/${id}/messages`, {
+  sendSessionMessage(id: string, content: string, mode?: "ask" | "yolo") {
+    return request<SendSessionMessageResponse>(`/sessions/${id}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content })
+      body: JSON.stringify({
+        content,
+        mode: mode ?? null
+      })
     });
   },
 

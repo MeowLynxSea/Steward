@@ -7,6 +7,7 @@ class SessionsState {
   list = $state<SessionSummary[]>([]);
   activeId = $state<string>("");
   active = $state<SessionDetail | null>(null);
+  messageMode = $state<"ask" | "yolo">("ask");
   loading = $state(false);
   listLoading = $state(false);
   error = $state<string | null>(null);
@@ -73,8 +74,18 @@ class SessionsState {
     };
 
     try {
-      await apiClient.sendSessionMessage(this.activeId, content.trim());
-      this.status = "Message queued";
+      const response = await apiClient.sendSessionMessage(
+        this.activeId,
+        content.trim(),
+        this.messageMode
+      );
+      this.active = {
+        ...this.active,
+        current_task: response.task ?? this.active.current_task
+      };
+      this.status = response.task_id
+        ? `Message queued in ${this.messageMode} mode`
+        : "Message queued";
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to send message";
     }

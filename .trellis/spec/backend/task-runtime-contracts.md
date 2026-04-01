@@ -138,18 +138,62 @@ Response:
 
 ```json
 {
-  "message_id": "uuid",
+  "accepted": true,
   "session_id": "uuid",
-  "run_id": "uuid-or-null",
-  "status": "accepted"
+  "task_id": "uuid-or-null",
+  "task": {
+    "id": "uuid",
+    "template_id": "legacy:session-thread",
+    "mode": "ask",
+    "status": "queued",
+    "title": "整理这个工作区，并给我一个结果摘要",
+    "created_at": "RFC3339 timestamp",
+    "updated_at": "RFC3339 timestamp",
+    "current_step": {
+      "id": "task-uuid",
+      "kind": "log",
+      "title": "Queued"
+    },
+    "pending_approval": null,
+    "last_error": null,
+    "result_metadata": null
+  }
 }
 ```
 
 Rules:
 
-- a message may create a new run immediately or enqueue work that creates a run asynchronously
-- if a run is created, the API should expose `run_id`
-- `mode` may default from session state, but the effective run mode must be persisted on the run
+- `mode` is optional; if omitted, the current task mode stays in effect and a new session defaults to `ask`
+- the API must reject unsupported modes with `422`
+- a session-thread message should attach to the durable task/run record keyed by the same UUID as the session thread
+- if a task record is available, the API should expose `task_id` and the current task snapshot immediately
+- the effective mode must be persisted on the attached task record before the agent loop consumes the message
+
+#### `GET /api/v0/sessions/:id`
+
+Response additions:
+
+```json
+{
+  "session": {
+    "id": "uuid"
+  },
+  "messages": [],
+  "current_task": {
+    "id": "uuid",
+    "template_id": "legacy:session-thread",
+    "mode": "ask",
+    "status": "running",
+    "title": "整理这个工作区，并给我一个结果摘要"
+  }
+}
+```
+
+Rules:
+
+- `current_task` is nullable
+- when present, it is the authoritative task/run record attached to that session thread
+- the UI must be able to render current execution state from session detail without guessing task identity from logs
 
 #### Ask-mode contract
 

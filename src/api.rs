@@ -199,6 +199,7 @@ pub struct SessionMessageResponse {
 pub struct SessionDetailResponse {
     pub session: SessionSummaryResponse,
     pub messages: Vec<SessionMessageResponse>,
+    pub current_task: Option<TaskRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,6 +215,7 @@ pub struct CreateSessionRequest {
 #[derive(Debug, Deserialize)]
 pub struct SendSessionMessageRequest {
     pub content: String,
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -227,6 +229,8 @@ pub struct CreateTaskRequest {
 pub struct SendSessionMessageResponse {
     pub accepted: bool,
     pub session_id: Uuid,
+    pub task_id: Option<Uuid>,
+    pub task: Option<TaskRecord>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -568,6 +572,7 @@ async fn get_session(
             .into_iter()
             .map(SessionMessageResponse::from)
             .collect(),
+        current_task: load_session_task(&state, session_id).await,
     }))
 }
 
@@ -584,6 +589,7 @@ async fn post_session_message(
     if payload.content.trim().is_empty() {
         return Err(ApiError::bad_request("message content cannot be empty"));
     }
+    let requested_mode = parse_requested_task_mode(payload.mode.as_deref())?;
 
     let message = IncomingMessage::new("api", &state.owner_id, payload.content)
         .with_owner_id(state.owner_id.clone())
@@ -594,6 +600,20 @@ async fn post_session_message(
             "surface": "web"
         }))
         .with_timezone("UTC");
+
+    let task = if let Some(runtime) = state.task_runtime.as_ref() {
+        let mut task = runtime.ensure_task(&message, session_id).await;
+        if let Some(mode) = requested_mode
+            && task.mode != mode
+            && let Some(updated) = runtime.toggle_mode(session_id, mode).await
+        {
+            task = updated;
+        }
+        Some(task)
+    } else {
+        None
+    };
+
     inject_tx
         .send(message)
         .await
@@ -602,6 +622,8 @@ async fn post_session_message(
     Ok(Json(SendSessionMessageResponse {
         accepted: true,
         session_id,
+        task_id: task.as_ref().map(|task| task.id),
+        task,
     }))
 }
 
@@ -1331,6 +1353,22 @@ async fn load_session_summary(
         .find(|conversation| conversation.id == session_id)
         .ok_or_else(|| ApiError::not_found(format!("session {session_id} not found")))?;
     Ok(SessionSummaryResponse::from(session))
+}
+
+async fn load_session_task(state: &ApiState, session_id: Uuid) -> Option<TaskRecord> {
+    let runtime = state.task_runtime.as_ref()?;
+    runtime.get_task(session_id).await
+}
+
+fn parse_requested_task_mode(mode: Option<&str>) -> ApiResult<Option<TaskMode>> {
+    match mode {
+        None => Ok(None),
+        Some("ask") => Ok(Some(TaskMode::Ask)),
+        Some("yolo") => Ok(Some(TaskMode::Yolo)),
+        Some(_) => Err(ApiError::unprocessable_entity(
+            "invalid mode: expected 'ask' or 'yolo'",
+        )),
+    }
 }
 
 fn event_thread_id(event: &ironclaw_common::AppEvent) -> Option<&str> {

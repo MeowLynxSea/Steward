@@ -1298,6 +1298,240 @@ async fn sessions_endpoints_create_and_load_history() {
     let session: serde_json::Value = serde_json::from_slice(&body).expect("session json");
     assert_eq!(session["session"]["id"], session_id);
     assert_eq!(session["messages"][0]["content"], "Archive plan ready");
+    assert_eq!(session["current_task"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn session_message_returns_attached_task_and_requested_mode() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-session-message-task-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let (inject_tx, mut inject_rx) = tokio::sync::mpsc::channel(8);
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime),
+        Some(inject_tx),
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db(
+            "http-test-user",
+            db.clone(),
+        ))),
+    ));
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"title":"Research sprint"}"#))
+                .expect("create request"),
+        )
+        .await
+        .expect("create response");
+    assert_eq!(create_response.status(), StatusCode::OK);
+    let create_body = create_response
+        .into_body()
+        .collect()
+        .await
+        .expect("create body")
+        .to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&create_body).expect("create json");
+    let session_id = created["id"].as_str().expect("session id").to_string();
+
+    let send_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/sessions/{session_id}/messages"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"content":"Summarize this workspace and propose next steps","mode":"yolo"}"#,
+                ))
+                .expect("send request"),
+        )
+        .await
+        .expect("send response");
+    assert_eq!(send_response.status(), StatusCode::OK);
+    let send_body = send_response
+        .into_body()
+        .collect()
+        .await
+        .expect("send body")
+        .to_bytes();
+    let sent: serde_json::Value = serde_json::from_slice(&send_body).expect("send json");
+    assert_eq!(sent["accepted"], true);
+    assert_eq!(sent["session_id"], session_id);
+    assert_eq!(sent["task_id"], session_id);
+    assert_eq!(sent["task"]["id"], session_id);
+    assert_eq!(sent["task"]["mode"], "yolo");
+
+    let injected = inject_rx.recv().await.expect("injected message");
+    assert_eq!(injected.thread_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(
+        injected.content,
+        "Summarize this workspace and propose next steps"
+    );
+
+    let get_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/sessions/{session_id}"))
+                .body(Body::empty())
+                .expect("get session request"),
+        )
+        .await
+        .expect("get session response");
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let get_body = get_response
+        .into_body()
+        .collect()
+        .await
+        .expect("get session body")
+        .to_bytes();
+    let session: serde_json::Value = serde_json::from_slice(&get_body).expect("session json");
+    assert_eq!(session["current_task"]["id"], session_id);
+    assert_eq!(session["current_task"]["mode"], "yolo");
+}
+
+#[tokio::test]
+async fn session_message_rejects_invalid_mode() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-session-message-mode-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let (inject_tx, _inject_rx) = tokio::sync::mpsc::channel(8);
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db,
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        Some(inject_tx),
+        Some(Arc::new(SessionManager::new())),
+        None,
+    ));
+
+    let create_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/sessions")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"title":"Mode validation"}"#))
+                .expect("create request"),
+        )
+        .await
+        .expect("create response");
+    let create_body = create_response
+        .into_body()
+        .collect()
+        .await
+        .expect("create body")
+        .to_bytes();
+    let created: serde_json::Value = serde_json::from_slice(&create_body).expect("create json");
+    let session_id = created["id"].as_str().expect("session id");
+
+    let send_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/v0/sessions/{session_id}/messages"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"content":"hello","mode":"turbo"}"#))
+                .expect("send request"),
+        )
+        .await
+        .expect("send response");
+    assert_eq!(send_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn session_detail_restores_current_task_after_runtime_restart() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-session-current-task-restart-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let session_id = uuid::Uuid::new_v4();
+
+    let session_manager = Arc::new(SessionManager::new());
+    session_manager
+        .create_bound_thread("http-test-user", "api", &session_id.to_string(), session_id)
+        .await;
+    db.ensure_conversation(
+        session_id,
+        "api",
+        "http-test-user",
+        Some(&session_id.to_string()),
+    )
+    .await
+    .expect("ensure conversation");
+
+    let message = IncomingMessage::new("api", "http-test-user", "Review the inbox")
+        .with_owner_id("http-test-user".to_string())
+        .with_sender_id("http-test-user".to_string())
+        .with_thread(session_id.to_string());
+    runtime.ensure_task(&message, session_id).await;
+    runtime
+        .toggle_mode(session_id, ironclaw::task_runtime::TaskMode::Yolo)
+        .await;
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::with_store(
+            "http-test-user".to_string(),
+            db,
+        ))),
+        None,
+        Some(session_manager),
+        None,
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/sessions/{session_id}"))
+                .body(Body::empty())
+                .expect("get session request"),
+        )
+        .await
+        .expect("get session response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("get session body")
+        .to_bytes();
+    let session: serde_json::Value = serde_json::from_slice(&body).expect("session json");
+    assert_eq!(session["current_task"]["id"], session_id.to_string());
+    assert_eq!(session["current_task"]["mode"], "yolo");
 }
 
 #[tokio::test]
