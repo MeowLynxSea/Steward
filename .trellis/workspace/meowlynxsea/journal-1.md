@@ -170,3 +170,35 @@ Validated provider settings at the API boundary, moved LLM API keys into the sec
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 04-01 Phase 2 session-first agent runtime
+
+**Date**: 2026-04-01
+**Task**: 04-01 Phase 2 session-first agent runtime
+
+### Summary
+
+Made session message sends attach to durable task records, added mode-aware session messaging, restored current task state in session detail, and surfaced execution state in the session UI.
+
+### Main Changes
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `14a68fd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
