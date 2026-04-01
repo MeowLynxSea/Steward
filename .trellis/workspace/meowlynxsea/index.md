@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 5
+- **Total Sessions**: 6
 - **Last Active**: 2026-04-01
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~204 | Active |
+| `journal-1.md` | ~236 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits |
 |---|------|-------|---------|
+| 6 | 2026-04-01 | 04-01 Phase 2 run history and approval center | `40ddf88` |
 | 5 | 2026-04-01 | 04-01 Phase 2 session-first agent runtime | `14a68fd` |
 | 4 | 2026-04-01 | 03-31 Phase 3 settings and recovery | `9bbb269` |
 | 3 | 2026-04-01 | Phase 3 observability and safety regression pass | `59a6c91` |

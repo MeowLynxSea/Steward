@@ -202,3 +202,35 @@ Made session message sends attach to durable task records, added mode-aware sess
 ### Next Steps
 
 - None - task complete
+
+
+## Session 6: 04-01 Phase 2 run history and approval center
+
+**Date**: 2026-04-01
+**Task**: 04-01 Phase 2 run history and approval center
+
+### Summary
+
+Added /runs compatibility routes, durable cancellation, approval-centered task UI groupings, and restart-safe run history regressions.
+
+### Main Changes
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `40ddf88` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
