@@ -23,6 +23,7 @@
   <a href="#positioning">Positioning</a> •
   <a href="#principles">Principles</a> •
   <a href="#current-direction">Current Direction</a> •
+  <a href="#user-docs">User Docs</a> •
   <a href="#developer-bootstrap">Developer Bootstrap</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#security">Security</a> •
@@ -51,11 +52,11 @@ Saved routines may exist later as accelerators, but they are not the product cen
 - **Local-first**: libSQL is the embedded storage baseline; no PostgreSQL, no required cloud account, no mandatory external services.
 - **Autonomous but reviewable**: the agent should act independently, but Ask/Yolo and event logs keep risky actions inspectable.
 - **Workspace-centric**: local files, indexed notes, reports, and external MCP tools are agent context, not an afterthought.
-- **Fork, not skin**: this project keeps useful Rust runtime/safety pieces from IronCowork but deliberately diverges from its old channel-first product model.
+- **Fork, not skin**: this project keeps useful Rust runtime and safety pieces from the original codebase but deliberately diverges from its old channel-first product model.
 
 ## Current Direction
 
-This repository is mid-migration from IronCowork to IronCowork.
+This repository is now aligned around the IronCowork product direction and is finishing packaging and end-user polish.
 
 What stays:
 
@@ -103,6 +104,13 @@ What replaces the old center of gravity:
 - **MCP protocol support** for external capability providers
 - **Plugin/tool architecture** for new local capabilities
 - **Multiple LLM backends** through direct provider adapters or OpenAI-compatible APIs
+
+## User Docs
+
+End-user setup and usage docs live here:
+
+- [docs/user-guide.md](docs/user-guide.md) for installation, browser-vs-desktop mode, provider setup, storage paths, sessions, approvals, and workspace usage
+- [docs/release-readiness.md](docs/release-readiness.md) for supported packaging targets, build commands, and release verification
 
 ## Developer Bootstrap
 

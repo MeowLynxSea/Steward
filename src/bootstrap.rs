@@ -1,4 +1,4 @@
-//! Bootstrap helpers for IronClaw.
+//! Bootstrap helpers for IronCowork.
 //!
 //! IronCowork Phase 0 uses libSQL as the default local backend. The bootstrap
 //! layer now mainly persists local-first settings such as `LIBSQL_PATH`,
@@ -9,10 +9,10 @@
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-const IRONCLAW_BASE_DIR_ENV: &str = "IRONCLAW_BASE_DIR";
+const IRONCOWORK_BASE_DIR_ENV: &str = "IRONCOWORK_BASE_DIR";
 
-/// Lazily computed IronClaw base directory, cached for the lifetime of the process.
-static IRONCLAW_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_ironclaw_base_dir);
+/// Lazily computed IronCowork base directory, cached for the lifetime of the process.
+static IRONCOWORK_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_ironclaw_base_dir);
 
 /// Compute the IronClaw base directory from environment.
 ///
@@ -20,14 +20,14 @@ static IRONCLAW_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_ironclaw_bas
 /// `ironclaw_base_dir()` function (which caches the result) and tests
 /// (which need to verify different configurations).
 pub fn compute_ironclaw_base_dir() -> PathBuf {
-    std::env::var(IRONCLAW_BASE_DIR_ENV)
+    std::env::var(IRONCOWORK_BASE_DIR_ENV)
         .map(PathBuf::from)
         .map(|path| {
             if path.as_os_str().is_empty() {
                 default_base_dir()
             } else if !path.is_absolute() {
                 eprintln!(
-                    "Warning: IRONCLAW_BASE_DIR is a relative path '{}', resolved against current directory",
+                    "Warning: IRONCOWORK_BASE_DIR is a relative path '{}', resolved against current directory",
                     path.display()
                 );
                 path
@@ -55,22 +55,22 @@ fn default_base_dir() -> PathBuf {
 
 /// Get the IronClaw base directory.
 ///
-/// Override with `IRONCLAW_BASE_DIR` environment variable.
+/// Override with `IRONCOWORK_BASE_DIR` environment variable.
 /// Defaults to `~/.ironcowork` (or `./.ironcowork` if home directory cannot be determined).
 ///
 /// Thread-safe: the value is computed once and cached in a `LazyLock`.
 ///
 /// # Environment Variable Behavior
-/// - If `IRONCLAW_BASE_DIR` is set to a non-empty path, that path is used.
-/// - If `IRONCLAW_BASE_DIR` is set to an empty string, it is treated as unset.
-/// - If `IRONCLAW_BASE_DIR` contains null bytes, a warning is printed and the default is used.
+/// - If `IRONCOWORK_BASE_DIR` is set to a non-empty path, that path is used.
+/// - If `IRONCOWORK_BASE_DIR` is set to an empty string, it is treated as unset.
+/// - If `IRONCOWORK_BASE_DIR` contains null bytes, a warning is printed and the default is used.
 /// - If the home directory cannot be determined, a warning is printed and the current directory is used.
 ///
 /// # Returns
 /// A `PathBuf` pointing to the base directory. The path is not validated
 /// for existence.
 pub fn ironclaw_base_dir() -> PathBuf {
-    IRONCLAW_BASE_DIR.clone()
+    IRONCOWORK_BASE_DIR.clone()
 }
 
 /// Path to the IronClaw-specific `.env` file: `~/.ironcowork/.env`.
@@ -669,9 +669,9 @@ INJECTED="pwned"#;
         // Use compute_ironclaw_base_dir() directly to avoid LazyLock caching,
         // which can be poisoned by whichever test initializes it first.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: Under lock_env(), no concurrent env access.
-        unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+        unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
 
         let path = compute_ironclaw_base_dir().join(".env");
         assert!(
@@ -681,7 +681,7 @@ INJECTED="pwned"#;
         );
 
         if let Some(val) = old_val {
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         }
     }
 
@@ -1045,11 +1045,11 @@ INJECTED="pwned"#;
     #[test]
     fn test_ironclaw_base_dir_default() {
         // This test must run first (or in isolation) before the LazyLock is initialized.
-        // It verifies that when IRONCLAW_BASE_DIR is not set, the default path is used.
+        // It verifies that when IRONCOWORK_BASE_DIR is not set, the default path is used.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+        unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
 
         // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
@@ -1058,18 +1058,18 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         }
     }
 
     #[test]
     fn test_ironclaw_base_dir_env_override() {
-        // This test verifies that when IRONCLAW_BASE_DIR is set,
+        // This test verifies that when IRONCOWORK_BASE_DIR is set,
         // the custom path is used. Must run before LazyLock is initialized.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCLAW_BASE_DIR", "/custom/ironclaw/path") };
+        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/custom/ironclaw/path") };
 
         // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
@@ -1077,10 +1077,10 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
         }
     }
 
@@ -1089,9 +1089,9 @@ INJECTED="pwned"#;
         // Verifies that ironclaw_env_path correctly joins .env to the base dir.
         // Uses compute_ironclaw_base_dir directly to avoid LazyLock caching.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCLAW_BASE_DIR", "/my/custom/dir") };
+        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/my/custom/dir") };
 
         // Test the path construction logic directly
         let base_path = compute_ironclaw_base_dir();
@@ -1100,20 +1100,20 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
         }
     }
 
     #[test]
     fn test_ironclaw_base_dir_empty_env() {
-        // Verifies that empty IRONCLAW_BASE_DIR falls back to default.
+        // Verifies that empty IRONCOWORK_BASE_DIR falls back to default.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCLAW_BASE_DIR", "") };
+        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "") };
 
         // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
@@ -1122,10 +1122,10 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
         }
     }
 
@@ -1133,9 +1133,9 @@ INJECTED="pwned"#;
     fn test_ironclaw_base_dir_special_chars() {
         // Verifies that paths with special characters are handled correctly.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCLAW_BASE_DIR").ok();
+        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCLAW_BASE_DIR", "/tmp/test_with-special.chars") };
+        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/tmp/test_with-special.chars") };
 
         // Force re-evaluation by calling the computation function directly
         let path = compute_ironclaw_base_dir();
@@ -1146,10 +1146,10 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCLAW_BASE_DIR", val) };
+            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCLAW_BASE_DIR") };
+            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
         }
     }
 
@@ -1237,7 +1237,11 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_creates_parent_dirs() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("nested").join("deep").join("ironcowork.pid");
+        let pid_path = dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("ironcowork.pid");
 
         let lock = PidLock::acquire_at(pid_path.clone()).unwrap();
         assert!(pid_path.exists());
