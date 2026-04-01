@@ -472,7 +472,8 @@ async fn async_main() -> anyhow::Result<()> {
             Some(channels.inject_sender()),
             Some(session_manager.clone()),
             components.workspace.clone(),
-        );
+        )
+        .with_workbench_metadata(components.tools.count(), components.dev_loaded_tool_names.clone());
         tokio::spawn(async move {
             if let Err(error) = run_api(api_bind_addr, api_state).await {
                 tracing::error!(%error, "local api service exited");

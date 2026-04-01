@@ -28,6 +28,12 @@ HTTP JSON requests to /api/v0/*
 SSE streams from /api/v0/sessions/:id/stream and /api/v0/runs/:id/stream
 ```
 
+Workbench-specific read surface:
+
+```http
+GET /api/v0/workbench/capabilities
+```
+
 #### Storage
 
 ```rust

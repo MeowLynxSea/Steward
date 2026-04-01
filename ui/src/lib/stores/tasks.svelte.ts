@@ -83,29 +83,6 @@ class TasksState {
     }
   }
 
-  async createArchiveTask(sourcePath: string, targetRoot: string, mode: "ask" | "yolo") {
-    this.error = null;
-    try {
-      this.status = "Creating archive task";
-      const response = await apiClient.createTask({
-        template_id: "builtin:file-archive",
-        mode,
-        parameters: {
-          source_path: sourcePath,
-          target_root: targetRoot,
-          naming_strategy: "preserve",
-          exclude_patterns: []
-        }
-      });
-      await this.refresh();
-      await this.select(response.task_id);
-    } catch (e) {
-      this.error = e instanceof Error ? e.message : "Failed to create archive task";
-    } finally {
-      this.status = "";
-    }
-  }
-
   async toggleMode(task: TaskRecord) {
     this.error = null;
     try {

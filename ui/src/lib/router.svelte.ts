@@ -1,6 +1,6 @@
-export type View = "sessions" | "tasks" | "templates" | "workspace" | "settings";
+export type View = "sessions" | "tasks" | "workspace" | "settings";
 
-const VALID_VIEWS = new Set<View>(["sessions", "tasks", "templates", "workspace", "settings"]);
+const VALID_VIEWS = new Set<View>(["sessions", "tasks", "workspace", "settings"]);
 const DEFAULT_VIEW: View = "sessions";
 
 function parseHash(): View {

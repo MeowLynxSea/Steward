@@ -4,16 +4,14 @@
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { sessionsStore } from "./lib/stores/sessions.svelte";
   import { tasksStore } from "./lib/stores/tasks.svelte";
-  import { templatesStore } from "./lib/stores/templates.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
+  import { workbenchStore } from "./lib/stores/workbench.svelte";
   import { listenForFolderDrops } from "./lib/tauri";
+  import type { TaskRecord, WorkspaceSearchResult } from "./lib/types";
 
   let appLoading = $state(true);
   let appError = $state("");
   let draftMessage = $state("");
-  let archiveSourcePath = $state("");
-  let archiveTargetRoot = $state("");
-  let archiveMode = $state<"ask" | "yolo">("ask");
   let rejectReason = $state("Rejected by user");
 
   function taskStatusTone(status: string): string {
@@ -54,10 +52,49 @@
     return item.current_step?.title || item.event;
   }
 
+  function navLabel(view: View): string {
+    switch (view) {
+      case "sessions":
+        return "Workbench";
+      case "tasks":
+        return "Runs";
+      case "workspace":
+        return "Workspace";
+      case "settings":
+        return "Settings";
+    }
+  }
+
   function currentSessionTask() {
     const active = sessionsStore.active;
     if (!active) return null;
     return tasksStore.list.find((task) => task.id === active.session.id) ?? active.current_task;
+  }
+
+  function nextRunFocus(task: TaskRecord | null): string {
+    if (!task) return "Start with a goal in the composer.";
+    if (task.pending_approval) return task.pending_approval.summary;
+    if (task.current_step?.title) return task.current_step.title;
+    if (task.last_error) return task.last_error;
+    return "Run state is synced from the backend.";
+  }
+
+  function useWorkspaceResult(result: WorkspaceSearchResult) {
+    const snippet = `Use workspace context from ${result.document_path}:\n${result.content}`;
+    draftMessage = draftMessage.trim()
+      ? `${draftMessage.trim()}\n\n${snippet}`
+      : snippet;
+  }
+
+  async function submitDraft() {
+    const content = draftMessage.trim();
+    if (!content) return;
+    await sessionsStore.sendMessage(content);
+    draftMessage = "";
+  }
+
+  function recentRuns() {
+    return tasksStore.list.slice(0, 6);
   }
 
   async function bootstrap() {
@@ -68,11 +105,10 @@
         settingsStore.fetch(),
         sessionsStore.fetchList(),
         tasksStore.fetch(),
-        templatesStore.fetch(),
-        workspaceStore.fetch()
+        workspaceStore.fetch(),
+        workbenchStore.fetch()
       ]);
 
-      // Auto-select first session if none active.
       if (!sessionsStore.activeId && sessionsStore.list.length > 0) {
         await sessionsStore.select(sessionsStore.list[0].id);
       }
@@ -89,8 +125,8 @@
     return (
       sessionsStore.status ||
       tasksStore.status ||
-      templatesStore.status ||
       workspaceStore.status ||
+      workbenchStore.status ||
       settingsStore.status ||
       "Ready"
     );
@@ -101,8 +137,8 @@
       appError ||
       sessionsStore.error ||
       tasksStore.error ||
-      templatesStore.error ||
       workspaceStore.error ||
+      workbenchStore.error ||
       settingsStore.error ||
       ""
     );
@@ -136,16 +172,16 @@
   <aside class="sidebar">
     <div class="brand">
       <p>IronCowork</p>
-      <span>Local-first task workspace</span>
+      <span>Session-first local agent workbench</span>
     </div>
 
     <nav class="nav">
-      {#each (["sessions", "tasks", "templates", "workspace", "settings"] as View[]) as view}
+      {#each (["sessions", "tasks", "workspace", "settings"] as View[]) as view}
         <button
           class:active={router.current === view}
           onclick={() => router.navigate(view)}
         >
-          {view.charAt(0).toUpperCase() + view.slice(1)}
+          {navLabel(view)}
         </button>
       {/each}
     </nav>
@@ -161,11 +197,11 @@
   <main class="content">
     {#if appLoading}
       <section class="panel">
-        <h1>Loading local workspace...</h1>
-        <p class="muted">Fetching settings, sessions, tasks, and workspace data.</p>
+        <h1>Loading local workbench...</h1>
+        <p class="muted">Fetching sessions, runs, workspace context, and supervision data.</p>
       </section>
     {:else if router.current === "sessions"}
-      <section class="sessions-layout">
+      <section class="workbench-layout">
         <div class="panel session-list">
           <div class="section-head">
             <h1>Sessions</h1>
@@ -175,7 +211,7 @@
           {#if sessionsStore.listLoading}
             <p class="muted">Loading sessions...</p>
           {:else if sessionsStore.list.length === 0}
-            <p class="muted">No sessions yet. Click "New" to create one.</p>
+            <p class="muted">No sessions yet. Create one and send a broad goal.</p>
           {:else}
             <div class="stack">
               {#each sessionsStore.list as session}
@@ -202,23 +238,23 @@
             </div>
 
             {@const sessionTask = currentSessionTask()}
-            {#if sessionTask}
-              <article class={`status-banner ${taskStatusTone(sessionTask.status)}`}>
-                <strong>{taskStatusCopy(sessionTask.status)}</strong>
-                <span>{sessionTask.current_step?.title ?? "Execution record attached to this session"}</span>
+            <article class={`status-banner ${taskStatusTone(sessionTask?.status ?? "queued")}`}>
+              <strong>{sessionTask ? taskStatusCopy(sessionTask.status) : "Ready for a new goal"}</strong>
+              <span>{nextRunFocus(sessionTask)}</span>
+              {#if sessionTask}
                 <button
                   onclick={() => {
                     router.navigate("tasks");
                     void tasksStore.select(sessionTask.id);
                   }}
                 >
-                  Open Task
+                  Open Run
                 </button>
-              </article>
-            {/if}
+              {/if}
+            </article>
 
             {#if sessionsStore.active.messages.length === 0}
-              <p class="muted">No messages yet. Send one below.</p>
+              <p class="muted">Describe a desktop knowledge-work goal and the agent will attach a run to this session.</p>
             {:else}
               <div class="chat-stream">
                 {#each sessionsStore.active.messages as message}
@@ -237,19 +273,152 @@
                   <option value="yolo">Yolo</option>
                 </select>
               </div>
-              <textarea bind:value={draftMessage} rows="4" placeholder="Send a message to the local agent"></textarea>
-              <button onclick={() => { sessionsStore.sendMessage(draftMessage); draftMessage = ""; }}>Send</button>
+              <textarea bind:value={draftMessage} rows="5" placeholder="Describe the goal, constraints, files to inspect, or the summary you want back"></textarea>
+              <button onclick={() => void submitDraft()}>Send</button>
             </div>
           {:else}
-            <p class="muted">Choose a session to start chatting.</p>
+            <p class="muted">Choose a session to start supervising work.</p>
           {/if}
+        </div>
+
+        <div class="workbench-rail">
+          <section class="panel rail-panel">
+            <div class="section-head">
+              <h1>Workspace Context</h1>
+              <button onclick={() => void workspaceStore.refresh()}>Refresh</button>
+            </div>
+
+            <div class="inline-form">
+              <input bind:value={workspaceStore.path} placeholder="Folder path to index" />
+              <button onclick={() => void workspaceStore.index(workspaceStore.path)}>Index</button>
+            </div>
+
+            <div class="inline-form">
+              <input bind:value={workspaceStore.searchQuery} placeholder="Search notes, docs, and workspace memory" />
+              <button onclick={() => void workspaceStore.search(workspaceStore.searchQuery)}>Search</button>
+            </div>
+
+            {#if workspaceStore.searchResults.length > 0}
+              <div class="stack compact">
+                {#each workspaceStore.searchResults.slice(0, 4) as result}
+                  <article class="search-result">
+                    <div class="operation-head">
+                      <strong>{result.document_path}</strong>
+                      <button onclick={() => useWorkspaceResult(result)}>Use In Prompt</button>
+                    </div>
+                    <p>{result.content}</p>
+                  </article>
+                {/each}
+              </div>
+            {:else if workspaceStore.entries.length > 0}
+              <div class="stack compact">
+                {#each workspaceStore.entries.slice(0, 6) as entry}
+                  <article class="workspace-entry">
+                    <strong>{entry.path}</strong>
+                    <span>{entry.is_directory ? "dir" : "file"}</span>
+                  </article>
+                {/each}
+              </div>
+            {:else}
+              <p class="muted">Index a folder or search the workspace to ground the current session.</p>
+            {/if}
+          </section>
+
+          <section class="panel rail-panel">
+            <div class="section-head">
+              <h1>Capabilities</h1>
+              <button onclick={() => void workbenchStore.fetch()}>Refresh</button>
+            </div>
+
+            {#if workbenchStore.capabilities}
+              <div class="stack compact task-facts">
+                <article class="workspace-entry">
+                  <strong>Workspace</strong>
+                  <span>{workbenchStore.capabilities.workspace_available ? "connected" : "offline"}</span>
+                </article>
+                <article class="workspace-entry">
+                  <strong>Tools</strong>
+                  <span>{workbenchStore.capabilities.tool_count}</span>
+                </article>
+                <article class="workspace-entry">
+                  <strong>MCP Servers</strong>
+                  <span>{workbenchStore.capabilities.mcp_servers.length}</span>
+                </article>
+              </div>
+
+              {#if workbenchStore.capabilities.dev_loaded_tools.length > 0}
+                <div class="stack compact">
+                  {#each workbenchStore.capabilities.dev_loaded_tools.slice(0, 6) as toolName}
+                    <article class="workspace-entry">
+                      <strong>{toolName}</strong>
+                      <span>dev tool</span>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+
+              {#if workbenchStore.capabilities.mcp_servers.length > 0}
+                <div class="stack compact">
+                  {#each workbenchStore.capabilities.mcp_servers as server}
+                    <article class="workspace-entry">
+                      <strong>{server.name}</strong>
+                      <span>{server.transport} · {server.auth_mode} · {server.enabled ? "enabled" : "disabled"}</span>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
+            {:else}
+              <p class="muted">Capability snapshot is unavailable.</p>
+            {/if}
+          </section>
+
+          <section class="panel rail-panel">
+            <div class="section-head">
+              <h1>Run Supervision</h1>
+              <button onclick={() => router.navigate("tasks")}>Open Runs</button>
+            </div>
+
+            {#if tasksStore.pendingApprovals.length > 0}
+              <div class="section-label">Approvals</div>
+              <div class="stack compact">
+                {#each tasksStore.pendingApprovals.slice(0, 4) as task}
+                  <button
+                    class="session-item approval-item"
+                    onclick={() => {
+                      router.navigate("tasks");
+                      void tasksStore.select(task.id);
+                    }}
+                  >
+                    <strong>{task.title}</strong>
+                    <span>{task.pending_approval?.risk ?? "approval"} · {task.mode}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
+
+            <div class="section-label">Recent Runs</div>
+            <div class="stack compact">
+              {#each recentRuns() as task}
+                <button
+                  class="session-item"
+                  onclick={() => {
+                    router.navigate("tasks");
+                    void tasksStore.select(task.id);
+                  }}
+                >
+                  <strong>{task.title}</strong>
+                  <span>{task.status} · {task.mode}</span>
+                </button>
+              {/each}
+            </div>
+          </section>
         </div>
       </section>
     {:else if router.current === "tasks"}
       <section class="sessions-layout">
         <div class="panel session-list">
           <div class="section-head">
-            <h1>Tasks</h1>
+            <h1>Runs</h1>
             <button onclick={() => void tasksStore.refresh()}>Refresh</button>
           </div>
 
@@ -269,31 +438,10 @@
             </section>
           {/if}
 
-          <div class="stack compact">
-            <div class="inline-form">
-              <input bind:value={archiveSourcePath} placeholder="Source folder to archive" />
-            </div>
-            <div class="inline-form">
-              <input bind:value={archiveTargetRoot} placeholder="Target root folder" />
-            </div>
-            <div class="inline-form">
-              <select bind:value={archiveMode}>
-                <option value="ask">Ask</option>
-                <option value="yolo">Yolo</option>
-              </select>
-              <button
-                onclick={() =>
-                  void tasksStore.createArchiveTask(archiveSourcePath, archiveTargetRoot, archiveMode)}
-              >
-                Run Archive
-              </button>
-            </div>
-          </div>
-
           {#if tasksStore.loading}
-            <p class="muted">Loading tasks...</p>
+            <p class="muted">Loading runs...</p>
           {:else if tasksStore.list.length === 0}
-            <p class="muted">No tasks found. Run the archive workflow to create one.</p>
+            <p class="muted">No runs yet. Start from the session workbench.</p>
           {:else}
             <div class="stack">
               {#each tasksStore.list as task}
@@ -328,7 +476,7 @@
 
         <div class="panel chat-panel">
           {#if tasksStore.detailLoading}
-            <p class="muted">Loading task detail...</p>
+            <p class="muted">Loading run detail...</p>
           {:else if tasksStore.detail}
             <div class="section-head">
               <h1>{tasksStore.detail.task.title}</h1>
@@ -350,13 +498,13 @@
 
             <article class={`status-banner ${taskStatusTone(tasksStore.detail.task.status)}`}>
               <strong>{taskStatusCopy(tasksStore.detail.task.status)}</strong>
-              <span>{tasksStore.detail.task.current_step?.title ?? "Task state updated"}</span>
+              <span>{tasksStore.detail.task.current_step?.title ?? "Run state updated"}</span>
             </article>
 
             <div class="stack compact task-facts">
               <article class="workspace-entry">
-                <strong>Template</strong>
-                <span>{tasksStore.detail.task.template_id}</span>
+                <strong>Record</strong>
+                <span>{tasksStore.detail.task.id}</span>
               </article>
               <article class="workspace-entry">
                 <strong>Mode</strong>
@@ -389,7 +537,7 @@
 
                 <label class="approval-form">
                   <span>Reject reason</span>
-                  <textarea bind:value={rejectReason} rows="3" placeholder="Explain why this task should stop"></textarea>
+                  <textarea bind:value={rejectReason} rows="3" placeholder="Explain why this run should stop"></textarea>
                 </label>
               </article>
             {/if}
@@ -423,74 +571,7 @@
               {/each}
             </div>
           {:else}
-            <p class="muted">Select a task to inspect its timeline and result.</p>
-          {/if}
-        </div>
-      </section>
-    {:else if router.current === "templates"}
-      <section class="sessions-layout">
-        <div class="panel session-list">
-          <div class="section-head">
-            <h1>Templates</h1>
-            <button onclick={() => void templatesStore.fetch()}>Refresh</button>
-          </div>
-
-          {#if templatesStore.loading}
-            <p class="muted">Loading templates...</p>
-          {:else if templatesStore.list.length === 0}
-            <p class="muted">No templates available yet.</p>
-          {:else}
-            <div class="stack">
-              {#each templatesStore.list as template}
-                <button
-                  class:active={template.id === templatesStore.activeId}
-                  class="session-item"
-                  onclick={() => templatesStore.select(template.id)}
-                >
-                  <strong>{template.name}</strong>
-                  <span>{template.builtin ? "Built-in" : "User"} · {template.default_mode}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-
-        <div class="panel chat-panel">
-          {#if templatesStore.active}
-            <div class="section-head">
-              <h1>{templatesStore.active.name}</h1>
-              <span>{templatesStore.active.builtin ? "Built-in template" : "User template"}</span>
-            </div>
-
-            <p>{templatesStore.active.description || "No description provided."}</p>
-
-            <div class="stack compact">
-              <article class="workspace-entry">
-                <strong>Template ID</strong>
-                <span>{templatesStore.active.id}</span>
-              </article>
-              <article class="workspace-entry">
-                <strong>Default Mode</strong>
-                <span>{templatesStore.active.default_mode}</span>
-              </article>
-              <article class="workspace-entry">
-                <strong>Mutability</strong>
-                <span>{templatesStore.active.mutable ? "Editable" : "Read-only"}</span>
-              </article>
-            </div>
-
-            <div class="stack">
-              <article class="message-card assistant">
-                <header>Parameter Schema</header>
-                <pre>{JSON.stringify(templatesStore.active.parameter_schema, null, 2)}</pre>
-              </article>
-              <article class="message-card assistant">
-                <header>Output Expectations</header>
-                <pre>{JSON.stringify(templatesStore.active.output_expectations, null, 2)}</pre>
-              </article>
-            </div>
-          {:else}
-            <p class="muted">Choose a template to inspect its schema and output contract.</p>
+            <p class="muted">Select a run to inspect its timeline and result.</p>
           {/if}
         </div>
       </section>

@@ -28,17 +28,12 @@ use crate::agent::submission::Submission;
 use crate::channels::IncomingMessage;
 use crate::config::{EmbeddingsConfig, LlmConfig, hydrate_llm_keys_from_secrets};
 use crate::db::Database;
-use crate::file_archive_workflow::{
-    create_archive_task, execute_archive_task, is_file_archive_task, validate_archive_params,
-};
 use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
 use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::settings::Settings;
 use crate::task_runtime::{TaskDetail, TaskMode, TaskRecord, TaskRuntime, TaskStatus};
-use crate::task_templates::{
-    TaskTemplateRecord, builtin_template, builtin_templates, validate_template_draft,
-};
+use crate::tools::mcp::config::{EffectiveTransport, load_mcp_servers_from_db};
 use crate::workspace::{SearchResult, Workspace, WorkspaceEntry};
 
 pub const DEFAULT_API_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -55,6 +50,8 @@ pub struct ApiState {
     session_manager: Option<Arc<SessionManager>>,
     workspace: Option<Arc<Workspace>>,
     secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+    tool_count: usize,
+    dev_loaded_tool_names: Vec<String>,
 }
 
 impl ApiState {
@@ -78,6 +75,8 @@ impl ApiState {
             session_manager,
             workspace,
             secrets_store: None,
+            tool_count: 0,
+            dev_loaded_tool_names: Vec::new(),
         }
     }
 
@@ -86,6 +85,16 @@ impl ApiState {
         secrets_store: Arc<dyn SecretsStore + Send + Sync>,
     ) -> Self {
         self.secrets_store = Some(secrets_store);
+        self
+    }
+
+    pub fn with_workbench_metadata(
+        mut self,
+        tool_count: usize,
+        dev_loaded_tool_names: Vec<String>,
+    ) -> Self {
+        self.tool_count = tool_count;
+        self.dev_loaded_tool_names = dev_loaded_tool_names;
         self
     }
 }
@@ -145,20 +154,9 @@ pub struct TaskListResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct CreateTaskResponse {
-    pub task_id: Uuid,
-    pub status: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct TaskDetailResponse {
     pub task: TaskRecord,
     pub timeline: Vec<crate::task_runtime::TaskTimelineEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct TemplateListResponse {
-    pub templates: Vec<TaskTemplateRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,13 +216,6 @@ pub struct SendSessionMessageRequest {
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CreateTaskRequest {
-    pub template_id: String,
-    pub mode: String,
-    pub parameters: Value,
-}
-
 #[derive(Debug, Serialize)]
 pub struct SendSessionMessageResponse {
     pub accepted: bool,
@@ -276,6 +267,23 @@ pub struct WorkspaceSearchResultResponse {
     pub vector_rank: Option<u32>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct WorkbenchCapabilitiesResponse {
+    pub workspace_available: bool,
+    pub tool_count: usize,
+    pub dev_loaded_tools: Vec<String>,
+    pub mcp_servers: Vec<WorkbenchMcpServerResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkbenchMcpServerResponse {
+    pub name: String,
+    pub transport: String,
+    pub enabled: bool,
+    pub auth_mode: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ApproveTaskRequest {
     pub approval_id: Option<Uuid>,
@@ -286,17 +294,6 @@ pub struct ApproveTaskRequest {
 #[derive(Debug, Deserialize)]
 pub struct PatchTaskModeRequest {
     pub mode: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UpsertTemplateRequest {
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    pub parameter_schema: Value,
-    pub default_mode: String,
-    #[serde(default = "default_template_output_expectations")]
-    pub output_expectations: Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -347,17 +344,6 @@ impl ApiError {
         }
     }
 
-    fn unprocessable_with_fields(
-        message: impl Into<String>,
-        field_errors: HashMap<String, String>,
-    ) -> Self {
-        Self {
-            status: StatusCode::UNPROCESSABLE_ENTITY,
-            message: message.into(),
-            field_errors: Some(field_errors),
-        }
-    }
-
     fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -403,7 +389,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/sessions/{id}", get(get_session))
         .route("/api/v0/sessions/{id}/messages", post(post_session_message))
         .route("/api/v0/sessions/{id}/stream", get(stream_session))
-        .route("/api/v0/tasks", get(list_tasks).post(create_task))
+        .route("/api/v0/tasks", get(list_tasks))
         .route("/api/v0/tasks/{id}", get(get_task).delete(delete_task))
         .route("/api/v0/tasks/{id}/stream", get(stream_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
@@ -416,14 +402,8 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/runs/{id}/reject", post(reject_task))
         .route("/api/v0/runs/{id}/mode", patch(patch_task_mode))
         .route(
-            "/api/v0/templates",
-            get(list_templates).post(create_template),
-        )
-        .route(
-            "/api/v0/templates/{id}",
-            get(get_template)
-                .put(update_template)
-                .delete(delete_template),
+            "/api/v0/workbench/capabilities",
+            get(get_workbench_capabilities),
         )
         .route("/api/v0/workspace/index", post(index_workspace))
         .route("/api/v0/workspace/tree", get(get_workspace_tree))
@@ -716,199 +696,6 @@ async fn list_tasks(State(state): State<ApiState>) -> ApiResult<Json<TaskListRes
     }))
 }
 
-async fn create_task(
-    State(state): State<ApiState>,
-    Json(payload): Json<CreateTaskRequest>,
-) -> ApiResult<(StatusCode, Json<CreateTaskResponse>)> {
-    let runtime = state
-        .task_runtime
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("task runtime is not available"))?
-        .clone();
-
-    let mode = match payload.mode.as_str() {
-        "ask" => TaskMode::Ask,
-        "yolo" => TaskMode::Yolo,
-        other => {
-            return Err(ApiError::unprocessable_entity(format!(
-                "invalid mode: {other}, must be \"ask\" or \"yolo\""
-            )));
-        }
-    };
-
-    match payload.template_id.as_str() {
-        "builtin:file-archive" => {
-            let params = validate_archive_params(&payload.parameters).map_err(|err| {
-                ApiError::unprocessable_with_fields(err.message, err.field_errors)
-            })?;
-            let task = create_archive_task(runtime.clone(), params, mode)
-                .await
-                .map_err(|err| ApiError::unprocessable_entity(err.message))?;
-
-            if matches!(mode, TaskMode::Yolo) && task.status == TaskStatus::Queued {
-                tokio::spawn(async move {
-                    let _ = execute_archive_task(runtime, task.id).await;
-                });
-            }
-
-            Ok((
-                StatusCode::CREATED,
-                Json(CreateTaskResponse {
-                    task_id: task.id,
-                    status: "queued".to_string(),
-                }),
-            ))
-        }
-        template_id if builtin_template(template_id).is_some() => Err(ApiError::conflict(format!(
-            "template {template_id} is defined but execution is not implemented yet"
-        ))),
-        template_id => Err(ApiError::not_found(format!(
-            "template {template_id} not found"
-        ))),
-    }
-}
-
-async fn list_templates(State(state): State<ApiState>) -> ApiResult<Json<TemplateListResponse>> {
-    let mut templates = builtin_templates();
-    let mut user_templates = state
-        .store
-        .list_task_templates(&state.owner_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to list templates: {e}")))?;
-    templates.append(&mut user_templates);
-    templates.sort_by(|left, right| {
-        right.builtin.cmp(&left.builtin).then_with(|| {
-            left.name
-                .to_ascii_lowercase()
-                .cmp(&right.name.to_ascii_lowercase())
-        })
-    });
-    Ok(Json(TemplateListResponse { templates }))
-}
-
-async fn get_template(
-    State(state): State<ApiState>,
-    Path(template_id): Path<String>,
-) -> ApiResult<Json<TaskTemplateRecord>> {
-    if let Some(template) = builtin_template(&template_id) {
-        return Ok(Json(template));
-    }
-
-    let template = state
-        .store
-        .get_task_template(&state.owner_id, &template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to load template: {e}")))?
-        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
-    Ok(Json(template))
-}
-
-async fn create_template(
-    State(state): State<ApiState>,
-    Json(payload): Json<UpsertTemplateRequest>,
-) -> ApiResult<(StatusCode, Json<TaskTemplateRecord>)> {
-    let draft = validate_template_payload(&payload)?;
-    let template_id = Uuid::new_v4().to_string();
-    let template = TaskTemplateRecord::from_user_row(
-        template_id.clone(),
-        draft.name,
-        draft.description,
-        draft.parameter_schema,
-        draft.default_mode,
-        draft.output_expectations,
-        chrono::Utc::now(),
-        chrono::Utc::now(),
-    );
-
-    state
-        .store
-        .create_task_template(&state.owner_id, &template)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to create template: {e}")))?;
-
-    let created = state
-        .store
-        .get_task_template(&state.owner_id, &template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to reload template: {e}")))?
-        .ok_or_else(|| ApiError::internal("created template could not be reloaded"))?;
-
-    Ok((StatusCode::CREATED, Json(created)))
-}
-
-async fn update_template(
-    State(state): State<ApiState>,
-    Path(template_id): Path<String>,
-    Json(payload): Json<UpsertTemplateRequest>,
-) -> ApiResult<Json<TaskTemplateRecord>> {
-    if builtin_template(&template_id).is_some() {
-        return Err(ApiError::conflict(format!(
-            "template {template_id} is built-in and cannot be modified"
-        )));
-    }
-
-    let existing = state
-        .store
-        .get_task_template(&state.owner_id, &template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to load template: {e}")))?
-        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
-    let draft = validate_template_payload(&payload)?;
-
-    let updated = TaskTemplateRecord {
-        id: existing.id,
-        name: draft.name,
-        description: draft.description,
-        parameter_schema: draft.parameter_schema,
-        default_mode: draft.default_mode,
-        output_expectations: draft.output_expectations,
-        builtin: false,
-        mutable: true,
-        clonable: true,
-        created_at: existing.created_at,
-        updated_at: Some(chrono::Utc::now()),
-    };
-
-    state
-        .store
-        .update_task_template(&state.owner_id, &updated)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to update template: {e}")))?;
-
-    let template = state
-        .store
-        .get_task_template(&state.owner_id, &template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to reload template: {e}")))?
-        .ok_or_else(|| ApiError::not_found(format!("template {template_id} not found")))?;
-
-    Ok(Json(template))
-}
-
-async fn delete_template(
-    State(state): State<ApiState>,
-    Path(template_id): Path<String>,
-) -> ApiResult<StatusCode> {
-    if builtin_template(&template_id).is_some() {
-        return Err(ApiError::conflict(format!(
-            "template {template_id} is built-in and cannot be deleted"
-        )));
-    }
-
-    let deleted = state
-        .store
-        .delete_task_template(&state.owner_id, &template_id)
-        .await
-        .map_err(|e| ApiError::internal(format!("failed to delete template: {e}")))?;
-    if !deleted {
-        return Err(ApiError::not_found(format!(
-            "template {template_id} not found"
-        )));
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn get_task(
     State(state): State<ApiState>,
     Path(task_id): Path<Uuid>,
@@ -960,13 +747,6 @@ async fn approve_task(
         always = payload.always,
         "task approval accepted through api"
     );
-
-    if is_file_archive_task(&task) {
-        let task = execute_archive_task(runtime.clone(), task_id)
-            .await
-            .map_err(|err| ApiError::internal(err.message))?;
-        return Ok(Json(task));
-    }
 
     let inject_tx = state
         .inject_tx
@@ -1090,26 +870,20 @@ async fn patch_task_mode(
         },
     );
 
-    if matches!(target_mode, TaskMode::Yolo) && task.status == TaskStatus::WaitingApproval {
-        if is_file_archive_task(&task) {
-            let runtime = runtime.clone();
-            tokio::spawn(async move {
-                let _ = execute_archive_task(runtime, task_id).await;
-            });
-        } else if let Some(inject_tx) = state.inject_tx.as_ref()
-            && let Some(pending) = task.pending_approval.as_ref()
-        {
-            inject_approval(
-                inject_tx,
-                &task,
-                Submission::ExecApproval {
-                    request_id: pending.id,
-                    approved: true,
-                    always: false,
-                },
-            )
-            .await?;
-        }
+    if matches!(target_mode, TaskMode::Yolo) && task.status == TaskStatus::WaitingApproval
+        && let Some(inject_tx) = state.inject_tx.as_ref()
+        && let Some(pending) = task.pending_approval.as_ref()
+    {
+        inject_approval(
+            inject_tx,
+            &task,
+            Submission::ExecApproval {
+                request_id: pending.id,
+                approved: true,
+                always: false,
+            },
+        )
+        .await?;
     }
 
     Ok(Json(runtime.get_task(task_id).await.ok_or_else(|| {
@@ -1158,6 +932,46 @@ async fn delete_task(
     Ok(Json(runtime.get_task(task_id).await.ok_or_else(|| {
         ApiError::not_found(format!("task {task_id} not found"))
     })?))
+}
+
+async fn get_workbench_capabilities(
+    State(state): State<ApiState>,
+) -> ApiResult<Json<WorkbenchCapabilitiesResponse>> {
+    let mcp_servers = load_mcp_servers_from_db(state.store.as_ref(), &state.owner_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to load MCP server config: {e}")))?
+        .servers
+        .into_iter()
+        .map(|server| {
+            let transport = match server.effective_transport() {
+                EffectiveTransport::Http => "http".to_string(),
+                EffectiveTransport::Stdio { .. } => "stdio".to_string(),
+                EffectiveTransport::Unix { .. } => "unix".to_string(),
+            };
+            let auth_mode = if server.has_custom_auth_header() {
+                "custom_header".to_string()
+            } else if server.requires_auth() {
+                "oauth".to_string()
+            } else {
+                "none".to_string()
+            };
+
+            WorkbenchMcpServerResponse {
+                name: server.name,
+                transport,
+                enabled: server.enabled,
+                auth_mode,
+                description: server.description,
+            }
+        })
+        .collect();
+
+    Ok(Json(WorkbenchCapabilitiesResponse {
+        workspace_available: state.workspace.is_some(),
+        tool_count: state.tool_count,
+        dev_loaded_tools: state.dev_loaded_tool_names.clone(),
+        mcp_servers,
+    }))
 }
 
 async fn index_workspace(
@@ -1249,23 +1063,6 @@ async fn load_settings(state: &ApiState) -> ApiResult<Settings> {
         hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), &state.owner_id).await;
     }
     Ok(settings)
-}
-
-fn default_template_output_expectations() -> Value {
-    json!({})
-}
-
-fn validate_template_payload(
-    payload: &UpsertTemplateRequest,
-) -> ApiResult<crate::task_templates::TaskTemplateDraft> {
-    validate_template_draft(
-        &payload.name,
-        &payload.description,
-        &payload.parameter_schema,
-        &payload.default_mode,
-        &payload.output_expectations,
-    )
-    .map_err(|err| ApiError::unprocessable_with_fields(err.message, err.field_errors))
 }
 
 fn validate_settings_patch(payload: &PatchSettingsRequest) -> ApiResult<()> {

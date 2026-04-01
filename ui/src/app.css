@@ -103,6 +103,13 @@ select {
   gap: 20px;
 }
 
+.workbench-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1.2fr) minmax(280px, 360px);
+  gap: 20px;
+  align-items: start;
+}
+
 .section-head {
   display: flex;
   align-items: center;
@@ -171,6 +178,17 @@ select {
   grid-template-rows: auto 1fr auto;
   gap: 18px;
   min-height: calc(100vh - 48px);
+}
+
+.workbench-rail {
+  display: grid;
+  gap: 20px;
+  align-content: start;
+}
+
+.rail-panel {
+  display: grid;
+  gap: 14px;
 }
 
 .chat-stream {
@@ -332,6 +350,7 @@ select {
 
 @media (max-width: 960px) {
   .app-shell,
+  .workbench-layout,
   .sessions-layout,
   .workspace-layout {
     grid-template-columns: 1fr;

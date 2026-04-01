@@ -5,7 +5,7 @@ import type {
   SettingsResponse,
   TaskDetail,
   TaskRecord,
-  TaskTemplateRecord,
+  WorkbenchCapabilities,
   WorkspaceEntry,
   WorkspaceSearchResult
 } from "./types";
@@ -88,17 +88,6 @@ export const apiClient = {
     return request<{ tasks: TaskRecord[] }>("/tasks");
   },
 
-  createTask(payload: {
-    template_id: string;
-    mode: "ask" | "yolo";
-    parameters: Record<string, unknown>;
-  }) {
-    return request<{ task_id: string; status: string }>("/tasks", {
-      method: "POST",
-      body: JSON.stringify(payload)
-    });
-  },
-
   getTask(id: string) {
     return request<TaskDetail>(`/tasks/${id}`);
   },
@@ -136,14 +125,8 @@ export const apiClient = {
     });
   },
 
-  // -- Templates --
-
-  listTemplates() {
-    return request<{ templates: TaskTemplateRecord[] }>("/templates");
-  },
-
-  getTemplate(id: string) {
-    return request<TaskTemplateRecord>(`/templates/${id}`);
+  getWorkbenchCapabilities() {
+    return request<WorkbenchCapabilities>("/workbench/capabilities");
   },
 
   // -- Workspace --

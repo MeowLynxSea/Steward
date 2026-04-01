@@ -1,6 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
-
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
@@ -17,7 +15,6 @@ use ironclaw::{
     workspace::Workspace,
 };
 use serde_json::json;
-use tokio::time::sleep;
 use tower::util::ServiceExt;
 
 async fn test_router() -> axum::Router {
@@ -49,42 +46,10 @@ async fn test_router() -> axum::Router {
         Some(Arc::new(SessionManager::new())),
         Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
     )
+    .with_workbench_metadata(7, vec!["dev-helper".to_string(), "debug-tool".to_string()])
     .with_secrets_store(secrets);
 
     router(state)
-}
-
-async fn wait_for_task_status(
-    app: &axum::Router,
-    task_id: uuid::Uuid,
-    expected_status: &str,
-) -> serde_json::Value {
-    for _ in 0..20 {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/v0/tasks/{task_id}"))
-                    .body(Body::empty())
-                    .expect("task detail request"),
-            )
-            .await
-            .expect("task detail response");
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("task detail body")
-            .to_bytes();
-        let detail: serde_json::Value = serde_json::from_slice(&body).expect("task detail json");
-        if detail["task"]["status"] == expected_status {
-            return detail;
-        }
-        sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("task {task_id} did not reach status {expected_status}");
 }
 
 #[tokio::test]
@@ -111,6 +76,38 @@ async fn health_endpoint_returns_local_bind() {
     let body: serde_json::Value = serde_json::from_slice(&body).expect("health json");
     assert_eq!(body["status"], "ok");
     assert_eq!(body["bind"], "127.0.0.1:8765");
+}
+
+#[tokio::test]
+async fn workbench_capabilities_endpoint_returns_workspace_tooling_snapshot() {
+    let app = test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/workbench/capabilities")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect body")
+        .to_bytes();
+    let body: serde_json::Value = serde_json::from_slice(&body).expect("capabilities json");
+    assert_eq!(body["workspace_available"], true);
+    assert_eq!(body["tool_count"], 7);
+    assert_eq!(body["dev_loaded_tools"][0], "dev-helper");
+    assert_eq!(body["dev_loaded_tools"][1], "debug-tool");
+    assert_eq!(
+        body["mcp_servers"].as_array().expect("mcp server array").len(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -797,229 +794,33 @@ async fn delete_task_cancels_run_and_persists_after_restart() {
 }
 
 #[tokio::test]
-async fn template_endpoints_support_builtin_and_user_crud() {
+async fn template_endpoints_are_removed_from_v0_api() {
     let app = test_router().await;
 
-    let builtin_response = app
+    let list_response = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri("/api/v0/templates")
                 .body(Body::empty())
-                .expect("list templates request"),
+                .expect("list request"),
         )
         .await
-        .expect("list templates response");
-    assert_eq!(builtin_response.status(), StatusCode::OK);
-    let builtin_body = builtin_response
-        .into_body()
-        .collect()
-        .await
-        .expect("builtin body")
-        .to_bytes();
-    let builtin_json: serde_json::Value =
-        serde_json::from_slice(&builtin_body).expect("builtin templates json");
-    assert_eq!(builtin_json["templates"][0]["builtin"], true);
-
-    let create_payload = json!({
-        "name": "Custom Archive",
-        "description": "User-defined archive variant",
-        "parameter_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": { "type": "string" }
-            },
-            "required": ["source_path"]
-        },
-        "default_mode": "ask",
-        "output_expectations": {
-            "kind": "file_operation_plan"
-        }
-    });
+        .expect("list response");
+    assert_eq!(list_response.status(), StatusCode::NOT_FOUND);
 
     let create_response = app
-        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v0/templates")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_payload.to_string()))
-                .expect("create template request"),
+                .body(Body::from("{}"))
+                .expect("create request"),
         )
         .await
-        .expect("create template response");
-    assert_eq!(create_response.status(), StatusCode::CREATED);
-    let created_body = create_response
-        .into_body()
-        .collect()
-        .await
-        .expect("created body")
-        .to_bytes();
-    let created_json: serde_json::Value =
-        serde_json::from_slice(&created_body).expect("created template json");
-    let template_id = created_json["id"].as_str().expect("template id");
-    assert_eq!(created_json["builtin"], false);
-    assert_eq!(created_json["name"], "Custom Archive");
-
-    let get_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v0/templates/{template_id}"))
-                .body(Body::empty())
-                .expect("get template request"),
-        )
-        .await
-        .expect("get template response");
-    assert_eq!(get_response.status(), StatusCode::OK);
-
-    let update_payload = json!({
-        "name": "Custom Archive Updated",
-        "description": "Updated description",
-        "parameter_schema": {
-            "type": "object",
-            "properties": {
-                "source_path": { "type": "string" },
-                "target_root": { "type": "string" }
-            },
-            "required": ["source_path", "target_root"]
-        },
-        "default_mode": "yolo",
-        "output_expectations": {
-            "kind": "file_operation_plan",
-            "artifacts": [{"type": "result_summary"}]
-        }
-    });
-
-    let update_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri(format!("/api/v0/templates/{template_id}"))
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(update_payload.to_string()))
-                .expect("update template request"),
-        )
-        .await
-        .expect("update template response");
-    assert_eq!(update_response.status(), StatusCode::OK);
-    let update_body = update_response
-        .into_body()
-        .collect()
-        .await
-        .expect("update body")
-        .to_bytes();
-    let update_json: serde_json::Value =
-        serde_json::from_slice(&update_body).expect("updated template json");
-    assert_eq!(update_json["name"], "Custom Archive Updated");
-    assert_eq!(update_json["default_mode"], "yolo");
-
-    let delete_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri(format!("/api/v0/templates/{template_id}"))
-                .body(Body::empty())
-                .expect("delete template request"),
-        )
-        .await
-        .expect("delete template response");
-    assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
-
-    let missing_response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/api/v0/templates/{template_id}"))
-                .body(Body::empty())
-                .expect("missing template request"),
-        )
-        .await
-        .expect("missing template response");
-    assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
-}
-
-#[tokio::test]
-async fn template_endpoints_reject_invalid_payloads_and_builtin_mutations() {
-    let app = test_router().await;
-
-    let invalid_payload = json!({
-        "name": "",
-        "description": "",
-        "parameter_schema": {
-            "type": "array"
-        },
-        "default_mode": "maybe",
-        "output_expectations": []
-    });
-
-    let invalid_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v0/templates")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(invalid_payload.to_string()))
-                .expect("invalid template request"),
-        )
-        .await
-        .expect("invalid template response");
-    assert_eq!(invalid_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let invalid_body = invalid_response
-        .into_body()
-        .collect()
-        .await
-        .expect("invalid body")
-        .to_bytes();
-    let invalid_json: serde_json::Value =
-        serde_json::from_slice(&invalid_body).expect("invalid template json");
-    assert_eq!(invalid_json["error"], "invalid template definition");
-    assert_eq!(invalid_json["field_errors"]["name"], "name is required");
-    assert_eq!(
-        invalid_json["field_errors"]["default_mode"],
-        "default_mode must be \"ask\" or \"yolo\""
-    );
-
-    let builtin_update = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("PUT")
-                .uri("/api/v0/templates/builtin:file-archive")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({
-                        "name": "Illegal",
-                        "description": "",
-                        "parameter_schema": {
-                            "type": "object",
-                            "properties": {}
-                        },
-                        "default_mode": "ask",
-                        "output_expectations": {}
-                    })
-                    .to_string(),
-                ))
-                .expect("builtin update request"),
-        )
-        .await
-        .expect("builtin update response");
-    assert_eq!(builtin_update.status(), StatusCode::CONFLICT);
-
-    let builtin_delete = app
-        .oneshot(
-            Request::builder()
-                .method("DELETE")
-                .uri("/api/v0/templates/builtin:file-archive")
-                .body(Body::empty())
-                .expect("builtin delete request"),
-        )
-        .await
-        .expect("builtin delete response");
-    assert_eq!(builtin_delete.status(), StatusCode::CONFLICT);
+        .expect("create response");
+    assert_eq!(create_response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 #[tokio::test]
@@ -1758,211 +1559,27 @@ async fn workspace_endpoints_index_and_list_tree() {
 }
 
 #[tokio::test]
-async fn create_archive_task_in_ask_mode_persists_preview() {
+async fn task_creation_endpoint_is_removed_from_v0_api() {
     let app = test_router().await;
-    let source_dir = tempfile::tempdir().expect("source tempdir");
-    let target_dir = tempfile::tempdir().expect("target tempdir");
-    let source_file = source_dir.path().join("report.txt");
-    std::fs::write(&source_file, "quarterly report").expect("write source file");
 
-    let create_payload = json!({
-        "template_id": "builtin:file-archive",
-        "mode": "ask",
-        "parameters": {
-            "source_path": source_dir.path().display().to_string(),
-            "target_root": target_dir.path().display().to_string(),
-            "naming_strategy": "preserve",
-            "exclude_patterns": []
-        }
-    });
-
-    let create_response = app
-        .clone()
+    let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri("/api/v0/tasks")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_payload.to_string()))
-                .expect("create task request"),
-        )
-        .await
-        .expect("create task response");
-    assert_eq!(create_response.status(), StatusCode::CREATED);
-    let body = create_response
-        .into_body()
-        .collect()
-        .await
-        .expect("create task body")
-        .to_bytes();
-    let created: serde_json::Value = serde_json::from_slice(&body).expect("create task json");
-    assert_eq!(created["status"], "queued");
-    let task_id = created["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse::<uuid::Uuid>()
-        .expect("uuid");
-
-    let detail = wait_for_task_status(&app, task_id, "waiting_approval").await;
-    assert_eq!(detail["task"]["template_id"], "builtin:file-archive");
-    assert_eq!(detail["task"]["pending_approval"]["risk"], "file_write");
-    assert_eq!(
-        detail["task"]["pending_approval"]["operations"][0]["tool_name"],
-        "move_file"
-    );
-    assert_eq!(
-        detail["task"]["pending_approval"]["operations"][0]["destination_path"],
-        target_dir
-            .path()
-            .join("Documents/report.txt")
-            .display()
-            .to_string()
-    );
-    assert_eq!(detail["timeline"][0]["event"], "task.created");
-    assert_eq!(detail["timeline"][1]["event"], "task.waiting_approval");
-    assert!(source_file.exists());
-}
-
-#[tokio::test]
-async fn create_archive_task_in_yolo_mode_executes_plan() {
-    let app = test_router().await;
-    let source_dir = tempfile::tempdir().expect("source tempdir");
-    let target_dir = tempfile::tempdir().expect("target tempdir");
-    let source_file = source_dir.path().join("photo.jpg");
-    let skipped_dir = source_dir.path().join("nested");
-    std::fs::create_dir_all(&skipped_dir).expect("create nested dir");
-    std::fs::write(&source_file, "image-bytes").expect("write source file");
-
-    let create_payload = json!({
-        "template_id": "builtin:file-archive",
-        "mode": "yolo",
-        "parameters": {
-            "source_path": source_dir.path().display().to_string(),
-            "target_root": target_dir.path().display().to_string(),
-            "naming_strategy": "preserve",
-            "exclude_patterns": []
-        }
-    });
-
-    let create_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v0/tasks")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_payload.to_string()))
-                .expect("create task request"),
-        )
-        .await
-        .expect("create task response");
-    assert_eq!(create_response.status(), StatusCode::CREATED);
-    let body = create_response
-        .into_body()
-        .collect()
-        .await
-        .expect("create task body")
-        .to_bytes();
-    let created: serde_json::Value = serde_json::from_slice(&body).expect("create task json");
-    let task_id = created["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse::<uuid::Uuid>()
-        .expect("uuid");
-
-    let detail = wait_for_task_status(&app, task_id, "completed").await;
-    let destination = target_dir.path().join("Images/photo.jpg");
-    assert!(destination.exists());
-    assert!(!source_file.exists());
-    assert_eq!(
-        detail["task"]["result_metadata"]["execution"]["moved"][0]["destination_path"],
-        destination.display().to_string()
-    );
-    assert_eq!(
-        detail["task"]["result_metadata"]["execution"]["skipped"][0]["reason"],
-        "directories are skipped"
-    );
-}
-
-#[tokio::test]
-async fn approve_archive_task_executes_waiting_plan() {
-    let app = test_router().await;
-    let source_dir = tempfile::tempdir().expect("source tempdir");
-    let target_dir = tempfile::tempdir().expect("target tempdir");
-    let source_file = source_dir.path().join("notes.md");
-    std::fs::write(&source_file, "# Notes").expect("write source file");
-
-    let create_payload = json!({
-        "template_id": "builtin:file-archive",
-        "mode": "ask",
-        "parameters": {
-            "source_path": source_dir.path().display().to_string(),
-            "target_root": target_dir.path().display().to_string(),
-            "naming_strategy": "preserve",
-            "exclude_patterns": []
-        }
-    });
-
-    let create_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v0/tasks")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(create_payload.to_string()))
-                .expect("create task request"),
-        )
-        .await
-        .expect("create task response");
-    let body = create_response
-        .into_body()
-        .collect()
-        .await
-        .expect("create task body")
-        .to_bytes();
-    let created: serde_json::Value = serde_json::from_slice(&body).expect("create task json");
-    let task_id = created["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse::<uuid::Uuid>()
-        .expect("uuid");
-
-    let waiting = wait_for_task_status(&app, task_id, "waiting_approval").await;
-    let approval_id = waiting["task"]["pending_approval"]["id"]
-        .as_str()
-        .expect("approval id");
-
-    let approve_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/api/v0/tasks/{task_id}/approve"))
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
                     json!({
-                        "approval_id": approval_id,
-                        "always": false
+                        "template_id": "builtin:file-archive",
+                        "mode": "ask",
+                        "parameters": {}
                     })
                     .to_string(),
                 ))
-                .expect("approve request"),
+                .expect("create request"),
         )
         .await
-        .expect("approve response");
-    assert_eq!(approve_response.status(), StatusCode::OK);
-    let body = approve_response
-        .into_body()
-        .collect()
-        .await
-        .expect("approve body")
-        .to_bytes();
-    let approved: serde_json::Value = serde_json::from_slice(&body).expect("approve json");
-    assert_eq!(approved["status"], "completed");
-    assert_eq!(approved["pending_approval"], serde_json::Value::Null);
+        .expect("create response");
 
-    let destination = target_dir.path().join("Documents/notes.md");
-    assert!(destination.exists());
-    assert!(!source_file.exists());
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }

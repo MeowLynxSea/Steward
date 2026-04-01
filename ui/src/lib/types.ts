@@ -93,20 +93,6 @@ export interface TaskDetail {
   timeline: TaskTimelineEntry[];
 }
 
-export interface TaskTemplateRecord {
-  id: string;
-  name: string;
-  description: string;
-  parameter_schema: Record<string, unknown>;
-  default_mode: TaskMode;
-  output_expectations: Record<string, unknown>;
-  builtin: boolean;
-  mutable: boolean;
-  clonable: boolean;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
 export interface WorkspaceEntry {
   path: string;
   is_directory: boolean;
@@ -122,6 +108,21 @@ export interface WorkspaceSearchResult {
   score: number;
   fts_rank: number | null;
   vector_rank: number | null;
+}
+
+export interface WorkbenchMcpServer {
+  name: string;
+  transport: string;
+  enabled: boolean;
+  auth_mode: string;
+  description: string | null;
+}
+
+export interface WorkbenchCapabilities {
+  workspace_available: boolean;
+  tool_count: number;
+  dev_loaded_tools: string[];
+  mcp_servers: WorkbenchMcpServer[];
 }
 
 export interface StreamEnvelope<T = Record<string, unknown>> {
