@@ -10,8 +10,9 @@ use ironclaw::{
     agent::SessionManager,
     api::{ApiState, local_api_addr, router, run_api},
     channels::IncomingMessage,
-    db::{ConversationStore, Database, libsql::LibSqlBackend},
+    db::{ConversationStore, Database, SettingsStore, libsql::LibSqlBackend},
     runtime_events::SseManager,
+    secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore},
     task_runtime::{TaskDetail, TaskRuntime},
     workspace::Workspace,
 };
@@ -27,6 +28,14 @@ async fn test_router() -> axum::Router {
     let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
     db.run_migrations().await.expect("migrations");
 
+    let crypto = Arc::new(
+        SecretsCrypto::new(secrecy::SecretString::from(
+            ironclaw::secrets::keychain::generate_master_key_hex(),
+        ))
+        .expect("crypto"),
+    );
+    let secrets: Arc<dyn SecretsStore + Send + Sync> = Arc::new(InMemorySecretsStore::new(crypto));
+
     let state = ApiState::new(
         "http-test-user".to_string(),
         local_api_addr(8765),
@@ -39,7 +48,8 @@ async fn test_router() -> axum::Router {
         None,
         Some(Arc::new(SessionManager::new())),
         Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
-    );
+    )
+    .with_secrets_store(secrets);
 
     router(state)
 }
@@ -204,6 +214,192 @@ async fn settings_round_trip_over_http_and_emits_sse_event() {
 }
 
 #[tokio::test]
+async fn patch_settings_rejects_invalid_remote_http_provider_url() {
+    let app = test_router().await;
+
+    let patch_payload = json!({
+        "llm_backend": "openai_compatible",
+        "openai_compatible_base_url": "http://example.com/v1",
+        "selected_model": "gpt-test"
+    });
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v0/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(patch_payload.to_string()))
+                .expect("patch request"),
+        )
+        .await
+        .expect("patch response");
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("patch body")
+        .to_bytes();
+    let error: serde_json::Value = serde_json::from_slice(&body).expect("error json");
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("invalid LLM settings")
+    );
+}
+
+#[tokio::test]
+async fn settings_api_keys_move_to_secrets_store_and_reload_after_restart() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-settings-secrets-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let crypto = Arc::new(
+        SecretsCrypto::new(secrecy::SecretString::from(
+            ironclaw::secrets::keychain::generate_master_key_hex(),
+        ))
+        .expect("crypto"),
+    );
+    let secrets: Arc<dyn SecretsStore + Send + Sync> = Arc::new(InMemorySecretsStore::new(crypto));
+
+    let app = router(
+        ApiState::new(
+            "http-test-user".to_string(),
+            local_api_addr(8765),
+            db.clone(),
+            Arc::new(SseManager::new()),
+            Some(Arc::new(TaskRuntime::with_store(
+                "http-test-user".to_string(),
+                db.clone(),
+            ))),
+            None,
+            Some(Arc::new(SessionManager::new())),
+            Some(Arc::new(Workspace::new_with_db(
+                "http-test-user",
+                db.clone(),
+            ))),
+        )
+        .with_secrets_store(Arc::clone(&secrets)),
+    );
+
+    let patch_payload = json!({
+        "llm_backend": "openai",
+        "selected_model": "gpt-4.1",
+        "llm_builtin_overrides": {
+            "openai": {
+                "api_key": "sk-test-123",
+                "model": "gpt-4.1"
+            }
+        },
+        "llm_custom_providers": [
+            {
+                "id": "local-openai-compatible",
+                "name": "Local OpenAI Compatible",
+                "adapter": "open_ai_completions",
+                "base_url": "http://127.0.0.1:11434/v1",
+                "default_model": "qwen2.5-coder",
+                "api_key": "local-secret",
+                "builtin": false
+            }
+        ]
+    });
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/api/v0/settings")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(patch_payload.to_string()))
+                .expect("patch request"),
+        )
+        .await
+        .expect("patch response");
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let stored = db
+        .get_all_settings("http-test-user")
+        .await
+        .expect("stored settings");
+    assert_eq!(
+        stored["llm_builtin_overrides.openai.model"],
+        json!("gpt-4.1")
+    );
+    assert!(
+        !stored.contains_key("llm_builtin_overrides.openai.api_key"),
+        "builtin api_key leaked to settings table"
+    );
+    let custom = stored["llm_custom_providers"][0].clone();
+    assert_eq!(custom["id"], "local-openai-compatible");
+    assert!(
+        custom.get("api_key").is_none(),
+        "custom api_key leaked to settings table"
+    );
+
+    let openai_secret = secrets
+        .get_decrypted("http-test-user", "llm_builtin_openai_api_key")
+        .await
+        .expect("builtin secret");
+    assert_eq!(openai_secret.expose(), "sk-test-123");
+    let custom_secret = secrets
+        .get_decrypted(
+            "http-test-user",
+            "llm_custom_local-openai-compatible_api_key",
+        )
+        .await
+        .expect("custom secret");
+    assert_eq!(custom_secret.expose(), "local-secret");
+
+    let restarted = router(
+        ApiState::new(
+            "http-test-user".to_string(),
+            local_api_addr(8765),
+            db.clone(),
+            Arc::new(SseManager::new()),
+            Some(Arc::new(TaskRuntime::with_store(
+                "http-test-user".to_string(),
+                db.clone(),
+            ))),
+            None,
+            Some(Arc::new(SessionManager::new())),
+            Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+        )
+        .with_secrets_store(secrets),
+    );
+
+    let get_response = restarted
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/settings")
+                .body(Body::empty())
+                .expect("get request"),
+        )
+        .await
+        .expect("get response");
+    assert_eq!(get_response.status(), StatusCode::OK);
+    let body = get_response
+        .into_body()
+        .collect()
+        .await
+        .expect("get body")
+        .to_bytes();
+    let restored: serde_json::Value = serde_json::from_slice(&body).expect("settings json");
+    assert_eq!(
+        restored["llm_builtin_overrides"]["openai"]["api_key"],
+        "sk-test-123"
+    );
+    assert_eq!(
+        restored["llm_custom_providers"][0]["api_key"],
+        "local-secret"
+    );
+}
+
+#[tokio::test]
 async fn run_api_rejects_non_localhost_bind() {
     let db_path = std::env::temp_dir().join(format!(
         "ironcowork-api-bind-test-{}.db",
@@ -362,6 +558,81 @@ async fn task_detail_persists_timeline_across_runtime_restart() {
     assert_eq!(detail.timeline[0].event, "task.created");
     assert_eq!(detail.timeline[1].event, "task.step.started");
     assert_eq!(detail.timeline[2].event, "task.failed");
+}
+
+#[tokio::test]
+async fn task_detail_preserves_pending_approval_across_runtime_restart() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-approval-restart-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let task_id = uuid::Uuid::new_v4();
+    let request_id = uuid::Uuid::new_v4();
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let message = IncomingMessage::new("test", "http-test-user", "archive downloads")
+        .with_thread(task_id.to_string())
+        .with_metadata(serde_json::json!({"source":"api-test"}));
+    runtime.ensure_task(&message, task_id).await;
+    let pending = ironclaw::agent::session::PendingApproval {
+        request_id,
+        tool_name: "write_file".to_string(),
+        parameters: json!({"path":"/tmp/report.md"}),
+        display_parameters: json!({"path":"/tmp/report.md"}),
+        description: "write a file".to_string(),
+        tool_call_id: "call_1".to_string(),
+        context_messages: Vec::new(),
+        deferred_tool_calls: Vec::new(),
+        user_timezone: Some("UTC".to_string()),
+        allow_always: true,
+    };
+    runtime
+        .mark_waiting_approval(&message, task_id, &pending)
+        .await;
+
+    let restarted_runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(restarted_runtime),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/tasks/{task_id}"))
+                .body(Body::empty())
+                .expect("task detail request"),
+        )
+        .await
+        .expect("task detail response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response
+        .into_body()
+        .collect()
+        .await
+        .expect("detail body")
+        .to_bytes();
+    let detail: serde_json::Value = serde_json::from_slice(&body).expect("task detail json");
+    assert_eq!(detail["task"]["status"], "waiting_approval");
+    assert_eq!(
+        detail["task"]["pending_approval"]["id"],
+        request_id.to_string()
+    );
+    assert_eq!(detail["timeline"][1]["event"], "task.waiting_approval");
 }
 
 #[tokio::test]

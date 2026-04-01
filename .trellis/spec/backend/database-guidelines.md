@@ -33,11 +33,15 @@ Examples:
 
 - Use a temp database per integration test and exercise the real API flow.
 - Persist settings and then reload them through the same store contract the app uses in production.
+- For `/api/v0/settings`, validate the fully resolved provider config before commit and fail with `422 Unprocessable Entity` when `LlmConfig::resolve()` or `EmbeddingsConfig::resolve()` rejects the payload.
+- Persist provider API keys only through the secrets store contract. The settings table may keep non-secret fields such as `llm_builtin_overrides.<provider>.model` or `llm_custom_providers[*].base_url`, but it must not keep plaintext `api_key` values.
+- After loading settings from the database, hydrate missing provider `api_key` fields from the secrets store before returning `/api/v0/settings` or resolving runtime config.
 
 ### Bad
 
 - Reintroducing branching logic that supports both PostgreSQL and libSQL "just in case".
 - Reading configuration from environment on every request instead of persisting and loading through the settings/database path.
+- Returning a sanitized PATCH response that drops provider keys while a subsequent GET response hydrates them back; settings write/read responses must stay shape-compatible for the UI.
 
 ---
 

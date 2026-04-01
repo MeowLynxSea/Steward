@@ -26,12 +26,14 @@ use uuid::Uuid;
 use crate::agent::SessionManager;
 use crate::agent::submission::Submission;
 use crate::channels::IncomingMessage;
+use crate::config::{EmbeddingsConfig, LlmConfig, hydrate_llm_keys_from_secrets};
 use crate::db::Database;
 use crate::file_archive_workflow::{
     create_archive_task, execute_archive_task, is_file_archive_task, validate_archive_params,
 };
 use crate::history::{ConversationMessage, ConversationSummary};
 use crate::runtime_events::SseManager;
+use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::settings::Settings;
 use crate::task_runtime::{TaskDetail, TaskMode, TaskRecord, TaskRuntime, TaskStatus};
 use crate::task_templates::{
@@ -52,6 +54,7 @@ pub struct ApiState {
     inject_tx: Option<tokio::sync::mpsc::Sender<IncomingMessage>>,
     session_manager: Option<Arc<SessionManager>>,
     workspace: Option<Arc<Workspace>>,
+    secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
 }
 
 impl ApiState {
@@ -74,7 +77,16 @@ impl ApiState {
             inject_tx,
             session_manager,
             workspace,
+            secrets_store: None,
         }
+    }
+
+    pub fn with_secrets_store(
+        mut self,
+        secrets_store: Arc<dyn SecretsStore + Send + Sync>,
+    ) -> Self {
+        self.secrets_store = Some(secrets_store);
+        self
     }
 }
 
@@ -450,6 +462,8 @@ async fn patch_settings(
 
     let mut settings = load_settings(&state).await?;
     apply_settings_patch(&mut settings, payload);
+    validate_resolved_settings(&settings)?;
+    persist_llm_provider_secrets(&state, &mut settings).await?;
 
     state
         .store
@@ -464,6 +478,10 @@ async fn patch_settings(
             thread_id: None,
         },
     );
+
+    if let Some(secrets) = state.secrets_store.as_ref() {
+        hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), &state.owner_id).await;
+    }
 
     Ok(Json(SettingsResponse::from(settings)))
 }
@@ -1155,7 +1173,11 @@ async fn load_settings(state: &ApiState) -> ApiResult<Settings> {
         .get_all_settings(&state.owner_id)
         .await
         .map_err(|e| ApiError::internal(format!("failed to load settings: {e}")))?;
-    Ok(Settings::from_db_map(&map))
+    let mut settings = Settings::from_db_map(&map);
+    if let Some(secrets) = state.secrets_store.as_ref() {
+        hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), &state.owner_id).await;
+    }
+    Ok(settings)
 }
 
 fn default_template_output_expectations() -> Value {
@@ -1191,6 +1213,14 @@ fn validate_settings_patch(payload: &PatchSettingsRequest) -> ApiResult<()> {
     Ok(())
 }
 
+fn validate_resolved_settings(settings: &Settings) -> ApiResult<()> {
+    LlmConfig::resolve(settings)
+        .map_err(|e| ApiError::unprocessable_entity(format!("invalid LLM settings: {e}")))?;
+    EmbeddingsConfig::resolve(settings)
+        .map_err(|e| ApiError::unprocessable_entity(format!("invalid embeddings settings: {e}")))?;
+    Ok(())
+}
+
 fn apply_settings_patch(settings: &mut Settings, payload: PatchSettingsRequest) {
     if let Some(value) = payload.llm_backend {
         settings.llm_backend = Some(value);
@@ -1210,6 +1240,53 @@ fn apply_settings_patch(settings: &mut Settings, payload: PatchSettingsRequest) 
     if let Some(value) = payload.llm_builtin_overrides {
         settings.llm_builtin_overrides = value;
     }
+}
+
+async fn persist_llm_provider_secrets(state: &ApiState, settings: &mut Settings) -> ApiResult<()> {
+    let Some(secrets) = state.secrets_store.as_ref() else {
+        return Ok(());
+    };
+
+    for (provider_id, override_value) in settings.llm_builtin_overrides.iter_mut() {
+        if let Some(api_key) = override_value.api_key.take()
+            && !api_key.trim().is_empty()
+        {
+            let secret_name = crate::settings::builtin_secret_name(provider_id);
+            secrets
+                .create(
+                    &state.owner_id,
+                    CreateSecretParams::new(secret_name, api_key).with_provider(provider_id),
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "failed to persist builtin provider secret for {provider_id}: {e}"
+                    ))
+                })?;
+        }
+    }
+
+    for provider in &mut settings.llm_custom_providers {
+        if let Some(api_key) = provider.api_key.take()
+            && !api_key.trim().is_empty()
+        {
+            let secret_name = crate::settings::custom_secret_name(&provider.id);
+            secrets
+                .create(
+                    &state.owner_id,
+                    CreateSecretParams::new(secret_name, api_key).with_provider(&provider.id),
+                )
+                .await
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "failed to persist custom provider secret for {}: {e}",
+                        provider.id
+                    ))
+                })?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn inject_approval(

@@ -30,7 +30,7 @@ pub struct CustomLlmProviderSettings {
     #[serde(default)]
     pub default_model: Option<String>,
     /// Optional API key stored inline.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     /// Whether this is a built-in provider (should always be false for custom).
     #[serde(default)]
@@ -805,44 +805,22 @@ impl Settings {
     /// Each key is a dotted path (e.g., "agent.name"), value is a JSONB value.
     /// Missing keys get their default value.
     pub fn from_db_map(map: &std::collections::HashMap<String, serde_json::Value>) -> Self {
-        // Start with defaults, then overlay each DB setting.
-        //
-        // The settings table stores both Settings struct fields and app-specific
-        // data (e.g. nearai.session_token). Skip keys that don't correspond to
-        // a known Settings path.
-        let mut settings = Self::default();
-
+        let mut root = serde_json::Map::new();
         for (key, value) in map {
             if key == "owner_id" {
                 continue;
             }
-
-            // Convert the JSONB value to a string for the existing set() method
-            let value_str = match value {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Null => continue, // null means default, skip
-                other => other.to_string(),
-            };
-
-            match settings.set(key, &value_str) {
-                Ok(()) => {}
-                // The settings table stores both Settings fields and app-specific
-                // data (e.g. nearai.session_token). Silently skip unknown paths.
-                Err(e) if e.starts_with("Path not found") => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to apply DB setting '{}' = '{}': {}",
-                        key,
-                        value_str,
-                        e
-                    );
-                }
+            if value.is_null() {
+                continue;
             }
+
+            insert_db_value(&mut root, key, value.clone());
         }
 
-        settings
+        serde_json::from_value(serde_json::Value::Object(root)).unwrap_or_else(|e| {
+            tracing::warn!("Failed to deserialize DB settings map: {}", e);
+            Self::default()
+        })
     }
 
     /// Flatten Settings into a key-value map suitable for DB storage.
@@ -1095,6 +1073,32 @@ fn collect_settings_json(
     }
 }
 
+fn insert_db_value(
+    root: &mut serde_json::Map<String, serde_json::Value>,
+    path: &str,
+    value: serde_json::Value,
+) {
+    let mut parts = path.split('.').peekable();
+    let mut current = root;
+
+    while let Some(part) = parts.next() {
+        if parts.peek().is_none() {
+            current.insert(part.to_string(), value);
+            return;
+        }
+
+        let entry = current
+            .entry(part.to_string())
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if !entry.is_object() {
+            *entry = serde_json::Value::Object(serde_json::Map::new());
+        }
+        current = entry
+            .as_object_mut()
+            .expect("object entry should stay object while inserting db value");
+    }
+}
+
 /// Recursively collect settings paths and values.
 fn collect_settings(
     value: &serde_json::Value,
@@ -1178,6 +1182,37 @@ mod tests {
         assert_eq!(
             restored.selected_model,
             Some("claude-3-5-sonnet-20241022".to_string())
+        );
+    }
+
+    #[test]
+    fn db_map_round_trip_preserves_builtin_llm_overrides() {
+        let settings = Settings {
+            llm_builtin_overrides: {
+                let mut overrides = std::collections::HashMap::new();
+                overrides.insert(
+                    "openai".to_string(),
+                    LlmBuiltinOverride {
+                        api_key: None,
+                        model: Some("gpt-4.1".to_string()),
+                        base_url: Some("https://api.openai.com/v1".to_string()),
+                    },
+                );
+                overrides
+            },
+            ..Default::default()
+        };
+
+        let map = settings.to_db_map();
+        let restored = Settings::from_db_map(&map);
+
+        assert_eq!(
+            restored.llm_builtin_overrides["openai"].model.as_deref(),
+            Some("gpt-4.1")
+        );
+        assert_eq!(
+            restored.llm_builtin_overrides["openai"].base_url.as_deref(),
+            Some("https://api.openai.com/v1")
         );
     }
 
