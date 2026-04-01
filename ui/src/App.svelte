@@ -24,6 +24,7 @@
         return "success";
       case "failed":
       case "rejected":
+      case "cancelled":
         return "danger";
       default:
         return "neutral";
@@ -40,6 +41,8 @@
         return "Failed";
       case "rejected":
         return "Rejected";
+      case "cancelled":
+        return "Cancelled";
       case "running":
         return "Running";
       default:
@@ -250,6 +253,22 @@
             <button onclick={() => void tasksStore.refresh()}>Refresh</button>
           </div>
 
+          {#if tasksStore.pendingApprovals.length > 0}
+            <section class="stack compact approval-center">
+              <div class="section-label">Approval Center</div>
+              {#each tasksStore.pendingApprovals as task}
+                <button
+                  class:active={task.id === tasksStore.activeId}
+                  class="session-item approval-item"
+                  onclick={() => void tasksStore.select(task.id)}
+                >
+                  <strong>{task.title}</strong>
+                  <span>{task.pending_approval?.risk ?? "approval"} · {task.mode}</span>
+                </button>
+              {/each}
+            </section>
+          {/if}
+
           <div class="stack compact">
             <div class="inline-form">
               <input bind:value={archiveSourcePath} placeholder="Source folder to archive" />
@@ -289,6 +308,22 @@
               {/each}
             </div>
           {/if}
+
+          {#if tasksStore.recentDecisions.length > 0}
+            <section class="stack compact decision-center">
+              <div class="section-label">Recent Decisions</div>
+              {#each tasksStore.recentDecisions.slice(0, 4) as task}
+                <button
+                  class:active={task.id === tasksStore.activeId}
+                  class="session-item decision-item"
+                  onclick={() => void tasksStore.select(task.id)}
+                >
+                  <strong>{task.title}</strong>
+                  <span>{task.status} · {task.mode}</span>
+                </button>
+              {/each}
+            </section>
+          {/if}
         </div>
 
         <div class="panel chat-panel">
@@ -304,6 +339,9 @@
               <button onclick={() => void tasksStore.toggleMode(tasksStore.detail!.task)}>
                 {tasksStore.detail.task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
               </button>
+              {#if tasksStore.detail.task.status !== "completed" && tasksStore.detail.task.status !== "failed" && tasksStore.detail.task.status !== "rejected" && tasksStore.detail.task.status !== "cancelled"}
+                <button onclick={() => void tasksStore.cancel(tasksStore.detail!.task)}>Cancel</button>
+              {/if}
               {#if tasksStore.detail.task.status === "waiting_approval" && tasksStore.detail.task.pending_approval}
                 <button onclick={() => void tasksStore.approve(tasksStore.detail!.task)}>Approve</button>
                 <button onclick={() => void tasksStore.reject(tasksStore.detail!.task, rejectReason)}>Reject</button>

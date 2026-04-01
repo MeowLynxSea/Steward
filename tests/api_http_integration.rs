@@ -497,6 +497,77 @@ async fn task_endpoints_patch_mode_and_list_runtime_state() {
 }
 
 #[tokio::test]
+async fn run_alias_endpoints_list_and_load_task_detail() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-runs-alias-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "prepare workspace report")
+        .with_thread(task_id.to_string());
+    runtime.ensure_task(&message, task_id).await;
+    runtime.mark_running(&message, task_id).await;
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let list_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v0/runs")
+                .body(Body::empty())
+                .expect("runs list request"),
+        )
+        .await
+        .expect("runs list response");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let list_body = list_response
+        .into_body()
+        .collect()
+        .await
+        .expect("runs list body")
+        .to_bytes();
+    let runs: serde_json::Value = serde_json::from_slice(&list_body).expect("runs list json");
+    assert_eq!(runs["tasks"][0]["id"], task_id.to_string());
+
+    let detail_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/runs/{task_id}"))
+                .body(Body::empty())
+                .expect("run detail request"),
+        )
+        .await
+        .expect("run detail response");
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_body = detail_response
+        .into_body()
+        .collect()
+        .await
+        .expect("run detail body")
+        .to_bytes();
+    let detail: serde_json::Value = serde_json::from_slice(&detail_body).expect("run detail json");
+    assert_eq!(detail["task"]["id"], task_id.to_string());
+    assert_eq!(detail["timeline"][1]["event"], "task.step.started");
+}
+
+#[tokio::test]
 async fn task_detail_persists_timeline_across_runtime_restart() {
     let db_path = std::env::temp_dir().join(format!(
         "ironcowork-api-task-detail-test-{}.db",
@@ -633,6 +704,96 @@ async fn task_detail_preserves_pending_approval_across_runtime_restart() {
         request_id.to_string()
     );
     assert_eq!(detail["timeline"][1]["event"], "task.waiting_approval");
+}
+
+#[tokio::test]
+async fn delete_task_cancels_run_and_persists_after_restart() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-task-cancel-restart-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+
+    let runtime = Arc::new(TaskRuntime::with_store(
+        "http-test-user".to_string(),
+        db.clone(),
+    ));
+    let task_id = uuid::Uuid::new_v4();
+    let message = IncomingMessage::new("test", "http-test-user", "organize these files")
+        .with_thread(task_id.to_string());
+    runtime.ensure_task(&message, task_id).await;
+    runtime.mark_running(&message, task_id).await;
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(runtime),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db(
+            "http-test-user",
+            db.clone(),
+        ))),
+    ));
+
+    let cancel_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v0/tasks/{task_id}"))
+                .body(Body::empty())
+                .expect("cancel request"),
+        )
+        .await
+        .expect("cancel response");
+    assert_eq!(cancel_response.status(), StatusCode::OK);
+    let cancel_body = cancel_response
+        .into_body()
+        .collect()
+        .await
+        .expect("cancel body")
+        .to_bytes();
+    let cancelled: serde_json::Value =
+        serde_json::from_slice(&cancel_body).expect("cancelled task json");
+    assert_eq!(cancelled["status"], "cancelled");
+
+    let restarted = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::with_store(
+            "http-test-user".to_string(),
+            db,
+        ))),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        None,
+    ));
+
+    let detail_response = restarted
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/tasks/{task_id}"))
+                .body(Body::empty())
+                .expect("task detail request"),
+        )
+        .await
+        .expect("task detail response");
+    assert_eq!(detail_response.status(), StatusCode::OK);
+    let detail_body = detail_response
+        .into_body()
+        .collect()
+        .await
+        .expect("task detail body")
+        .to_bytes();
+    let detail: serde_json::Value = serde_json::from_slice(&detail_body).expect("task detail json");
+    assert_eq!(detail["task"]["status"], "cancelled");
+    assert_eq!(detail["timeline"][2]["event"], "task.cancelled");
 }
 
 #[tokio::test]

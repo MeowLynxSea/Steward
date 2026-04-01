@@ -123,6 +123,12 @@ export const apiClient = {
     });
   },
 
+  cancelTask(id: string) {
+    return request<TaskRecord>(`/tasks/${id}`, {
+      method: "DELETE"
+    });
+  },
+
   patchTaskMode(id: string, mode: "ask" | "yolo") {
     return request<TaskRecord>(`/tasks/${id}/mode`, {
       method: "PATCH",

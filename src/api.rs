@@ -404,11 +404,17 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/sessions/{id}/messages", post(post_session_message))
         .route("/api/v0/sessions/{id}/stream", get(stream_session))
         .route("/api/v0/tasks", get(list_tasks).post(create_task))
-        .route("/api/v0/tasks/{id}", get(get_task))
+        .route("/api/v0/tasks/{id}", get(get_task).delete(delete_task))
         .route("/api/v0/tasks/{id}/stream", get(stream_task))
         .route("/api/v0/tasks/{id}/approve", post(approve_task))
         .route("/api/v0/tasks/{id}/reject", post(reject_task))
         .route("/api/v0/tasks/{id}/mode", patch(patch_task_mode))
+        .route("/api/v0/runs", get(list_tasks))
+        .route("/api/v0/runs/{id}", get(get_task).delete(delete_task))
+        .route("/api/v0/runs/{id}/stream", get(stream_task))
+        .route("/api/v0/runs/{id}/approve", post(approve_task))
+        .route("/api/v0/runs/{id}/reject", post(reject_task))
+        .route("/api/v0/runs/{id}/mode", patch(patch_task_mode))
         .route(
             "/api/v0/templates",
             get(list_templates).post(create_template),
@@ -1111,6 +1117,49 @@ async fn patch_task_mode(
     })?))
 }
 
+async fn delete_task(
+    State(state): State<ApiState>,
+    Path(task_id): Path<Uuid>,
+) -> ApiResult<Json<TaskRecord>> {
+    let runtime = state
+        .task_runtime
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("task runtime is not available"))?;
+    let task = runtime
+        .get_task(task_id)
+        .await
+        .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
+
+    if matches!(
+        task.status,
+        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Rejected | TaskStatus::Cancelled
+    ) {
+        return Err(ApiError::conflict(format!(
+            "task {task_id} is already terminal"
+        )));
+    }
+
+    tracing::info!(
+        task_id = %task_id,
+        correlation_id = %task.correlation_id,
+        status = task.status.as_str(),
+        "task cancelled through api"
+    );
+    runtime.mark_cancelled(task_id, "cancelled by user").await;
+
+    state.sse_manager.broadcast_for_user(
+        &state.owner_id,
+        ironclaw_common::AppEvent::Status {
+            message: "task.cancelled".to_string(),
+            thread_id: Some(task_id.to_string()),
+        },
+    );
+
+    Ok(Json(runtime.get_task(task_id).await.ok_or_else(|| {
+        ApiError::not_found(format!("task {task_id} not found"))
+    })?))
+}
+
 async fn index_workspace(
     State(state): State<ApiState>,
     Json(payload): Json<WorkspaceIndexRequest>,
@@ -1457,6 +1506,9 @@ async fn normalize_task_event(
         }
         ironclaw_common::AppEvent::Status { message, .. } if message == "task.rejected" => {
             ("task.rejected".to_string(), json!({ "task": task }))
+        }
+        ironclaw_common::AppEvent::Status { message, .. } if message == "task.cancelled" => {
+            ("task.cancelled".to_string(), json!({ "task": task }))
         }
         ironclaw_common::AppEvent::Status { message, .. }
             if message.starts_with("task.mode_changed:") =>

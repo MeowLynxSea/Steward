@@ -504,6 +504,28 @@ impl TaskRuntime {
         .await;
     }
 
+    pub async fn mark_cancelled(&self, task_id: Uuid, reason: impl Into<String>) {
+        let reason = reason.into();
+        self.apply_update(
+            task_id,
+            None,
+            "task.cancelled",
+            json!({ "reason": reason }),
+            |task| {
+                task.status = TaskStatus::Cancelled;
+                task.current_step = Some(TaskCurrentStep {
+                    id: format!("cancelled-{task_id}"),
+                    kind: "result".to_string(),
+                    title: "Cancelled".to_string(),
+                });
+                task.pending_approval = None;
+                task.last_error = Some(reason.clone());
+                task.result_metadata = Some(json!({ "cancel_reason": reason }));
+            },
+        )
+        .await;
+    }
+
     pub async fn mark_rejected(&self, task_id: Uuid, reason: impl Into<String>) {
         let reason = reason.into();
         self.apply_update(

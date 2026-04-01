@@ -14,6 +14,19 @@ class TasksState {
   #previousStates = new Map<string, string>();
   #detailStream: StreamHandle | null = null;
 
+  get pendingApprovals() {
+    return this.list.filter((task) => task.status === "waiting_approval");
+  }
+
+  get recentDecisions() {
+    return this.list.filter((task) =>
+      task.status === "completed" ||
+      task.status === "rejected" ||
+      task.status === "failed" ||
+      task.status === "cancelled"
+    );
+  }
+
   async fetch() {
     this.loading = true;
     this.error = null;
@@ -132,6 +145,19 @@ class TasksState {
       await this.#refreshActiveTask();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to reject task";
+    } finally {
+      this.status = "";
+    }
+  }
+
+  async cancel(task: TaskRecord) {
+    this.error = null;
+    try {
+      this.status = `Cancelling ${task.title}`;
+      await apiClient.cancelTask(task.id);
+      await this.#refreshActiveTask();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to cancel task";
     } finally {
       this.status = "";
     }

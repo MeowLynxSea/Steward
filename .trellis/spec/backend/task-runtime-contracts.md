@@ -37,6 +37,11 @@ PATCH  /api/v0/runs/:id/mode
 DELETE /api/v0/runs/:id
 ```
 
+Rules:
+
+- `/api/v0/runs*` is the public session/run contract
+- `/api/v0/tasks*` may remain as a compatibility alias during migration, but it must expose the same durable record and state transitions
+
 #### Core mode enum
 
 ```rust
@@ -248,6 +253,7 @@ Rules:
 | run missing | reject run mutation/read | `404` |
 | approve when no pending approval | reject state transition | `409` |
 | reject when run already completed | reject state transition | `409` |
+| cancel when run already terminal | reject state transition | `409` |
 
 ### 5. Good / Base / Bad
 

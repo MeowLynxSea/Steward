@@ -125,6 +125,28 @@ select {
   gap: 8px;
 }
 
+.section-label {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #5e6973;
+}
+
+.approval-center,
+.decision-center {
+  margin-bottom: 14px;
+}
+
+.approval-item {
+  border-color: rgba(168, 108, 0, 0.18);
+  background: rgba(255, 196, 86, 0.14);
+}
+
+.decision-item {
+  border-color: rgba(23, 34, 44, 0.08);
+  background: rgba(23, 34, 44, 0.03);
+}
+
 .session-item,
 .task-card,
 .workspace-entry,
