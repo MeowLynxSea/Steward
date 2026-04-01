@@ -142,6 +142,7 @@ impl TaskRoute {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub id: Uuid,
+    pub correlation_id: String,
     pub template_id: String,
     pub mode: TaskMode,
     pub status: TaskStatus,
@@ -161,6 +162,7 @@ impl TaskRecord {
         let now = Utc::now();
         Self {
             id: thread_id,
+            correlation_id: thread_id.to_string(),
             template_id: "legacy:session-thread".to_string(),
             mode: TaskMode::Ask,
             status: TaskStatus::Queued,
@@ -189,6 +191,7 @@ impl TaskRecord {
         let now = Utc::now();
         Self {
             id: task_id,
+            correlation_id: task_id.to_string(),
             template_id: template_id.into(),
             mode,
             status: TaskStatus::Queued,
@@ -211,6 +214,7 @@ impl TaskRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskTimelineEntry {
     pub sequence: u64,
+    pub correlation_id: String,
     pub event: String,
     pub status: TaskStatus,
     pub mode: TaskMode,
@@ -256,6 +260,7 @@ impl TaskRuntime {
                     let task = entry.get_mut();
                     task.title = crate::agent::truncate_for_preview(&message.content, 80);
                     task.route = TaskRoute::from_message(message, thread_id);
+                    task.correlation_id = thread_id.to_string();
                     task.updated_at = Utc::now();
                     task.clone()
                 }
@@ -270,6 +275,12 @@ impl TaskRuntime {
 
         self.persist_task(&task).await;
         if created {
+            tracing::info!(
+                task_id = %task.id,
+                correlation_id = %task.correlation_id,
+                owner_id = %task.route.owner_id,
+                "task created"
+            );
             self.append_timeline(
                 &task,
                 "task.created",
@@ -565,8 +576,18 @@ impl TaskRuntime {
         if let Some(message) = message {
             task.route = TaskRoute::from_message(message, task_id);
         }
+        task.correlation_id = task_id.to_string();
         mutate(&mut task);
         task.updated_at = Utc::now();
+
+        tracing::info!(
+            task_id = %task.id,
+            correlation_id = %task.correlation_id,
+            event,
+            status = task.status.as_str(),
+            mode = task.mode.as_str(),
+            "task state transition"
+        );
 
         self.tasks.write().await.insert(task_id, task.clone());
         self.persist_task(&task).await;
@@ -616,6 +637,13 @@ impl TaskRuntime {
             .await
         {
             tracing::warn!(task_id = %task.id, event, %error, "failed to persist task timeline");
+        } else {
+            tracing::debug!(
+                task_id = %task.id,
+                correlation_id = %task.correlation_id,
+                event,
+                "persisted task timeline event"
+            );
         }
     }
 
@@ -671,6 +699,7 @@ mod tests {
 
         let task = runtime.ensure_task(&message, task_id).await;
         assert_eq!(task.id, task_id);
+        assert_eq!(task.correlation_id, task_id.to_string());
         assert_eq!(task.mode, TaskMode::Ask);
         assert_eq!(task.status, TaskStatus::Queued);
     }
@@ -689,5 +718,44 @@ mod tests {
 
         assert_eq!(task.mode, TaskMode::Yolo);
         assert_eq!(runtime.mode_for_task(task_id).await, TaskMode::Yolo);
+    }
+
+    #[tokio::test]
+    async fn mark_waiting_approval_infers_network_risk_and_correlation_id() {
+        let runtime = TaskRuntime::new();
+        let task_id = Uuid::new_v4();
+        let message = IncomingMessage::new("test", "user-1", "fetch latest docs")
+            .with_thread(task_id.to_string());
+        runtime.ensure_task(&message, task_id).await;
+
+        let pending = PendingApproval {
+            request_id: Uuid::new_v4(),
+            tool_name: "http_fetch".to_string(),
+            parameters: json!({"url": "https://example.com"}),
+            display_parameters: json!({"url": "https://example.com"}),
+            description: "fetch a remote url".to_string(),
+            tool_call_id: "call_1".to_string(),
+            context_messages: Vec::new(),
+            deferred_tool_calls: Vec::new(),
+            user_timezone: Some("UTC".to_string()),
+            allow_always: false,
+        };
+
+        runtime
+            .mark_waiting_approval(&message, task_id, &pending)
+            .await;
+
+        let detail = runtime.get_task_detail(task_id).await.expect("task detail");
+        assert_eq!(detail.task.correlation_id, task_id.to_string());
+        assert_eq!(detail.task.status, TaskStatus::WaitingApproval);
+        assert_eq!(
+            detail
+                .task
+                .pending_approval
+                .as_ref()
+                .expect("pending approval")
+                .risk,
+            "network_request"
+        );
     }
 }

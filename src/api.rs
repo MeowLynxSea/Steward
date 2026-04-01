@@ -153,6 +153,7 @@ pub struct TemplateListResponse {
 struct StreamEnvelope {
     event: String,
     thread_id: String,
+    correlation_id: String,
     sequence: u64,
     timestamp: String,
     payload: Value,
@@ -890,7 +891,6 @@ async fn approve_task(
         .get_task(task_id)
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
-
     if task.status != TaskStatus::WaitingApproval {
         return Err(ApiError::conflict(format!(
             "task {task_id} is not waiting for approval"
@@ -907,6 +907,13 @@ async fn approve_task(
             "approval_id does not match current checkpoint",
         ));
     }
+    tracing::info!(
+        task_id = %task_id,
+        correlation_id = %task.correlation_id,
+        approval_id = %approval_id,
+        always = payload.always,
+        "task approval accepted through api"
+    );
 
     if is_file_archive_task(&task) {
         let task = execute_archive_task(runtime.clone(), task_id)
@@ -971,6 +978,13 @@ async fn reject_task(
     let reason = payload
         .reason
         .unwrap_or_else(|| "rejected by user".to_string());
+    tracing::info!(
+        task_id = %task_id,
+        correlation_id = %task.correlation_id,
+        approval_id = %pending.id,
+        reason,
+        "task approval rejected through api"
+    );
     runtime.mark_rejected(task_id, &reason).await;
 
     state.sse_manager.broadcast_for_user(
@@ -1014,6 +1028,13 @@ async fn patch_task_mode(
         .toggle_mode(task_id, target_mode)
         .await
         .ok_or_else(|| ApiError::not_found(format!("task {task_id} not found")))?;
+    tracing::info!(
+        task_id = %task_id,
+        correlation_id = %task.correlation_id,
+        mode = target_mode.as_str(),
+        status = task.status.as_str(),
+        "task mode updated through api"
+    );
 
     state.sse_manager.broadcast_for_user(
         &state.owner_id,
@@ -1354,6 +1375,7 @@ fn serialize_stream_envelope(
 ) -> Option<Result<Event, Infallible>> {
     let envelope = StreamEnvelope {
         event: normalized.0.clone(),
+        correlation_id: thread_id.clone(),
         thread_id,
         sequence,
         timestamp: chrono::Utc::now().to_rfc3339(),

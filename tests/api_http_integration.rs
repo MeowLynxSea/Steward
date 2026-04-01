@@ -750,6 +750,7 @@ async fn task_stream_emits_waiting_approval_then_mode_changed() {
     let waiting_bytes = waiting_frame.into_data().expect("waiting data");
     let waiting_text = std::str::from_utf8(&waiting_bytes).expect("utf8");
     assert!(waiting_text.contains("event: task.waiting_approval"));
+    assert!(waiting_text.contains(&format!("\"correlation_id\":\"{task_id}\"")));
     assert!(waiting_text.contains("\"status\":\"waiting_approval\""));
 
     let mode_frame = body
@@ -760,6 +761,7 @@ async fn task_stream_emits_waiting_approval_then_mode_changed() {
     let mode_bytes = mode_frame.into_data().expect("mode data");
     let mode_text = std::str::from_utf8(&mode_bytes).expect("utf8");
     assert!(mode_text.contains("event: task.mode_changed"));
+    assert!(mode_text.contains(&format!("\"correlation_id\":\"{task_id}\"")));
     assert!(mode_text.contains("\"mode\":\"yolo\""));
 }
 

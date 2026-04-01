@@ -177,6 +177,7 @@ impl TaskStore for LibSqlBackend {
         {
             timeline.push(TaskTimelineEntry {
                 sequence: row.get::<i64>(0).unwrap_or_default() as u64,
+                correlation_id: task_id.to_string(),
                 event: get_text(&row, 1),
                 status: TaskStatus::from_str(&get_text(&row, 2)),
                 mode: TaskMode::from_str(&get_text(&row, 3)),
@@ -196,6 +197,7 @@ fn row_to_task(row: &libsql::Row) -> Result<TaskRecord, DatabaseError> {
         id: get_text(row, 0)
             .parse()
             .map_err(|e| DatabaseError::Serialization(format!("invalid task id: {e}")))?,
+        correlation_id: get_text(row, 0),
         template_id: get_text(row, 1),
         mode: TaskMode::from_str(&get_text(row, 2)),
         status: TaskStatus::from_str(&get_text(row, 3)),

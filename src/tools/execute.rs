@@ -58,6 +58,9 @@ pub async fn execute_tool_with_safety(
     let safe_params = redact_params(&normalized_params, tool.sensitive_params());
     tracing::debug!(
         tool = %tool_name,
+        job_id = %job_ctx.job_id,
+        user_id = %job_ctx.user_id,
+        conversation_id = ?job_ctx.conversation_id,
         params = %safe_params,
         "Tool call started"
     );
@@ -75,6 +78,9 @@ pub async fn execute_tool_with_safety(
                 .unwrap_or(0);
             tracing::debug!(
                 tool = %tool_name,
+                job_id = %job_ctx.job_id,
+                user_id = %job_ctx.user_id,
+                conversation_id = ?job_ctx.conversation_id,
                 elapsed_ms = elapsed.as_millis() as u64,
                 result_size_bytes = result_size,
                 "Tool call succeeded"
@@ -83,6 +89,9 @@ pub async fn execute_tool_with_safety(
         Ok(Err(e)) => {
             tracing::debug!(
                 tool = %tool_name,
+                job_id = %job_ctx.job_id,
+                user_id = %job_ctx.user_id,
+                conversation_id = ?job_ctx.conversation_id,
                 elapsed_ms = elapsed.as_millis() as u64,
                 error = %e,
                 "Tool call failed"
@@ -91,6 +100,9 @@ pub async fn execute_tool_with_safety(
         Err(_) => {
             tracing::debug!(
                 tool = %tool_name,
+                job_id = %job_ctx.job_id,
+                user_id = %job_ctx.user_id,
+                conversation_id = ?job_ctx.conversation_id,
                 elapsed_ms = elapsed.as_millis() as u64,
                 timeout_secs = timeout.as_secs(),
                 "Tool call timed out"
