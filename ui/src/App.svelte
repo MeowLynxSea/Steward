@@ -159,6 +159,7 @@
       window.clearInterval(taskInterval);
       tasksStore.dispose();
       sessionsStore.disconnect();
+      workspaceStore.dispose();
       void unlistenDrops();
     };
   });
@@ -293,6 +294,13 @@
               <button onclick={() => void workspaceStore.index(workspaceStore.path)}>Index</button>
             </div>
 
+            {#if workspaceStore.indexJob}
+              <article class="status-banner neutral">
+                <strong>Index {workspaceStore.indexJob.phase}</strong>
+                <span>{workspaceStore.indexJob.processed_files} / {workspaceStore.indexJob.total_files || "?"} files · {workspaceStore.indexJob.indexed_files} indexed · {workspaceStore.indexJob.skipped_files} skipped</span>
+              </article>
+            {/if}
+
             <div class="inline-form">
               <input bind:value={workspaceStore.searchQuery} placeholder="Search notes, docs, and workspace memory" />
               <button onclick={() => void workspaceStore.search(workspaceStore.searchQuery)}>Search</button>
@@ -306,6 +314,9 @@
                       <strong>{result.document_path}</strong>
                       <button onclick={() => useWorkspaceResult(result)}>Use In Prompt</button>
                     </div>
+                    {#if result.source_path}
+                      <span>{result.source_path}</span>
+                    {/if}
                     <p>{result.content}</p>
                   </article>
                 {/each}
@@ -588,6 +599,13 @@
             <button onclick={() => void workspaceStore.index(workspaceStore.path)}>Index Folder</button>
           </div>
 
+          {#if workspaceStore.indexJob}
+            <article class="status-banner neutral">
+              <strong>Index {workspaceStore.indexJob.phase}</strong>
+              <span>{workspaceStore.indexJob.processed_files} / {workspaceStore.indexJob.total_files || "?"} files · {workspaceStore.indexJob.indexed_files} indexed · {workspaceStore.indexJob.skipped_files} skipped</span>
+            </article>
+          {/if}
+
           {#if workspaceStore.loading}
             <p class="muted">Loading workspace...</p>
           {:else if workspaceStore.entries.length === 0}
@@ -624,6 +642,9 @@
                 <article class="search-result">
                   <strong>{result.document_path}</strong>
                   <span>score {result.score.toFixed(3)}</span>
+                  {#if result.source_path}
+                    <span>{result.source_path}</span>
+                  {/if}
                   <p>{result.content}</p>
                 </article>
               {/each}

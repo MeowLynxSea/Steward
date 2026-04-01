@@ -15,6 +15,7 @@ use ironclaw::{
     workspace::Workspace,
 };
 use serde_json::json;
+use tokio::time::{Duration, sleep};
 use tower::util::ServiceExt;
 
 async fn test_router() -> axum::Router {
@@ -50,6 +51,39 @@ async fn test_router() -> axum::Router {
     .with_secrets_store(secrets);
 
     router(state)
+}
+
+async fn wait_for_workspace_index_job(
+    app: &axum::Router,
+    job_id: &str,
+) -> serde_json::Value {
+    for _ in 0..40 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v0/workspace/index/{job_id}"))
+                    .body(Body::empty())
+                    .expect("job detail request"),
+            )
+            .await
+            .expect("job detail response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("job detail body")
+            .to_bytes();
+        let job: serde_json::Value = serde_json::from_slice(&body).expect("job detail json");
+        let status = job["status"].as_str().unwrap_or_default();
+        if status == "completed" || status == "failed" {
+            return job;
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("workspace index job {job_id} did not complete in time");
 }
 
 #[tokio::test]
@@ -1505,6 +1539,18 @@ async fn workspace_endpoints_index_and_list_tree() {
     let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
     db.run_migrations().await.expect("migrations");
     let source_dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(source_dir.path().join("notes/sub")).expect("create nested source dir");
+    std::fs::write(
+        source_dir.path().join("notes/alpha.md"),
+        "alpha workspace note about retrieval",
+    )
+    .expect("write alpha");
+    std::fs::write(
+        source_dir.path().join("notes/sub/beta.txt"),
+        "beta details for recursive indexing",
+    )
+    .expect("write beta");
+    std::fs::write(source_dir.path().join("notes/image.bin"), [0, 159, 146, 150]).expect("write binary");
 
     let app = router(ApiState::new(
         "http-test-user".to_string(),
@@ -1531,11 +1577,29 @@ async fn workspace_endpoints_index_and_list_tree() {
         .await
         .expect("index response");
     assert_eq!(index_response.status(), StatusCode::OK);
+    let index_body = index_response
+        .into_body()
+        .collect()
+        .await
+        .expect("index body")
+        .to_bytes();
+    let index_json: serde_json::Value = serde_json::from_slice(&index_body).expect("index json");
+    let job_id = index_json["job"]["id"].as_str().expect("job id");
+    let import_root = index_json["job"]["import_root"]
+        .as_str()
+        .expect("import root")
+        .to_string();
+    let job = wait_for_workspace_index_job(&app, job_id).await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["total_files"], 3);
+    assert_eq!(job["indexed_files"], 2);
+    assert_eq!(job["skipped_files"], 1);
 
     let tree_response = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v0/workspace/tree")
+                .uri(format!("/api/v0/workspace/tree?path={}", import_root))
                 .body(Body::empty())
                 .expect("tree request"),
         )
@@ -1554,7 +1618,153 @@ async fn workspace_endpoints_index_and_list_tree() {
             .as_array()
             .expect("entries")
             .iter()
-            .any(|entry| !entry["path"].as_str().unwrap_or_default().is_empty())
+            .any(|entry| entry["path"] == format!("{import_root}/notes"))
+    );
+
+    let search_response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/workspace/search")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "query": "recursive indexing beta" }).to_string()))
+                .expect("search request"),
+        )
+        .await
+        .expect("search response");
+    assert_eq!(search_response.status(), StatusCode::OK);
+    let search_body = search_response
+        .into_body()
+        .collect()
+        .await
+        .expect("search body")
+        .to_bytes();
+    let search: serde_json::Value = serde_json::from_slice(&search_body).expect("search json");
+    assert!(
+        search["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .any(|result| {
+                result["document_path"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("notes/sub/beta.txt")
+                    && result["source_path"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains("notes/sub/beta.txt")
+            })
+    );
+}
+
+#[tokio::test]
+async fn workspace_reindex_replaces_stale_files_for_same_source_root() {
+    let db_path = std::env::temp_dir().join(format!(
+        "ironcowork-api-workspace-reindex-test-{}.db",
+        uuid::Uuid::new_v4()
+    ));
+    let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("db"));
+    db.run_migrations().await.expect("migrations");
+    let source_dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(source_dir.path().join("first.md"), "first version").expect("write first");
+
+    let app = router(ApiState::new(
+        "http-test-user".to_string(),
+        local_api_addr(8765),
+        db.clone(),
+        Arc::new(SseManager::new()),
+        Some(Arc::new(TaskRuntime::new())),
+        None,
+        Some(Arc::new(SessionManager::new())),
+        Some(Arc::new(Workspace::new_with_db("http-test-user", db))),
+    ));
+
+    let first_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/workspace/index")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "path": source_dir.path().display().to_string() }).to_string(),
+                ))
+                .expect("first index request"),
+        )
+        .await
+        .expect("first index response");
+    let first_body = first_response
+        .into_body()
+        .collect()
+        .await
+        .expect("first index body")
+        .to_bytes();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_body).expect("first json");
+    let first_job_id = first_json["job"]["id"].as_str().expect("first job id");
+    let import_root = first_json["job"]["import_root"]
+        .as_str()
+        .expect("import root")
+        .to_string();
+    let first_job = wait_for_workspace_index_job(&app, first_job_id).await;
+    assert_eq!(first_job["status"], "completed");
+
+    std::fs::remove_file(source_dir.path().join("first.md")).expect("remove first");
+    std::fs::write(source_dir.path().join("second.md"), "second version").expect("write second");
+
+    let second_response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v0/workspace/index")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "path": source_dir.path().display().to_string() }).to_string(),
+                ))
+                .expect("second index request"),
+        )
+        .await
+        .expect("second index response");
+    let second_body = second_response
+        .into_body()
+        .collect()
+        .await
+        .expect("second index body")
+        .to_bytes();
+    let second_json: serde_json::Value =
+        serde_json::from_slice(&second_body).expect("second index json");
+    let second_job_id = second_json["job"]["id"].as_str().expect("second job id");
+    let second_job = wait_for_workspace_index_job(&app, second_job_id).await;
+    assert_eq!(second_job["status"], "completed");
+    assert_eq!(second_job["indexed_files"], 1);
+
+    let tree_response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/v0/workspace/tree?path={}", import_root))
+                .body(Body::empty())
+                .expect("tree request"),
+        )
+        .await
+        .expect("tree response");
+    let tree_body = tree_response
+        .into_body()
+        .collect()
+        .await
+        .expect("tree body")
+        .to_bytes();
+    let tree: serde_json::Value = serde_json::from_slice(&tree_body).expect("tree json");
+    let entries = tree["entries"].as_array().expect("entries");
+    assert!(
+        entries
+            .iter()
+            .any(|entry| entry["path"] == format!("{import_root}/second.md"))
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry["path"] == format!("{import_root}/first.md"))
     );
 }
 

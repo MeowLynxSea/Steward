@@ -7,6 +7,7 @@ import type {
   TaskRecord,
   WorkbenchCapabilities,
   WorkspaceEntry,
+  WorkspaceIndexJob,
   WorkspaceSearchResult
 } from "./types";
 
@@ -132,10 +133,14 @@ export const apiClient = {
   // -- Workspace --
 
   indexWorkspace(path: string) {
-    return request<{ path: string; document_path: string }>("/workspace/index", {
+    return request<{ job: WorkspaceIndexJob }>("/workspace/index", {
       method: "POST",
       body: JSON.stringify({ path })
     });
+  },
+
+  getWorkspaceIndexJob(id: string) {
+    return request<WorkspaceIndexJob>(`/workspace/index/${id}`);
   },
 
   getWorkspaceTree(path = "") {

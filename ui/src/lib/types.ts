@@ -100,9 +100,27 @@ export interface WorkspaceEntry {
   content_preview: string | null;
 }
 
+export interface WorkspaceIndexJob {
+  id: string;
+  path: string;
+  import_root: string;
+  manifest_path: string;
+  status: string;
+  phase: string;
+  total_files: number;
+  processed_files: number;
+  indexed_files: number;
+  skipped_files: number;
+  error: string | null;
+  started_at: string;
+  updated_at: string;
+  completed_at: string | null;
+}
+
 export interface WorkspaceSearchResult {
   document_id: string;
   document_path: string;
+  source_path: string | null;
   chunk_id: string;
   content: string;
   score: number;

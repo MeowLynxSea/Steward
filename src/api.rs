@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -52,6 +53,7 @@ pub struct ApiState {
     secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
     tool_count: usize,
     dev_loaded_tool_names: Vec<String>,
+    workspace_index_jobs: Arc<tokio::sync::RwLock<HashMap<Uuid, WorkspaceIndexJobResponse>>>,
 }
 
 impl ApiState {
@@ -77,6 +79,7 @@ impl ApiState {
             secrets_store: None,
             tool_count: 0,
             dev_loaded_tool_names: Vec::new(),
+            workspace_index_jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -231,8 +234,25 @@ pub struct WorkspaceIndexRequest {
 
 #[derive(Debug, Serialize)]
 pub struct WorkspaceIndexResponse {
+    pub job: WorkspaceIndexJobResponse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceIndexJobResponse {
+    pub id: Uuid,
     pub path: String,
-    pub document_path: String,
+    pub import_root: String,
+    pub manifest_path: String,
+    pub status: String,
+    pub phase: String,
+    pub total_files: usize,
+    pub processed_files: usize,
+    pub indexed_files: usize,
+    pub skipped_files: usize,
+    pub error: Option<String>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -260,6 +280,7 @@ pub struct WorkspaceSearchResponse {
 pub struct WorkspaceSearchResultResponse {
     pub document_id: Uuid,
     pub document_path: String,
+    pub source_path: Option<String>,
     pub chunk_id: Uuid,
     pub content: String,
     pub score: f32,
@@ -406,6 +427,7 @@ pub fn router(state: ApiState) -> Router {
             get(get_workbench_capabilities),
         )
         .route("/api/v0/workspace/index", post(index_workspace))
+        .route("/api/v0/workspace/index/{id}", get(get_workspace_index_job))
         .route("/api/v0/workspace/tree", get(get_workspace_tree))
         .route("/api/v0/workspace/search", post(search_workspace))
         .fallback_service(ServeDir::new("static").append_index_html_on_directories(true))
@@ -986,31 +1008,80 @@ async fn index_workspace(
     if path.is_empty() {
         return Err(ApiError::bad_request("path cannot be empty"));
     }
-    let metadata = std::fs::metadata(path)
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|e| ApiError::bad_request(format!("path is not accessible: {e}")))?;
+    let metadata = std::fs::metadata(&canonical_path)
         .map_err(|e| ApiError::bad_request(format!("path is not accessible: {e}")))?;
     if !metadata.is_dir() {
         return Err(ApiError::bad_request("path must be a directory"));
     }
+    let canonical_path_string = canonical_path.display().to_string();
+    let slug = workspace_index_slug(&canonical_path);
+    let import_root = format!("imports/fs/{slug}");
+    let manifest_path = format!("indexes/fs/{slug}.json");
+    let now = chrono::Utc::now();
+    let job = WorkspaceIndexJobResponse {
+        id: Uuid::new_v4(),
+        path: canonical_path_string.clone(),
+        import_root: import_root.clone(),
+        manifest_path: manifest_path.clone(),
+        status: "queued".to_string(),
+        phase: "queued".to_string(),
+        total_files: 0,
+        processed_files: 0,
+        indexed_files: 0,
+        skipped_files: 0,
+        error: None,
+        started_at: now,
+        updated_at: now,
+        completed_at: None,
+    };
 
-    let document_path = format!("indexes/{}.md", Uuid::new_v4());
-    workspace
-        .write(
-            &document_path,
-            &format!(
-                "# Indexed Folder\n\n- source_path: {}\n- indexed_at: {}\n",
-                path,
-                chrono::Utc::now().to_rfc3339(),
-            ),
+    {
+        let mut jobs = state.workspace_index_jobs.write().await;
+        jobs.insert(job.id, job.clone());
+    }
+
+    let jobs = Arc::clone(&state.workspace_index_jobs);
+    let workspace = Arc::clone(workspace);
+    tokio::spawn(async move {
+        if let Err(error) = run_workspace_index_job(
+            Arc::clone(&jobs),
+            workspace,
+            job.id,
+            canonical_path,
+            canonical_path_string,
+            import_root,
+            manifest_path,
         )
         .await
-        .map_err(|e| {
-            ApiError::internal(format!("failed to record workspace index request: {e}"))
-        })?;
+        {
+            let _ = update_workspace_index_job(&jobs, job.id, |job| {
+                let now = chrono::Utc::now();
+                job.status = "failed".to_string();
+                job.phase = "failed".to_string();
+                job.error = Some(error.clone());
+                job.updated_at = now;
+                job.completed_at = Some(now);
+            })
+            .await;
+            tracing::error!(job_id = %job.id, %error, "workspace index job failed");
+        }
+    });
 
-    Ok(Json(WorkspaceIndexResponse {
-        path: path.to_string(),
-        document_path,
-    }))
+    Ok(Json(WorkspaceIndexResponse { job }))
+}
+
+async fn get_workspace_index_job(
+    State(state): State<ApiState>,
+    Path(job_id): Path<Uuid>,
+) -> ApiResult<Json<WorkspaceIndexJobResponse>> {
+    let jobs = state.workspace_index_jobs.read().await;
+    let job = jobs
+        .get(&job_id)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found(format!("workspace index job {job_id} not found")))?;
+    Ok(Json(job))
 }
 
 async fn get_workspace_tree(
@@ -1044,10 +1115,20 @@ async fn search_workspace(
         .search(payload.query.trim(), 20)
         .await
         .map_err(|e| ApiError::internal(format!("failed to search workspace: {e}")))?;
+    let filtered: Vec<SearchResult> = results
+        .into_iter()
+        .filter(|result| !result.document_path.starts_with("indexes/fs/"))
+        .collect();
+    let source_roots = load_index_source_roots(workspace.as_ref(), &filtered).await;
+
     Ok(Json(WorkspaceSearchResponse {
-        results: results
+        results: filtered
             .into_iter()
-            .map(WorkspaceSearchResultResponse::from)
+            .map(|result| {
+                let slug = workspace_index_slug_from_document_path(&result.document_path);
+                let source_root = slug.as_ref().and_then(|value| source_roots.get(value));
+                WorkspaceSearchResultResponse::from_with_source_root(result, source_root)
+            })
             .collect(),
     }))
 }
@@ -1245,6 +1326,28 @@ impl From<TaskDetail> for TaskDetailResponse {
     }
 }
 
+impl WorkspaceSearchResultResponse {
+    fn from_with_source_root(result: SearchResult, source_root: Option<&String>) -> Self {
+        let slug = workspace_index_slug_from_document_path(&result.document_path);
+        let source_path = match (slug.as_deref(), source_root) {
+            (Some(_), Some(root)) => source_relative_from_document_path(&result.document_path)
+                .map(|relative| FsPath::new(root).join(relative).display().to_string()),
+            _ => None,
+        };
+
+        Self {
+            document_id: result.document_id,
+            document_path: result.document_path,
+            source_path,
+            chunk_id: result.chunk_id,
+            content: result.content,
+            score: result.score,
+            fts_rank: result.fts_rank,
+            vector_rank: result.vector_rank,
+        }
+    }
+}
+
 fn normalize_session_event(
     thread_id: String,
     event: ironclaw_common::AppEvent,
@@ -1284,6 +1387,273 @@ fn normalize_session_event(
     };
 
     Some((thread_id, normalized))
+}
+
+async fn load_index_source_roots(
+    workspace: &Workspace,
+    results: &[SearchResult],
+) -> HashMap<String, String> {
+    let mut roots = HashMap::new();
+    for result in results {
+        let Some(slug) = workspace_index_slug_from_document_path(&result.document_path) else {
+            continue;
+        };
+        if roots.contains_key(&slug) {
+            continue;
+        }
+        let manifest_path = format!("indexes/fs/{slug}.json");
+        let Ok(doc) = workspace.read(&manifest_path).await else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&doc.content) else {
+            continue;
+        };
+        if let Some(source_root) = value.get("source_root").and_then(Value::as_str) {
+            roots.insert(slug, source_root.to_string());
+        }
+    }
+    roots
+}
+
+fn workspace_index_slug(path: &FsPath) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let source = path.display().to_string();
+    let base = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("workspace");
+    let sanitized: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    source.hash(&mut hasher);
+    format!("{}-{:08x}", sanitized.trim_matches('-'), (hasher.finish() & 0xffff_ffff) as u32)
+}
+
+fn workspace_index_slug_from_document_path(document_path: &str) -> Option<String> {
+    let rest = document_path.strip_prefix("imports/fs/")?;
+    rest.split('/').next().map(str::to_string)
+}
+
+fn source_relative_from_document_path(document_path: &str) -> Option<PathBuf> {
+    let rest = document_path.strip_prefix("imports/fs/")?;
+    let (_, relative) = rest.split_once('/')?;
+    Some(PathBuf::from(relative))
+}
+
+#[derive(Debug, Clone)]
+struct IndexCandidate {
+    absolute_path: PathBuf,
+    relative_path: String,
+}
+
+async fn run_workspace_index_job(
+    jobs: Arc<tokio::sync::RwLock<HashMap<Uuid, WorkspaceIndexJobResponse>>>,
+    workspace: Arc<Workspace>,
+    job_id: Uuid,
+    source_root: PathBuf,
+    source_root_string: String,
+    import_root: String,
+    manifest_path: String,
+) -> Result<(), String> {
+    update_workspace_index_job(&jobs, job_id, |job| {
+        job.status = "running".to_string();
+        job.phase = "scanning".to_string();
+        job.updated_at = chrono::Utc::now();
+    })
+    .await?;
+
+    let source_root_for_scan = source_root.clone();
+    let candidates = tokio::task::spawn_blocking(move || discover_index_candidates(&source_root_for_scan))
+        .await
+        .map_err(|e| format!("failed to join index discovery task: {e}"))??;
+
+    update_workspace_index_job(&jobs, job_id, |job| {
+        job.phase = "indexing".to_string();
+        job.total_files = candidates.len();
+        job.updated_at = chrono::Utc::now();
+    })
+    .await?;
+
+    let stale_paths: Vec<String> = workspace
+        .list_all()
+        .await
+        .map_err(|e| format!("failed to list workspace paths before reindex: {e}"))?
+        .into_iter()
+        .filter(|path| path.starts_with(&import_root))
+        .collect();
+
+    for stale_path in stale_paths {
+        workspace
+            .delete(&stale_path)
+            .await
+            .map_err(|e| format!("failed to delete stale indexed path {stale_path}: {e}"))?;
+    }
+
+    for candidate in &candidates {
+        match ingest_index_candidate(&workspace, &import_root, candidate).await {
+            Ok(true) => {
+                update_workspace_index_job(&jobs, job_id, |job| {
+                    job.processed_files += 1;
+                    job.indexed_files += 1;
+                    job.updated_at = chrono::Utc::now();
+                })
+                .await?;
+            }
+            Ok(false) => {
+                update_workspace_index_job(&jobs, job_id, |job| {
+                    job.processed_files += 1;
+                    job.skipped_files += 1;
+                    job.updated_at = chrono::Utc::now();
+                })
+                .await?;
+            }
+            Err(error) => {
+                update_workspace_index_job(&jobs, job_id, |job| {
+                    job.processed_files += 1;
+                    job.skipped_files += 1;
+                    job.updated_at = chrono::Utc::now();
+                })
+                .await?;
+                tracing::warn!(
+                    job_id = %job_id,
+                    path = %candidate.absolute_path.display(),
+                    %error,
+                    "skipped workspace file during indexing"
+                );
+            }
+        }
+    }
+
+    update_workspace_index_job(&jobs, job_id, |job| {
+        job.phase = "finalizing".to_string();
+        job.updated_at = chrono::Utc::now();
+    })
+    .await?;
+
+    let snapshot = {
+        let jobs_guard = jobs.read().await;
+        jobs_guard
+            .get(&job_id)
+            .cloned()
+            .ok_or_else(|| format!("workspace index job {job_id} disappeared"))?
+    };
+    let manifest = serde_json::to_string_pretty(&json!({
+        "job_id": job_id,
+        "source_root": source_root_string,
+        "import_root": import_root,
+        "manifest_path": manifest_path,
+        "indexed_at": chrono::Utc::now().to_rfc3339(),
+        "total_files": snapshot.total_files,
+        "indexed_files": snapshot.indexed_files,
+        "skipped_files": snapshot.skipped_files
+    }))
+    .map_err(|e| format!("failed to serialize workspace index manifest: {e}"))?;
+    workspace
+        .write(&manifest_path, &manifest)
+        .await
+        .map_err(|e| format!("failed to write workspace index manifest: {e}"))?;
+
+    update_workspace_index_job(&jobs, job_id, |job| {
+        let now = chrono::Utc::now();
+        job.status = "completed".to_string();
+        job.phase = "completed".to_string();
+        job.updated_at = now;
+        job.completed_at = Some(now);
+    })
+    .await?;
+
+    Ok(())
+}
+
+async fn update_workspace_index_job(
+    jobs: &Arc<tokio::sync::RwLock<HashMap<Uuid, WorkspaceIndexJobResponse>>>,
+    job_id: Uuid,
+    apply: impl FnOnce(&mut WorkspaceIndexJobResponse),
+) -> Result<(), String> {
+    let mut jobs_guard = jobs.write().await;
+    let Some(job) = jobs_guard.get_mut(&job_id) else {
+        return Err(format!("workspace index job {job_id} not found"));
+    };
+    apply(job);
+    Ok(())
+}
+
+fn discover_index_candidates(source_root: &FsPath) -> Result<Vec<IndexCandidate>, String> {
+    fn walk(root: &FsPath, current: &FsPath, out: &mut Vec<IndexCandidate>) -> Result<(), String> {
+        let entries = std::fs::read_dir(current)
+            .map_err(|e| format!("failed to read directory {}: {e}", current.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("failed to read directory entry: {e}"))?;
+            let path = entry.path();
+            let metadata = entry
+                .metadata()
+                .map_err(|e| format!("failed to read metadata for {}: {e}", path.display()))?;
+            if metadata.is_dir() {
+                walk(root, &path, out)?;
+                continue;
+            }
+            if !metadata.is_file() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|e| format!("failed to relativize {}: {e}", path.display()))?
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(IndexCandidate {
+                absolute_path: path,
+                relative_path: relative,
+            });
+        }
+        Ok(())
+    }
+
+    let mut candidates = Vec::new();
+    walk(source_root, source_root, &mut candidates)?;
+    candidates.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+    Ok(candidates)
+}
+
+async fn ingest_index_candidate(
+    workspace: &Workspace,
+    import_root: &str,
+    candidate: &IndexCandidate,
+) -> Result<bool, String> {
+    let bytes = tokio::fs::read(&candidate.absolute_path)
+        .await
+        .map_err(|e| format!("failed to read file: {e}"))?;
+    let Some(content) = extract_indexable_text(&bytes) else {
+        return Ok(false);
+    };
+    let workspace_path = format!("{import_root}/{}", candidate.relative_path);
+    workspace
+        .write(&workspace_path, &content)
+        .await
+        .map_err(|e| format!("failed to write indexed document: {e}"))?;
+    Ok(true)
+}
+
+fn extract_indexable_text(bytes: &[u8]) -> Option<String> {
+    const MAX_INDEX_BYTES: usize = 512 * 1024;
+
+    if bytes.is_empty() {
+        return None;
+    }
+    if bytes.len() > MAX_INDEX_BYTES {
+        return None;
+    }
+    if bytes.contains(&0) {
+        return None;
+    }
+    let text = String::from_utf8(bytes.to_vec()).ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(text)
 }
 
 async fn normalize_task_event(
@@ -1383,20 +1753,6 @@ impl From<ConversationMessage> for SessionMessageResponse {
             role: value.role,
             content: value.content,
             created_at: value.created_at,
-        }
-    }
-}
-
-impl From<SearchResult> for WorkspaceSearchResultResponse {
-    fn from(value: SearchResult) -> Self {
-        Self {
-            document_id: value.document_id,
-            document_path: value.document_path,
-            chunk_id: value.chunk_id,
-            content: value.content,
-            score: value.score,
-            fts_rank: value.fts_rank,
-            vector_rank: value.vector_rank,
         }
     }
 }

@@ -32,6 +32,10 @@ Workbench-specific read surface:
 
 ```http
 GET /api/v0/workbench/capabilities
+POST /api/v0/workspace/index
+GET  /api/v0/workspace/index/:id
+GET  /api/v0/workspace/tree
+POST /api/v0/workspace/search
 ```
 
 #### Storage
@@ -56,8 +60,16 @@ async fn open_libsql(path: &std::path::Path) -> anyhow::Result<libsql::Database>
 
 - `session` is the primary user-facing object.
 - `run` or `task` is a persisted execution artifact created by a session or future background routine.
+- workspace ingestion must populate the same persisted workspace document/chunk corpus used by retrieval; it must not be a disconnected sidecar index.
 - The product must not require predefined workflows as a first-class concept.
 - Future routines or presets may exist, but they must layer on top of the session/run model.
+
+#### Workspace indexing contract
+
+- `POST /api/v0/workspace/index` starts a background ingestion job for a selected filesystem directory.
+- `GET /api/v0/workspace/index/:id` returns authoritative progress and final counts for that ingestion job.
+- re-indexing the same source root must replace stale imported documents under the corresponding workspace import prefix.
+- workspace search results should expose enough metadata for supervision, including workspace document path and source file path when the result originates from filesystem ingestion.
 
 #### Forbidden boundary crossings
 
