@@ -114,7 +114,7 @@ pub struct OpenAiCodexConfig {
     pub api_base_url: String,
     /// OAuth client ID (default: OpenAI's public Codex client).
     pub client_id: String,
-    /// Path to session file (default: ~/.ironclaw/openai_codex_session.json).
+    /// Path to session file (default: ~/.ironcowork/openai_codex_session.json).
     pub session_path: PathBuf,
     /// Seconds before expiry to proactively refresh (default: 300).
     pub token_refresh_margin_secs: u64,

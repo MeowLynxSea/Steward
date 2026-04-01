@@ -4,7 +4,7 @@
 //! - **Device Code** (primary): Works on headless servers, no browser needed.
 //! - **Browser PKCE** (fallback): Standard OAuth for local machines.
 //!
-//! Tokens are persisted to `~/.ironclaw/openai_codex_session.json` and
+//! Tokens are persisted to `~/.ironcowork/openai_codex_session.json` and
 //! auto-refreshed before expiry.
 
 use chrono::{DateTime, Utc};

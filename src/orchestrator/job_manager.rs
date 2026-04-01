@@ -71,7 +71,7 @@ pub struct ContainerJobConfig {
 impl Default for ContainerJobConfig {
     fn default() -> Self {
         Self {
-            image: "ironclaw-worker:latest".to_string(),
+            image: "ironcowork-worker:latest".to_string(),
             memory_limit_mb: 2048,
             cpu_shares: 1024,
             orchestrator_port: 50051,
@@ -132,7 +132,7 @@ pub struct CompletionResult {
     pub message: Option<String>,
 }
 
-/// Validate that a project directory is under `~/.ironclaw/projects/`.
+/// Validate that a project directory is under `~/.ironcowork/projects/`.
 ///
 /// Returns the canonicalized path if valid. Creates the base directory if
 /// it doesn't exist (so the prefix check always runs).
@@ -323,7 +323,7 @@ impl ContainerJobManager {
             format!("IRONCLAW_ORCHESTRATOR_URL={}", orchestrator_url),
         ];
 
-        // Build volume mounts (validate project_dir stays within ~/.ironclaw/projects/)
+        // Build volume mounts (validate project_dir stays within ~/.ironcowork/projects/)
         let mut binds = Vec::new();
         if let Some(ref dir) = project_dir {
             let canonical = validate_bind_mount_path(dir, job_id)?;
@@ -420,7 +420,7 @@ impl ContainerJobManager {
         };
 
         let container_name = match mode {
-            JobMode::Worker => format!("ironclaw-worker-{}", job_id),
+            JobMode::Worker => format!("ironcowork-worker-{}", job_id),
             JobMode::ClaudeCode => format!("ironclaw-claude-{}", job_id),
         };
         let options = CreateContainerOptions {

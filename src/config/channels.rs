@@ -14,7 +14,7 @@ pub struct ChannelsConfig {
     pub http: Option<HttpConfig>,
     pub gateway: Option<GatewayConfig>,
     pub signal: Option<SignalConfig>,
-    /// Directory containing WASM channel modules (default: ~/.ironclaw/channels/).
+    /// Directory containing WASM channel modules (default: ~/.ironcowork/channels/).
     pub wasm_channels_dir: std::path::PathBuf,
     /// Whether WASM channels are enabled.
     pub wasm_channels_enabled: bool,
@@ -348,7 +348,7 @@ impl ChannelsConfig {
 /// other modules that need to construct a gateway URL.
 pub const DEFAULT_GATEWAY_PORT: u16 = 3000;
 
-/// Get the default channels directory (~/.ironclaw/channels/).
+/// Get the default channels directory (~/.ironcowork/channels/).
 fn default_channels_dir() -> PathBuf {
     ironclaw_base_dir().join("channels")
 }

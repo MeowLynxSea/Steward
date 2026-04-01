@@ -1,4 +1,4 @@
-//! CLI subcommand definitions for `ironclaw api`.
+//! CLI subcommand definitions for `ironcowork api`.
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;

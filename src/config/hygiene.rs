@@ -43,7 +43,7 @@ impl HygieneConfig {
     }
 
     /// Convert to the workspace hygiene config, resolving the state directory
-    /// to the standard `~/.ironclaw` location.
+    /// to the standard `~/.ironcowork` location.
     pub fn to_workspace_config(&self) -> crate::workspace::hygiene::HygieneConfig {
         crate::workspace::hygiene::HygieneConfig {
             enabled: self.enabled,

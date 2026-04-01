@@ -21,7 +21,7 @@ use crate::secrets::SecretError;
 
 /// Service name for keychain entries.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-const SERVICE_NAME: &str = "ironclaw";
+const SERVICE_NAME: &str = "ironcowork";
 
 /// Account name for the master key.
 #[cfg(any(target_os = "macos", target_os = "linux"))]

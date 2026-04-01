@@ -55,10 +55,10 @@ use std::sync::Arc;
 use clap::{ColorChoice, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "ironclaw")]
+#[command(name = "ironcowork")]
 #[command(about = "Local-first AI automation runtime")]
 #[command(
-    long_about = "IronCowork Phase 0 runtime commands. Use 'ironclaw <subcommand> --help' for details.\nExamples:\n  ironclaw run\n  ironclaw config list"
+    long_about = "IronCowork local runtime commands.\nExamples:\n  ironcowork run\n  ironcowork config list"
 )]
 #[command(version)]
 #[command(color = ColorChoice::Auto)] // Enable auto-color for help (if the terminal supports it)
@@ -84,7 +84,7 @@ pub enum Command {
     /// Run the agent (default if no subcommand given)
     #[command(
         about = "Run the AI agent",
-        long_about = "Starts the IronCowork transitional runtime.\nExample: ironclaw run"
+        long_about = "Starts the IronCowork local runtime.\nExample: ironcowork run"
     )]
     Run,
 
@@ -92,7 +92,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Run local HTTP API",
-        long_about = "Starts the Phase 1 local-only Axum API.\nExample: ironclaw api serve --port 8765"
+        long_about = "Starts the IronCowork local Axum API for browser and desktop clients.\nExample: ironcowork api serve --port 8765"
     )]
     Api(ApiCommand),
 
@@ -100,7 +100,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage app configs",
-        long_about = "Commands for listing, getting, and setting configurations.\nExample: ironclaw config list"
+        long_about = "Commands for listing, getting, and setting configurations.\nExample: ironcowork config list"
     )]
     Config(ConfigCommand),
 
@@ -108,7 +108,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage WASM tools",
-        long_about = "Install, list, or remove WASM-based tools.\nExample: ironclaw tool install mytool.wasm"
+        long_about = "Install, list, or remove WASM-based tools.\nExample: ironcowork tool install mytool.wasm"
     )]
     Tool(ToolCommand),
 
@@ -116,7 +116,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Browse/install extensions",
-        long_about = "Interact with extension registry.\nExample: ironclaw registry list"
+        long_about = "Interact with extension registry.\nExample: ironcowork registry list"
     )]
     Registry(RegistryCommand),
 
@@ -125,7 +125,7 @@ pub enum Command {
         subcommand,
         alias = "cron",
         about = "Manage routines",
-        long_about = "List, create, edit, enable/disable, delete, and view history of routines.\nExamples:\n  ironclaw routines list\n  ironclaw routines create --name daily-digest --schedule '0 0 9 * * *' --prompt 'Summarize today'"
+        long_about = "List, create, edit, enable/disable, delete, and view history of routines.\nExamples:\n  ironcowork routines list\n  ironcowork routines create --name daily-digest --schedule '0 0 9 * * *' --prompt 'Summarize today'"
     )]
     Routines(RoutinesCommand),
 
@@ -133,7 +133,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage MCP servers",
-        long_about = "Add, auth, list, or test MCP servers.\nExample: ironclaw mcp add notion https://mcp.notion.com"
+        long_about = "Add, auth, list, or test MCP servers.\nExample: ironcowork mcp add notion https://mcp.notion.com"
     )]
     Mcp(Box<McpCommand>),
 
@@ -141,7 +141,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage workspace memory",
-        long_about = "Search, read, or write to memory.\nExample: ironclaw memory search 'query'"
+        long_about = "Search, read, or write to memory.\nExample: ironcowork memory search 'query'"
     )]
     Memory(MemoryCommand),
 
@@ -149,7 +149,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage DM pairing",
-        long_about = "Approve or manage pairing requests.\nExamples:\n  ironclaw pairing list telegram\n  ironclaw pairing approve telegram ABC12345"
+        long_about = "Approve or manage pairing requests.\nExamples:\n  ironcowork pairing list telegram\n  ironcowork pairing approve telegram ABC12345"
     )]
     Pairing(PairingCommand),
 
@@ -157,7 +157,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage OS service",
-        long_about = "Install, start, or stop service.\nExample: ironclaw service install"
+        long_about = "Install, start, or stop service.\nExample: ironcowork service install"
     )]
     Service(ServiceCommand),
 
@@ -165,7 +165,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage skills",
-        long_about = "List, search, and inspect SKILL.md-based skills.\nExamples:\n  ironclaw skills list\n  ironclaw skills search 'writing'\n  ironclaw skills info my-skill"
+        long_about = "List, search, and inspect SKILL.md-based skills.\nExamples:\n  ironcowork skills list\n  ironcowork skills search 'writing'\n  ironcowork skills info my-skill"
     )]
     Skills(SkillsCommand),
 
@@ -173,7 +173,7 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage lifecycle hooks",
-        long_about = "List and inspect lifecycle hooks (bundled, plugin, workspace).\nExamples:\n  ironclaw hooks list\n  ironclaw hooks list --verbose\n  ironclaw hooks list --json"
+        long_about = "List and inspect lifecycle hooks (bundled, plugin, workspace).\nExamples:\n  ironcowork hooks list\n  ironcowork hooks list --verbose\n  ironcowork hooks list --json"
     )]
     Hooks(HooksCommand),
 
@@ -181,28 +181,28 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Manage LLM providers and models",
-        long_about = "List providers, view current configuration, and set active provider/model.\nExamples:\n  ironclaw models list\n  ironclaw models list openai --verbose\n  ironclaw models status\n  ironclaw models set gpt-4o\n  ironclaw models set-provider anthropic --model claude-sonnet-4-6-20250514"
+        long_about = "List providers, view current configuration, and set active provider/model.\nExamples:\n  ironcowork models list\n  ironcowork models list openai --verbose\n  ironcowork models status\n  ironcowork models set gpt-4o\n  ironcowork models set-provider anthropic --model claude-sonnet-4-6-20250514"
     )]
     Models(ModelsCommand),
 
     /// Probe external dependencies and validate configuration
     #[command(
         about = "Run diagnostics",
-        long_about = "Checks dependencies and config validity.\nExample: ironclaw doctor"
+        long_about = "Checks dependencies and config validity.\nExample: ironcowork doctor"
     )]
     Doctor,
 
     /// Show system health and diagnostics
     #[command(
         about = "Show system status",
-        long_about = "Displays health and diagnostics info.\nExample: ironclaw status"
+        long_about = "Displays health and diagnostics info.\nExample: ironcowork status"
     )]
     Status,
 
     /// Generate shell completion scripts
     #[command(
         about = "Generate completions",
-        long_about = "Generates shell completion scripts.\nExample: ironclaw completion --shell bash > ironclaw.bash"
+        long_about = "Generates shell completion scripts.\nExample: ironcowork completion --shell bash > ironcowork.bash"
     )]
     Completion(Completion),
 
@@ -211,14 +211,14 @@ pub enum Command {
     #[command(
         subcommand,
         about = "Import from other AI systems",
-        long_about = "Migrate data from other AI assistants like OpenClaw.\nExample: ironclaw import openclaw"
+        long_about = "Migrate data from other AI assistants like OpenClaw.\nExample: ironcowork import openclaw"
     )]
     Import(ImportCommand),
 
     /// Authenticate with a provider (re-login)
     #[command(
         about = "Authenticate with a provider",
-        long_about = "Re-authenticate with an LLM provider.\nExample: ironclaw login --openai-codex"
+        long_about = "Re-authenticate with an LLM provider.\nExample: ironcowork login --openai-codex"
     )]
     Login {
         /// Authenticate with OpenAI Codex (ChatGPT subscription)

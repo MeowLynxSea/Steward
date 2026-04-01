@@ -306,7 +306,7 @@ impl Tool for MessageTool {
         let attachment_count = attachments.len();
 
         // Validate all attachment paths against the sandbox and verify existence.
-        // Allow paths under the base_dir (~/.ironclaw) or /tmp/.
+        // Allow paths under the base_dir (~/.ironcowork) or /tmp/.
         for path in &attachments {
             let tmp_dir = PathBuf::from("/tmp");
             let resolved =
@@ -583,7 +583,7 @@ mod tests {
         tool.set_context(Some("signal".to_string()), Some("+1234567890".to_string()))
             .await;
 
-        // Execute with attachments outside both sandbox (~/.ironclaw) and /tmp/
+        // Execute with attachments outside both sandbox (~/.ironcowork) and /tmp/
         let ctx = crate::context::JobContext::new("test", "test description");
         let result = tool
             .execute(

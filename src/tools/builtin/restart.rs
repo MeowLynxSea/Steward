@@ -73,7 +73,7 @@ impl Tool for RestartTool {
 
         // Check if running inside a Docker container via IRONCLAW_IN_DOCKER env var.
         // The Docker entrypoint sets this to "true". For local development, it's unset or "false".
-        // The entrypoint restart loop only works inside a Docker container (ironclaw-worker).
+        // The entrypoint restart loop only works inside a Docker container (ironcowork-worker).
         let in_docker = std::env::var("IRONCLAW_IN_DOCKER")
             .map(|v| v.to_lowercase() == "true")
             .unwrap_or(false);
@@ -101,8 +101,8 @@ impl Tool for RestartTool {
         // Spawn a background task so the response is flushed before exit.
         // We use std::process::exit(0) to trigger a Docker container restart:
         //
-        // - The ironclaw-worker Docker container runs an entrypoint loop that monitors
-        //   the exit code of the `ironclaw run` process:
+        // - The ironcowork-worker Docker container runs an entrypoint loop that monitors
+        //   the exit code of the `ironcowork run` process:
         //   * Exit code 0 = clean restart: reset failure counter, wait IRONCLAW_RESTART_DELAY
         //     (default 5s), then restart the process
         //   * Exit code ≠ 0 = failure: increment counter, exit after IRONCLAW_MAX_FAILURES

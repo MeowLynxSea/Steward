@@ -64,7 +64,7 @@ pub fn builtin_client_id_override_env(secret_name: &str) -> Option<&'static str>
 
 /// Suppress the baked-in desktop OAuth client secret when a hosted proxy is configured.
 ///
-/// In hosted deployments, IronClaw may resolve the platform Google client ID from
+/// In hosted deployments, IronCowork may resolve the platform Google client ID from
 /// environment variables while still falling back to the baked-in desktop secret.
 /// That client_id/client_secret mismatch breaks Google token exchange and refresh.
 ///
@@ -634,7 +634,7 @@ fn hosted_state_checksum(payload_bytes: &[u8]) -> String {
 /// Build a versioned hosted OAuth state envelope.
 ///
 /// The encoded value is opaque to providers and can be decoded by both
-/// IronClaw and the external auth proxy for routing and callback lookup.
+/// IronCowork and the external auth proxy for routing and callback lookup.
 pub fn encode_hosted_oauth_state(flow_id: &str, instance_name: Option<&str>) -> String {
     let payload = HostedOAuthStatePayload {
         flow_id: flow_id.to_string(),
@@ -1440,7 +1440,7 @@ mod tests {
         let html = landing_html("Google", true);
         assert!(html.contains("Google Connected"));
         assert!(html.contains("charset"));
-        assert!(html.contains("IronClaw"));
+        assert!(html.contains("IronCowork"));
         assert!(html.contains("#22c55e")); // green accent
         assert!(!html.contains("Failed"));
     }
@@ -1457,7 +1457,7 @@ mod tests {
         let html = landing_html("Notion", false);
         assert!(html.contains("Authorization Failed"));
         assert!(html.contains("charset"));
-        assert!(html.contains("IronClaw"));
+        assert!(html.contains("IronCowork"));
         assert!(html.contains("#ef4444")); // red accent
         assert!(!html.contains("Connected"));
     }

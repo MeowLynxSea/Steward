@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="ironclaw.png?v=2" alt="IronCowork" width="200"/>
+  <img src="ironcowork.png?v=2" alt="IronCowork" width="200"/>
 </p>
 
 <h1 align="center">IronCowork</h1>
@@ -23,6 +23,7 @@
   <a href="#positioning">Positioning</a> •
   <a href="#principles">Principles</a> •
   <a href="#current-direction">Current Direction</a> •
+  <a href="#developer-bootstrap">Developer Bootstrap</a> •
   <a href="#configuration">Configuration</a> •
   <a href="#security">Security</a> •
   <a href="#architecture">Architecture</a>
@@ -50,11 +51,11 @@ Saved routines may exist later as accelerators, but they are not the product cen
 - **Local-first**: libSQL is the embedded storage baseline; no PostgreSQL, no required cloud account, no mandatory external services.
 - **Autonomous but reviewable**: the agent should act independently, but Ask/Yolo and event logs keep risky actions inspectable.
 - **Workspace-centric**: local files, indexed notes, reports, and external MCP tools are agent context, not an afterthought.
-- **Fork, not skin**: this project keeps useful Rust runtime/safety pieces from IronClaw but deliberately diverges from its old channel-first product model.
+- **Fork, not skin**: this project keeps useful Rust runtime/safety pieces from IronCowork but deliberately diverges from its old channel-first product model.
 
 ## Current Direction
 
-This repository is mid-migration from IronClaw to IronCowork.
+This repository is mid-migration from IronCowork to IronCowork.
 
 What stays:
 
@@ -102,6 +103,23 @@ What replaces the old center of gravity:
 - **MCP protocol support** for external capability providers
 - **Plugin/tool architecture** for new local capabilities
 - **Multiple LLM backends** through direct provider adapters or OpenAI-compatible APIs
+
+## Developer Bootstrap
+
+Fresh-clone developer setup is documented in [docs/developer-bootstrap.md](docs/developer-bootstrap.md).
+
+Shortest path:
+
+```bash
+./scripts/dev-setup.sh
+```
+
+That bootstrap prepares Rust + WASM prerequisites, installs UI dependencies, builds the static frontend bundle, and installs git hooks.
+
+Daily development flows:
+
+- Browser mode: `cargo run -- api serve --port 8765`, then open `http://127.0.0.1:8765`
+- Desktop mode: run `npm --prefix ui run build -- --watch`, `cargo run -- api serve --port 8765`, then `cargo tauri dev --config src-tauri/tauri.conf.json`
 
 ## Configuration
 

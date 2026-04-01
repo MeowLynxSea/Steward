@@ -73,7 +73,7 @@ pub struct HygieneConfig {
     pub conversation_retention_days: u32,
     /// Minimum hours between hygiene passes.
     pub cadence_hours: u32,
-    /// Directory to store state file (default: `~/.ironclaw`).
+    /// Directory to store state file (default: `~/.ironcowork`).
     pub state_dir: PathBuf,
 }
 

@@ -95,7 +95,7 @@ pub struct DatabaseConfig {
     pub ssl_mode: SslMode,
 
     // -- libSQL fields --
-    /// Path to local libSQL database file (default: ~/.ironclaw/ironclaw.db).
+    /// Path to local libSQL database file (default: ~/.ironcowork/ironcowork.db).
     pub libsql_path: Option<PathBuf>,
     /// Turso cloud URL for remote sync (optional).
     pub libsql_url: Option<String>,
@@ -222,9 +222,9 @@ impl SslMode {
     }
 }
 
-/// Default libSQL database path (~/.ironclaw/ironclaw.db).
+/// Default libSQL database path (~/.ironcowork/ironcowork.db).
 pub fn default_libsql_path() -> PathBuf {
-    ironclaw_base_dir().join("ironclaw.db")
+    ironclaw_base_dir().join("ironcowork.db")
 }
 
 #[cfg(test)]

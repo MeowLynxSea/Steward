@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-30  
 **Status:** Product-direction baseline  
-**Goal:** Turn the IronClaw fork into IronCowork, a desktop-first autonomous agent for local knowledge work.
+**Goal:** Turn the IronCowork fork into IronCowork, a desktop-first autonomous agent for local knowledge work.
 
 ---
 

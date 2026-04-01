@@ -4,10 +4,11 @@ expression: help
 ---
 Local-first AI automation runtime
 
-Usage: ironclaw [OPTIONS] [COMMAND]
+Usage: ironcowork [OPTIONS] [COMMAND]
 
 Commands:
   run         Run the AI agent
+  api         Run local HTTP API
   config      Manage app configs
   tool        Manage WASM tools
   registry    Browse/install extensions

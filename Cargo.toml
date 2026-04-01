@@ -15,15 +15,19 @@ exclude = [
 ]
 
 [package]
-name = "ironclaw"
+name = "ironcowork"
 version = "0.22.0"
 edition = "2024"
 rust-version = "1.92"
-description = "Secure personal AI assistant that protects your data and expands its capabilities on the fly"
-authors = ["NEAR AI <support@near.ai>"]
+description = "Desktop-first autonomous AI coworker for local knowledge work"
+authors = ["IronCowork contributors"]
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/nearai/ironclaw"
-repository = "https://github.com/nearai/ironclaw"
+homepage = "https://github.com/MeowLynxSea/IronCowork"
+repository = "https://github.com/MeowLynxSea/IronCowork"
+
+[lib]
+name = "ironclaw"
+path = "src/lib.rs"
 
 [package.metadata.wix]
 upgrade-guid = "D0156E61-BA37-451E-8AB9-1A2ECCCFA48F"

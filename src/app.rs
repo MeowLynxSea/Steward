@@ -589,7 +589,7 @@ impl AppBuilder {
                                         {
                                             tracing::warn!(
                                                 "MCP server '{}' requires authentication. \
-                                                 Run: ironclaw mcp auth {}",
+                                                 Run: ironcowork mcp auth {}",
                                                 server_name,
                                                 server_name
                                             );

@@ -1,4 +1,4 @@
-//! IronClaw - Main entry point.
+//! IronCowork - Main entry point.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -208,7 +208,7 @@ async fn async_main() -> anyhow::Result<()> {
                 );
             } else {
                 println!("Specify a provider to authenticate with:");
-                println!("  ironclaw login --openai-codex   (ChatGPT subscription)");
+                println!("  ironcowork login --openai-codex   (ChatGPT subscription)");
             }
             return Ok(());
         }
@@ -222,7 +222,7 @@ async fn async_main() -> anyhow::Result<()> {
         Ok(lock) => Some(lock),
         Err(ironclaw::bootstrap::PidLockError::AlreadyRunning { pid }) => {
             anyhow::bail!(
-                "Another IronClaw instance is already running (PID {}). \
+                "Another IronCowork instance is already running (PID {}). \
                  If this is incorrect, remove the stale PID file: {}",
                 pid,
                 ironclaw::bootstrap::pid_lock_path().display()
@@ -263,7 +263,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Initialize tracing for the local runtime after env/config loading.
     init_app_tracing();
 
-    tracing::debug!("Starting IronClaw...");
+    tracing::debug!("Starting IronCowork...");
     tracing::debug!("Loaded configuration for agent: {}", config.agent.name);
     tracing::debug!("LLM backend: {}", config.llm.backend);
 

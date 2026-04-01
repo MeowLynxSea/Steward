@@ -200,7 +200,7 @@ impl CreateJobTool {
 
             if !exists {
                 return Err(ToolError::ExecutionFailed(format!(
-                    "secret '{}' not found. Store it first via 'ironclaw tool auth' or the web UI.",
+                    "secret '{}' not found. Store it first via 'ironcowork tool auth' or the web UI.",
                     secret_name
                 )));
             }
@@ -697,11 +697,11 @@ fn projects_base() -> PathBuf {
 
 /// Resolve the project directory, creating it if it doesn't exist.
 ///
-/// Auto-creates `~/.ironclaw/projects/{project_id}/` so every sandbox job has a
+/// Auto-creates `~/.ironcowork/projects/{project_id}/` so every sandbox job has a
 /// persistent bind mount that survives container teardown.
 ///
 /// When an explicit path is provided (e.g. job restarts reusing the old dir),
-/// it is validated to fall within `~/.ironclaw/projects/` after canonicalization.
+/// it is validated to fall within `~/.ironcowork/projects/` after canonicalization.
 fn resolve_project_dir(
     explicit: Option<PathBuf>,
     project_id: Uuid,
@@ -841,12 +841,12 @@ impl Tool for CreateJobTool {
                     "project_dir": {
                         "type": "string",
                         "description": "Path to an existing project directory to mount into the container. \
-                                        Must be under ~/.ironclaw/projects/. If omitted, a fresh directory is created."
+                                        Must be under ~/.ironcowork/projects/. If omitted, a fresh directory is created."
                     },
                     "credentials": {
                         "type": "object",
                         "description": "Map of secret names to env var names. Each secret must exist in the \
-                                        secrets store (via 'ironclaw tool auth' or web UI). Example: \
+                                        secrets store (via 'ironcowork tool auth' or web UI). Example: \
                                         {\"github_token\": \"GITHUB_TOKEN\", \"npm_token\": \"NPM_TOKEN\"}",
                         "additionalProperties": { "type": "string" }
                     }

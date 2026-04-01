@@ -3282,7 +3282,27 @@ dependencies = [
 ]
 
 [[package]]
-name = "ironclaw"
+name = "ironclaw_common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "ironclaw_safety"
+version = "0.2.0"
+dependencies = [
+ "aho-corasick",
+ "regex",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "ironcowork"
 version = "0.22.0"
 dependencies = [
  "aes-gcm",
@@ -3371,26 +3391,6 @@ dependencies = [
  "wasmtime-wasi",
  "zbus",
  "zip",
-]
-
-[[package]]
-name = "ironclaw_common"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "ironclaw_safety"
-version = "0.2.0"
-dependencies = [
- "aho-corasick",
- "regex",
- "serde_json",
- "thiserror 2.0.18",
- "tracing",
- "url",
 ]
 
 [[package]]

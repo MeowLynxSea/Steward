@@ -1,53 +1,51 @@
 #!/usr/bin/env bash
-# Developer setup script for IronClaw.
+# Developer setup script for IronCowork.
 #
 # Gets a fresh checkout ready for development without requiring
 # Docker, PostgreSQL, or any external services.
 #
 # Usage:
 #   ./scripts/dev-setup.sh
-#
-# After running, you can:
-#   cargo check           # default features (postgres + libsql)
-#   cargo test            # default test suite (uses libsql temp DB)
-#   cargo test --all-features         # full test suite
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "=== IronClaw Developer Setup ==="
+echo "=== IronCowork Developer Setup ==="
 echo ""
 
-# 1. Check rustup
 if ! command -v rustup &>/dev/null; then
     echo "ERROR: rustup not found. Install from https://rustup.rs"
     exit 1
 fi
-echo "[1/6] rustup found: $(rustup --version 2>/dev/null | head -1)"
+echo "[1/8] rustup found: $(rustup --version 2>/dev/null | head -1)"
 
-# 2. Add WASM target (required by build.rs for channel compilation)
-echo "[2/6] Adding wasm32-wasip2 target..."
+if ! command -v npm &>/dev/null; then
+    echo "ERROR: npm not found. Install Node.js 20+ before running this bootstrap."
+    exit 1
+fi
+echo "[2/8] npm found: $(npm --version 2>/dev/null)"
+
+echo "[3/8] Adding wasm32-wasip2 target..."
 rustup target add wasm32-wasip2
 
-# 3. Install wasm-tools (required by build.rs for WASM component model)
-echo "[3/6] Installing wasm-tools..."
+echo "[4/8] Installing wasm-tools..."
 if command -v wasm-tools &>/dev/null; then
     echo "  wasm-tools already installed: $(wasm-tools --version)"
 else
     cargo install wasm-tools --locked
 fi
 
-# 4. Verify the project compiles
-echo "[4/6] Running cargo check..."
+echo "[5/8] Installing UI dependencies..."
+npm --prefix ui ci
+
+echo "[6/8] Building UI bundle..."
+npm --prefix ui run build
+
+echo "[7/8] Running cargo check..."
 cargo check
 
-# 5. Run tests using libsql temp DB (no Docker/external DB needed)
-echo "[5/6] Running tests (no external DB required)..."
-cargo test
-
-# 6. Install git hooks
-echo "[6/6] Installing git hooks..."
+echo "[8/8] Installing git hooks..."
 HOOKS_DIR=$(git rev-parse --git-path hooks 2>/dev/null) || true
 if [ -n "$HOOKS_DIR" ]; then
     mkdir -p "$HOOKS_DIR"
@@ -64,10 +62,26 @@ else
 fi
 
 echo ""
-echo "=== Setup complete ==="
+echo "Recommended verification:"
+echo "  cargo test --test api_http_integration"
+echo "  npm --prefix ui run build"
 echo ""
 echo "Quick start:"
-echo "  cargo run                            # Run with default features"
-echo "  cargo test                           # Test suite (libsql temp DB)"
-echo "  cargo test --all-features            # Full test suite"
-echo "  cargo clippy --all-features          # Lint all code"
+echo "  Browser mode:"
+echo "    cargo run -- api serve --port 8765"
+echo "    open http://127.0.0.1:8765"
+echo ""
+echo "  Desktop mode:"
+echo "    npm --prefix ui run build -- --watch"
+echo "    cargo run -- api serve --port 8765"
+echo "    cargo tauri dev --config src-tauri/tauri.conf.json"
+echo ""
+echo "  Optional Tauri CLI install:"
+echo "    cargo install tauri-cli"
+echo ""
+echo "Smoke tests:"
+echo "  cargo test                           # default test suite"
+echo "  cargo test --all-features            # full test suite"
+echo "  cargo clippy --all-features          # lint all code"
+echo ""
+echo "=== Setup complete ==="

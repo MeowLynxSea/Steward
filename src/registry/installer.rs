@@ -202,9 +202,9 @@ pub struct InstallOutcome {
 pub struct RegistryInstaller {
     /// Root of the repo (parent of `registry/`), used to resolve `source.dir`.
     repo_root: PathBuf,
-    /// Directory for installed tools (`~/.ironclaw/tools/`).
+    /// Directory for installed tools (`~/.ironcowork/tools/`).
     tools_dir: PathBuf,
-    /// Directory for installed channels (`~/.ironclaw/channels/`).
+    /// Directory for installed channels (`~/.ironcowork/channels/`).
     channels_dir: PathBuf,
 }
 
@@ -264,7 +264,7 @@ impl RegistryInstaller {
             .map_err(RegistryError::Io)?;
 
         // Use manifest.name for installed filenames so discovery, auth, and
-        // CLI commands (`ironclaw tool auth <name>`) all agree on the stem.
+        // CLI commands (`ironcowork tool auth <name>`) all agree on the stem.
         let target_wasm = target_dir.join(format!("{}.wasm", manifest.name));
 
         // Check if already exists
@@ -593,7 +593,7 @@ impl RegistryInstaller {
         let mut auth_hints = Vec::new();
         if let Some(shared) = &bundle.shared_auth {
             auth_hints.push(format!(
-                "Bundle uses shared auth '{}'. Run `ironclaw tool auth <any-member>` to authenticate all members.",
+                "Bundle uses shared auth '{}'. Run `ironcowork tool auth <any-member>` to authenticate all members.",
                 shared
             ));
         }
@@ -851,8 +851,8 @@ mod tests {
     fn test_installer_creation() {
         let installer = RegistryInstaller::new(
             PathBuf::from("/repo"),
-            PathBuf::from("/home/.ironclaw/tools"),
-            PathBuf::from("/home/.ironclaw/channels"),
+            PathBuf::from("/home/.ironcowork/tools"),
+            PathBuf::from("/home/.ironcowork/channels"),
         );
         assert_eq!(installer.repo_root, PathBuf::from("/repo"));
     }

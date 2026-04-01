@@ -40,7 +40,7 @@ pub async fn run_status_command() -> anyhow::Result<()> {
     let settings = load_settings();
 
     println!();
-    println!("  {}IronClaw Status{}", fmt::bold(), fmt::reset());
+    println!("  {}IronCowork Status{}", fmt::bold(), fmt::reset());
     println!();
 
     // Version

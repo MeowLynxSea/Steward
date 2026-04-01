@@ -670,7 +670,7 @@ fn merge_extra_headers(
     merged
 }
 
-/// Get the default session file path (~/.ironclaw/session.json).
+/// Get the default session file path (~/.ironcowork/session.json).
 pub fn default_session_path() -> PathBuf {
     ironclaw_base_dir().join("session.json")
 }

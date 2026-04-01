@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!   ┌─────────────────────┐    ┌──────────────────────────┐
-//!   │  providers.json     │    │ ~/.ironclaw/providers.json│
+//!   │  providers.json     │    │ ~/.ironcowork/providers.json│
 //!   │  (built-in, embed)  │    │ (user overrides/extras)  │
 //!   └────────┬────────────┘    └────────────┬─────────────┘
 //!            │                              │
@@ -192,7 +192,7 @@ pub struct ProviderDefinition {
 /// Registry of known LLM providers.
 ///
 /// Built from compiled-in `providers.json` plus optional user overrides
-/// from `~/.ironclaw/providers.json`.
+/// from `~/.ironcowork/providers.json`.
 pub struct ProviderRegistry {
     providers: Vec<ProviderDefinition>,
     /// Lowercase id/alias → index into `providers`.
@@ -216,7 +216,7 @@ impl ProviderRegistry {
 
     /// Load the default registry: built-in providers + user overrides.
     ///
-    /// User providers from `~/.ironclaw/providers.json` are appended,
+    /// User providers from `~/.ironcowork/providers.json` are appended,
     /// with later entries overriding earlier ones by ID/alias.
     pub fn load() -> Self {
         let builtins: Vec<ProviderDefinition> =

@@ -2,15 +2,16 @@
 source: src/cli/mod.rs
 expression: help
 ---
-IronCowork Phase 0 runtime commands. Use 'ironclaw <subcommand> --help' for details.
+IronCowork local runtime commands.
 Examples:
-  ironclaw run
-  ironclaw config list
+  ironcowork run
+  ironcowork config list
 
-Usage: ironclaw [OPTIONS] [COMMAND]
+Usage: ironcowork [OPTIONS] [COMMAND]
 
 Commands:
   run         Run the AI agent
+  api         Run local HTTP API
   config      Manage app configs
   tool        Manage WASM tools
   registry    Browse/install extensions

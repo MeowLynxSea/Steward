@@ -984,7 +984,7 @@ impl Agent {
         let model_owned = model.to_string();
         let backend = self.deps.llm_backend.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            // 3a. Update the backend-specific model env var in ~/.ironclaw/.env
+            // 3a. Update the backend-specific model env var in ~/.ironcowork/.env
             //     only if the var already exists (don't inject new vars).
             let registry = crate::llm::ProviderRegistry::load();
             let model_env = registry.model_env_var(&backend);
