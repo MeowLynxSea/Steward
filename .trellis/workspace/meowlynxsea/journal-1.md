@@ -138,3 +138,35 @@ Completed the observability and safety regression pass for task-runtime correlat
 ### Next Steps
 
 - Continue with the next active Trellis task in sequence.
+
+
+## Session 4: 03-31 Phase 3 settings and recovery
+
+**Date**: 2026-04-01
+**Task**: 03-31 Phase 3 settings and recovery
+
+### Summary
+
+Validated provider settings at the API boundary, moved LLM API keys into the secrets store, hydrated settings responses after restart, and added restart/settings regressions.
+
+### Main Changes
+
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9bbb269` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
