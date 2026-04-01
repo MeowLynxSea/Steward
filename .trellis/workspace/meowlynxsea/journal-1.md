@@ -102,3 +102,39 @@ Normalized task/SSE contracts, aligned the Svelte UI, added a repeatable Phase 1
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Phase 3 observability and safety regression pass
+
+**Date**: 2026-04-01
+**Task**: Phase 3 observability and safety regression pass
+
+### Summary
+
+Completed the observability and safety regression pass for task-runtime correlation, API audit logging, and SSE traceability.
+
+### Main Changes
+
+- Added `correlation_id` to task records, timeline entries, and SSE stream envelopes so REST, SSE, and persisted runtime state share the same stable identifier.
+- Added structured runtime/API logs for task creation, state transitions, approvals, mode changes, and tool execution context.
+- Added regression coverage for network-risk approval inference and SSE correlation payloads.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `59a6c91` | `fix(runtime): add task correlation logging` |
+
+### Testing
+
+- [OK] `cargo test --lib mark_waiting_approval_infers_network_risk_and_correlation_id -- --nocapture`
+- [OK] `cargo test --test api_http_integration task_stream_emits_waiting_approval_then_mode_changed -- --exact --nocapture`
+- [OK] `cargo test --test api_http_integration approve_task_returns_409_on_wrong_approval_id -- --exact --nocapture`
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Continue with the next active Trellis task in sequence.
