@@ -129,24 +129,12 @@ pub async fn run_status_command() -> anyhow::Result<()> {
     };
     println!("{}", fmt::kv_line("WASM Tools", &tools_value, 12));
 
-    // WASM channels
-    let channels_dir = settings
-        .channels
-        .wasm_channels_dir
-        .clone()
-        .unwrap_or_else(default_channels_dir);
     let mut channel_info = vec!["cli".to_string()];
     if settings.channels.http_enabled {
         channel_info.push(format!(
             "http:{}",
             settings.channels.http_port.unwrap_or(3000)
         ));
-    }
-    if channels_dir.exists() {
-        let wasm_count = count_wasm_files(&channels_dir);
-        if wasm_count > 0 {
-            channel_info.push(format!("{} wasm", wasm_count));
-        }
     }
     println!("{}", fmt::kv_line("Channels", &channel_info.join(", "), 12));
 
@@ -200,10 +188,6 @@ fn count_wasm_files(dir: &std::path::Path) -> usize {
 
 fn default_tools_dir() -> PathBuf {
     ironclaw_base_dir().join("tools")
-}
-
-fn default_channels_dir() -> PathBuf {
-    ironclaw_base_dir().join("channels")
 }
 
 #[cfg(test)]

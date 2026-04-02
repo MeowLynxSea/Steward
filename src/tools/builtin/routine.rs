@@ -465,7 +465,7 @@ fn routine_create_schema(include_compatibility_aliases: bool) -> Value {
             },
             "delivery": {
                 "type": "object",
-                "description": "Optional delivery defaults for notifications and message tool calls inside routine jobs.",
+                "description": "Optional delivery defaults for notifications inside routine jobs.",
                 "properties": delivery_properties()
             },
             "advanced": {

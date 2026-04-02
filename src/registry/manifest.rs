@@ -1,13 +1,13 @@
 //! Serde structs for extension registry manifests.
 //!
-//! Each manifest describes a single extension (tool or channel) with its source
+//! Each manifest describes a single extension (tool or MCP server) with its source
 //! location, build artifacts, authentication requirements, and tags.
 
 use serde::{Deserialize, Serialize};
 
 use crate::extensions::{AuthHint, ExtensionKind, ExtensionSource, RegistryEntry};
 
-/// A single extension manifest loaded from `registry/{tools,channels,mcp-servers}/<name>.json`.
+/// A single extension manifest loaded from `registry/{tools,mcp-servers}/<name>.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtensionManifest {
     /// Unique identifier (matches crate name stem, e.g. "slack").
@@ -16,7 +16,7 @@ pub struct ExtensionManifest {
     /// Human-readable name (e.g. "Slack").
     pub display_name: String,
 
-    /// Whether this is a tool, channel, or MCP server.
+    /// Whether this is a tool or MCP server.
     pub kind: ManifestKind,
 
     /// Semver version from Cargo.toml. Optional for MCP server manifests.
@@ -61,7 +61,6 @@ pub struct ExtensionManifest {
 #[serde(rename_all = "snake_case")]
 pub enum ManifestKind {
     Tool,
-    Channel,
     McpServer,
 }
 
@@ -69,7 +68,6 @@ impl From<ManifestKind> for ExtensionKind {
     fn from(kind: ManifestKind) -> Self {
         match kind {
             ManifestKind::Tool => ExtensionKind::WasmTool,
-            ManifestKind::Channel => ExtensionKind::WasmChannel,
             ManifestKind::McpServer => ExtensionKind::McpServer,
         }
     }
@@ -79,7 +77,6 @@ impl std::fmt::Display for ManifestKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ManifestKind::Tool => write!(f, "tool"),
-            ManifestKind::Channel => write!(f, "channel"),
             ManifestKind::McpServer => write!(f, "mcp_server"),
         }
     }
@@ -150,7 +147,7 @@ pub struct BundleDefinition {
     #[serde(default)]
     pub description: Option<String>,
 
-    /// Extension references as "tools/<name>" or "channels/<name>".
+    /// Extension references as "tools/<name>" or "mcp-servers/<name>".
     pub extensions: Vec<String>,
 
     /// Shared auth secret across bundle members (if any).
@@ -216,7 +213,7 @@ impl ExtensionManifest {
         })
     }
 
-    /// Build a [`RegistryEntry`] for a WASM tool or channel manifest.
+    /// Build a [`RegistryEntry`] for a WASM tool manifest.
     fn to_wasm_registry_entry(&self) -> RegistryEntry {
         let source_spec = self.source.as_ref();
 
@@ -327,31 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_channel_manifest() {
-        let json = r#"{
-            "name": "telegram",
-            "display_name": "Telegram",
-            "kind": "channel",
-            "version": "0.1.0",
-            "description": "Telegram Bot API channel",
-            "source": {
-                "dir": "channels-src/telegram",
-                "capabilities": "telegram.capabilities.json",
-                "crate_name": "telegram-channel"
-            },
-            "tags": ["messaging"]
-        }"#;
-
-        let manifest: ExtensionManifest = serde_json::from_str(json).expect("parse manifest");
-        assert_eq!(manifest.kind, ManifestKind::Channel);
-        assert!(manifest.auth_summary.is_none());
-        assert!(manifest.artifacts.is_empty());
-
-        let entry = manifest.to_registry_entry().unwrap();
-        assert_eq!(entry.kind, ExtensionKind::WasmChannel);
-    }
-
-    #[test]
     fn test_parse_bundles() {
         let json = r#"{
             "bundles": {
@@ -380,7 +352,6 @@ mod tests {
     #[test]
     fn test_manifest_kind_display() {
         assert_eq!(ManifestKind::Tool.to_string(), "tool");
-        assert_eq!(ManifestKind::Channel.to_string(), "channel");
         assert_eq!(ManifestKind::McpServer.to_string(), "mcp_server");
     }
 

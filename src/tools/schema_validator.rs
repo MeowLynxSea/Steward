@@ -578,7 +578,7 @@ mod tests {
                         "url": { "type": "string", "description": "Explicit URL" },
                         "kind": {
                             "type": "string",
-                            "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
+                            "enum": ["mcp_server", "wasm_tool"],
                             "description": "Extension type"
                         }
                     },
@@ -612,7 +612,7 @@ mod tests {
                     "properties": {
                         "kind": {
                             "type": "string",
-                            "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
+                            "enum": ["mcp_server", "wasm_tool"],
                             "description": "Filter by extension type"
                         },
                         "include_available": {

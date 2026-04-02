@@ -132,10 +132,8 @@ impl Agent {
 
         // Pass channel-specific conversation context to the LLM.
         // This helps the agent know who/group it's talking to.
-        if let Some(channel) = self.channels.get_channel(&message.channel).await {
-            for (key, value) in channel.conversation_context(&message.metadata) {
-                reasoning = reasoning.with_conversation_data(&key, &value);
-            }
+        for (key, value) in self.channels.conversation_context(&message.metadata) {
+            reasoning = reasoning.with_conversation_data(&key, &value);
         }
 
         if let Some(prompt) = system_prompt {
@@ -330,8 +328,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
         let _ = self
             .agent
-            .channels
-            .send_status(
+            .send_channel_status(
                 &self.message.channel,
                 StatusUpdate::Thinking(format!("Thinking (step {iteration})...")),
                 &self.message.metadata,
@@ -509,8 +506,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         // Execute tools and add results to context
         let _ = self
             .agent
-            .channels
-            .send_status(
+            .send_channel_status(
                 &self.message.channel,
                 StatusUpdate::Thinking(contextual_tool_message(&tool_calls)),
                 &self.message.metadata,
@@ -540,8 +536,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         if narrative.is_some() || !decisions.is_empty() {
             let _ = self
                 .agent
-                .channels
-                .send_status(
+                .send_channel_status(
                     &self.message.channel,
                     StatusUpdate::ReasoningUpdate {
                         narrative: narrative.clone().unwrap_or_default(),
@@ -725,8 +720,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             for (pf_idx, tc) in &runnable {
                 let _ = self
                     .agent
-                    .channels
-                    .send_status(
+                    .send_channel_status(
                         &self.message.channel,
                         StatusUpdate::ToolStarted {
                             name: tc.name.clone(),
@@ -743,8 +737,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 let disp_tool = self.agent.tools().get(&tc.name).await;
                 let _ = self
                     .agent
-                    .channels
-                    .send_status(
+                    .send_channel_status(
                         &self.message.channel,
                         StatusUpdate::tool_completed(
                             tc.name.clone(),
@@ -895,8 +888,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                             } else {
                                 let _ = self
                                     .agent
-                                    .channels
-                                    .send_status(
+                                    .send_channel_status(
                                         &self.message.channel,
                                         StatusUpdate::ImageGenerated { data_url, path },
                                         &self.message.metadata,
@@ -918,8 +910,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     {
                         let _ = self
                             .agent
-                            .channels
-                            .send_status(
+                            .send_channel_status(
                                 &self.message.channel,
                                 StatusUpdate::ToolResult {
                                     name: tc.name.clone(),
@@ -944,8 +935,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                         }
                         let _ = self
                             .agent
-                            .channels
-                            .send_status(
+                            .send_channel_status(
                                 &self.message.channel,
                                 StatusUpdate::AuthRequired {
                                     extension_name: ext_name,
@@ -1297,7 +1287,7 @@ mod tests {
     use crate::agent::agent_loop::{Agent, AgentDeps};
     use crate::agent::cost_guard::{CostGuard, CostGuardConfig};
     use crate::agent::session::Session;
-    use crate::channels::ChannelManager;
+    use crate::channels::MessageStream;
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::context::ContextManager;
     use crate::error::Error;
@@ -1308,6 +1298,8 @@ mod tests {
     };
     use crate::safety::SafetyLayer;
     use crate::tools::ToolRegistry;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::ReceiverStream;
 
     use super::check_auth_required;
 
@@ -1354,6 +1346,11 @@ mod tests {
         }
     }
 
+    fn empty_message_stream() -> MessageStream {
+        let (_tx, rx) = mpsc::channel(1);
+        Box::pin(ReceiverStream::new(rx))
+    }
+
     /// Build a minimal `Agent` for unit testing (no DB, no workspace, no extensions).
     fn make_test_agent() -> Agent {
         let deps = AgentDeps {
@@ -1384,7 +1381,7 @@ mod tests {
             task_runtime: None,
         };
 
-        Agent::new(
+        Agent::new_with_message_stream(
             AgentConfig {
                 name: "test-agent".to_string(),
                 max_parallel_jobs: 1,
@@ -1408,7 +1405,8 @@ mod tests {
                 max_jobs_concurrent_per_user: None,
             },
             deps,
-            Arc::new(ChannelManager::new()),
+            empty_message_stream(),
+            None,
             None,
             None,
             None,
@@ -2267,7 +2265,7 @@ mod tests {
             task_runtime: None,
         };
 
-        Agent::new(
+        Agent::new_with_message_stream(
             AgentConfig {
                 name: "test-agent".to_string(),
                 max_parallel_jobs: 1,
@@ -2291,7 +2289,8 @@ mod tests {
                 max_jobs_concurrent_per_user: None,
             },
             deps,
-            Arc::new(ChannelManager::new()),
+            empty_message_stream(),
+            None,
             None,
             None,
             None,
@@ -2396,7 +2395,7 @@ mod tests {
                 task_runtime: None,
             };
 
-            Agent::new(
+            Agent::new_with_message_stream(
                 AgentConfig {
                     name: "test-agent".to_string(),
                     max_parallel_jobs: 1,
@@ -2420,7 +2419,8 @@ mod tests {
                     max_jobs_concurrent_per_user: None,
                 },
                 deps,
-                Arc::new(ChannelManager::new()),
+                empty_message_stream(),
+                None,
                 None,
                 None,
                 None,

@@ -198,8 +198,6 @@ async fn extension_manager_with_process_manager_constructs() {
     let secrets: Arc<dyn SecretsStore + Send + Sync> = Arc::new(InMemorySecretsStore::new(crypto));
     let tools = Arc::new(ToolRegistry::new());
     let tools_dir = tempfile::tempdir().expect("tools_dir");
-    let channels_dir = tempfile::tempdir().expect("channels_dir");
-
     let manager = ExtensionManager::new(
         Arc::new(McpSessionManager::new()),
         Arc::new(McpProcessManager::new()),
@@ -208,7 +206,6 @@ async fn extension_manager_with_process_manager_constructs() {
         None,
         None,
         tools_dir.path().to_path_buf(),
-        channels_dir.path().to_path_buf(),
         None,
         "test".to_string(),
         None,

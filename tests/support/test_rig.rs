@@ -1,4 +1,4 @@
-//! TestRig -- a builder for wiring a real Agent with a replay LLM and test channel.
+//! TestRig -- a builder for wiring a real Agent with a replay LLM and test transport.
 //!
 //! Constructs a full `Agent` with real tools but a `TraceLlm` (or custom LLM)
 //! and a `TestChannel`, runs the agent in a background tokio task, and provides
@@ -19,7 +19,7 @@ use ironclaw::tools::Tool;
 
 use crate::support::instrumented_llm::InstrumentedLlm;
 use crate::support::metrics::{ToolInvocation, TraceMetrics};
-use crate::support::test_channel::{TestChannel, TestChannelHandle};
+use crate::support::test_channel::TestChannel;
 use crate::support::trace_llm::{LlmTrace, TraceLlm};
 
 use ironclaw::llm::recording::{HttpExchange, HttpInterceptor, ReplayingHttpInterceptor};
@@ -539,7 +539,6 @@ impl TestRigBuilder {
     /// Requires the `libsql` feature for the embedded test database.
     #[cfg(feature = "libsql")]
     pub async fn build(self) -> TestRig {
-        use ironclaw::channels::ChannelManager;
         use ironclaw::db::libsql::LibSqlBackend;
 
         // Destructure self up front to avoid partial-move issues.
@@ -813,7 +812,7 @@ impl TestRigBuilder {
             task_runtime: None,
         };
 
-        // 7. Create TestChannel and ChannelManager.
+        // 7. Create the in-process test transport and message stream.
         // When testing bootstrap, the channel must be named "gateway" because
         // the bootstrap greeting targets only the gateway channel.
         let test_channel = if self.keep_bootstrap {
@@ -821,15 +820,8 @@ impl TestRigBuilder {
         } else {
             Arc::new(TestChannel::new())
         };
-        let handle = TestChannelHandle::new(Arc::clone(&test_channel));
-        let channel_manager = ChannelManager::new();
-        channel_manager.add(Box::new(handle)).await;
-        let channels = Arc::new(channel_manager);
-
-        // 7b. Register message tool so routines can send messages to channels.
-        deps.tools
-            .register_message_tools(Arc::clone(&channels), deps.extension_manager.clone())
-            .await;
+        let message_stream = test_channel.start().await.expect("test channel start");
+        let transport: Arc<dyn ironclaw::channels::MessageTransport> = test_channel.clone();
 
         // 8. Create Agent.
         let routine_config = if enable_routines {
@@ -845,10 +837,11 @@ impl TestRigBuilder {
         } else {
             None
         };
-        let agent = Agent::new(
+        let agent = Agent::new_with_message_stream(
             components.config.agent.clone(),
             deps,
-            channels,
+            message_stream,
+            Some(transport),
             None, // heartbeat_config
             None, // hygiene_config
             routine_config,

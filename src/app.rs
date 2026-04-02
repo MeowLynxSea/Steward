@@ -667,8 +667,7 @@ impl AppBuilder {
             }
         };
 
-        // Append builtin entries (e.g. channel-relay integrations) so they appear
-        // in the web UI's available extensions list.
+        // Append builtin entries so they appear in the web UI's available extensions list.
         let builtin = crate::extensions::registry::builtin_entries();
         for entry in builtin {
             if !catalog_entries.iter().any(|e| e.name == entry.name) {
@@ -699,7 +698,6 @@ impl AppBuilder {
                 Some(Arc::clone(hooks)),
                 wasm_tool_runtime.clone(),
                 self.config.wasm.tools_dir.clone(),
-                self.config.channels.wasm_channels_dir.clone(),
                 self.config.tunnel.public_url.clone(),
                 self.config.owner_id.clone(),
                 self.db.clone(),

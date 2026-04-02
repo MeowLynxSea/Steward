@@ -170,7 +170,6 @@ impl RegistryCatalog {
     /// ```text
     /// registry/
     /// ├── tools/*.json
-    /// ├── channels/*.json
     /// └── _bundles.json
     /// ```
     pub fn load(registry_dir: &Path) -> Result<Self, RegistryError> {
@@ -184,12 +183,6 @@ impl RegistryCatalog {
         let tools_dir = registry_dir.join("tools");
         if tools_dir.is_dir() {
             Self::load_manifests_from_dir(&tools_dir, "tools", &mut manifests)?;
-        }
-
-        // Load channels
-        let channels_dir = registry_dir.join("channels");
-        if channels_dir.is_dir() {
-            Self::load_manifests_from_dir(&channels_dir, "channels", &mut manifests)?;
         }
 
         // Load MCP servers
@@ -287,8 +280,7 @@ impl RegistryCatalog {
     /// then searches by bare name ("github").
     ///
     /// If a bare name matches more than one prefix, returns `None`.
-    /// Use a qualified key ("tools/github", "channels/telegram", or
-    /// "mcp-servers/notion") to disambiguate.
+    /// Use a qualified key ("tools/github" or "mcp-servers/notion") to disambiguate.
     pub fn get(&self, name: &str) -> Option<&ExtensionManifest> {
         // Try exact key first
         if let Some(m) = self.manifests.get(name) {
@@ -296,7 +288,7 @@ impl RegistryCatalog {
         }
 
         // Try with kind prefix, detecting collisions
-        let candidates: Vec<_> = ["tools", "channels", "mcp-servers"]
+        let candidates: Vec<_> = ["tools", "mcp-servers"]
             .iter()
             .filter_map(|prefix| self.manifests.get(&format!("{}/{}", prefix, name)))
             .collect();
@@ -318,7 +310,6 @@ impl RegistryCatalog {
 
         let prefixes: &[(&str, &str)] = &[
             ("tools", "tool"),
-            ("channels", "channel"),
             ("mcp-servers", "mcp_server"),
         ];
 
@@ -350,14 +341,13 @@ impl RegistryCatalog {
         }
     }
 
-    /// Get the full key ("tools/github", "channels/telegram", or
-    /// "mcp-servers/notion") for a manifest.
+    /// Get the full key ("tools/github" or "mcp-servers/notion") for a manifest.
     pub fn key_for(&self, name: &str) -> Option<String> {
         if self.manifests.contains_key(name) {
             return Some(name.to_string());
         }
 
-        let matches: Vec<String> = ["tools", "channels", "mcp-servers"]
+        let matches: Vec<String> = ["tools", "mcp-servers"]
             .iter()
             .filter_map(|prefix| {
                 let key = format!("{}/{}", prefix, name);
@@ -509,10 +499,8 @@ mod tests {
 
     fn create_test_registry(dir: &Path) {
         let tools_dir = dir.join("tools");
-        let channels_dir = dir.join("channels");
         let mcp_dir = dir.join("mcp-servers");
         fs::create_dir_all(&tools_dir).unwrap();
-        fs::create_dir_all(&channels_dir).unwrap();
         fs::create_dir_all(&mcp_dir).unwrap();
 
         fs::write(
@@ -559,24 +547,6 @@ mod tests {
         .unwrap();
 
         fs::write(
-            channels_dir.join("telegram.json"),
-            r#"{
-                "name": "telegram",
-                "display_name": "Telegram",
-                "kind": "channel",
-                "version": "0.1.0",
-                "description": "Telegram Bot API channel",
-                "source": {
-                    "dir": "channels-src/telegram",
-                    "capabilities": "telegram.capabilities.json",
-                    "crate_name": "telegram-channel"
-                },
-                "tags": ["messaging"]
-            }"#,
-        )
-        .unwrap();
-
-        fs::write(
             mcp_dir.join("notion.json"),
             r#"{
                 "name": "notion",
@@ -596,11 +566,11 @@ mod tests {
                 "bundles": {
                     "default": {
                         "display_name": "Recommended",
-                        "extensions": ["tools/slack", "tools/github", "channels/telegram"]
+                        "extensions": ["tools/slack", "tools/github"]
                     },
                     "messaging": {
                         "display_name": "Messaging",
-                        "extensions": ["tools/slack", "channels/telegram"],
+                        "extensions": ["tools/slack"],
                         "shared_auth": null
                     }
                 }
@@ -615,7 +585,7 @@ mod tests {
         create_test_registry(tmp.path());
 
         let catalog = RegistryCatalog::load(tmp.path()).unwrap();
-        assert_eq!(catalog.all().len(), 4);
+        assert_eq!(catalog.all().len(), 3);
     }
 
     #[test]
@@ -626,9 +596,6 @@ mod tests {
         let catalog = RegistryCatalog::load(tmp.path()).unwrap();
         let tools = catalog.list(Some(ManifestKind::Tool), None);
         assert_eq!(tools.len(), 2);
-
-        let channels = catalog.list(Some(ManifestKind::Channel), None);
-        assert_eq!(channels.len(), 1);
 
         let mcp_servers = catalog.list(Some(ManifestKind::McpServer), None);
         assert_eq!(mcp_servers.len(), 1);
@@ -644,7 +611,7 @@ mod tests {
         assert_eq!(defaults.len(), 2);
 
         let messaging = catalog.list(None, Some("messaging"));
-        assert_eq!(messaging.len(), 2); // slack (tool) and telegram (channel) both have "messaging" tag
+        assert_eq!(messaging.len(), 1);
     }
 
     #[test]
@@ -660,7 +627,6 @@ mod tests {
 
         // Bare name
         assert!(catalog.get("slack").is_some());
-        assert!(catalog.get("telegram").is_some());
         assert!(catalog.get("notion").is_some());
 
         // Missing
@@ -693,7 +659,7 @@ mod tests {
         let catalog = RegistryCatalog::load(tmp.path()).unwrap();
 
         let (manifests, missing) = catalog.resolve_bundle("default").unwrap();
-        assert_eq!(manifests.len(), 3);
+        assert_eq!(manifests.len(), 2);
         assert!(missing.is_empty());
 
         assert!(catalog.resolve_bundle("nonexistent").is_err());
@@ -713,7 +679,7 @@ mod tests {
 
         // Bundle
         let (manifests, bundle) = catalog.resolve("default").unwrap();
-        assert_eq!(manifests.len(), 3);
+        assert_eq!(manifests.len(), 2);
         assert!(bundle.is_some());
     }
 

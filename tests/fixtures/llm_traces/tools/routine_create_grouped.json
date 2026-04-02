@@ -24,7 +24,7 @@
               },
               "execution": {
                 "mode": "full_job",
-                "tool_permissions": ["message", "http"]
+                "tool_permissions": ["http"]
               },
               "delivery": {
                 "channel": "telegram",

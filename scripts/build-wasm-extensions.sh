@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build all WASM tools and channels from source.
+# Build all WASM tools from source.
 #
-# Verifies that every tool/channel in the registry compiles against the
+# Verifies that every registry tool compiles against the
 # current WIT definitions. Used by CI and can be run locally.
 #
 # Prerequisites:
@@ -9,23 +9,13 @@
 #   cargo install cargo-component --locked
 #
 # Usage:
-#   ./scripts/build-wasm-extensions.sh           # build all
-#   ./scripts/build-wasm-extensions.sh --tools    # tools only
-#   ./scripts/build-wasm-extensions.sh --channels # channels only
+#   ./scripts/build-wasm-extensions.sh
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-BUILD_TOOLS=true
-BUILD_CHANNELS=true
 FAILED=()
-
-if [[ "${1:-}" == "--tools" ]]; then
-    BUILD_CHANNELS=false
-elif [[ "${1:-}" == "--channels" ]]; then
-    BUILD_TOOLS=false
-fi
 
 build_extension() {
     local manifest_path="$1"
@@ -51,24 +41,15 @@ build_extension() {
     echo "  OK   $name"
 }
 
-if $BUILD_TOOLS; then
-    echo "Building WASM tools..."
-    for manifest in registry/tools/*.json; do
-        build_extension "$manifest" || true
-    done
-fi
-
-if $BUILD_CHANNELS; then
-    echo "Building WASM channels..."
-    for manifest in registry/channels/*.json; do
-        build_extension "$manifest" || true
-    done
-fi
+echo "Building WASM tools..."
+for manifest in registry/tools/*.json; do
+    build_extension "$manifest" || true
+done
 
 echo ""
 if [ ${#FAILED[@]} -gt 0 ]; then
     echo "FAILED: ${FAILED[*]}"
     exit 1
 else
-    echo "All WASM extensions built successfully."
+    echo "All WASM tools built successfully."
 fi

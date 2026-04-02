@@ -337,10 +337,10 @@ mod advanced {
             .build()
             .await;
 
-        // Turn 1: Create the routine (manual trigger, full_job, message+http pre-authorized).
+        // Turn 1: Create the routine (manual trigger, full_job, http pre-authorized).
         rig.send_message(
             "Set up a morning tech news routine with manual trigger \
-             and full_job mode. Pre-authorize the message and http tools.",
+             and full_job mode. Pre-authorize the http tool.",
         )
         .await;
         let r1 = rig.wait_for_responses(1, TIMEOUT).await;
@@ -353,15 +353,14 @@ mod advanced {
 
         // Turn 2: Fire the routine. This dispatches a full_job through the scheduler.
         // The routine worker runs autonomously and consumes TraceLlm steps for
-        // http, memory_write, and message tool calls. The http tool uses the
+        // http and memory_write tool calls. The http tool uses the
         // ReplayingHttpInterceptor to return the mock news API response.
         rig.send_message("Fire it now.").await;
 
         // Wait for:
         //   - response 2: main conversation reply ("fired the routine")
-        //   - response 3: message tool broadcast from routine worker ("Tech News Digest: ...")
-        // The routine worker runs asynchronously, so we wait for 3 total responses.
-        let responses = rig.wait_for_responses(3, Duration::from_secs(15)).await;
+        // The routine worker continues asynchronously without broadcasting a chat reply.
+        let responses = rig.wait_for_responses(2, Duration::from_secs(15)).await;
 
         // Find the main conversation reply (from turn 2) by content, since
         // the routine worker runs asynchronously and may interleave messages.
@@ -375,24 +374,9 @@ mod advanced {
             responses.iter().map(|r| &r.content).collect::<Vec<_>>()
         );
 
-        // The routine worker runs autonomously: http → memory_write → message.
-        // The message tool broadcasts to the test channel, proving the full
-        // chain executed successfully (including ApprovalContext allowing the
-        // http and message tools in autonomous mode).
-        let message_broadcast = responses.iter().find(|r| {
-            r.content.contains("Tech News Digest")
-                || r.content.contains("Rust 2026")
-                || r.content.contains("WASM Component Model")
-        });
-        assert!(
-            message_broadcast.is_some(),
-            "Routine worker should have broadcast a message. Got: {:?}",
-            responses.iter().map(|r| &r.content).collect::<Vec<_>>()
-        );
-
         // Verify main conversation tools were called.
         let started = rig.tool_calls_started();
-        for tool in &["routine_create", "routine_fire"] {
+        for tool in &["routine_create", "routine_fire", "http", "memory_write"] {
             assert!(
                 started.iter().any(|s| s == *tool),
                 "{tool} not called: {started:?}"

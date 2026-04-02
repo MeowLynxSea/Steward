@@ -72,7 +72,6 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "skill_search",
     "skill_install",
     "skill_remove",
-    "message",
     "web_fetch",
     "restart",
     "image_generate",
@@ -92,8 +91,6 @@ pub struct ToolRegistry {
     secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
     /// Shared rate limiter for built-in tool invocations.
     rate_limiter: RateLimiter,
-    /// Reference to the message tool for setting context per-turn.
-    message_tool: RwLock<Option<Arc<crate::tools::builtin::MessageTool>>>,
 }
 
 impl ToolRegistry {
@@ -114,7 +111,6 @@ impl ToolRegistry {
             credential_registry: None,
             secrets_store: None,
             rate_limiter: RateLimiter::new(),
-            message_tool: RwLock::new(None),
         }
     }
 
@@ -523,38 +519,6 @@ impl ToolRegistry {
         self.register_sync(Arc::new(RoutineHistoryTool::new(store)));
         self.register_sync(Arc::new(EventEmitTool::new(engine)));
         tracing::debug!("Registered 7 routine management tools");
-    }
-
-    /// Register message tool for sending messages to channels.
-    pub async fn register_message_tools(
-        &self,
-        channel_manager: Arc<crate::channels::ChannelManager>,
-        extension_manager: Option<Arc<crate::extensions::ExtensionManager>>,
-    ) {
-        use crate::tools::builtin::MessageTool;
-        let mut tool = MessageTool::new(channel_manager);
-        if let Some(extension_manager) = extension_manager {
-            tool = tool.with_extension_manager(extension_manager);
-        }
-        let tool = Arc::new(tool);
-        *self.message_tool.write().await = Some(Arc::clone(&tool));
-        self.tools
-            .write()
-            .await
-            .insert(tool.name().to_string(), tool as Arc<dyn Tool>);
-        self.builtin_names
-            .write()
-            .await
-            .insert("message".to_string());
-        tracing::debug!("Registered message tool");
-    }
-
-    /// Set the default channel and target for the message tool.
-    /// Call this before each agent turn with the current conversation's context.
-    pub async fn set_message_tool_context(&self, channel: Option<String>, target: Option<String>) {
-        if let Some(tool) = self.message_tool.read().await.as_ref() {
-            tool.set_context(channel, target).await;
-        }
     }
 
     /// Register image generation and editing tools.

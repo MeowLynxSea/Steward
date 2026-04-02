@@ -4,12 +4,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use ironclaw::{
     agent::{Agent, AgentDeps},
     api::{ApiState, DEFAULT_API_PORT, local_api_addr, run_api},
     app::{AppBuilder, AppBuilderFlags},
-    channels::{ChannelManager, ReplChannel},
+    channels::{IncomingMessage, MessageStream},
     cli::{
         Cli, Command, run_api_command, run_mcp_command, run_pairing_command, run_service_command,
         run_status_command, run_tool_command,
@@ -315,34 +317,10 @@ async fn async_main() -> anyhow::Result<()> {
         _ => None,
     };
 
-    // ── Channel setup ──────────────────────────────────────────────────
+    // ── Message Ingress ────────────────────────────────────────────────
 
-    let channels = ChannelManager::new();
-    let mut channel_names: Vec<String> = Vec::new();
-
-    // Phase 0 keeps a single local REPL entrypoint while the desktop HTTP API
-    // and Tauri shell are built. This avoids carrying legacy network channels
-    // and gateway startup paths through the cleanup.
-    let repl_channel = if let Some(ref msg) = cli.message {
-        Some(ReplChannel::with_message_for_user(
-            config.owner_id.clone(),
-            msg.clone(),
-        ))
-    } else {
-        let repl = ReplChannel::with_user_id(config.owner_id.clone());
-        repl.suppress_banner();
-        Some(repl)
-    };
-
-    if let Some(repl) = repl_channel {
-        channels.add(Box::new(repl)).await;
-        if cli.message.is_some() {
-            tracing::debug!("Single message mode");
-        } else {
-            channel_names.push("repl".to_string());
-            tracing::debug!("REPL mode enabled");
-        }
-    }
+    let (inject_tx, inject_rx) = mpsc::channel::<IncomingMessage>(64);
+    let message_stream: MessageStream = Box::pin(ReceiverStream::new(inject_rx));
 
     // Register lifecycle hooks.
     let active_tool_names = components.tools.list().await;
@@ -351,9 +329,7 @@ async fn async_main() -> anyhow::Result<()> {
         &components.hooks,
         components.workspace.as_ref(),
         &config.wasm.tools_dir,
-        &config.channels.wasm_channels_dir,
         &active_tool_names,
-        &[],
         &components.dev_loaded_tool_names,
     )
     .await;
@@ -382,7 +358,7 @@ async fn async_main() -> anyhow::Result<()> {
         container_job_manager.clone(),
         components.db.clone(),
         job_event_tx.clone(),
-        Some(channels.inject_sender()),
+        Some(inject_tx.clone()),
         if config.sandbox.enabled {
             Some(Arc::clone(&prompt_queue))
         } else {
@@ -428,7 +404,7 @@ async fn async_main() -> anyhow::Result<()> {
             claude_code_enabled: config.claude_code.enabled,
             routines_enabled: config.routines.enabled,
             skills_enabled: config.skills.enabled,
-            channels: channel_names,
+            channels: Vec::new(),
             tunnel_url: None,
             tunnel_provider: None,
             startup_elapsed: Some(startup_start.elapsed()),
@@ -437,14 +413,6 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     // ── Run the agent ──────────────────────────────────────────────────
-
-    let channels = Arc::new(channels);
-
-    // Register message tool for sending messages to connected channels
-    components
-        .tools
-        .register_message_tools(Arc::clone(&channels), components.extension_manager.clone())
-        .await;
 
     // Snapshot memory for trace recording before the agent starts
     if let Some(ref recorder) = components.recording_handle
@@ -494,7 +462,7 @@ async fn async_main() -> anyhow::Result<()> {
             store,
             sse_manager.clone(),
             Some(task_runtime.clone()),
-            Some(channels.inject_sender()),
+            Some(inject_tx.clone()),
             Some(session_manager.clone()),
             components.workspace.clone(),
         )
@@ -550,12 +518,12 @@ async fn async_main() -> anyhow::Result<()> {
         task_runtime: Some(task_runtime),
     };
 
-    let channels_for_warnings = Arc::clone(&channels);
     let routine_engine_slot = Arc::new(tokio::sync::RwLock::new(None));
-    let mut agent = Agent::new(
+    let mut agent = Agent::new_with_message_stream(
         config.agent.clone(),
         deps,
-        channels,
+        message_stream,
+        None,
         Some(config.heartbeat.clone()),
         Some(config.hygiene.clone()),
         Some(config.routines.clone()),
@@ -583,37 +551,29 @@ async fn async_main() -> anyhow::Result<()> {
         });
     }
 
-    // Broadcast channel for clean shutdown of background tasks
-    let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
     agent.set_routine_engine_slot(Arc::clone(&routine_engine_slot));
 
-    // Notify user if sandbox is unavailable (Docker missing/not running)
     if let Some(warning) = docker_user_warning {
-        let channels_ref = Arc::clone(&channels_for_warnings);
-        tokio::spawn(async move {
-            // Delay to let channels finish connecting before sending the warning.
-            // 5s is generous but avoids the message being lost on slow startups.
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            tracing::debug!("Sending sandbox-unavailable warning to connected channels");
-            let response = ironclaw::channels::OutgoingResponse {
-                content: format!("Warning: {warning}"),
-                thread_id: None,
-                attachments: Vec::new(),
-                metadata: serde_json::json!({
-                    "source": "system",
-                    "type": "warning",
-                }),
-            };
-            let _ = channels_ref.broadcast_all("default", response).await;
-        });
+        tracing::warn!("{warning}");
+    }
+
+    if let Some(message) = cli.message.clone() {
+        inject_tx
+            .send(
+                IncomingMessage::new("cli", &config.owner_id, message)
+                    .with_owner_id(config.owner_id.clone())
+                    .with_sender_id(config.owner_id.clone())
+                    .with_metadata(serde_json::json!({
+                        "source": "cli"
+                    })),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("failed to enqueue CLI message: {error}"))?;
     }
 
     agent.run().await?;
 
     // ── Shutdown ────────────────────────────────────────────────────────
-
-    // Signal background tasks to gracefully shut down
-    let _ = shutdown_tx.send(());
 
     // Shut down all stdio MCP server child processes.
     components.mcp_process_manager.shutdown_all().await;

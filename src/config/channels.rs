@@ -1,7 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-
-use crate::bootstrap::ironclaw_base_dir;
 use crate::config::helpers::{optional_env, parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
 use crate::settings::Settings;
@@ -14,13 +10,6 @@ pub struct ChannelsConfig {
     pub http: Option<HttpConfig>,
     pub gateway: Option<GatewayConfig>,
     pub signal: Option<SignalConfig>,
-    /// Directory containing WASM channel modules (default: ~/.ironcowork/channels/).
-    pub wasm_channels_dir: std::path::PathBuf,
-    /// Whether WASM channels are enabled.
-    pub wasm_channels_enabled: bool,
-    /// Per-channel owner user IDs. When set, the channel only responds to this user.
-    /// Key: channel name (e.g., "telegram"), Value: owner user ID.
-    pub wasm_channel_owner_ids: HashMap<String, i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -318,28 +307,6 @@ impl ChannelsConfig {
             http,
             gateway,
             signal,
-            wasm_channels_dir: optional_env("WASM_CHANNELS_DIR")?
-                .map(PathBuf::from)
-                .or_else(|| cs.wasm_channels_dir.clone())
-                .unwrap_or_else(default_channels_dir),
-            wasm_channels_enabled: parse_bool_env(
-                "WASM_CHANNELS_ENABLED",
-                cs.wasm_channels_enabled,
-            )?,
-            wasm_channel_owner_ids: {
-                let mut ids = cs.wasm_channel_owner_ids.clone();
-                // Backwards compat: TELEGRAM_OWNER_ID env var
-                if let Some(id_str) = optional_env("TELEGRAM_OWNER_ID")? {
-                    let id: i64 = id_str.parse().map_err(|e: std::num::ParseIntError| {
-                        ConfigError::InvalidValue {
-                            key: "TELEGRAM_OWNER_ID".to_string(),
-                            message: format!("must be an integer: {e}"),
-                        }
-                    })?;
-                    ids.insert("telegram".to_string(), id);
-                }
-                ids
-            },
         })
     }
 }
@@ -347,11 +314,6 @@ impl ChannelsConfig {
 /// Default gateway port — used both in `resolve()` and as the fallback in
 /// other modules that need to construct a gateway URL.
 pub const DEFAULT_GATEWAY_PORT: u16 = 3000;
-
-/// Get the default channels directory (~/.ironcowork/channels/).
-fn default_channels_dir() -> PathBuf {
-    ironclaw_base_dir().join("channels")
-}
 
 #[cfg(test)]
 mod tests {
@@ -474,46 +436,11 @@ mod tests {
             http: None,
             gateway: None,
             signal: None,
-            wasm_channels_dir: PathBuf::from("/tmp/channels"),
-            wasm_channels_enabled: true,
-            wasm_channel_owner_ids: HashMap::new(),
         };
         assert!(cfg.cli.enabled);
         assert!(cfg.http.is_none());
         assert!(cfg.gateway.is_none());
         assert!(cfg.signal.is_none());
-        assert_eq!(cfg.wasm_channels_dir, PathBuf::from("/tmp/channels"));
-        assert!(cfg.wasm_channels_enabled);
-        assert!(cfg.wasm_channel_owner_ids.is_empty());
-    }
-
-    #[test]
-    fn channels_config_with_owner_ids() {
-        let mut ids = HashMap::new();
-        ids.insert("telegram".to_string(), 12345_i64);
-        ids.insert("slack".to_string(), 67890_i64);
-
-        let cfg = ChannelsConfig {
-            cli: CliConfig { enabled: false },
-            http: None,
-            gateway: None,
-            signal: None,
-            wasm_channels_dir: PathBuf::from("/opt/channels"),
-            wasm_channels_enabled: false,
-            wasm_channel_owner_ids: ids,
-        };
-        assert_eq!(cfg.wasm_channel_owner_ids.get("telegram"), Some(&12345));
-        assert_eq!(cfg.wasm_channel_owner_ids.get("slack"), Some(&67890));
-        assert!(!cfg.wasm_channels_enabled);
-    }
-
-    #[test]
-    fn default_channels_dir_ends_with_channels() {
-        let dir = default_channels_dir();
-        assert!(
-            dir.ends_with("channels"),
-            "expected path ending in 'channels', got: {dir:?}"
-        );
     }
 
     #[test]
@@ -530,8 +457,6 @@ mod tests {
         settings.channels.signal_http_url = Some("http://127.0.0.1:8080".to_string());
         settings.channels.signal_account = Some("+15551234567".to_string());
         settings.channels.signal_allow_from = Some("+15551234567,+15557654321".to_string());
-        settings.channels.wasm_channels_dir = Some(PathBuf::from("/tmp/settings-channels"));
-        settings.channels.wasm_channels_enabled = false;
 
         let cfg = ChannelsConfig::resolve(&settings, "owner-scope").expect("resolve");
 
@@ -548,11 +473,5 @@ mod tests {
         let signal = cfg.signal.expect("signal config");
         assert_eq!(signal.account, "+15551234567");
         assert_eq!(signal.allow_from, vec!["+15551234567", "+15557654321"]);
-
-        assert_eq!(
-            cfg.wasm_channels_dir,
-            PathBuf::from("/tmp/settings-channels")
-        );
-        assert!(!cfg.wasm_channels_enabled);
     }
 }

@@ -377,24 +377,6 @@ pub struct ChannelSettings {
     #[serde(default)]
     pub signal_group_allow_from: Option<String>,
 
-    /// Per-channel owner user IDs. When set, the channel only responds to this user.
-    /// Key: channel name (e.g., "telegram"), Value: owner user ID.
-    #[serde(default)]
-    pub wasm_channel_owner_ids: std::collections::HashMap<String, i64>,
-
-    /// Enabled WASM channels by name.
-    /// Channels not in this list but present in the channels directory will still load.
-    /// This is primarily used by the setup wizard to track which channels were configured.
-    #[serde(default)]
-    pub wasm_channels: Vec<String>,
-
-    /// Whether WASM channels are enabled.
-    #[serde(default = "default_true")]
-    pub wasm_channels_enabled: bool,
-
-    /// Directory containing WASM channel modules.
-    #[serde(default)]
-    pub wasm_channels_dir: Option<PathBuf>,
 }
 
 impl Default for ChannelSettings {
@@ -416,10 +398,6 @@ impl Default for ChannelSettings {
             signal_dm_policy: None,
             signal_group_policy: None,
             signal_group_allow_from: None,
-            wasm_channel_owner_ids: std::collections::HashMap::new(),
-            wasm_channels: Vec::new(),
-            wasm_channels_enabled: true,
-            wasm_channels_dir: None,
         }
     }
 }
@@ -1199,6 +1177,7 @@ mod tests {
                         api_key: None,
                         model: Some("gpt-4.1".to_string()),
                         base_url: Some("https://api.openai.com/v1".to_string()),
+                        request_format: None,
                     },
                 );
                 overrides
@@ -1286,40 +1265,6 @@ mod tests {
         assert!(!settings.embeddings.enabled);
         assert_eq!(settings.embeddings.provider, "nearai");
         assert_eq!(settings.embeddings.model, "text-embedding-3-small");
-    }
-
-    #[test]
-    fn test_wasm_channel_owner_ids_db_round_trip() {
-        let mut settings = Settings::default();
-        settings
-            .channels
-            .wasm_channel_owner_ids
-            .insert("telegram".to_string(), 123456789);
-
-        let map = settings.to_db_map();
-        let restored = Settings::from_db_map(&map);
-        assert_eq!(
-            restored.channels.wasm_channel_owner_ids.get("telegram"),
-            Some(&123456789)
-        );
-    }
-
-    #[test]
-    fn test_wasm_channel_owner_ids_default_empty() {
-        let settings = Settings::default();
-        assert!(settings.channels.wasm_channel_owner_ids.is_empty());
-    }
-
-    #[test]
-    fn test_wasm_channel_owner_ids_via_set() {
-        let mut settings = Settings::default();
-        settings
-            .set("channels.wasm_channel_owner_ids.telegram", "987654321")
-            .unwrap();
-        assert_eq!(
-            settings.channels.wasm_channel_owner_ids.get("telegram"),
-            Some(&987654321)
-        );
     }
 
     #[test]
@@ -1781,11 +1726,6 @@ mod tests {
             channels: ChannelSettings {
                 http_enabled: true,
                 http_port: Some(9090),
-                wasm_channel_owner_ids: {
-                    let mut m = std::collections::HashMap::new();
-                    m.insert("telegram".to_string(), 12345);
-                    m
-                },
                 ..Default::default()
             },
             heartbeat: HeartbeatSettings {
@@ -1851,11 +1791,6 @@ mod tests {
         );
         assert!(restored.channels.http_enabled, "http_enabled lost");
         assert_eq!(restored.channels.http_port, Some(9090), "http_port lost");
-        assert_eq!(
-            restored.channels.wasm_channel_owner_ids.get("telegram"),
-            Some(&12345),
-            "wasm_channel_owner_ids lost"
-        );
         assert!(restored.heartbeat.enabled, "heartbeat.enabled lost");
         assert_eq!(
             restored.heartbeat.interval_secs, 900,
@@ -2006,7 +1941,6 @@ mod tests {
                 http_port: Some(8080),
                 signal_enabled: true,
                 signal_account: Some("+1234567890".to_string()),
-                wasm_channels: vec!["telegram".to_string()],
                 ..Default::default()
             },
             heartbeat: HeartbeatSettings {
@@ -2037,11 +1971,6 @@ mod tests {
         assert!(current.channels.http_enabled, "HTTP channel must survive");
         assert_eq!(current.channels.http_port, Some(8080));
         assert!(current.channels.signal_enabled, "Signal must survive");
-        assert_eq!(
-            current.channels.wasm_channels,
-            vec!["telegram".to_string()],
-            "WASM channels must survive"
-        );
         assert!(current.embeddings.enabled, "Embeddings must survive");
         assert_eq!(current.embeddings.provider, "openai");
         assert!(current.heartbeat.enabled, "Heartbeat must survive");
@@ -2076,7 +2005,6 @@ mod tests {
             },
             channels: ChannelSettings {
                 http_enabled: false,
-                wasm_channels: vec!["telegram".to_string()],
                 ..Default::default()
             },
             ..Default::default()
@@ -2089,12 +2017,10 @@ mod tests {
         // Simulate step_channels: user enables HTTP and adds discord
         current.channels.http_enabled = true;
         current.channels.http_port = Some(9090);
-        current.channels.wasm_channels = vec!["telegram".to_string(), "discord".to_string()];
 
         // Verify: channels changed
         assert!(current.channels.http_enabled);
         assert_eq!(current.channels.http_port, Some(9090));
-        assert_eq!(current.channels.wasm_channels.len(), 2);
 
         // Verify: everything else preserved
         assert_eq!(current.llm_backend.as_deref(), Some("anthropic"));
@@ -2121,7 +2047,6 @@ mod tests {
                 http_enabled: true,
                 http_port: Some(8080),
                 signal_enabled: true,
-                wasm_channels: vec!["telegram".to_string()],
                 ..Default::default()
             },
             embeddings: EmbeddingsSettings {
@@ -2172,11 +2097,6 @@ mod tests {
         assert!(
             current.channels.signal_enabled,
             "Signal must survive quick mode re-run"
-        );
-        assert_eq!(
-            current.channels.wasm_channels,
-            vec!["telegram".to_string()],
-            "WASM channels must survive quick mode re-run"
         );
         assert!(
             current.embeddings.enabled,

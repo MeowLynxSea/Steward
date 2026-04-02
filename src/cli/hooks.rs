@@ -80,10 +80,7 @@ async fn discover_hooks(config: &crate::config::Config) -> Vec<HookInfo> {
 
     // 2. Plugin hooks from WASM capabilities sidecar files
     let wasm_tools_dir = &config.wasm.tools_dir;
-    let wasm_channels_dir = &config.channels.wasm_channels_dir;
-
     collect_plugin_hooks(&mut hooks, wasm_tools_dir, "tool").await;
-    collect_plugin_hooks(&mut hooks, wasm_channels_dir, "channel").await;
 
     // Note: workspace hooks (hooks/hooks.json, hooks/*.hook.json) are stored
     // in the database-backed Workspace and require a DB connection to list.

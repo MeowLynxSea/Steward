@@ -144,7 +144,6 @@ mod tests {
             Some(Arc::new(HookRegistry::default())),
             None,
             tools_dir.to_path_buf(),
-            tools_dir.join("channels"),
             None,
             owner_id.to_string(),
             None,

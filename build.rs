@@ -2,7 +2,7 @@
 //!
 //! IronCowork Phase 0 removes the bundled channel build pipeline. Keep this
 //! script focused on compile-time catalog embedding so the crate can build
-//! without `channels-src/`.
+//! without legacy channel assets.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -19,14 +19,14 @@ fn main() {
 ///
 /// Output: `$OUT_DIR/embedded_catalog.json` with structure:
 /// ```json
-/// { "tools": [...], "channels": [...], "bundles": {...} }
+/// { "tools": [...], "mcp_servers": [...], "bundles": {...} }
 /// ```
 fn embed_registry_catalog(root: &Path) {
     use std::fs;
 
     let registry_dir = root.join("registry");
 
-    // Rerun if the bundles file changes (per-file watches for tools/channels
+    // Rerun if the bundles file changes (per-file watches for tools/MCP manifests
     // are emitted inside collect_json_files to track content changes reliably).
     println!("cargo:rerun-if-changed=registry/_bundles.json");
 
@@ -37,26 +37,19 @@ fn embed_registry_catalog(root: &Path) {
         // No registry dir: write empty catalog
         fs::write(
             &out_path,
-            r#"{"tools":[],"channels":[],"mcp_servers":[],"bundles":{"bundles":{}}}"#,
+            r#"{"tools":[],"mcp_servers":[],"bundles":{"bundles":{}}}"#,
         )
         .unwrap();
         return;
     }
 
     let mut tools = Vec::new();
-    let mut channels = Vec::new();
     let mut mcp_servers = Vec::new();
 
     // Collect tool manifests
     let tools_dir = registry_dir.join("tools");
     if tools_dir.is_dir() {
         collect_json_files(&tools_dir, &mut tools);
-    }
-
-    // Collect channel manifests
-    let channels_dir = registry_dir.join("channels");
-    if channels_dir.is_dir() {
-        collect_json_files(&channels_dir, &mut channels);
     }
 
     // Collect MCP server manifests
@@ -75,9 +68,8 @@ fn embed_registry_catalog(root: &Path) {
 
     // Build the combined JSON
     let catalog = format!(
-        r#"{{"tools":[{}],"channels":[{}],"mcp_servers":[{}],"bundles":{}}}"#,
+        r#"{{"tools":[{}],"mcp_servers":[{}],"bundles":{}}}"#,
         tools.join(","),
-        channels.join(","),
         mcp_servers.join(","),
         bundles_raw,
     );

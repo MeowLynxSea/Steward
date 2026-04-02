@@ -1932,6 +1932,7 @@ mod tests {
                 api_key: Some("test-openai-key".to_string()),
                 model: None,
                 base_url: None,
+                request_format: None,
             },
         );
         let payload = PatchSettingsRequest {

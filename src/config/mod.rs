@@ -146,9 +146,6 @@ impl Config {
                 http: None,
                 gateway: None,
                 signal: None,
-                wasm_channels_dir: std::env::temp_dir().join("ironclaw-test-channels"),
-                wasm_channels_enabled: false,
-                wasm_channel_owner_ids: HashMap::new(),
             },
             agent: AgentConfig::for_testing(),
             safety: SafetyConfig {
@@ -735,6 +732,7 @@ mod tests {
                         api_key: None, // stripped during write
                         model: Some("gpt-4o".to_string()),
                         base_url: None,
+                        request_format: None,
                     },
                 );
                 m
@@ -819,6 +817,7 @@ mod tests {
                         api_key: Some("sk-existing".to_string()),
                         model: None,
                         base_url: None,
+                        request_format: None,
                     },
                 );
                 m

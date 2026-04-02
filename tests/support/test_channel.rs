@@ -1,4 +1,4 @@
-//! TestChannel -- an in-process Channel for E2E testing.
+//! TestChannel -- an in-process message transport for E2E testing.
 //!
 //! Injects messages into the agent loop via an mpsc sender and captures
 //! responses and status events for assertion in tests.
@@ -15,17 +15,18 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
-use ironclaw::channels::{Channel, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate};
+use ironclaw::channels::{
+    IncomingMessage, MessageStream, MessageTransport, OutgoingResponse, StatusUpdate,
+};
 use ironclaw::error::ChannelError;
 
 // ---------------------------------------------------------------------------
 // TestChannel
 // ---------------------------------------------------------------------------
 
-/// A `Channel` implementation for injecting messages and capturing responses
-/// in integration tests.
+/// A transport fixture for injecting messages and capturing responses in integration tests.
 pub struct TestChannel {
-    /// Channel name returned by `Channel::name()`.
+    /// Logical ingress name attached to injected messages.
     channel_name: String,
     /// Sender half for injecting `IncomingMessage`s into the stream.
     tx: mpsc::Sender<IncomingMessage>,
@@ -215,92 +216,15 @@ impl TestChannel {
 }
 
 // ---------------------------------------------------------------------------
-// TestChannelHandle -- wraps Arc<TestChannel> as Box<dyn Channel>
+// Message stream + transport implementation
 // ---------------------------------------------------------------------------
 
-/// A thin wrapper around `Arc<TestChannel>` that implements `Channel`.
-///
-/// This lets us hand a `Box<dyn Channel>` to `ChannelManager::add()` while
-/// keeping an `Arc<TestChannel>` in the test rig for sending messages and
-/// reading captures. The `name_override` allows different test harnesses
-/// to present the channel under different names (e.g. "gateway" vs "test").
-pub struct TestChannelHandle {
-    inner: Arc<TestChannel>,
-    name: String,
-}
-
-impl TestChannelHandle {
-    /// Create a handle that delegates `name()` to the inner `TestChannel`.
-    pub fn new(inner: Arc<TestChannel>) -> Self {
-        Self {
-            name: inner.name().to_string(),
-            inner,
-        }
-    }
-
-    /// Create a handle with a custom channel name.
-    pub fn with_name(inner: Arc<TestChannel>, name: impl Into<String>) -> Self {
-        Self {
-            inner,
-            name: name.into(),
-        }
-    }
-}
-
-#[async_trait]
-impl Channel for TestChannelHandle {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn start(&self) -> Result<MessageStream, ChannelError> {
-        self.inner.start().await
-    }
-
-    async fn respond(
-        &self,
-        msg: &IncomingMessage,
-        response: OutgoingResponse,
-    ) -> Result<(), ChannelError> {
-        self.inner.respond(msg, response).await
-    }
-
-    async fn send_status(
-        &self,
-        status: StatusUpdate,
-        metadata: &serde_json::Value,
-    ) -> Result<(), ChannelError> {
-        self.inner.send_status(status, metadata).await
-    }
-
-    async fn broadcast(
-        &self,
-        user_id: &str,
-        response: OutgoingResponse,
-    ) -> Result<(), ChannelError> {
-        self.inner.broadcast(user_id, response).await
-    }
-
-    async fn health_check(&self) -> Result<(), ChannelError> {
-        self.inner.health_check().await
-    }
-
-    fn conversation_context(&self, metadata: &serde_json::Value) -> HashMap<String, String> {
-        self.inner.conversation_context(metadata)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Channel trait implementation
-// ---------------------------------------------------------------------------
-
-#[async_trait]
-impl Channel for TestChannel {
-    fn name(&self) -> &str {
+impl TestChannel {
+    pub fn name(&self) -> &str {
         &self.channel_name
     }
 
-    async fn start(&self) -> Result<MessageStream, ChannelError> {
+    pub async fn start(&self) -> Result<MessageStream, ChannelError> {
         let rx = self
             .rx
             .lock()
@@ -320,7 +244,10 @@ impl Channel for TestChannel {
 
         Ok(stream)
     }
+}
 
+#[async_trait]
+impl MessageTransport for TestChannel {
     async fn respond(
         &self,
         _msg: &IncomingMessage,
@@ -363,14 +290,11 @@ impl Channel for TestChannel {
 
     async fn broadcast(
         &self,
+        _channel_name: &str,
         _user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
         self.responses.lock().await.push(response);
-        Ok(())
-    }
-
-    async fn health_check(&self) -> Result<(), ChannelError> {
         Ok(())
     }
 

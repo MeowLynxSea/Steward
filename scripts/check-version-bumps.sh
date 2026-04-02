@@ -117,7 +117,6 @@ if echo "$CHANGED_FILES" | grep -qx 'wit/tool\.wit'; then
     WIT_TOOL_CHANGED=true
 fi
 if echo "$CHANGED_FILES" | grep -qx 'wit/channel\.wit'; then
-    WIT_CHANNEL_CHANGED=true
 fi
 
 if $WIT_TOOL_CHANGED; then
@@ -145,32 +144,7 @@ if $WIT_TOOL_CHANGED; then
     fi
 fi
 
-if $WIT_CHANNEL_CHANGED; then
-    echo ""
-    echo "=== wit/channel.wit changed ==="
-
-    NEW_VER=$(extract_wit_version "wit/channel.wit")
-    OLD_VER=$(extract_wit_version_base "wit/channel.wit")
-    echo "  WIT package version: ${OLD_VER:-<none>} -> ${NEW_VER:-<missing>}"
-
-    if ! version_was_bumped "${NEW_VER}" "${OLD_VER}"; then
-        echo "  ERROR: wit/channel.wit package version was not bumped (${OLD_VER} -> ${NEW_VER:-<missing>})."
-        ERRORS=$((ERRORS + 1))
-    else
-        echo "  OK: WIT package version bumped."
-    fi
-
-    # Check WIT_CHANNEL_VERSION constant matches
-    CONST_VER=$(extract_rust_const "src/tools/wasm/mod.rs" "WIT_CHANNEL_VERSION")
-    if [[ -n "$NEW_VER" && "$CONST_VER" != "$NEW_VER" ]]; then
-        echo "  ERROR: WIT_CHANNEL_VERSION in src/tools/wasm/mod.rs is '${CONST_VER}' but wit/channel.wit has '${NEW_VER}'. They must match."
-        ERRORS=$((ERRORS + 1))
-    elif [[ -n "$NEW_VER" ]]; then
-        echo "  OK: WIT_CHANNEL_VERSION matches wit/channel.wit."
-    fi
-fi
-
-if $WIT_TOOL_CHANGED || $WIT_CHANNEL_CHANGED; then
+if $WIT_TOOL_CHANGED; then
     echo ""
     echo "  WARNING: WIT interface changed. All published registry extensions should bump their versions for compatibility."
 fi
@@ -201,38 +175,6 @@ for tool in $TOOL_NAMES; do
 
     if ! version_was_bumped "${NEW_VER}" "${OLD_VER}"; then
         echo "  ERROR: ${REGISTRY_FILE} version was not bumped (${OLD_VER} -> ${NEW_VER:-<missing>}). Bump the version when changing tools-src/${tool}/."
-        ERRORS=$((ERRORS + 1))
-    else
-        echo "  OK: version bumped."
-    fi
-done
-
-# --- 3. Channel source changes ------------------------------------------------
-
-CHANNEL_NAMES=$(echo "$CHANGED_FILES" | sed -n 's|^channels-src/\([^/]*\)/.*|\1|p' | sort -u)
-
-if [[ -n "$CHANNEL_NAMES" ]]; then
-    echo ""
-    echo "=== Channel source changes ==="
-fi
-
-for channel in $CHANNEL_NAMES; do
-    REGISTRY_FILE="registry/channels/${channel}.json"
-    echo ""
-    echo "  --- channels-src/${channel}/ changed ---"
-
-    if [[ ! -f "$REGISTRY_FILE" ]]; then
-        echo "  SKIP: ${REGISTRY_FILE} does not exist yet (new extension?)."
-        continue
-    fi
-
-    NEW_VER=$(extract_json_version "$REGISTRY_FILE")
-    OLD_VER=$(extract_json_version_base "$REGISTRY_FILE")
-
-    echo "  Registry version: ${OLD_VER:-<none>} -> ${NEW_VER:-<missing>}"
-
-    if ! version_was_bumped "${NEW_VER}" "${OLD_VER}"; then
-        echo "  ERROR: ${REGISTRY_FILE} version was not bumped (${OLD_VER} -> ${NEW_VER:-<missing>}). Bump the version when changing channels-src/${channel}/."
         ERRORS=$((ERRORS + 1))
     else
         echo "  OK: version bumped."

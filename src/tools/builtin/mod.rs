@@ -7,7 +7,6 @@ mod http;
 mod job;
 mod json;
 pub mod memory;
-mod message;
 pub mod path_utils;
 mod restart;
 pub mod routine;
@@ -30,7 +29,6 @@ pub use job::{
 };
 pub use json::JsonTool;
 pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
-pub use message::MessageTool;
 pub use restart::RestartTool;
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,

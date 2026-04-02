@@ -1279,8 +1279,8 @@ async fn execute_full_job(
         "max_iterations": execution.max_iterations,
         "owner_id": routine.user_id
     });
-    // Carry the routine's notify config in job metadata so the message tool
-    // can resolve channel/target per-job without global state mutation.
+    // Carry the routine's notify config in job metadata so routine jobs can
+    // resolve channel/target delivery defaults without global state mutation.
     if let Some(channel) = &routine.notify.channel {
         metadata["notify_channel"] = serde_json::json!(channel);
     }

@@ -31,11 +31,8 @@ impl Tool for ToolSearchTool {
 
     fn description(&self) -> &str {
         "Search for available extensions to add new capabilities. Extensions include \
-         channels (Telegram, Slack, Discord — connect messaging platforms so IronClaw can \
-         receive and reply there), tools, and MCP servers. Use `tool_install` and \
-         `tool_activate` to install and enable channels; use the `message` tool for proactive \
-         outbound sends. Use discover:true to search online if the built-in registry has no \
-         results."
+         tools and MCP servers. Use discover:true to search online if the built-in registry \
+         has no results."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -104,7 +101,7 @@ impl Tool for ToolInstallTool {
     }
 
     fn description(&self) -> &str {
-        "Install an extension (channel, tool, or MCP server). \
+        "Install an extension (tool or MCP server). \
          Use the name from tool_search results, or provide an explicit URL."
     }
 
@@ -122,7 +119,7 @@ impl Tool for ToolInstallTool {
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
+                    "enum": ["mcp_server", "wasm_tool"],
                     "description": "Extension type (auto-detected if omitted)"
                 }
             },
@@ -147,7 +144,6 @@ impl Tool for ToolInstallTool {
             .and_then(|k| match k {
                 "mcp_server" => Some(ExtensionKind::McpServer),
                 "wasm_tool" => Some(ExtensionKind::WasmTool),
-                "wasm_channel" => Some(ExtensionKind::WasmChannel),
                 _ => None,
             });
 
@@ -392,7 +388,7 @@ impl Tool for ToolListTool {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
+                    "enum": ["mcp_server", "wasm_tool"],
                     "description": "Filter by extension type (omit to list all)"
                 },
                 "include_available": {
@@ -417,7 +413,6 @@ impl Tool for ToolListTool {
             .and_then(|k| match k {
                 "mcp_server" => Some(ExtensionKind::McpServer),
                 "wasm_tool" => Some(ExtensionKind::WasmTool),
-                "wasm_channel" => Some(ExtensionKind::WasmChannel),
                 _ => None,
             });
 
@@ -638,14 +633,14 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_search_description_clarifies_channel_setup_vs_sending() {
+    fn test_tool_search_description_mentions_setup_flow() {
         let tool = ToolSearchTool {
             manager: test_manager_stub(),
         };
 
         let description = tool.description();
-        assert!(description.contains("Use `tool_install` and `tool_activate`"));
-        assert!(description.contains("use the `message` tool for proactive outbound sends"));
+        assert!(description.contains("Extensions include"));
+        assert!(description.contains("tools and MCP servers"));
     }
 
     #[test]
@@ -819,7 +814,6 @@ mod tests {
             None,
             None,
             std::env::temp_dir().join("ironclaw-test-tools"),
-            std::env::temp_dir().join("ironclaw-test-channels"),
             None,
             "test".to_string(),
             None,

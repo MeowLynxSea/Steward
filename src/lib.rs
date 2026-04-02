@@ -92,7 +92,7 @@ pub use error::{Error, Result};
 
 /// Re-export commonly used types.
 pub mod prelude {
-    pub use crate::channels::{Channel, IncomingMessage, MessageStream};
+    pub use crate::channels::{IncomingMessage, MessageStream};
     pub use crate::config::Config;
     pub use crate::context::{JobContext, JobState};
     pub use crate::error::{Error, Result};

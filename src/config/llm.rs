@@ -1332,6 +1332,7 @@ mod tests {
                 api_key: None,
                 model: Some("llama-3.1-8b-instant".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1384,6 +1385,7 @@ mod tests {
                 api_key: None,
                 model: Some("llama-3.1-8b-instant".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1442,6 +1444,7 @@ mod tests {
                 api_key: Some("gsk_test_key".to_string()),
                 model: Some("llama-3.3-70b-versatile".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1581,6 +1584,7 @@ mod tests {
                 api_key: Some("gsk_from_db".to_string()),
                 model: None,
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1623,6 +1627,7 @@ mod tests {
                 api_key: None,
                 model: Some("model-from-db".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1752,6 +1757,7 @@ mod tests {
                 api_key: None,
                 model: Some("model-from-db-override".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1788,6 +1794,7 @@ mod tests {
                 api_key: None,
                 model: Some("model-from-override".to_string()),
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1821,6 +1828,7 @@ mod tests {
                 api_key: None,
                 model: None,
                 base_url: Some("http://localhost:9002".to_string()),
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1884,6 +1892,7 @@ mod tests {
                 api_key: Some("key-from-db".to_string()),
                 model: None,
                 base_url: None,
+                request_format: None,
             },
         );
         let settings = Settings {
@@ -1939,6 +1948,7 @@ mod tests {
                 api_key: Some("some-key".to_string()),
                 model: None,
                 base_url: None,
+                request_format: None,
             },
         );
         let settings_with_key = Settings {
@@ -1972,6 +1982,7 @@ mod tests {
                 api_key: None,
                 model: None,
                 base_url: Some("http://localhost:9004".to_string()),
+                request_format: None,
             },
         );
         let settings = Settings {

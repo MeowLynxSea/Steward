@@ -1127,25 +1127,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tool_info_clarifies_message_and_channel_setup_roles() {
+    async fn tool_info_describes_extension_setup_tools() {
         let trace = LlmTrace::new(
-            "test-tool-info-channel-message-clarity",
+            "test-tool-info-extension-setup",
             vec![TraceTurn {
-                user_input: "How do message and channels differ?".to_string(),
+                user_input: "How do extension setup tools work?".to_string(),
                 steps: vec![
-                    TraceStep {
-                        request_hint: None,
-                        response: TraceResponse::ToolCalls {
-                            tool_calls: vec![TraceToolCall {
-                                id: "call_tool_info_message".to_string(),
-                                name: "tool_info".to_string(),
-                                arguments: serde_json::json!({"name": "message"}),
-                            }],
-                            input_tokens: 100,
-                            output_tokens: 20,
-                        },
-                        expected_tool_results: Vec::new(),
-                    },
                     TraceStep {
                         request_hint: None,
                         response: TraceResponse::ToolCalls {
@@ -1187,7 +1174,7 @@ mod tests {
 
         let results = rig.tool_results();
         let info_results: Vec<_> = results.iter().filter(|(n, _)| n == "tool_info").collect();
-        assert_eq!(info_results.len(), 2, "Expected two tool_info results");
+        assert_eq!(info_results.len(), 1, "Expected one tool_info result");
 
         let info_json: Vec<serde_json::Value> = info_results
             .iter()
@@ -1197,22 +1184,6 @@ mod tests {
             })
             .collect();
 
-        let message_json = info_json
-            .iter()
-            .find(|info| info["name"] == "message")
-            .expect("tool_info result should contain 'message'");
-        let message_description = message_json["description"]
-            .as_str()
-            .expect("message description should be a string");
-        assert!(
-            message_description.contains("Use normal assistant output to reply"),
-            "message description should distinguish normal replies: {message_description}"
-        );
-        assert!(
-            message_description.contains("proactive notifications"),
-            "message description should describe proactive sends: {message_description}"
-        );
-
         let tool_search_json = info_json
             .iter()
             .find(|info| info["name"] == "tool_search")
@@ -1221,14 +1192,8 @@ mod tests {
             .as_str()
             .expect("tool_search description should be a string");
         assert!(
-            tool_search_description.contains("`tool_install`")
-                && tool_search_description.contains("`tool_activate`"),
-            "tool_search description should describe setup/activation via tool_install and \
-             tool_activate: {tool_search_description}"
-        );
-        assert!(
-            tool_search_description.contains("use the `message` tool for proactive outbound sends"),
-            "tool_search description should point outbound sends to message: {tool_search_description}"
+            tool_search_description.contains("Extensions include"),
+            "tool_search description should explain extension categories: {tool_search_description}"
         );
 
         rig.shutdown();

@@ -1,9 +1,7 @@
 //! Lifecycle management for extensions: discovery, installation, authentication,
-//! and activation of channels, tools, and MCP servers.
+//! and activation of tools and MCP servers.
 //!
-//! Extensions are the user-facing abstraction that unifies three runtime kinds:
-//! - **Channels** (Telegram, Slack, Discord) — messaging platform connections
-//!   and conversation transports (WASM)
+//! Extensions are the user-facing abstraction that unifies two runtime kinds:
 //! - **Tools** — sandboxed capabilities (WASM)
 //! - **MCP servers** — external API integrations via Model Context Protocol
 //!
@@ -11,10 +9,10 @@
 //! authenticate, and activate extensions at runtime without CLI commands.
 //!
 //! ```text
-//!  User: "add telegram"
-//!    -> tool_search("telegram")    -> finds channel in registry
-//!    -> tool_install("telegram")   -> copies bundled WASM to channels dir
-//!    -> tool_activate("telegram")  -> configures credentials, starts channel
+//!  User: "add notion"
+//!    -> tool_search("notion")    -> finds MCP server in registry
+//!    -> tool_install("notion")   -> saves MCP config
+//!    -> tool_activate("notion")  -> connects and registers tools
 //! ```
 
 pub mod discovery;
@@ -37,10 +35,6 @@ pub enum ExtensionKind {
     McpServer,
     /// Sandboxed WASM module, file-based, capabilities auth.
     WasmTool,
-    /// WASM channel module with hot-activation support.
-    WasmChannel,
-    /// External channel via channel-relay service (Slack, etc.).
-    ChannelRelay,
 }
 
 impl std::fmt::Display for ExtensionKind {
@@ -48,8 +42,6 @@ impl std::fmt::Display for ExtensionKind {
         match self {
             ExtensionKind::McpServer => write!(f, "mcp_server"),
             ExtensionKind::WasmTool => write!(f, "wasm_tool"),
-            ExtensionKind::WasmChannel => write!(f, "wasm_channel"),
-            ExtensionKind::ChannelRelay => write!(f, "channel_relay"),
         }
     }
 }
@@ -104,8 +96,6 @@ pub enum ExtensionSource {
     },
     /// Discovered online (not yet validated for a specific source type).
     Discovered { url: String },
-    /// External channel via channel-relay service.
-    ChannelRelay { relay_url: String },
 }
 
 /// Hint about what authentication method is needed.
@@ -123,8 +113,6 @@ pub enum AuthHint {
     CapabilitiesAuth,
     /// No authentication needed.
     None,
-    /// OAuth via channel-relay service.
-    ChannelRelayOAuth,
 }
 
 /// Where a search result came from.
@@ -622,21 +610,21 @@ mod tests {
     #[test]
     fn auth_result_awaiting_token_round_trip() {
         let result = AuthResult::awaiting_token(
-            "telegram",
-            ExtensionKind::WasmChannel,
-            "Enter your bot token".to_string(),
+            "github",
+            ExtensionKind::WasmTool,
+            "Enter your token".to_string(),
             None,
         );
         let json = serde_json::to_value(&result).unwrap();
 
         assert_eq!(json["status"], "awaiting_token");
-        assert_eq!(json["instructions"], "Enter your bot token");
+        assert_eq!(json["instructions"], "Enter your token");
         assert_eq!(json["awaiting_token"], true);
         assert!(json.get("auth_url").is_none());
 
         let back: AuthResult = serde_json::from_value(json).unwrap();
         assert!(back.is_awaiting_token());
-        assert_eq!(back.instructions(), Some("Enter your bot token"));
+        assert_eq!(back.instructions(), Some("Enter your token"));
     }
 
     #[test]
@@ -697,7 +685,6 @@ mod tests {
     fn extension_kind_display() {
         assert_eq!(ExtensionKind::McpServer.to_string(), "mcp_server");
         assert_eq!(ExtensionKind::WasmTool.to_string(), "wasm_tool");
-        assert_eq!(ExtensionKind::WasmChannel.to_string(), "wasm_channel");
     }
 
     #[test]
@@ -705,7 +692,6 @@ mod tests {
         for kind in [
             ExtensionKind::McpServer,
             ExtensionKind::WasmTool,
-            ExtensionKind::WasmChannel,
         ] {
             let json = serde_json::to_value(kind).unwrap();
             let back: ExtensionKind = serde_json::from_value(json).unwrap();
@@ -719,10 +705,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(ExtensionKind::WasmTool).unwrap(),
             "wasm_tool"
-        );
-        assert_eq!(
-            serde_json::to_value(ExtensionKind::WasmChannel).unwrap(),
-            "wasm_channel"
         );
     }
 
@@ -910,13 +892,13 @@ mod tests {
     fn activate_result_serde_roundtrip() {
         let ar = ActivateResult {
             name: "slack".to_string(),
-            kind: ExtensionKind::WasmChannel,
+            kind: ExtensionKind::WasmTool,
             tools_loaded: vec!["send_message".to_string(), "read_channel".to_string()],
             message: "Activated with 2 tools".to_string(),
         };
         let json = serde_json::to_value(&ar).unwrap();
         assert_eq!(json["name"], "slack");
-        assert_eq!(json["kind"], "wasm_channel");
+        assert_eq!(json["kind"], "wasm_tool");
         assert_eq!(json["tools_loaded"].as_array().unwrap().len(), 2);
         let back: ActivateResult = serde_json::from_value(json).unwrap();
         assert_eq!(back.tools_loaded, vec!["send_message", "read_channel"]);
@@ -1085,7 +1067,7 @@ mod tests {
         assert_eq!(
             AuthResult::awaiting_authorization(
                 "c",
-                ExtensionKind::WasmChannel,
+                ExtensionKind::WasmTool,
                 "https://x.com".into(),
                 "local".into(),
             )

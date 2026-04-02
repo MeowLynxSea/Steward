@@ -376,7 +376,7 @@ mod tests {
     /// always have `is_internal == false`, regardless of metadata content.
     #[test]
     fn test_external_metadata_cannot_spoof_internal_flag() {
-        let msg = IncomingMessage::new("wasm_channel", "attacker", "pwned").with_metadata(
+        let msg = IncomingMessage::new("external", "attacker", "pwned").with_metadata(
             serde_json::json!({
                 "__internal_job_monitor": true,
                 "is_internal": true,

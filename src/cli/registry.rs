@@ -10,7 +10,7 @@ use crate::registry::manifest::ManifestKind;
 pub enum RegistryCommand {
     /// List available extensions in the registry
     List {
-        /// Filter by kind: "tool" or "channel"
+        /// Filter by kind: "tool" or "mcp_server"
         #[arg(short, long)]
         kind: Option<String>,
 
@@ -94,8 +94,8 @@ fn cmd_list(
 ) -> anyhow::Result<()> {
     let kind_filter = match kind {
         Some("tool" | "tools") => Some(ManifestKind::Tool),
-        Some("channel" | "channels") => Some(ManifestKind::Channel),
-        Some(other) => anyhow::bail!("Unknown kind '{}'. Use 'tool' or 'channel'.", other),
+        Some("mcp_server" | "mcp-servers" | "mcp_servers") => Some(ManifestKind::McpServer),
+        Some(other) => anyhow::bail!("Unknown kind '{}'. Use 'tool' or 'mcp_server'.", other),
         None => None,
     };
 

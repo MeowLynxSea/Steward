@@ -2,7 +2,7 @@
 //!
 //! Provides:
 //! - [`StubLlm`]: A configurable LLM provider that returns a fixed response
-//! - [`StubChannel`]: A configurable channel stub with message injection and response capture
+//! - [`StubChannel`]: A configurable transport stub with message injection and response capture
 //! - [`TestHarnessBuilder`]: Builder for wiring `AgentDeps` with defaults
 //! - [`TestHarness`]: The assembled components ready for use in tests
 //!
@@ -32,7 +32,7 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc};
 
 use crate::agent::AgentDeps;
 use crate::channels::{
-    Channel, ChannelManager, IncomingMessage, MessageStream, OutgoingResponse, StatusUpdate,
+    IncomingMessage, MessageStream, MessageTransport, OutgoingResponse, StatusUpdate,
 };
 use crate::db::Database;
 use crate::error::{ChannelError, LlmError};
@@ -284,9 +284,6 @@ impl StubChannel {
     }
 
     /// Get a shared handle to the response capture list.
-    ///
-    /// Call this *before* moving the channel into a `ChannelManager`,
-    /// since `add()` takes ownership.
     pub fn captured_responses_handle(
         &self,
     ) -> Arc<Mutex<Vec<(IncomingMessage, OutgoingResponse)>>> {
@@ -309,13 +306,8 @@ impl StubChannel {
     }
 }
 
-#[async_trait]
-impl Channel for StubChannel {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn start(&self) -> Result<MessageStream, ChannelError> {
+impl StubChannel {
+    pub async fn start(&self) -> Result<MessageStream, ChannelError> {
         let rx = self
             .rx
             .lock()
@@ -328,7 +320,10 @@ impl Channel for StubChannel {
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(Box::pin(stream))
     }
+}
 
+#[async_trait]
+impl MessageTransport for StubChannel {
     async fn respond(
         &self,
         msg: &IncomingMessage,
@@ -349,16 +344,6 @@ impl Channel for StubChannel {
         self.statuses.lock().expect("poisoned").push(status);
         Ok(())
     }
-
-    async fn health_check(&self) -> Result<(), ChannelError> {
-        if self.healthy.load(Ordering::Relaxed) {
-            Ok(())
-        } else {
-            Err(ChannelError::HealthCheckFailed {
-                name: self.name.clone(),
-            })
-        }
-    }
 }
 
 /// Captured broadcast deliveries keyed by the target user or chat identifier.
@@ -369,16 +354,15 @@ pub type BroadcastCapture = Arc<AsyncMutex<Vec<(String, OutgoingResponse)>>>;
 /// This is useful for unit tests that need to assert message routing without
 /// spinning up a full interactive channel harness.
 pub struct RecordingBroadcastChannel {
-    name: &'static str,
     captures: BroadcastCapture,
 }
 
 impl RecordingBroadcastChannel {
     pub fn new(name: &'static str) -> (Self, BroadcastCapture) {
         let captures = Arc::new(AsyncMutex::new(Vec::new()));
+        let _ = name;
         (
             Self {
-                name,
                 captures: Arc::clone(&captures),
             },
             captures,
@@ -387,16 +371,7 @@ impl RecordingBroadcastChannel {
 }
 
 #[async_trait]
-impl Channel for RecordingBroadcastChannel {
-    fn name(&self) -> &str {
-        self.name
-    }
-
-    async fn start(&self) -> Result<MessageStream, ChannelError> {
-        let (_tx, rx) = mpsc::channel::<IncomingMessage>(1);
-        Ok(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx)))
-    }
-
+impl MessageTransport for RecordingBroadcastChannel {
     async fn respond(
         &self,
         _msg: &IncomingMessage,
@@ -415,6 +390,7 @@ impl Channel for RecordingBroadcastChannel {
 
     async fn broadcast(
         &self,
+        _channel_name: &str,
         user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
@@ -425,9 +401,6 @@ impl Channel for RecordingBroadcastChannel {
         Ok(())
     }
 
-    async fn health_check(&self) -> Result<(), ChannelError> {
-        Ok(())
-    }
 }
 
 /// Assembled test components.
@@ -436,8 +409,8 @@ pub struct TestHarness {
     pub deps: AgentDeps,
     /// Direct reference to the database (as `Arc<dyn Database>`).
     pub db: Arc<dyn Database>,
-    /// Stub channel sender + manager, present if `with_stub_channel()` was called.
-    pub channel: Option<(mpsc::Sender<IncomingMessage>, ChannelManager)>,
+    /// Stub channel sender + transport, present if `with_stub_channel()` was called.
+    pub channel: Option<(mpsc::Sender<IncomingMessage>, Arc<StubChannel>)>,
     /// Temp directory guard — keeps the test database alive. Dropped
     /// automatically when the harness goes out of scope.
     #[cfg(feature = "libsql")]
@@ -489,10 +462,7 @@ impl TestHarnessBuilder {
         self
     }
 
-    /// Include a `StubChannel` wired into a `ChannelManager`.
-    ///
-    /// The harness will expose the sender (for injecting messages) and
-    /// the manager (for routing responses) via [`TestHarness::channel`].
+    /// Include a `StubChannel` with direct message injection and response capture.
     pub fn with_stub_channel(mut self) -> Self {
         self.stub_channel = true;
         self
@@ -537,9 +507,7 @@ impl TestHarnessBuilder {
 
         let channel = if self.stub_channel {
             let (stub, sender) = StubChannel::new("stub");
-            let manager = ChannelManager::new();
-            manager.add(Box::new(stub)).await;
-            Some((sender, manager))
+            Some((sender, Arc::new(stub)))
         } else {
             None
         };
@@ -1012,10 +980,8 @@ mod tests {
     #[tokio::test]
     async fn test_stub_channel_health_check() {
         let (channel, _sender) = StubChannel::new("healthy");
-        channel.health_check().await.expect("health check failed");
-
         channel.set_healthy(false);
-        assert!(channel.health_check().await.is_err());
+        assert!(!channel.healthy.load(Ordering::Relaxed));
     }
 
     // === Database CRUD coverage for untested trait methods ===
@@ -1074,7 +1040,7 @@ mod tests {
     async fn test_harness_with_channel() {
         let harness = TestHarnessBuilder::new().with_stub_channel().build().await;
 
-        let (sender, channel_manager) =
+        let (sender, channel) =
             harness.channel.as_ref().expect("channel should be present");
 
         // Inject a message via sender
@@ -1083,9 +1049,10 @@ mod tests {
             .await
             .expect("send failed");
 
-        // Verify channel is registered in the manager
-        let names = channel_manager.channel_names().await;
-        assert!(names.contains(&"stub".to_string()));
+        let mut stream = channel.start().await.expect("start failed");
+        use futures::StreamExt;
+        let message = stream.next().await.expect("stream ended");
+        assert_eq!(message.channel, "stub");
     }
 
     #[cfg(feature = "libsql")]

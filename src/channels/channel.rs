@@ -1,4 +1,4 @@
-//! Channel trait and message types.
+//! Message ingress and delivery primitives.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -389,25 +389,15 @@ impl StatusUpdate {
     }
 }
 
-/// Trait for message channels.
+/// Optional delivery transport for non-API ingress.
 ///
-/// Channels receive messages from external sources and convert them to
-/// a unified format. They also handle sending responses back.
+/// The production runtime is API-first and injects [`IncomingMessage`] values
+/// directly into the agent loop. Tests and any remaining in-process adapters
+/// can provide a transport to capture responses, status updates, proactive
+/// notifications, and channel-specific prompt context.
 #[async_trait]
-pub trait Channel: Send + Sync {
-    /// Get the channel name (e.g., "cli", "slack", "telegram", "http").
-    fn name(&self) -> &str;
-
-    /// Start listening for messages.
-    ///
-    /// Returns a stream of incoming messages. The channel should handle
-    /// reconnection and error recovery internally.
-    async fn start(&self) -> Result<MessageStream, ChannelError>;
-
-    /// Send a response back to the user.
-    ///
-    /// The response is sent in the context of the original message
-    /// (same channel, same thread if applicable).
+pub trait MessageTransport: Send + Sync {
+    /// Send a response back in the context of the original message.
     async fn respond(
         &self,
         msg: &IncomingMessage,
@@ -419,7 +409,7 @@ pub trait Channel: Send + Sync {
     /// The metadata contains channel-specific routing info (e.g., Telegram chat_id)
     /// needed to deliver the status to the correct destination.
     ///
-    /// Default implementation does nothing (for channels that don't support status).
+    /// Default implementation does nothing.
     async fn send_status(
         &self,
         _status: StatusUpdate,
@@ -428,22 +418,17 @@ pub trait Channel: Send + Sync {
         Ok(())
     }
 
-    /// Send a proactive message without a prior incoming message.
+    /// Send a proactive message to a user on the named ingress surface.
     ///
-    /// Used for alerts, heartbeat notifications, and other agent-initiated communication.
-    /// The user_id helps target a specific user within the channel.
-    ///
-    /// Default implementation does nothing (for channels that don't support broadcast).
+    /// Default implementation does nothing.
     async fn broadcast(
         &self,
+        _channel_name: &str,
         _user_id: &str,
         _response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
         Ok(())
     }
-
-    /// Check if the channel is healthy.
-    async fn health_check(&self) -> Result<(), ChannelError>;
 
     /// Get conversation context from message metadata for system prompt.
     ///
@@ -455,28 +440,10 @@ pub trait Channel: Send + Sync {
         HashMap::new()
     }
 
-    /// Gracefully shut down the channel.
+    /// Gracefully shut down the transport.
     async fn shutdown(&self) -> Result<(), ChannelError> {
         Ok(())
     }
-}
-
-/// Trait for channels that support hot-secret-swapping during SIGHUP reload.
-///
-/// This allows channels to update authentication credentials without restarting,
-/// enabling zero-downtime configuration reloads. Channels that don't support
-/// secret updates can simply not implement this trait.
-#[async_trait]
-pub trait ChannelSecretUpdater: Send + Sync {
-    /// Update the secret for this channel.
-    ///
-    /// Called during SIGHUP configuration reload. Implementation should:
-    /// - Apply the new secret atomically
-    /// - Not fail the entire reload if secret update fails
-    /// - Log appropriate errors/info messages
-    ///
-    /// The secret is optional (may be None if secret is no longer configured).
-    async fn update_secret(&self, new_secret: Option<secrecy::SecretString>);
 }
 
 #[cfg(test)]

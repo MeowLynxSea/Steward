@@ -2,11 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use crate::agent::{Agent, AgentDeps};
 use crate::api::{ApiState, local_api_addr, run_api};
 use crate::app::{AppBuilder, AppBuilderFlags};
-use crate::channels::ChannelManager;
+use crate::channels::{IncomingMessage, MessageStream};
 use crate::config::Config;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
@@ -49,21 +51,19 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     let prompt_queue = orch.prompt_queue;
     let docker_status = orch.docker_status;
 
-    let channels = Arc::new(ChannelManager::new());
-
     let active_tool_names = components.tools.list().await;
     let _ = bootstrap_hooks(
         &components.hooks,
         components.workspace.as_ref(),
         &config.wasm.tools_dir,
-        &config.channels.wasm_channels_dir,
         &active_tool_names,
-        &[],
         &components.dev_loaded_tool_names,
     )
     .await;
 
     let session_manager = Arc::clone(&components.agent_session_manager);
+    let (inject_tx, inject_rx) = mpsc::channel::<IncomingMessage>(64);
+    let message_stream: MessageStream = Box::pin(ReceiverStream::new(inject_rx));
     let scheduler_slot: crate::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
@@ -73,7 +73,7 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         container_job_manager.clone(),
         components.db.clone(),
         job_event_tx.clone(),
-        Some(channels.inject_sender()),
+        Some(inject_tx.clone()),
         if config.sandbox.enabled {
             Some(Arc::clone(&prompt_queue))
         } else {
@@ -81,11 +81,6 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         },
         components.secrets_store.clone(),
     );
-
-    components
-        .tools
-        .register_message_tools(Arc::clone(&channels), components.extension_manager.clone())
-        .await;
 
     let reaper_context_manager = Arc::clone(&components.context_manager);
     let task_runtime = if let Some(store) = components.db.clone() {
@@ -123,7 +118,7 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
             store,
             sse_manager.clone(),
             Some(task_runtime.clone()),
-            Some(channels.inject_sender()),
+            Some(inject_tx.clone()),
             Some(session_manager.clone()),
             components.workspace.clone(),
         )
@@ -184,10 +179,11 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     };
 
     let routine_engine_slot = Arc::new(tokio::sync::RwLock::new(None));
-    let mut agent = Agent::new(
+    let mut agent = Agent::new_with_message_stream(
         config.agent.clone(),
         deps,
-        channels,
+        message_stream,
+        None,
         Some(config.heartbeat.clone()),
         Some(config.hygiene.clone()),
         Some(config.routines.clone()),

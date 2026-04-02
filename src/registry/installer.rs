@@ -116,7 +116,6 @@ fn validate_manifest_install_inputs(manifest: &ExtensionManifest) -> Result<(), 
 
     let expected_prefix = match manifest.kind {
         ManifestKind::Tool => "tools-src/",
-        ManifestKind::Channel => "channels-src/",
         ManifestKind::McpServer => unreachable!(),
     };
 
@@ -188,7 +187,7 @@ fn download_failure_reason(error: &reqwest::Error) -> String {
 pub struct InstallOutcome {
     /// Extension name.
     pub name: String,
-    /// Whether this is a tool or channel.
+    /// Whether this is a tool or MCP server.
     pub kind: ManifestKind,
     /// Destination path of the installed WASM binary.
     pub wasm_path: PathBuf,
@@ -204,16 +203,13 @@ pub struct RegistryInstaller {
     repo_root: PathBuf,
     /// Directory for installed tools (`~/.ironcowork/tools/`).
     tools_dir: PathBuf,
-    /// Directory for installed channels (`~/.ironcowork/channels/`).
-    channels_dir: PathBuf,
 }
 
 impl RegistryInstaller {
-    pub fn new(repo_root: PathBuf, tools_dir: PathBuf, channels_dir: PathBuf) -> Self {
+    pub fn new(repo_root: PathBuf, tools_dir: PathBuf) -> Self {
         Self {
             repo_root,
             tools_dir,
-            channels_dir,
         }
     }
 
@@ -223,7 +219,6 @@ impl RegistryInstaller {
         Self {
             repo_root,
             tools_dir: base_dir.join("tools"),
-            channels_dir: base_dir.join("channels"),
         }
     }
 
@@ -255,7 +250,6 @@ impl RegistryInstaller {
 
         let target_dir = match manifest.kind {
             ManifestKind::Tool => &self.tools_dir,
-            ManifestKind::Channel => &self.channels_dir,
             ManifestKind::McpServer => unreachable!(),
         };
 
@@ -440,7 +434,6 @@ impl RegistryInstaller {
 
         let target_dir = match manifest.kind {
             ManifestKind::Tool => &self.tools_dir,
-            ManifestKind::Channel => &self.channels_dir,
             ManifestKind::McpServer => {
                 return Err(RegistryError::InvalidManifest {
                     name: manifest.name.clone(),
@@ -852,7 +845,6 @@ mod tests {
         let installer = RegistryInstaller::new(
             PathBuf::from("/repo"),
             PathBuf::from("/home/.ironcowork/tools"),
-            PathBuf::from("/home/.ironcowork/channels"),
         );
         assert_eq!(installer.repo_root, PathBuf::from("/repo"));
     }
@@ -884,11 +876,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_source_rejects_path_traversal_name() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
+        let installer =
+            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
 
         let manifest = test_manifest("../evil", "tools-src/evil", None, None);
 
@@ -904,11 +893,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_non_https_url() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
+        let installer =
+            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
 
         let manifest = test_manifest(
             "demo",
@@ -931,11 +917,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_disallowed_host() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
+        let installer =
+            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
 
         let manifest = test_manifest(
             "demo",
@@ -956,11 +939,8 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_null_sha256() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
+        let installer =
+            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
 
         // Valid URL but no sha256 — should be rejected before any download attempt
         let manifest = test_manifest(
@@ -1053,66 +1033,6 @@ mod tests {
         assert!(result.has_capabilities);
     }
 
-    #[tokio::test]
-    async fn test_install_from_source_rejects_wrong_prefix_for_channel() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
-
-        // Channel manifest with tools-src/ prefix should be rejected
-        let manifest = test_manifest_with_kind(
-            "telegram",
-            "tools-src/telegram",
-            None,
-            None,
-            ManifestKind::Channel,
-        );
-
-        let result = installer.install_from_source(&manifest, false).await;
-        match result {
-            Err(RegistryError::InvalidManifest { field, reason, .. }) => {
-                assert_eq!(field, "source.dir");
-                assert!(reason.contains("channels-src/"), "reason: {}", reason);
-            }
-            other => panic!("unexpected result: {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_install_from_source_accepts_correct_channel_prefix() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
-
-        // Channel manifest with channels-src/ prefix should pass validation
-        // (will fail later because source dir doesn't exist, which is fine)
-        let manifest = test_manifest_with_kind(
-            "telegram",
-            "channels-src/telegram",
-            None,
-            None,
-            ManifestKind::Channel,
-        );
-
-        let result = installer.install_from_source(&manifest, false).await;
-        match result {
-            Err(RegistryError::ManifestRead { reason, .. }) => {
-                assert!(
-                    reason.contains("source directory does not exist"),
-                    "reason: {}",
-                    reason
-                );
-            }
-            other => panic!("unexpected result: {:?}", other),
-        }
-    }
-
     #[test]
     fn test_extract_tar_gz_missing_wasm() {
         use flate2::Compression;
@@ -1172,11 +1092,8 @@ mod tests {
         );
     }
 
-    // Regression tests for tool/channel artifact name collision (PR #964).
-    // When a tool and channel share the same registry filename (e.g. slack.json),
-    // CI produces kind-prefixed bundles (tool-slack-*.tar.gz vs channel-slack-*.tar.gz).
-    // The files *inside* each archive use manifest.name (slack-tool.wasm vs slack.wasm).
-    // These tests verify the installer extracts by manifest.name correctly.
+    // Regression tests for artifact name handling (PR #964).
+    // The installer must extract by manifest.name, not by registry file stem.
 
     fn build_test_tar_gz(wasm_name: &str, caps_name: Option<&str>) -> Vec<u8> {
         use flate2::Compression;
@@ -1261,79 +1178,4 @@ mod tests {
         assert!(result.has_capabilities);
     }
 
-    #[test]
-    fn test_extract_correct_wasm_from_channel_bundle() {
-        // Channel bundle contains slack.wasm — extraction by name="slack" succeeds.
-        let gz_bytes = build_test_tar_gz("slack.wasm", Some("slack.capabilities.json"));
-
-        let tmp = tempfile::tempdir().unwrap();
-        let wasm_path = tmp.path().join("slack.wasm");
-        let caps_path = tmp.path().join("slack.capabilities.json");
-
-        let result =
-            extract_tar_gz(&gz_bytes, "slack", &wasm_path, &caps_path, "test://url").unwrap();
-
-        assert!(wasm_path.exists());
-        assert!(caps_path.exists());
-        assert!(result.has_capabilities);
-    }
-
-    #[tokio::test]
-    async fn test_tool_and_channel_install_to_separate_directories() {
-        // Tool and channel manifests with the same file_stem ("slack") install
-        // to different directories without collision.
-        let temp = tempfile::tempdir().expect("tempdir");
-        let installer = RegistryInstaller::new(
-            temp.path().to_path_buf(),
-            temp.path().join("tools"),
-            temp.path().join("channels"),
-        );
-
-        let tool_manifest = test_manifest_with_kind(
-            "slack-tool",
-            "tools-src/slack",
-            None,
-            None,
-            ManifestKind::Tool,
-        );
-        let channel_manifest = test_manifest_with_kind(
-            "slack",
-            "channels-src/slack",
-            None,
-            None,
-            ManifestKind::Channel,
-        );
-
-        // Both fail because source dirs don't exist, but the error path reveals
-        // the target directory — tool goes to tools/, channel goes to channels/.
-        let tool_err = installer
-            .install_from_source(&tool_manifest, false)
-            .await
-            .expect_err("no source dir");
-        let channel_err = installer
-            .install_from_source(&channel_manifest, false)
-            .await
-            .expect_err("no source dir");
-
-        match tool_err {
-            RegistryError::ManifestRead { path, .. } => {
-                assert!(
-                    path.ends_with("tools-src/slack"),
-                    "tool should resolve to tools-src/slack, got: {}",
-                    path.display()
-                );
-            }
-            other => panic!("expected ManifestRead for tool, got: {:?}", other),
-        }
-        match channel_err {
-            RegistryError::ManifestRead { path, .. } => {
-                assert!(
-                    path.ends_with("channels-src/slack"),
-                    "channel should resolve to channels-src/slack, got: {}",
-                    path.display()
-                );
-            }
-            other => panic!("expected ManifestRead for channel, got: {:?}", other),
-        }
-    }
 }

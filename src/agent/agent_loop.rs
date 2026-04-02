@@ -7,6 +7,7 @@
 //! - `commands` - System commands and job handlers
 //! - `thread_ops` - Thread/session operations (user input, undo, approval, persistence)
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -20,7 +21,7 @@ use crate::agent::session::ThreadState;
 use crate::agent::session_manager::SessionManager;
 use crate::agent::submission::{Submission, SubmissionParser, SubmissionResult};
 use crate::agent::{HeartbeatConfig as AgentHeartbeatConfig, Router, Scheduler, SchedulerDeps};
-use crate::channels::{ChannelManager, IncomingMessage, OutgoingResponse};
+use crate::channels::{IncomingMessage, MessageStream, MessageTransport, OutgoingResponse};
 use crate::config::{AgentConfig, HeartbeatConfig, RoutineConfig, SkillsConfig};
 use crate::context::ContextManager;
 use crate::db::Database;
@@ -189,11 +190,78 @@ pub struct AgentDeps {
     pub task_runtime: Option<Arc<TaskRuntime>>,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct AgentChannels(Option<Arc<dyn MessageTransport>>);
+
+impl AgentChannels {
+    pub(super) fn from_transport(transport: Option<Arc<dyn MessageTransport>>) -> Self {
+        Self(transport)
+    }
+
+    pub(super) async fn respond(
+        &self,
+        message: &IncomingMessage,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        if let Some(transport) = self.0.as_ref() {
+            transport.respond(message, response).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) async fn send_status(
+        &self,
+        channel_name: &str,
+        status: crate::channels::StatusUpdate,
+        metadata: &serde_json::Value,
+    ) -> Result<(), ChannelError> {
+        if let Some(transport) = self.0.as_ref() {
+            let _ = channel_name;
+            transport.send_status(status, metadata).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) async fn broadcast(
+        &self,
+        channel_name: &str,
+        user_id: &str,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        if let Some(transport) = self.0.as_ref() {
+            transport.broadcast(channel_name, user_id, response).await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) async fn shutdown_all(&self) -> Result<(), ChannelError> {
+        if let Some(transport) = self.0.as_ref() {
+            transport.shutdown().await
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn conversation_context(
+        &self,
+        metadata: &serde_json::Value,
+    ) -> HashMap<String, String> {
+        self.0
+            .as_ref()
+            .map(|transport| transport.conversation_context(metadata))
+            .unwrap_or_default()
+    }
+}
+
 /// The main agent that coordinates all components.
 pub struct Agent {
     pub(super) config: AgentConfig,
     pub(super) deps: AgentDeps,
-    pub(super) channels: Arc<ChannelManager>,
+    pub(super) channels: AgentChannels,
+    pub(super) message_stream: tokio::sync::Mutex<Option<MessageStream>>,
     pub(super) context_manager: Arc<ContextManager>,
     pub(super) scheduler: Arc<Scheduler>,
     pub(super) router: Router,
@@ -246,15 +314,67 @@ impl Agent {
         &self.deps.owner_id
     }
 
-    /// Create a new agent.
-    ///
-    /// Optionally accepts pre-created `ContextManager` and `SessionManager` for sharing
-    /// with external components (job tools, web gateway). Creates new ones if not provided.
+    pub(super) async fn send_channel_response(
+        &self,
+        message: &IncomingMessage,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        self.channels.respond(message, response).await
+    }
+
+    pub(super) async fn send_channel_status(
+        &self,
+        channel_name: &str,
+        status: crate::channels::StatusUpdate,
+        metadata: &serde_json::Value,
+    ) -> Result<(), ChannelError> {
+        self.channels.send_status(channel_name, status, metadata).await
+    }
+
+    pub(super) async fn broadcast_channel(
+        &self,
+        channel_name: &str,
+        user_id: &str,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        self.channels.broadcast(channel_name, user_id, response).await
+    }
+
+    pub(super) async fn shutdown_channels(&self) -> Result<(), ChannelError> {
+        self.channels.shutdown_all().await
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub fn new_with_message_stream(
         config: AgentConfig,
         deps: AgentDeps,
-        channels: Arc<ChannelManager>,
+        message_stream: MessageStream,
+        transport: Option<Arc<dyn MessageTransport>>,
+        heartbeat_config: Option<HeartbeatConfig>,
+        hygiene_config: Option<crate::config::HygieneConfig>,
+        routine_config: Option<RoutineConfig>,
+        context_manager: Option<Arc<ContextManager>>,
+        session_manager: Option<Arc<SessionManager>>,
+    ) -> Self {
+        Self::new_inner(
+            config,
+            deps,
+            message_stream,
+            transport,
+            heartbeat_config,
+            hygiene_config,
+            routine_config,
+            context_manager,
+            session_manager,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_inner(
+        config: AgentConfig,
+        deps: AgentDeps,
+        message_stream: MessageStream,
+        transport: Option<Arc<dyn MessageTransport>>,
         heartbeat_config: Option<HeartbeatConfig>,
         hygiene_config: Option<crate::config::HygieneConfig>,
         routine_config: Option<RoutineConfig>,
@@ -292,7 +412,8 @@ impl Agent {
         Self {
             config,
             deps,
-            channels,
+            channels: AgentChannels::from_transport(transport),
+            message_stream: tokio::sync::Mutex::new(Some(message_stream)),
             context_manager,
             scheduler,
             router: Router::new(),
@@ -490,8 +611,13 @@ impl Agent {
             None
         };
 
-        // Start channels
-        let mut message_stream = self.channels.start_all().await?;
+        // Start the primary message ingress.
+        let mut message_stream = self
+            .message_stream
+            .lock()
+            .await
+            .take()
+            .expect("agent requires a configured message stream");
 
         // Start self-repair task with notification forwarding
         let mut self_repair = DefaultSelfRepair::new(
@@ -509,6 +635,7 @@ impl Agent {
         let repair_interval = self.config.repair_check_interval;
         let repair_channels = self.channels.clone();
         let repair_owner_id = self.owner_id().to_string();
+        let repair_sse = self.deps.sse_tx.clone();
         let repair_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(repair_interval).await;
@@ -556,8 +683,17 @@ impl Agent {
 
                     if let Some(msg) = notification {
                         let response = OutgoingResponse::text(format!("Self-Repair: {}", msg));
+                        if let Some(ref sse) = repair_sse {
+                            sse.broadcast_for_user(
+                                &repair_owner_id,
+                                ironclaw_common::AppEvent::Response {
+                                    content: response.content.clone(),
+                                    thread_id: String::new(),
+                                },
+                            );
+                        }
                         let _ = repair_channels
-                            .broadcast_all(&repair_owner_id, response)
+                            .broadcast("gateway", &repair_owner_id, response)
                             .await;
                     }
                 }
@@ -572,8 +708,17 @@ impl Agent {
                                 "Self-Repair: Tool '{}' repaired: {}",
                                 tool.name, message
                             ));
+                            if let Some(ref sse) = repair_sse {
+                                sse.broadcast_for_user(
+                                    &repair_owner_id,
+                                    ironclaw_common::AppEvent::Response {
+                                        content: response.content.clone(),
+                                        thread_id: String::new(),
+                                    },
+                                );
+                            }
                             let _ = repair_channels
-                                .broadcast_all(&repair_owner_id, response)
+                                .broadcast("gateway", &repair_owner_id, response)
                                 .await;
                         }
                         Ok(result) => {
@@ -637,6 +782,7 @@ impl Agent {
                     .await;
                     let notify_user = heartbeat_notify_user;
                     let channels = self.channels.clone();
+                    let sse = self.deps.sse_tx.clone();
                     let is_multi_tenant = hb_config.multi_tenant;
                     tokio::spawn(async move {
                         while let Some(response) = notify_rx.recv().await {
@@ -655,11 +801,23 @@ impl Agent {
                                 None
                             };
 
-                            // Try the configured channel first, fall back to
-                            // broadcasting on all channels.
-                            let targeted_ok = if let Some(ref channel) = notify_channel {
+                            // Prefer the configured ingress target. If no transport
+                            // is attached, SSE remains the API-first delivery path.
+                            let targeted_ok = if let Some(channel) = notify_channel.as_ref() {
                                 let target = effective_user.as_deref().or(notify_target.as_deref());
                                 if let Some(user) = target {
+                                    if let Some(ref sse) = sse {
+                                        sse.broadcast_for_user(
+                                            user,
+                                            ironclaw_common::AppEvent::Response {
+                                                content: response.content.clone(),
+                                                thread_id: response
+                                                    .thread_id
+                                                    .clone()
+                                                    .unwrap_or_default(),
+                                            },
+                                        );
+                                    }
                                     channels
                                         .broadcast(channel, user, response.clone())
                                         .await
@@ -671,20 +829,22 @@ impl Agent {
                                 false
                             };
 
-                            if !targeted_ok {
-                                let fallback = effective_user.as_deref().or(notify_user.as_deref());
-                                if let Some(user) = fallback {
-                                    let results = channels.broadcast_all(user, response).await;
-                                    for (ch, result) in results {
-                                        if let Err(e) = result {
-                                            tracing::warn!(
-                                                "Failed to broadcast heartbeat to {}: {}",
-                                                ch,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
+                            if !targeted_ok
+                                && let Some(user) =
+                                    effective_user.as_deref().or(notify_user.as_deref())
+                                && let Some(ref sse) = sse
+                            {
+                                sse.broadcast_for_user(
+                                    user,
+                                    ironclaw_common::AppEvent::Response {
+                                        content: response.content.clone(),
+                                        thread_id: response.thread_id.clone().unwrap_or_default(),
+                                    },
+                                );
+                            } else if !targeted_ok
+                                && effective_user.as_deref().or(notify_user.as_deref()).is_none()
+                            {
+                                tracing::warn!("Dropping heartbeat notification with no user target");
                             }
                         }
                     });
@@ -760,6 +920,7 @@ impl Agent {
 
                     // Spawn notification forwarder (mirrors heartbeat pattern)
                     let channels = self.channels.clone();
+                    let sse = self.deps.sse_tx.clone();
                     let extension_manager = self.deps.extension_manager.clone();
                     tokio::spawn(async move {
                         while let Some(response) = notify_rx.recv().await {
@@ -788,9 +949,18 @@ impl Agent {
                                 continue;
                             };
 
-                            // Try the configured channel first, fall back to
-                            // broadcasting on all channels.
-                            let targeted_ok = if let Some(ref channel) = notify_channel {
+                            // Prefer the configured ingress target. If no transport
+                            // is attached, SSE remains the API-first delivery path.
+                            let targeted_ok = if let Some(channel) = notify_channel.as_ref() {
+                                if let Some(ref sse) = sse {
+                                    sse.broadcast_for_user(
+                                        &user,
+                                        ironclaw_common::AppEvent::Response {
+                                            content: response.content.clone(),
+                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                        },
+                                    );
+                                }
                                 match channels.broadcast(channel, &user, response.clone()).await {
                                     Ok(()) => true,
                                     Err(e) => {
@@ -813,17 +983,17 @@ impl Agent {
                                 false
                             };
 
-                            if !targeted_ok && let Some(user) = fallback_user {
-                                let results = channels.broadcast_all(&user, response).await;
-                                for (ch, result) in results {
-                                    if let Err(e) = result {
-                                        tracing::warn!(
-                                            "Failed to broadcast routine notification to {}: {}",
-                                            ch,
-                                            e
-                                        );
-                                    }
-                                }
+                            if !targeted_ok
+                                && let Some(user) = fallback_user
+                                && let Some(ref sse) = sse
+                            {
+                                sse.broadcast_for_user(
+                                    &user,
+                                    ironclaw_common::AppEvent::Response {
+                                        content: response.content.clone(),
+                                        thread_id: response.thread_id.clone().unwrap_or_default(),
+                                    },
+                                );
                             }
                         }
                     });
@@ -881,7 +1051,7 @@ impl Agent {
 
             let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
             out.thread_id = Some(id.to_string());
-            let _ = self.channels.broadcast("gateway", "default", out).await;
+            let _ = self.broadcast_channel("gateway", "default", out).await;
         }
 
         // Main message loop
@@ -945,8 +1115,10 @@ impl Agent {
                             // Skip channel delivery for "api" — SSE already delivered the response above.
                             if message.channel != "api" {
                                 if let Err(e) = self
-                                    .channels
-                                    .respond(&message, OutgoingResponse::text(new_content))
+                                    .send_channel_response(
+                                        &message,
+                                        OutgoingResponse::text(new_content),
+                                    )
                                     .await
                                 {
                                     tracing::error!(
@@ -961,8 +1133,10 @@ impl Agent {
                             // Skip channel delivery for "api" — SSE already delivered the response above.
                             if message.channel != "api" {
                                 if let Err(e) = self
-                                    .channels
-                                    .respond(&message, OutgoingResponse::text(response))
+                                    .send_channel_response(
+                                        &message,
+                                        OutgoingResponse::text(response),
+                                    )
                                     .await
                                 {
                                     tracing::error!(
@@ -999,8 +1173,10 @@ impl Agent {
                     );
                     tracing::error!("Error handling message: {}", e);
                     if let Err(send_err) = self
-                        .channels
-                        .respond(&message, OutgoingResponse::text(format!("Error: {}", e)))
+                        .send_channel_response(
+                            &message,
+                            OutgoingResponse::text(format!("Error: {}", e)),
+                        )
                         .await
                     {
                         tracing::error!(
@@ -1024,7 +1200,7 @@ impl Agent {
             cron_handle.abort();
         }
         self.scheduler.stop_all().await;
-        self.channels.shutdown_all().await?;
+        self.shutdown_channels().await?;
 
         Ok(())
     }
@@ -1119,16 +1295,6 @@ impl Agent {
             );
             return Ok(Some(message.content.clone()));
         }
-
-        // Set message tool context for this turn (current channel and target)
-        // For Signal, use signal_target from metadata (group:ID or phone number),
-        // otherwise fall back to user_id
-        let target = message
-            .routing_target()
-            .unwrap_or_else(|| message.user_id.clone());
-        self.tools()
-            .set_message_tool_context(Some(message.channel.clone()), Some(target))
-            .await;
 
         // Parse submission type first
         let mut submission = SubmissionParser::parse(&message.content);
@@ -1345,8 +1511,7 @@ impl Agent {
                 let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
                 out.thread_id = Some(conv_id.to_string());
                 let _ = self
-                    .channels
-                    .broadcast(&message.channel, &message.user_id, out)
+                    .broadcast_channel(&message.channel, &message.user_id, out)
                     .await;
             }
         }

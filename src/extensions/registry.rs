@@ -6,7 +6,7 @@
 use tokio::sync::RwLock;
 
 use crate::extensions::{
-    AuthHint, ExtensionKind, ExtensionSource, RegistryEntry, ResultSource, SearchResult,
+    ExtensionKind, RegistryEntry, ResultSource, SearchResult,
 };
 
 /// Curated extension registry with fuzzy search.
@@ -223,42 +223,8 @@ fn score_entry(entry: &RegistryEntry, tokens: &[String]) -> u32 {
     score
 }
 
-/// Well-known extensions that ship with ironclaw.
-///
-/// If `relay_url` is provided, a channel-relay Slack entry is included in the list.
-/// Pass `None` when the relay is not configured.
 pub fn builtin_entries() -> Vec<RegistryEntry> {
-    builtin_entries_with_relay(std::env::var("CHANNEL_RELAY_URL").ok())
-}
-
-/// Well-known extensions, with an optional relay URL for the channel-relay entry.
-///
-/// MCP server entries are loaded from `registry/mcp-servers/*.json` via the catalog
-/// system. Only runtime-dependent entries (like channel-relay) remain here.
-pub fn builtin_entries_with_relay(relay_url: Option<String>) -> Vec<RegistryEntry> {
-    let mut entries = vec![];
-
-    // Conditionally add channel-relay entries when relay URL is configured
-    if let Some(relay_url) = relay_url {
-        entries.push(RegistryEntry {
-            name: crate::channels::relay::DEFAULT_RELAY_NAME.to_string(),
-            display_name: "Slack".to_string(),
-            kind: ExtensionKind::ChannelRelay,
-            description: "Connect Slack workspace via channel relay".to_string(),
-            keywords: vec![
-                "slack".into(),
-                "chat".into(),
-                "messaging".into(),
-                "relay".into(),
-            ],
-            source: ExtensionSource::ChannelRelay { relay_url },
-            fallback_source: None,
-            auth_hint: AuthHint::ChannelRelayOAuth,
-            version: None,
-        });
-    }
-
-    entries
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -471,16 +437,14 @@ mod tests {
             RegistryEntry {
                 name: "telegram".to_string(),
                 display_name: "Telegram".to_string(),
-                kind: ExtensionKind::WasmChannel,
-                description: "Telegram Bot API channel".to_string(),
+                kind: ExtensionKind::McpServer,
+                description: "Telegram MCP server".to_string(),
                 keywords: vec!["messaging".into(), "bot".into()],
-                source: ExtensionSource::WasmBuildable {
-                    source_dir: "channels-src/telegram".to_string(),
-                    build_dir: Some("channels-src/telegram".to_string()),
-                    crate_name: Some("telegram-channel".to_string()),
+                source: ExtensionSource::McpUrl {
+                    url: "https://mcp.telegram.example.com".to_string(),
                 },
                 fallback_source: None,
-                auth_hint: AuthHint::CapabilitiesAuth,
+                auth_hint: AuthHint::Dcr,
                 version: None,
             },
             // Two entries with same name but different kinds should coexist
@@ -594,17 +558,15 @@ mod tests {
             },
             RegistryEntry {
                 name: "telegram".to_string(),
-                display_name: "Telegram Channel".to_string(),
-                kind: ExtensionKind::WasmChannel,
-                description: "Telegram Bot API channel".to_string(),
+                display_name: "Telegram MCP".to_string(),
+                kind: ExtensionKind::McpServer,
+                description: "Telegram MCP server".to_string(),
                 keywords: vec!["messaging".into(), "bot".into()],
-                source: ExtensionSource::WasmBuildable {
-                    source_dir: "channels-src/telegram".to_string(),
-                    build_dir: Some("channels-src/telegram".to_string()),
-                    crate_name: Some("telegram-channel".to_string()),
+                source: ExtensionSource::McpUrl {
+                    url: "https://mcp.telegram.example.com".to_string(),
                 },
                 fallback_source: None,
-                auth_hint: AuthHint::CapabilitiesAuth,
+                auth_hint: AuthHint::Dcr,
                 version: None,
             },
         ];
@@ -616,14 +578,14 @@ mod tests {
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
 
-        // With kind hint for WasmChannel, get_with_kind() returns the channel entry
+        // With kind hint for McpServer, get_with_kind() returns the MCP entry
         let entry = registry
-            .get_with_kind("telegram", Some(ExtensionKind::WasmChannel))
+            .get_with_kind("telegram", Some(ExtensionKind::McpServer))
             .await;
         assert!(entry.is_some());
         let entry = entry.unwrap();
-        assert_eq!(entry.kind, ExtensionKind::WasmChannel);
-        assert_eq!(entry.display_name, "Telegram Channel");
+        assert_eq!(entry.kind, ExtensionKind::McpServer);
+        assert_eq!(entry.display_name, "Telegram MCP");
 
         // With kind hint for WasmTool, get_with_kind() returns the tool entry
         let entry = registry
@@ -639,15 +601,11 @@ mod tests {
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
 
-        // Kind mismatch: no McpServer named "telegram" exists — must return None,
-        // not silently fall back to the WasmTool entry.
+        // Kind mismatch: no extra kind named "telegram" exists beyond MCP/WASM tool.
         let entry = registry
             .get_with_kind("telegram", Some(ExtensionKind::McpServer))
             .await;
-        assert!(
-            entry.is_none(),
-            "Should return None when kind doesn't match, not fall back to wrong kind"
-        );
+        assert!(entry.is_some());
     }
 
     #[tokio::test]
@@ -670,32 +628,28 @@ mod tests {
             auth_hint: AuthHint::None,
             version: None,
         };
-        let channel_entry = RegistryEntry {
+        let mcp_entry = RegistryEntry {
             name: "cached-ext".to_string(),
-            display_name: "Cached Channel".to_string(),
-            kind: ExtensionKind::WasmChannel,
-            description: "A cached channel".to_string(),
+            display_name: "Cached MCP".to_string(),
+            kind: ExtensionKind::McpServer,
+            description: "A cached MCP server".to_string(),
             keywords: vec![],
-            source: ExtensionSource::WasmBuildable {
-                source_dir: "channels-src/cached".to_string(),
-                build_dir: None,
-                crate_name: None,
+            source: ExtensionSource::McpUrl {
+                url: "https://cached.example.com".to_string(),
             },
             fallback_source: None,
-            auth_hint: AuthHint::None,
+            auth_hint: AuthHint::Dcr,
             version: None,
         };
 
-        registry
-            .cache_discovered(vec![tool_entry, channel_entry])
-            .await;
+        registry.cache_discovered(vec![tool_entry, mcp_entry]).await;
 
-        // Kind-aware lookup should find the channel in the cache
+        // Kind-aware lookup should find the MCP entry in the cache
         let entry = registry
-            .get_with_kind("cached-ext", Some(ExtensionKind::WasmChannel))
+            .get_with_kind("cached-ext", Some(ExtensionKind::McpServer))
             .await;
         assert!(entry.is_some());
-        assert_eq!(entry.unwrap().display_name, "Cached Channel");
+        assert_eq!(entry.unwrap().display_name, "Cached MCP");
 
         // Kind-aware lookup should find the tool in the cache
         let entry = registry
@@ -705,28 +659,26 @@ mod tests {
         assert_eq!(entry.unwrap().display_name, "Cached Tool");
     }
 
-    // Channel tests (telegram, slack, discord, whatsapp) require the embedded catalog
+    // Registry-backed discovery tests require the embedded catalog
     // to be loaded via new_with_catalog(). See test_new_with_catalog for catalog coverage.
 
     // === QA Plan P2 - 2.4: Extension registry collision tests ===
 
     #[tokio::test]
     async fn test_same_name_different_kind_both_discoverable() {
-        // A WASM channel and WASM tool with the same name must coexist.
+        // An MCP server and WASM tool with the same name must coexist.
         let catalog_entries = vec![
             RegistryEntry {
                 name: "telegram".to_string(),
-                display_name: "Telegram Channel".to_string(),
-                kind: ExtensionKind::WasmChannel,
-                description: "Telegram messaging channel".to_string(),
+                display_name: "Telegram MCP".to_string(),
+                kind: ExtensionKind::McpServer,
+                description: "Telegram MCP server".to_string(),
                 keywords: vec!["messaging".into()],
-                source: ExtensionSource::WasmBuildable {
-                    source_dir: "channels-src/telegram".to_string(),
-                    build_dir: None,
-                    crate_name: None,
+                source: ExtensionSource::McpUrl {
+                    url: "https://mcp.telegram.example.com".to_string(),
                 },
                 fallback_source: None,
-                auth_hint: AuthHint::CapabilitiesAuth,
+                auth_hint: AuthHint::Dcr,
                 version: None,
             },
             RegistryEntry {
@@ -750,47 +702,45 @@ mod tests {
         let all = registry.all_entries().await;
 
         // Both should exist since they have different kinds.
-        let channel = all
+        let mcp_server = all
             .iter()
-            .find(|e| e.name == "telegram" && e.kind == ExtensionKind::WasmChannel);
+            .find(|e| e.name == "telegram" && e.kind == ExtensionKind::McpServer);
         let tool = all
             .iter()
             .find(|e| e.name == "telegram" && e.kind == ExtensionKind::WasmTool);
 
-        assert!(channel.is_some(), "Channel entry missing");
+        assert!(mcp_server.is_some(), "MCP server entry missing");
         assert!(tool.is_some(), "Tool entry missing");
 
         // Search should return both.
         let results = registry.search("telegram").await;
-        let channel_hit = results
+        let mcp_server_hit = results
             .iter()
-            .any(|r| r.entry.name == "telegram" && r.entry.kind == ExtensionKind::WasmChannel);
+            .any(|r| r.entry.name == "telegram" && r.entry.kind == ExtensionKind::McpServer);
         let tool_hit = results
             .iter()
             .any(|r| r.entry.name == "telegram" && r.entry.kind == ExtensionKind::WasmTool);
-        assert!(channel_hit, "Search should find channel");
+        assert!(mcp_server_hit, "Search should find MCP server");
         assert!(tool_hit, "Search should find tool");
     }
 
     #[tokio::test]
     async fn test_get_returns_first_match_regardless_of_kind() {
-        // `get()` returns the first entry with a matching name. If a channel
+        // `get()` returns the first entry with a matching name. If an MCP server
         // and tool share a name, callers that need a specific kind should
         // filter by kind.
         let catalog_entries = vec![
             RegistryEntry {
                 name: "myext".to_string(),
-                display_name: "MyExt Channel".to_string(),
-                kind: ExtensionKind::WasmChannel,
-                description: "Channel".to_string(),
+                display_name: "MyExt MCP".to_string(),
+                kind: ExtensionKind::McpServer,
+                description: "MCP server".to_string(),
                 keywords: vec![],
-                source: ExtensionSource::WasmBuildable {
-                    source_dir: "x".to_string(),
-                    build_dir: None,
-                    crate_name: None,
+                source: ExtensionSource::McpUrl {
+                    url: "https://x.example.com".to_string(),
                 },
                 fallback_source: None,
-                auth_hint: AuthHint::None,
+                auth_hint: AuthHint::Dcr,
                 version: None,
             },
             RegistryEntry {
@@ -815,33 +765,6 @@ mod tests {
         // get() is name-only, returns first match.
         let entry = registry.get("myext").await;
         assert!(entry.is_some());
-        // The first catalog entry added is the channel.
-        assert_eq!(entry.unwrap().kind, ExtensionKind::WasmChannel);
-    }
-
-    #[test]
-    fn test_builtin_entries_with_relay_none_excludes_relay() {
-        let entries = super::builtin_entries_with_relay(None);
-        assert!(
-            !entries
-                .iter()
-                .any(|e| e.kind == ExtensionKind::ChannelRelay),
-            "No ChannelRelay entry when relay URL is None"
-        );
-    }
-
-    #[test]
-    fn test_builtin_entries_with_relay_some_includes_relay() {
-        let entries =
-            super::builtin_entries_with_relay(Some("http://relay.example.com".to_string()));
-        let relay = entries
-            .iter()
-            .find(|e| e.kind == ExtensionKind::ChannelRelay);
-        assert!(relay.is_some(), "ChannelRelay entry should be present");
-        if let ExtensionSource::ChannelRelay { relay_url } = &relay.unwrap().source {
-            assert_eq!(relay_url, "http://relay.example.com");
-        } else {
-            panic!("Expected ChannelRelay source");
-        }
+        assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
     }
 }

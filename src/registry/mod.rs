@@ -1,13 +1,13 @@
-//! Extension registry: metadata catalog for tools and channels.
+//! Extension registry: metadata catalog for tools and MCP servers.
 //!
 //! The registry provides a central index of all available extensions (WASM tools
-//! and channels) with their source locations, build artifacts, authentication
+//! and MCP servers) with their source locations, build artifacts, authentication
 //! requirements, and grouping via bundles.
 //!
 //! ```text
 //! registry/
 //! ├── tools/          <- One JSON manifest per tool
-//! ├── channels/       <- One JSON manifest per channel
+//! ├── mcp-servers/    <- One JSON manifest per MCP server
 //! └── _bundles.json   <- Bundle definitions (google, messaging, default)
 //! ```
 
