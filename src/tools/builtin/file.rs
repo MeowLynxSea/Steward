@@ -175,7 +175,7 @@ impl Tool for ReadFileTool {
     }
 
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Container
+        ToolDomain::Host
     }
 }
 
@@ -286,7 +286,7 @@ impl Tool for WriteFileTool {
     }
 
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Container
+        ToolDomain::Host
     }
 
     fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
@@ -399,7 +399,7 @@ impl Tool for MoveFileTool {
     }
 
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Container
+        ToolDomain::Host
     }
 
     fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
@@ -511,7 +511,7 @@ impl Tool for ListDirTool {
     }
 
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Container
+        ToolDomain::Host
     }
 }
 
@@ -724,7 +724,7 @@ impl Tool for ApplyPatchTool {
     }
 
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Container
+        ToolDomain::Host
     }
 
     fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {

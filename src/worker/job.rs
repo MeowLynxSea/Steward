@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -20,7 +22,7 @@ use crate::agent::agentic_loop::{
 };
 use crate::agent::scheduler::WorkerMessage;
 use crate::agent::task::TaskOutput;
-use crate::context::{ContextManager, JobState};
+use crate::context::{ContextManager, JobContext, JobState};
 use crate::error::Error;
 use crate::hooks::HookRegistry;
 use crate::llm::{
@@ -60,6 +62,8 @@ pub struct WorkerDeps {
     pub approval_context: Option<ApprovalContext>,
     /// HTTP interceptor for trace recording/replay (propagated to JobContext).
     pub http_interceptor: Option<Arc<dyn crate::llm::recording::HttpInterceptor>>,
+    /// Configuration for the local Claude Code execution strategy.
+    pub claude_code: crate::config::ClaudeCodeConfig,
 }
 
 /// Worker that executes a single job.
@@ -71,6 +75,48 @@ pub struct Worker {
 /// Result of a tool execution with metadata for context building.
 struct ToolExecResult {
     result: Result<String, Error>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaudeStreamEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    message: Option<ClaudeMessageWrapper>,
+    #[serde(default)]
+    result: Option<serde_json::Value>,
+    #[serde(default)]
+    is_error: Option<bool>,
+    #[serde(default)]
+    duration_ms: Option<u64>,
+    #[serde(default)]
+    num_turns: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaudeMessageWrapper {
+    #[serde(default)]
+    content: Option<Vec<ClaudeContentBlock>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ClaudeContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    content: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_use_id: Option<String>,
 }
 
 impl Worker {
@@ -242,6 +288,10 @@ impl Worker {
         // Get job context
         let job_ctx = self.context_manager().get_context(self.job_id).await?;
 
+        if self.execution_strategy(&job_ctx) == "claude_code" {
+            return self.run_claude_code(job_ctx, &mut rx).await;
+        }
+
         // Create reasoning engine
         let reasoning =
             Reasoning::new(self.llm().clone()).with_model_name(self.llm().active_model_name());
@@ -309,6 +359,321 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         }
 
         Ok(())
+    }
+
+    fn execution_strategy(&self, job_ctx: &JobContext) -> String {
+        job_ctx
+            .metadata
+            .get("execution_strategy")
+            .and_then(|value| value.as_str())
+            .unwrap_or("native")
+            .to_string()
+    }
+
+    async fn run_claude_code(
+        &self,
+        job_ctx: JobContext,
+        rx: &mut mpsc::Receiver<WorkerMessage>,
+    ) -> Result<(), Error> {
+        let project_dir = self.resolve_project_dir(&job_ctx)?;
+        let max_turns = job_ctx
+            .metadata
+            .get("max_iterations")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(self.deps.claude_code.max_turns as u64)
+            .min(u32::MAX as u64) as u32;
+
+        self.write_claude_settings(&project_dir)?;
+
+        self.log_event(
+            "status",
+            serde_json::json!({
+                "message": format!(
+                    "Starting local Claude Code session in {}",
+                    project_dir.display()
+                ),
+            }),
+        );
+
+        let mut session_id = self
+            .run_claude_session(
+                &job_ctx.description,
+                None,
+                &project_dir,
+                max_turns,
+                &job_ctx.extra_env,
+            )
+            .await?;
+
+        let mut follow_up_count = 0u32;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
+                Ok(Some(WorkerMessage::UserMessage(content))) => {
+                    follow_up_count += 1;
+                    self.log_event(
+                        "message",
+                        serde_json::json!({
+                            "role": "user",
+                            "content": content,
+                        }),
+                    );
+                    session_id = self
+                        .run_claude_session(
+                            &content,
+                            session_id.as_deref(),
+                            &project_dir,
+                            max_turns,
+                            &job_ctx.extra_env,
+                        )
+                        .await?;
+                }
+                Ok(Some(WorkerMessage::Stop)) => {
+                    self.context_manager()
+                        .update_context(self.job_id, |ctx| {
+                            ctx.transition_to(
+                                JobState::Cancelled,
+                                Some("Stopped by scheduler".to_string()),
+                            )
+                        })
+                        .await?
+                        .map_err(|reason| crate::error::JobError::ContextError {
+                            id: self.job_id,
+                            reason,
+                        })?;
+                    self.log_event(
+                        "result",
+                        serde_json::json!({
+                            "status": "cancelled",
+                            "success": false,
+                            "message": "Claude Code job cancelled",
+                        }),
+                    );
+                    self.persist_status(JobState::Cancelled, Some("Stopped by scheduler".to_string()));
+                    return Ok(());
+                }
+                Ok(Some(WorkerMessage::Ping | WorkerMessage::Start)) => {}
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        self.mark_completed().await?;
+        self.log_event(
+            "status",
+            serde_json::json!({
+                "message": format!(
+                    "Claude Code completed after {} session(s)",
+                    follow_up_count + 1
+                ),
+                "session_id": session_id,
+            }),
+        );
+        Ok(())
+    }
+
+    fn resolve_project_dir(&self, job_ctx: &JobContext) -> Result<std::path::PathBuf, Error> {
+        let from_metadata = job_ctx
+            .metadata
+            .get("project_dir")
+            .and_then(|value| value.as_str())
+            .map(std::path::PathBuf::from);
+
+        let dir = from_metadata.unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).map_err(|e| crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed to create project directory {}: {}", dir.display(), e),
+            })?;
+        }
+
+        dir.canonicalize().map_err(|e| {
+            crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!(
+                    "failed to canonicalize project directory {}: {}",
+                    dir.display(),
+                    e
+                ),
+            }
+            .into()
+        })
+    }
+
+    fn write_claude_settings(&self, project_dir: &std::path::Path) -> Result<(), Error> {
+        let settings_dir = project_dir.join(".claude");
+        std::fs::create_dir_all(&settings_dir).map_err(|e| {
+            crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed to create {}: {}", settings_dir.display(), e),
+            }
+        })?;
+        let settings = build_permission_settings(&self.deps.claude_code.allowed_tools);
+        std::fs::write(settings_dir.join("settings.json"), settings).map_err(|e| {
+            crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed to write Claude settings: {}", e),
+            }
+        })?;
+        Ok(())
+    }
+
+    async fn run_claude_session(
+        &self,
+        prompt: &str,
+        resume_session_id: Option<&str>,
+        project_dir: &std::path::Path,
+        max_turns: u32,
+        extra_env: &std::collections::HashMap<String, String>,
+    ) -> Result<Option<String>, Error> {
+        let max_turns_str = max_turns.to_string();
+
+        #[cfg(unix)]
+        let (mut child, stdout, stderr) = {
+            let (pty, pts) = pty_process::open().map_err(|e| {
+                crate::error::ToolError::ExecutionFailed {
+                    name: "claude_code".to_string(),
+                    reason: format!("failed to allocate PTY: {}", e),
+                }
+            })?;
+
+            let mut cmd = pty_process::Command::new("claude");
+            cmd = cmd
+                .arg("-p")
+                .arg(prompt)
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--max-turns")
+                .arg(&max_turns_str)
+                .arg("--model")
+                .arg(&self.deps.claude_code.model);
+
+            if let Some(session_id) = resume_session_id {
+                cmd = cmd.arg("--resume").arg(session_id);
+            }
+
+            cmd = cmd.envs(extra_env.iter());
+            cmd = cmd.current_dir(project_dir);
+            cmd = cmd.stderr(std::process::Stdio::piped());
+
+            let mut child = cmd.spawn(pts).map_err(|e| crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed to spawn claude with PTY: {}", e),
+            })?;
+
+            let stderr = child.stderr.take().ok_or_else(|| {
+                crate::error::ToolError::ExecutionFailed {
+                    name: "claude_code".to_string(),
+                    reason: "failed to capture claude stderr".to_string(),
+                }
+            })?;
+
+            let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(pty);
+            (child, stdout, stderr)
+        };
+
+        #[cfg(not(unix))]
+        let (mut child, stdout, stderr) = {
+            let mut cmd = tokio::process::Command::new("claude");
+            cmd.arg("-p")
+                .arg(prompt)
+                .arg("--output-format")
+                .arg("stream-json")
+                .arg("--verbose")
+                .arg("--max-turns")
+                .arg(&max_turns_str)
+                .arg("--model")
+                .arg(&self.deps.claude_code.model);
+
+            if let Some(session_id) = resume_session_id {
+                cmd.arg("--resume").arg(session_id);
+            }
+
+            cmd.envs(extra_env);
+            cmd.current_dir(project_dir)
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+
+            let mut child = cmd.spawn().map_err(|e| crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed to spawn claude: {}", e),
+            })?;
+            let stdout_pipe = child.stdout.take().ok_or_else(|| {
+                crate::error::ToolError::ExecutionFailed {
+                    name: "claude_code".to_string(),
+                    reason: "failed to capture claude stdout".to_string(),
+                }
+            })?;
+            let stderr = child.stderr.take().ok_or_else(|| {
+                crate::error::ToolError::ExecutionFailed {
+                    name: "claude_code".to_string(),
+                    reason: "failed to capture claude stderr".to_string(),
+                }
+            })?;
+            let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(stdout_pipe);
+            (child, stdout, stderr)
+        };
+
+        let job_id = self.job_id;
+        let sse = self.deps.sse_tx.clone();
+        let store = self.deps.store.clone();
+        let stderr_handle = tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log_job_event(store.clone(), sse.clone(), job_id, "status", serde_json::json!({
+                    "message": line,
+                }));
+            }
+        });
+
+        let reader = BufReader::new(stdout);
+        let mut lines = reader.lines();
+        let mut session_id = None;
+
+        while let Ok(Some(line)) = lines.next_line().await {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<ClaudeStreamEvent>(line) {
+                Ok(event) => {
+                    if event.event_type == "system" && let Some(value) = event.session_id.clone() {
+                        session_id = Some(value);
+                    }
+                    for (event_type, data) in stream_event_to_job_events(&event) {
+                        self.log_event(&event_type, data);
+                    }
+                }
+                Err(_) => {
+                    self.log_event(
+                        "status",
+                        serde_json::json!({
+                            "message": line,
+                        }),
+                    );
+                }
+            }
+        }
+
+        let status = child.wait().await.map_err(|e| crate::error::ToolError::ExecutionFailed {
+            name: "claude_code".to_string(),
+            reason: format!("failed waiting for claude: {}", e),
+        })?;
+        let _ = stderr_handle.await;
+
+        if !status.success() {
+            return Err(crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("claude exited with code {}", status.code().unwrap_or(-1)),
+            }
+            .into());
+        }
+
+        Ok(session_id)
     }
 
     async fn execution_loop(
@@ -1119,6 +1484,159 @@ fn store_fallback_in_metadata(
     }
 }
 
+fn build_permission_settings(allowed_tools: &[String]) -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "permissions": {
+            "allow": allowed_tools,
+        }
+    }))
+    .expect("static JSON structure is valid")
+}
+
+fn stream_event_to_job_events(
+    event: &ClaudeStreamEvent,
+) -> Vec<(String, serde_json::Value)> {
+    let mut events = Vec::new();
+    let blocks = event.message.as_ref().and_then(|message| message.content.as_ref());
+
+    match event.event_type.as_str() {
+        "system" => {
+            events.push((
+                "status".to_string(),
+                serde_json::json!({
+                    "message": "Claude Code session started",
+                    "session_id": event.session_id,
+                }),
+            ));
+        }
+        "assistant" => {
+            if let Some(blocks) = blocks {
+                for block in blocks {
+                    match block.block_type.as_str() {
+                        "text" => {
+                            if let Some(text) = block.text.as_deref().filter(|text| !text.is_empty()) {
+                                events.push((
+                                    "message".to_string(),
+                                    serde_json::json!({
+                                        "role": "assistant",
+                                        "content": text,
+                                    }),
+                                ));
+                            }
+                        }
+                        "tool_use" => {
+                            events.push((
+                                "tool_use".to_string(),
+                                serde_json::json!({
+                                    "tool_name": block.name,
+                                    "tool_use_id": block.id,
+                                    "input": block.input,
+                                }),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        "user" => {
+            if let Some(blocks) = blocks {
+                for block in blocks {
+                    if block.block_type == "tool_result" {
+                        events.push((
+                            "tool_result".to_string(),
+                            serde_json::json!({
+                                "tool_use_id": block.tool_use_id,
+                                "output": block.content,
+                            }),
+                        ));
+                    }
+                }
+            }
+        }
+        "result" => {
+            if let Some(text) = event.result.as_ref().and_then(|value| value.as_str()).filter(|text| !text.is_empty()) {
+                events.push((
+                    "message".to_string(),
+                    serde_json::json!({
+                        "role": "assistant",
+                        "content": text,
+                    }),
+                ));
+            }
+            events.push((
+                "result".to_string(),
+                serde_json::json!({
+                    "status": if event.is_error.unwrap_or(false) { "error" } else { "completed" },
+                    "session_id": event.session_id,
+                    "duration_ms": event.duration_ms,
+                    "num_turns": event.num_turns,
+                }),
+            ));
+        }
+        other => {
+            events.push((
+                "status".to_string(),
+                serde_json::json!({
+                    "message": format!("Claude event: {}", other),
+                }),
+            ));
+        }
+    }
+
+    events
+}
+
+fn log_job_event(
+    store: Option<AdminScope>,
+    sse: Option<Arc<crate::runtime_events::SseManager>>,
+    job_id: Uuid,
+    event_type: &str,
+    data: serde_json::Value,
+) {
+    if let Some(store) = store {
+        let event_type = event_type.to_string();
+        let data_for_store = data.clone();
+        tokio::spawn(async move {
+            if let Err(error) = store.save_job_event(job_id, &event_type, &data_for_store).await {
+                tracing::warn!(job_id = %job_id, %event_type, "Failed to persist event: {}", error);
+            }
+        });
+    }
+
+    if let Some(sse) = sse {
+        let job_id_str = job_id.to_string();
+        let event = match event_type {
+            "message" => Some(ironclaw_common::AppEvent::JobMessage {
+                job_id: job_id_str,
+                role: data
+                    .get("role")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("assistant")
+                    .to_string(),
+                content: data
+                    .get("content")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }),
+            "status" => Some(ironclaw_common::AppEvent::JobStatus {
+                job_id: job_id_str,
+                message: data
+                    .get("message")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            }),
+            _ => None,
+        };
+
+        if let Some(event) = event {
+            sse.broadcast(event);
+        }
+    }
+}
+
 /// Job delegate: implements `LoopDelegate` for the background job context.
 /// Whether an LLM error represents a completion-eligible empty response.
 ///
@@ -1795,6 +2313,7 @@ mod tests {
             sse_tx: None,
             approval_context: None,
             http_interceptor: None,
+            claude_code: crate::config::ClaudeCodeConfig::default(),
         };
 
         Worker::new(job_id, deps)
@@ -2000,6 +2519,7 @@ mod tests {
             sse_tx: None,
             approval_context,
             http_interceptor: None,
+            claude_code: crate::config::ClaudeCodeConfig::default(),
         };
 
         Worker::new(job_id, deps)

@@ -60,7 +60,7 @@ pub struct OAuthRefreshConfig {
     pub client_id: String,
     /// OAuth client_secret (optional, some providers use PKCE without a secret).
     pub client_secret: Option<String>,
-    /// Hosted OAuth proxy base URL (e.g., "http://host.docker.internal:8080").
+    /// Hosted OAuth proxy base URL.
     pub exchange_proxy_url: Option<String>,
     /// OAuth proxy auth token for authenticating with the hosted OAuth proxy.
     /// Kept as `gateway_token` for public API compatibility.

@@ -1700,7 +1700,7 @@ impl Workspace {
     ///
     /// Scans `dir` for `*.md` files (non-recursive) and writes each one into
     /// the workspace **only if it doesn't already exist in the database**.
-    /// This allows Docker images or deployment scripts to ship customized
+    /// This allows packaged builds or deployment scripts to ship customized
     /// workspace templates that override the generic seeds.
     ///
     /// Returns the number of files imported (0 if all already existed).

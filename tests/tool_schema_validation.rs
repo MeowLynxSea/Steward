@@ -65,6 +65,7 @@ async fn core_registration_covers_expected_tools() {
         "http",
         "json",
         "list_dir",
+        "move_file",
         "read_file",
         "shell",
         "time",

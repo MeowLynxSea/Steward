@@ -17,7 +17,7 @@ pub struct AgentConfig {
     pub use_planning: bool,
     /// Session idle timeout. Sessions inactive longer than this are pruned.
     pub session_idle_timeout: Duration,
-    /// Allow chat to use filesystem/shell tools directly (bypass sandbox).
+    /// Allow chat to use filesystem/shell tools directly in the host runtime.
     pub allow_local_tools: bool,
     /// Maximum daily LLM spend in cents (e.g. 10000 = $100). None = unlimited.
     pub max_cost_per_day_cents: Option<u64>,

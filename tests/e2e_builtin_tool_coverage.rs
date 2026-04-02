@@ -126,6 +126,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .with_skills()
             .build()
@@ -161,6 +162,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .with_skills()
             .build()
@@ -200,6 +202,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .with_skills()
             .build()
@@ -274,6 +277,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -315,6 +319,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -352,6 +357,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -393,6 +399,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -434,6 +441,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -471,6 +479,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -554,6 +563,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -607,6 +617,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -672,6 +683,7 @@ mod tests {
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
             .with_skills()
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -728,6 +740,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -951,6 +964,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -993,6 +1007,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;
@@ -1030,6 +1045,7 @@ mod tests {
 
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
+            .with_routines()
             .with_auto_approve_tools(true)
             .build()
             .await;

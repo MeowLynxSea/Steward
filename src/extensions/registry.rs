@@ -762,9 +762,9 @@ mod tests {
 
         let registry = ExtensionRegistry::new_with_catalog(catalog_entries);
 
-        // get() is name-only, returns first match.
+        // get() is name-only, returns the first match from the merged registry.
         let entry = registry.get("myext").await;
         assert!(entry.is_some());
-        assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
+        assert_eq!(entry.unwrap().kind, ExtensionKind::McpServer);
     }
 }

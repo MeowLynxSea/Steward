@@ -131,14 +131,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
     section_header("External");
 
     check(
-        "Docker daemon",
-        check_docker_daemon().await,
-        &mut passed,
-        &mut failed,
-        &mut skipped,
-    );
-
-    check(
         "cloudflared",
         check_binary("cloudflared", &["--version"]),
         &mut passed,
@@ -550,24 +542,6 @@ fn check_service_installed() -> CheckResult {
     }
 }
 
-// ── Docker daemon ───────────────────────────────────────────
-
-async fn check_docker_daemon() -> CheckResult {
-    let detection = crate::sandbox::check_docker().await;
-    match detection.status {
-        crate::sandbox::DockerStatus::Available => CheckResult::Pass("running".into()),
-        crate::sandbox::DockerStatus::NotInstalled => CheckResult::Skip(format!(
-            "not installed. {}",
-            detection.platform.install_hint()
-        )),
-        crate::sandbox::DockerStatus::NotRunning => CheckResult::Fail(format!(
-            "installed but not running. {}",
-            detection.platform.start_hint()
-        )),
-        crate::sandbox::DockerStatus::Disabled => CheckResult::Skip("sandbox disabled".into()),
-    }
-}
-
 // ── External binary ─────────────────────────────────────────
 
 fn check_binary(name: &str, args: &[&str]) -> CheckResult {
@@ -742,14 +716,6 @@ mod tests {
     #[test]
     fn check_service_installed_does_not_panic() {
         let result = check_service_installed();
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[tokio::test]
-    async fn check_docker_daemon_does_not_panic() {
-        let result = check_docker_daemon().await;
         match result {
             CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
         }

@@ -140,16 +140,11 @@ impl fmt::Display for RiskLevel {
     }
 }
 
-/// Where a tool should execute: orchestrator process or inside a container.
-///
-/// Orchestrator tools run in the main agent process (memory access, job mgmt, etc).
-/// Container tools run inside Docker containers (shell, file ops, code mods).
+/// Where a tool should execute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolDomain {
-    /// Safe to run in the orchestrator (pure functions, memory, job management).
-    Orchestrator,
-    /// Must run inside a sandboxed container (filesystem, shell, code).
-    Container,
+    /// Safe to run in the main process.
+    Host,
 }
 
 /// Error type for tool execution.
@@ -318,7 +313,7 @@ pub trait Tool: Send + Sync {
 
     /// Whether this tool invocation requires user approval.
     ///
-    /// Returns `Never` by default (most tools run in a sandboxed environment).
+    /// Returns `Never` by default.
     /// Override to return `UnlessAutoApproved` for tools that need approval
     /// but can be session-auto-approved, or `Always` for invocations that
     /// must always prompt (e.g. destructive shell commands, HTTP with auth).
@@ -327,7 +322,7 @@ pub trait Tool: Send + Sync {
     }
 
     /// Maximum time this tool is allowed to run before the caller kills it.
-    /// Override for long-running tools like sandbox execution.
+    /// Override for long-running tools like background job execution.
     /// Default: 60 seconds.
     fn execution_timeout(&self) -> Duration {
         Duration::from_secs(60)
@@ -335,12 +330,9 @@ pub trait Tool: Send + Sync {
 
     /// Where this tool should execute.
     ///
-    /// `Orchestrator` tools run in the main agent process (safe, no FS access).
-    /// `Container` tools run inside Docker containers (shell, file ops).
-    ///
-    /// Default: `Orchestrator` (safe for the main process).
+    /// Default: `Host` (safe for the main process).
     fn domain(&self) -> ToolDomain {
-        ToolDomain::Orchestrator
+        ToolDomain::Host
     }
 
     /// Parameter names whose values must be redacted before logging, hooks, and approvals.

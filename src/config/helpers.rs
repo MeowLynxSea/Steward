@@ -216,7 +216,8 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
         message: "URL is missing a host".to_string(),
     })?;
 
-    let host_lower = host.to_lowercase();
+    let host_normalized = host.trim_matches(&['[', ']'][..]);
+    let host_lower = host_normalized.to_lowercase();
 
     // For HTTP (non-TLS), only allow localhost — remote HTTP endpoints
     // risk credential leakage (e.g. NEAR AI bearer tokens sent over plaintext).
@@ -224,7 +225,6 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
         let is_localhost = host_lower == "localhost"
             || host_lower == "127.0.0.1"
             || host_lower == "::1"
-            || host_lower == "[::1]"
             || host_lower.ends_with(".localhost");
         if !is_localhost {
             return Err(ConfigError::InvalidValue {
@@ -232,7 +232,7 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
                 message: format!(
                     "HTTP (non-TLS) is only allowed for localhost, got '{}'. \
                      Use HTTPS for remote endpoints.",
-                    host
+                    host_normalized
                 ),
             });
         }
@@ -274,7 +274,7 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
 
     // For HTTPS, reject private/loopback/link-local/metadata IPs.
     // Check both IP literals and resolved hostnames to prevent DNS-based SSRF.
-    if let Ok(ip) = host.parse::<IpAddr>() {
+    if let Ok(ip) = host_normalized.parse::<IpAddr>() {
         if is_dangerous_ip(&ip) {
             return Err(ConfigError::InvalidValue {
                 key: field_name.to_string(),
@@ -298,8 +298,19 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
         // a hot path, wrap in `tokio::task::spawn_blocking` or use
         // `tokio::net::lookup_host`.
         use std::net::ToSocketAddrs;
+        if host_lower == "invalid" || host_lower.ends_with(".invalid") {
+            return Err(ConfigError::InvalidValue {
+                key: field_name.to_string(),
+                message: format!(
+                    "failed to resolve hostname '{}': reserved .invalid domain. \
+                     Base URLs must be resolvable at config time.",
+                    host_normalized
+                ),
+            });
+        }
+
         let port = parsed.port().unwrap_or(443);
-        match (host, port).to_socket_addrs() {
+        match (host_normalized, port).to_socket_addrs() {
             Ok(addrs) => {
                 for addr in addrs {
                     if is_dangerous_ip(&addr.ip()) {
@@ -308,7 +319,7 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
                             message: format!(
                                 "hostname '{}' resolves to private/internal IP '{}'. \
                                  This is blocked to prevent SSRF attacks.",
-                                host,
+                                host_normalized,
                                 addr.ip()
                             ),
                         });
@@ -321,7 +332,7 @@ pub(crate) fn validate_base_url(url: &str, field_name: &str) -> Result<(), Confi
                     message: format!(
                         "failed to resolve hostname '{}': {}. \
                          Base URLs must be resolvable at config time.",
-                        host, e
+                        host_normalized, e
                     ),
                 });
             }

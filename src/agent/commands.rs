@@ -166,7 +166,7 @@ impl Agent {
                         failed += s.failed;
                         stuck += s.stuck;
                     }
-                    if let Ok(s) = store.sandbox_job_summary().await {
+                    if let Ok(s) = store.local_job_summary().await {
                         total += s.total;
                         in_progress += s.running;
                         completed += s.completed;
@@ -236,15 +236,15 @@ impl Agent {
                     Vec::new()
                 }
             };
-            let sandbox_jobs = match store.list_sandbox_jobs().await {
+            let local_jobs = match store.list_local_jobs().await {
                 Ok(jobs) => jobs,
                 Err(e) => {
-                    tracing::warn!("Failed to list sandbox jobs: {}", e);
+                    tracing::warn!("Failed to list local jobs: {}", e);
                     Vec::new()
                 }
             };
 
-            if agent_jobs.is_empty() && sandbox_jobs.is_empty() {
+            if agent_jobs.is_empty() && local_jobs.is_empty() {
                 return Ok("No jobs found.".to_string());
             }
 
@@ -252,7 +252,7 @@ impl Agent {
             for j in &agent_jobs {
                 output.push_str(&format!("  {} - {} ({})\n", j.id, j.title, j.status));
             }
-            for j in &sandbox_jobs {
+            for j in &local_jobs {
                 output.push_str(&format!("  {} - {} ({})\n", j.id, j.task, j.status));
             }
             return Ok(output);
@@ -565,7 +565,7 @@ impl Agent {
         &self,
         command: &str,
         args: &[String],
-        channel: &str,
+        _channel: &str,
         tenant: &crate::tenant::TenantCtx,
     ) -> Result<SubmissionResult, Error> {
         match command {
@@ -603,74 +603,11 @@ impl Agent {
                 "  /heartbeat        Run heartbeat check\n",
                 "  /summarize        Summarize current thread\n",
                 "  /suggest          Suggest next steps\n",
-                "  /restart          Gracefully restart the process\n",
                 "\n",
                 "  /quit             Exit",
             ))),
 
             "ping" => Ok(SubmissionResult::response("pong!")),
-
-            "restart" => {
-                tracing::info!("[commands::restart] Restart command received");
-                // Channel authorization check: restart is only available via web interface
-                if channel != "gateway" {
-                    tracing::warn!(
-                        "[commands::restart] Restart rejected: not from gateway channel (from: {})",
-                        channel
-                    );
-                    return Ok(SubmissionResult::error(
-                        "Restart is only available through the web interface with explicit user confirmation. \
-                         Use the Restart button in the UI."
-                            .to_string(),
-                    ));
-                }
-                // Environment check: restart is only available in Docker containers
-                let in_docker = std::env::var("IRONCLAW_IN_DOCKER")
-                    .map(|v| v.to_lowercase() == "true")
-                    .unwrap_or(false);
-
-                tracing::debug!("[commands::restart] IRONCLAW_IN_DOCKER={}", in_docker);
-
-                if !in_docker {
-                    tracing::warn!(
-                        "[commands::restart] Restart rejected: not in Docker environment"
-                    );
-                    return Ok(SubmissionResult::error(
-                        "Restart is not available in this environment. \
-                         The IRONCLAW_IN_DOCKER environment variable must be set to 'true' for Docker deployments."
-                            .to_string(),
-                    ));
-                }
-
-                // Execute restart tool directly (don't dispatch as a job for LLM planning)
-                // This ensures the tool runs immediately without LLM involvement
-                use crate::tools::Tool;
-                let tool = crate::tools::builtin::RestartTool;
-                let params = serde_json::json!({});
-
-                // Create a minimal JobContext for the tool
-                let dummy_ctx =
-                    crate::context::JobContext::with_user("system", "Restart", "Graceful restart");
-
-                match tool.execute(params, &dummy_ctx).await {
-                    Ok(output) => {
-                        tracing::info!("[commands::restart] RestartTool executed successfully");
-                        // Extract text from the ToolOutput result
-                        let response = match output.result {
-                            serde_json::Value::String(s) => s,
-                            _ => output.result.to_string(),
-                        };
-                        Ok(SubmissionResult::response(response))
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "[commands::restart] RestartTool execution failed: {:?}",
-                            e
-                        );
-                        Ok(SubmissionResult::error(format!("Restart failed: {}", e)))
-                    }
-                }
-            }
 
             "version" => Ok(SubmissionResult::response(format!(
                 "{} v{}",

@@ -473,12 +473,12 @@ impl Store {
     }
 }
 
-// ==================== Sandbox Jobs ====================
+// ==================== Local Jobs ====================
 
-/// Record for a sandbox container job, persisted in the `agent_jobs` table
-/// with `source = 'sandbox'`.
+/// Record for a locally executed autonomous job, persisted in the `agent_jobs`
+/// table with `source = 'local'`.
 #[derive(Debug, Clone)]
-pub struct SandboxJobRecord {
+pub struct LocalJobRecord {
     pub id: Uuid,
     pub task: String,
     pub status: String,
@@ -490,13 +490,13 @@ pub struct SandboxJobRecord {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     /// Serialized JSON of `Vec<CredentialGrant>` for restart support.
-    /// Stored in the `description` column of `agent_jobs` (unused for sandbox jobs).
+    /// Stored in the `description` column of `agent_jobs` (unused for local jobs).
     pub credential_grants_json: String,
 }
 
-/// Summary of sandbox job counts grouped by status.
+/// Summary of local job counts grouped by status.
 #[derive(Debug, Clone, Default)]
-pub struct SandboxJobSummary {
+pub struct LocalJobSummary {
     pub total: usize,
     pub creating: usize,
     pub running: usize,
@@ -505,7 +505,7 @@ pub struct SandboxJobSummary {
     pub interrupted: usize,
 }
 
-/// Lightweight record for agent (non-sandbox) jobs, used by the web Jobs tab.
+/// Lightweight record for agent (non-local) jobs, used by the web Jobs tab.
 #[derive(Debug, Clone)]
 pub struct AgentJobRecord {
     pub id: Uuid,
@@ -518,7 +518,7 @@ pub struct AgentJobRecord {
     pub failure_reason: Option<String>,
 }
 
-/// Summary counts for agent (non-sandbox) jobs.
+/// Summary counts for agent (non-local) jobs.
 #[derive(Debug, Clone, Default)]
 pub struct AgentJobSummary {
     pub total: usize,
@@ -546,15 +546,15 @@ impl AgentJobSummary {
 
 #[cfg(feature = "postgres")]
 impl Store {
-    /// Insert a new sandbox job into `agent_jobs`.
-    pub async fn save_sandbox_job(&self, job: &SandboxJobRecord) -> Result<(), DatabaseError> {
+    /// Insert a new local job into `agent_jobs`.
+    pub async fn save_local_job(&self, job: &LocalJobRecord) -> Result<(), DatabaseError> {
         let conn = self.conn().await?;
         conn.execute(
             r#"
             INSERT INTO agent_jobs (
                 id, title, description, status, source, user_id, project_dir,
                 success, failure_reason, created_at, started_at, completed_at
-            ) VALUES ($1, $2, $3, $4, 'sandbox', $5, $6, $7, $8, $9, $10, $11)
+            ) VALUES ($1, $2, $3, $4, 'local', $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (id) DO UPDATE SET
                 status = EXCLUDED.status,
                 success = EXCLUDED.success,
@@ -580,24 +580,24 @@ impl Store {
         Ok(())
     }
 
-    /// Get a sandbox job by ID.
-    pub async fn get_sandbox_job(
+    /// Get a local job by ID.
+    pub async fn get_local_job(
         &self,
         id: Uuid,
-    ) -> Result<Option<SandboxJobRecord>, DatabaseError> {
+    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
         let conn = self.conn().await?;
         let row = conn
             .query_opt(
                 r#"
                 SELECT id, title, description, status, user_id, project_dir,
                        success, failure_reason, created_at, started_at, completed_at
-                FROM agent_jobs WHERE id = $1 AND source = 'sandbox'
+                FROM agent_jobs WHERE id = $1 AND source = 'local'
                 "#,
                 &[&id],
             )
             .await?;
 
-        Ok(row.map(|r| SandboxJobRecord {
+        Ok(row.map(|r| LocalJobRecord {
             id: r.get("id"),
             task: r.get("title"),
             status: r.get("status"),
@@ -614,15 +614,15 @@ impl Store {
         }))
     }
 
-    /// List all sandbox jobs, most recent first.
-    pub async fn list_sandbox_jobs(&self) -> Result<Vec<SandboxJobRecord>, DatabaseError> {
+    /// List all local jobs, most recent first.
+    pub async fn list_local_jobs(&self) -> Result<Vec<LocalJobRecord>, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
             .query(
                 r#"
                 SELECT id, title, description, status, user_id, project_dir,
                        success, failure_reason, created_at, started_at, completed_at
-                FROM agent_jobs WHERE source = 'sandbox'
+                FROM agent_jobs WHERE source = 'local'
                 ORDER BY created_at DESC
                 "#,
                 &[],
@@ -631,7 +631,7 @@ impl Store {
 
         Ok(rows
             .iter()
-            .map(|r| SandboxJobRecord {
+            .map(|r| LocalJobRecord {
                 id: r.get("id"),
                 task: r.get("title"),
                 status: r.get("status"),
@@ -649,18 +649,18 @@ impl Store {
             .collect())
     }
 
-    /// List sandbox jobs for a specific user, most recent first.
-    pub async fn list_sandbox_jobs_for_user(
+    /// List local jobs for a specific user, most recent first.
+    pub async fn list_local_jobs_for_user(
         &self,
         user_id: &str,
-    ) -> Result<Vec<SandboxJobRecord>, DatabaseError> {
+    ) -> Result<Vec<LocalJobRecord>, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
             .query(
                 r#"
                 SELECT id, title, description, status, user_id, project_dir,
                        success, failure_reason, created_at, started_at, completed_at
-                FROM agent_jobs WHERE source = 'sandbox' AND user_id = $1
+                FROM agent_jobs WHERE source = 'local' AND user_id = $1
                 ORDER BY created_at DESC
                 "#,
                 &[&user_id],
@@ -669,7 +669,7 @@ impl Store {
 
         Ok(rows
             .iter()
-            .map(|r| SandboxJobRecord {
+            .map(|r| LocalJobRecord {
                 id: r.get("id"),
                 task: r.get("title"),
                 status: r.get("status"),
@@ -687,20 +687,20 @@ impl Store {
             .collect())
     }
 
-    /// Get a summary of sandbox job counts by status for a specific user.
-    pub async fn sandbox_job_summary_for_user(
+    /// Get a summary of local job counts by status for a specific user.
+    pub async fn local_job_summary_for_user(
         &self,
         user_id: &str,
-    ) -> Result<SandboxJobSummary, DatabaseError> {
+    ) -> Result<LocalJobSummary, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
             .query(
-                "SELECT status, COUNT(*) as cnt FROM agent_jobs WHERE source = 'sandbox' AND user_id = $1 GROUP BY status",
+                "SELECT status, COUNT(*) as cnt FROM agent_jobs WHERE source = 'local' AND user_id = $1 GROUP BY status",
                 &[&user_id],
             )
             .await?;
 
-        let mut summary = SandboxJobSummary::default();
+        let mut summary = LocalJobSummary::default();
         for row in &rows {
             let status: String = row.get("status");
             let count: i64 = row.get("cnt");
@@ -718,8 +718,8 @@ impl Store {
         Ok(summary)
     }
 
-    /// Check if a sandbox job belongs to a specific user.
-    pub async fn sandbox_job_belongs_to_user(
+    /// Check if a local job belongs to a specific user.
+    pub async fn local_job_belongs_to_user(
         &self,
         job_id: Uuid,
         user_id: &str,
@@ -727,15 +727,15 @@ impl Store {
         let conn = self.conn().await?;
         let row = conn
             .query_opt(
-                "SELECT 1 FROM agent_jobs WHERE id = $1 AND user_id = $2 AND source = 'sandbox'",
+                "SELECT 1 FROM agent_jobs WHERE id = $1 AND user_id = $2 AND source = 'local'",
                 &[&job_id, &user_id],
             )
             .await?;
         Ok(row.is_some())
     }
 
-    /// Update sandbox job status and optional timestamps/result.
-    pub async fn update_sandbox_job_status(
+    /// Update local job status and optional timestamps/result.
+    pub async fn update_local_job_status(
         &self,
         id: Uuid,
         status: &str,
@@ -753,7 +753,7 @@ impl Store {
                 failure_reason = COALESCE($4, failure_reason),
                 started_at = COALESCE($5, started_at),
                 completed_at = COALESCE($6, completed_at)
-            WHERE id = $1 AND source = 'sandbox'
+            WHERE id = $1 AND source = 'local'
             "#,
             &[&id, &status, &success, &message, &started_at, &completed_at],
         )
@@ -761,10 +761,10 @@ impl Store {
         Ok(())
     }
 
-    /// Mark any sandbox jobs left in "running" or "creating" as "interrupted".
+    /// Mark any local jobs left in "running" or "creating" as "interrupted".
     ///
     /// Called on startup to handle jobs that were running when the process died.
-    pub async fn cleanup_stale_sandbox_jobs(&self) -> Result<u64, DatabaseError> {
+    pub async fn cleanup_stale_local_jobs(&self) -> Result<u64, DatabaseError> {
         let conn = self.conn().await?;
         let count = conn
             .execute(
@@ -773,28 +773,28 @@ impl Store {
                     status = 'interrupted',
                     failure_reason = 'Process restarted',
                     completed_at = NOW()
-                WHERE source = 'sandbox' AND status IN ('running', 'creating')
+                WHERE source = 'local' AND status IN ('running', 'creating')
                 "#,
                 &[],
             )
             .await?;
         if count > 0 {
-            tracing::info!("Marked {} stale sandbox jobs as interrupted", count);
+            tracing::info!("Marked {} stale local jobs as interrupted", count);
         }
         Ok(count)
     }
 
-    /// Get a summary of sandbox job counts by status.
-    pub async fn sandbox_job_summary(&self) -> Result<SandboxJobSummary, DatabaseError> {
+    /// Get a summary of local job counts by status.
+    pub async fn local_job_summary(&self) -> Result<LocalJobSummary, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
             .query(
-                "SELECT status, COUNT(*) as cnt FROM agent_jobs WHERE source = 'sandbox' GROUP BY status",
+                "SELECT status, COUNT(*) as cnt FROM agent_jobs WHERE source = 'local' GROUP BY status",
                 &[],
             )
             .await?;
 
-        let mut summary = SandboxJobSummary::default();
+        let mut summary = LocalJobSummary::default();
         for row in &rows {
             let status: String = row.get("status");
             let count: i64 = row.get("cnt");
@@ -812,7 +812,7 @@ impl Store {
         Ok(summary)
     }
 
-    /// List all agent (non-sandbox) jobs, most recent first.
+    /// List all agent (non-local) jobs, most recent first.
     pub async fn list_agent_jobs(&self) -> Result<Vec<AgentJobRecord>, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
@@ -889,7 +889,7 @@ impl Store {
         Ok(row.and_then(|r| r.get::<_, Option<String>>("failure_reason")))
     }
 
-    /// Summary counts for agent (non-sandbox) jobs.
+    /// Summary counts for agent (non-local) jobs.
     pub async fn agent_job_summary(&self) -> Result<AgentJobSummary, DatabaseError> {
         let conn = self.conn().await?;
         let rows = conn
@@ -944,7 +944,7 @@ pub struct JobEventRecord {
 
 #[cfg(feature = "postgres")]
 impl Store {
-    /// Persist a job event (fire-and-forget from orchestrator handler).
+    /// Persist a job event (fire-and-forget from the local runtime).
     pub async fn save_job_event(
         &self,
         job_id: Uuid,
@@ -1014,8 +1014,8 @@ impl Store {
             .collect())
     }
 
-    /// Update the job_mode column for a sandbox job.
-    pub async fn update_sandbox_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
+    /// Update the job_mode column for a local job.
+    pub async fn update_local_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
         let conn = self.conn().await?;
         conn.execute(
             "UPDATE agent_jobs SET job_mode = $2 WHERE id = $1",
@@ -1025,8 +1025,8 @@ impl Store {
         Ok(())
     }
 
-    /// Get the job_mode for a sandbox job.
-    pub async fn get_sandbox_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
+    /// Get the job_mode for a local job.
+    pub async fn get_local_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
         let conn = self.conn().await?;
         let row = conn
             .query_opt("SELECT job_mode FROM agent_jobs WHERE id = $1", &[&id])

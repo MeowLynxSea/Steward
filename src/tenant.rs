@@ -30,7 +30,7 @@ use crate::db::Database;
 use crate::error::DatabaseError;
 use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, LlmCallRecord,
-    SandboxJobRecord, SandboxJobSummary, SettingRow,
+    LocalJobRecord, LocalJobSummary, SettingRow,
 };
 use crate::workspace::Workspace;
 
@@ -41,7 +41,7 @@ use crate::workspace::Workspace;
 /// Scoped database view. All operations are bound to a single user.
 ///
 /// This is the **only** way handler code should access the database.
-/// ID-based lookups (jobs, routines, sandbox jobs) automatically filter
+/// ID-based lookups (jobs, routines, local jobs) automatically filter
 /// by ownership — returning `None` when the resource belongs to a
 /// different user.
 #[derive(Clone)]
@@ -109,30 +109,30 @@ impl TenantScope {
             .await
     }
 
-    // === Sandbox jobs ===
+    // === Local jobs ===
 
-    pub async fn list_sandbox_jobs(&self) -> Result<Vec<SandboxJobRecord>, DatabaseError> {
-        self.inner.list_sandbox_jobs_for_user(&self.user_id).await
+    pub async fn list_local_jobs(&self) -> Result<Vec<LocalJobRecord>, DatabaseError> {
+        self.inner.list_local_jobs_for_user(&self.user_id).await
     }
 
-    pub async fn sandbox_job_summary(&self) -> Result<SandboxJobSummary, DatabaseError> {
-        self.inner.sandbox_job_summary_for_user(&self.user_id).await
+    pub async fn local_job_summary(&self) -> Result<LocalJobSummary, DatabaseError> {
+        self.inner.local_job_summary_for_user(&self.user_id).await
     }
 
-    /// Fetch a sandbox job by ID, returning `None` if it doesn't belong to this user.
-    pub async fn get_sandbox_job(
+    /// Fetch a local job by ID, returning `None` if it doesn't belong to this user.
+    pub async fn get_local_job(
         &self,
         id: Uuid,
-    ) -> Result<Option<SandboxJobRecord>, DatabaseError> {
-        match self.inner.get_sandbox_job(id).await? {
+    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
+        match self.inner.get_local_job(id).await? {
             Some(job) if job.user_id == self.user_id => Ok(Some(job)),
             _ => Ok(None),
         }
     }
 
-    pub async fn sandbox_job_belongs_to_user(&self, job_id: Uuid) -> Result<bool, DatabaseError> {
+    pub async fn local_job_belongs_to_user(&self, job_id: Uuid) -> Result<bool, DatabaseError> {
         self.inner
-            .sandbox_job_belongs_to_user(job_id, &self.user_id)
+            .local_job_belongs_to_user(job_id, &self.user_id)
             .await
     }
 
@@ -589,24 +589,24 @@ impl AdminScope {
         self.inner.increment_repair_attempts(tool_name).await
     }
 
-    // === Sandbox housekeeping ===
+    // === Local job housekeeping ===
 
-    pub async fn cleanup_stale_sandbox_jobs(&self) -> Result<u64, DatabaseError> {
-        self.inner.cleanup_stale_sandbox_jobs().await
+    pub async fn cleanup_stale_local_jobs(&self) -> Result<u64, DatabaseError> {
+        self.inner.cleanup_stale_local_jobs().await
     }
 
-    pub async fn get_sandbox_job(
+    pub async fn get_local_job(
         &self,
         id: Uuid,
-    ) -> Result<Option<SandboxJobRecord>, DatabaseError> {
-        self.inner.get_sandbox_job(id).await
+    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
+        self.inner.get_local_job(id).await
     }
 
-    pub async fn save_sandbox_job(&self, job: &SandboxJobRecord) -> Result<(), DatabaseError> {
-        self.inner.save_sandbox_job(job).await
+    pub async fn save_local_job(&self, job: &LocalJobRecord) -> Result<(), DatabaseError> {
+        self.inner.save_local_job(job).await
     }
 
-    pub async fn update_sandbox_job_status(
+    pub async fn update_local_job_status(
         &self,
         id: Uuid,
         status: &str,
@@ -616,16 +616,16 @@ impl AdminScope {
         completed_at: Option<DateTime<Utc>>,
     ) -> Result<(), DatabaseError> {
         self.inner
-            .update_sandbox_job_status(id, status, success, message, started_at, completed_at)
+            .update_local_job_status(id, status, success, message, started_at, completed_at)
             .await
     }
 
-    pub async fn update_sandbox_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
-        self.inner.update_sandbox_job_mode(id, mode).await
+    pub async fn update_local_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
+        self.inner.update_local_job_mode(id, mode).await
     }
 
-    pub async fn get_sandbox_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
-        self.inner.get_sandbox_job_mode(id).await
+    pub async fn get_local_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
+        self.inner.get_local_job_mode(id).await
     }
 
     pub async fn save_job_event(

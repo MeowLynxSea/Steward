@@ -12,6 +12,7 @@ Usage: ironcowork [OPTIONS] [COMMAND]
 Commands:
   run         Run the AI agent
   api         Run local HTTP API
+  desktop     Launch desktop app
   config      Manage app configs
   tool        Manage WASM tools
   registry    Browse/install extensions

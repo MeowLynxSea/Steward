@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use secrecy::SecretString;
 
 use crate::bootstrap::ironclaw_base_dir;
-use crate::config::helpers::validate_base_url;
+use crate::config::helpers::{optional_env, parse_optional_env, validate_base_url};
 use crate::error::ConfigError;
 use crate::llm::config::*;
 use crate::llm::registry::{ProviderProtocol, ProviderRegistry};
@@ -57,10 +57,13 @@ impl LlmConfig {
     pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
         let registry = ProviderRegistry::load();
 
-        // Persisted settings are the only source of runtime LLM routing.
+        // Runtime routing is primarily driven by persisted settings, but env vars
+        // still provide local/operator overrides for tests, scripted installs, and
+        // no-DB flows.
         let backend = settings
             .llm_backend
             .clone()
+            .or_else(|| optional_env("LLM_BACKEND").ok().flatten())
             .unwrap_or_else(|| "nearai".to_string());
         tracing::info!(
             backend = %backend,
@@ -101,7 +104,6 @@ impl LlmConfig {
 
         // Session config (used by NearAI provider for OAuth/session-token auth)
         let nearai_auth_url = "https://private.near.ai".to_string();
-        validate_base_url(&nearai_auth_url, "NEARAI_AUTH_URL")?;
         let session = SessionConfig {
             auth_base_url: nearai_auth_url,
             session_path: default_session_path(),
@@ -112,7 +114,7 @@ impl LlmConfig {
         let nearai_api_key = if let Some(key) = nearai_override.and_then(|o| o.api_key.as_ref()) {
             Some(SecretString::from(key.clone()))
         } else {
-            None
+            optional_env("NEARAI_API_KEY")?.map(SecretString::from)
         };
         let nearai_model = if let Some(model) = settings.selected_model.clone() {
             model
@@ -122,13 +124,16 @@ impl LlmConfig {
             crate::llm::DEFAULT_MODEL.to_string()
         };
         let nearai_base_url = if let Some(url) = nearai_override.and_then(|o| o.base_url.clone()) {
+            validate_base_url(&url, "NEARAI_BASE_URL")?;
+            url
+        } else if let Some(url) = optional_env("NEARAI_BASE_URL")? {
+            validate_base_url(&url, "NEARAI_BASE_URL")?;
             url
         } else if nearai_api_key.is_some() {
             "https://cloud-api.near.ai".to_string()
         } else {
             "https://private.near.ai".to_string()
         };
-        validate_base_url(&nearai_base_url, "NEARAI_BASE_URL")?;
         let nearai = NearAiConfig {
             model: nearai_model,
             cheap_model: None,
@@ -197,18 +202,24 @@ impl LlmConfig {
 
         // Resolve OpenAI Codex config
         let openai_codex = if is_openai_codex {
-            // Model: settings.selected_model > default
+            // Model: settings.selected_model > OPENAI_CODEX_MODEL > OPENAI_MODEL > default
             let model = settings
                 .selected_model
                 .clone()
+                .or_else(|| optional_env("OPENAI_CODEX_MODEL").ok().flatten())
+                .or_else(|| optional_env("OPENAI_MODEL").ok().flatten())
                 .unwrap_or_else(|| "gpt-5.3-codex".to_string());
-            let auth_endpoint = "https://auth.openai.com".to_string();
+            let auth_endpoint = optional_env("OPENAI_CODEX_AUTH_URL")?
+                .unwrap_or_else(|| "https://auth.openai.com".to_string());
             validate_base_url(&auth_endpoint, "OPENAI_CODEX_AUTH_URL")?;
-            let api_base_url = "https://chatgpt.com/backend-api/codex".to_string();
+            let api_base_url = optional_env("OPENAI_CODEX_API_URL")?
+                .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
             validate_base_url(&api_base_url, "OPENAI_CODEX_API_URL")?;
-            let client_id = "app_EMoamEEZ73f0CkXaXp7hrann".to_string();
+            let client_id = optional_env("OPENAI_CODEX_CLIENT_ID")?
+                .unwrap_or_else(|| "app_EMoamEEZ73f0CkXaXp7hrann".to_string());
             let session_path = ironclaw_base_dir().join("openai_codex_session.json");
-            let token_refresh_margin_secs = 300;
+            let token_refresh_margin_secs =
+                parse_optional_env("OPENAI_CODEX_TOKEN_REFRESH_MARGIN_SECS", 300)?;
             Some(OpenAiCodexConfig {
                 model,
                 auth_endpoint,
@@ -221,7 +232,7 @@ impl LlmConfig {
             None
         };
 
-        let request_timeout_secs = 120;
+        let request_timeout_secs = parse_optional_env("LLM_REQUEST_TIMEOUT_SECS", 120)?;
 
         let gemini_oauth = if backend_lower == "gemini_oauth" || backend_lower == "gemini-oauth" {
             let model = Self::resolve_model(settings, "gemini-2.5-flash");
@@ -343,7 +354,7 @@ impl LlmConfig {
             protocol,
             api_key_env,
             base_url_env,
-            _model_env,
+            model_env,
             default_model,
             default_base_url,
             extra_headers_env,
@@ -381,12 +392,14 @@ impl LlmConfig {
             )
         };
 
-        let api_key = if api_key_env.is_some() {
-            settings
-                .llm_builtin_overrides
-                .get(backend)
-                .and_then(|o| o.api_key.as_ref())
-                .map(|key| SecretString::from(key.clone()))
+        let api_key = if let Some(key) = settings
+            .llm_builtin_overrides
+            .get(backend)
+            .and_then(|o| o.api_key.as_ref())
+        {
+            Some(SecretString::from(key.clone()))
+        } else if let Some(env_var) = api_key_env {
+            optional_env(env_var)?.map(SecretString::from)
         } else {
             None
         };
@@ -418,6 +431,7 @@ impl LlmConfig {
                     _ => None,
                 }
             })
+            .or_else(|| base_url_env.and_then(|env_var| optional_env(env_var).ok().flatten()))
             .or_else(|| default_base_url.map(String::from))
             .unwrap_or_default();
 
@@ -447,17 +461,25 @@ impl LlmConfig {
                     .get(backend)
                     .and_then(|o| o.model.clone())
             })
+            .or_else(|| optional_env(model_env).ok().flatten())
             .unwrap_or_else(|| default_model.to_string());
 
-        let extra_headers = if extra_headers_env.is_some() {
-            Vec::new()
+        let extra_headers = if let Some(env_var) = extra_headers_env {
+            optional_env(env_var)?
+                .map(|value| parse_extra_headers_with_key(&value, env_var))
+                .transpose()?
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
 
         // Resolve OAuth token (Anthropic-specific: `claude login` flow).
         // Only check for OAuth token when the provider is actually Anthropic.
-        let oauth_token = None;
+        let oauth_token = if canonical_id == "anthropic" {
+            optional_env("ANTHROPIC_OAUTH_TOKEN")?.map(SecretString::from)
+        } else {
+            None
+        };
         let api_key = if api_key.is_none() && oauth_token.is_some() {
             // OAuth token present but no API key: use a placeholder so the
             // config block is populated. The provider factory will route to
@@ -501,7 +523,6 @@ impl LlmConfig {
 ///
 /// Format: `Key1:Value1,Key2:Value2` (colon-separated, not `=`, because
 /// header values often contain `=`).
-#[cfg(test)]
 fn parse_extra_headers_with_key(
     val: &str,
     env_var_name: &str,

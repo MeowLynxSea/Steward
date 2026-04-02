@@ -54,11 +54,13 @@ pub struct SchedulerDeps {
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub store: Option<AdminScope>,
     pub hooks: Arc<HookRegistry>,
+    pub claude_code: crate::config::ClaudeCodeConfig,
 }
 
 /// Schedules and manages parallel job execution.
 pub struct Scheduler {
     config: AgentConfig,
+    claude_code: crate::config::ClaudeCodeConfig,
     context_manager: Arc<ContextManager>,
     llm: Arc<dyn LlmProvider>,
     safety: Arc<SafetyLayer>,
@@ -87,6 +89,7 @@ impl Scheduler {
     ) -> Self {
         Self {
             config,
+            claude_code: deps.claude_code,
             context_manager,
             llm,
             safety,
@@ -311,6 +314,7 @@ impl Scheduler {
                 sse_tx: self.sse_tx.clone(),
                 approval_context,
                 http_interceptor: self.http_interceptor.clone(),
+                claude_code: self.config_claude_code(),
             };
             let worker = Worker::new(job_id, deps);
 
@@ -353,6 +357,10 @@ impl Scheduler {
 
         tracing::info!("Scheduled job {} for execution", job_id);
         Ok(())
+    }
+
+    fn config_claude_code(&self) -> crate::config::ClaudeCodeConfig {
+        self.claude_code.clone()
     }
 
     /// Schedule a sub-task from within a worker.
@@ -823,6 +831,7 @@ mod tests {
                 extension_manager: None,
                 store: None,
                 hooks,
+                claude_code: crate::config::ClaudeCodeConfig::default(),
             },
         )
     }

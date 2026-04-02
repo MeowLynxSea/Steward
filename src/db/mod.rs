@@ -36,7 +36,7 @@ use crate::error::DatabaseError;
 use crate::error::WorkspaceError;
 use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, JobEventRecord,
-    LlmCallRecord, SandboxJobRecord, SandboxJobSummary, SettingRow,
+    LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
@@ -301,7 +301,7 @@ async fn validate_postgres(pool: &deadpool_postgres::Pool) -> Result<(), Databas
              Install it:\n  \
              macOS:   brew install pgvector\n  \
              Ubuntu:  apt install postgresql-{0}-pgvector\n  \
-             Docker:  use the pgvector/pgvector:pg{0} image\n  \
+             Container image:  use pgvector/pgvector:pg{0}\n  \
              Source:  https://github.com/pgvector/pgvector#installation\n\n\
              Then restart PostgreSQL and retry the connection check.",
             major_version
@@ -489,11 +489,11 @@ pub trait JobStore: Send + Sync {
 }
 
 #[async_trait]
-pub trait SandboxStore: Send + Sync {
-    async fn save_sandbox_job(&self, job: &SandboxJobRecord) -> Result<(), DatabaseError>;
-    async fn get_sandbox_job(&self, id: Uuid) -> Result<Option<SandboxJobRecord>, DatabaseError>;
-    async fn list_sandbox_jobs(&self) -> Result<Vec<SandboxJobRecord>, DatabaseError>;
-    async fn update_sandbox_job_status(
+pub trait LocalJobStore: Send + Sync {
+    async fn save_local_job(&self, job: &LocalJobRecord) -> Result<(), DatabaseError>;
+    async fn get_local_job(&self, id: Uuid) -> Result<Option<LocalJobRecord>, DatabaseError>;
+    async fn list_local_jobs(&self) -> Result<Vec<LocalJobRecord>, DatabaseError>;
+    async fn update_local_job_status(
         &self,
         id: Uuid,
         status: &str,
@@ -502,23 +502,23 @@ pub trait SandboxStore: Send + Sync {
         started_at: Option<DateTime<Utc>>,
         completed_at: Option<DateTime<Utc>>,
     ) -> Result<(), DatabaseError>;
-    async fn cleanup_stale_sandbox_jobs(&self) -> Result<u64, DatabaseError>;
-    async fn sandbox_job_summary(&self) -> Result<SandboxJobSummary, DatabaseError>;
-    async fn list_sandbox_jobs_for_user(
+    async fn cleanup_stale_local_jobs(&self) -> Result<u64, DatabaseError>;
+    async fn local_job_summary(&self) -> Result<LocalJobSummary, DatabaseError>;
+    async fn list_local_jobs_for_user(
         &self,
         user_id: &str,
-    ) -> Result<Vec<SandboxJobRecord>, DatabaseError>;
-    async fn sandbox_job_summary_for_user(
+    ) -> Result<Vec<LocalJobRecord>, DatabaseError>;
+    async fn local_job_summary_for_user(
         &self,
         user_id: &str,
-    ) -> Result<SandboxJobSummary, DatabaseError>;
-    async fn sandbox_job_belongs_to_user(
+    ) -> Result<LocalJobSummary, DatabaseError>;
+    async fn local_job_belongs_to_user(
         &self,
         job_id: Uuid,
         user_id: &str,
     ) -> Result<bool, DatabaseError>;
-    async fn update_sandbox_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError>;
-    async fn get_sandbox_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError>;
+    async fn update_local_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError>;
+    async fn get_local_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError>;
     async fn save_job_event(
         &self,
         job_id: Uuid,
@@ -974,7 +974,7 @@ pub struct UserSummaryStats {
 pub trait Database:
     ConversationStore
     + JobStore
-    + SandboxStore
+    + LocalJobStore
     + RoutineStore
     + ToolFailureStore
     + SettingsStore

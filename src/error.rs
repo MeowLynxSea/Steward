@@ -43,8 +43,8 @@ pub enum Error {
     #[error("Hook error: {0}")]
     Hook(#[from] crate::hooks::HookError),
 
-    #[error("Orchestrator error: {0}")]
-    Orchestrator(#[from] OrchestratorError),
+    #[error("Runtime error: {0}")]
+    Runtime(#[from] RuntimeError),
 
     #[error("Worker error: {0}")]
     Worker(#[from] WorkerError),
@@ -317,29 +317,20 @@ pub enum WorkspaceError {
     InjectionRejected { path: String, reason: String },
 }
 
-/// Orchestrator errors (internal API, container management).
+/// Local runtime errors.
 #[derive(Debug, thiserror::Error)]
-pub enum OrchestratorError {
-    #[error("Container creation failed for job {job_id}: {reason}")]
-    ContainerCreationFailed { job_id: Uuid, reason: String },
-
-    #[error("Container not found for job {job_id}")]
-    ContainerNotFound { job_id: Uuid },
-
-    #[error("Container for job {job_id} is in unexpected state: {state}")]
-    InvalidContainerState { job_id: Uuid, state: String },
-
+pub enum RuntimeError {
     #[error("Internal API error: {reason}")]
     ApiError { reason: String },
 
-    #[error("Docker error: {reason}")]
-    Docker { reason: String },
+    #[error("Job runtime failed for job {job_id}: {reason}")]
+    JobRuntimeFailed { job_id: Uuid, reason: String },
 }
 
-/// Worker errors (container-side execution).
+/// Worker errors during local execution.
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
-    #[error("Failed to connect to orchestrator at {url}: {reason}")]
+    #[error("Failed to connect to local runtime at {url}: {reason}")]
     ConnectionFailed { url: String, reason: String },
 
     #[error("LLM proxy request failed: {reason}")]
@@ -348,8 +339,8 @@ pub enum WorkerError {
     #[error("Secret resolution failed for {secret_name}: {reason}")]
     SecretResolveFailed { secret_name: String, reason: String },
 
-    #[error("Orchestrator returned error for job {job_id}: {reason}")]
-    OrchestratorRejected { job_id: Uuid, reason: String },
+    #[error("Local runtime rejected job {job_id}: {reason}")]
+    RuntimeRejected { job_id: Uuid, reason: String },
 
     #[error("Worker execution failed: {reason}")]
     ExecutionFailed { reason: String },

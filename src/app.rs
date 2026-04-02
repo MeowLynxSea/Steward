@@ -159,8 +159,8 @@ impl AppBuilder {
         // Fire-and-forget housekeeping — no need to block startup.
         let db_cleanup = db.clone();
         tokio::spawn(async move {
-            if let Err(e) = db_cleanup.cleanup_stale_sandbox_jobs().await {
-                tracing::warn!("Failed to cleanup stale sandbox jobs: {}", e);
+            if let Err(e) = db_cleanup.cleanup_stale_local_jobs().await {
+                tracing::warn!("Failed to cleanup stale local jobs: {}", e);
             }
         });
 
@@ -395,9 +395,7 @@ impl AppBuilder {
         }
 
         // Register builder tool if enabled
-        let builder = if self.config.builder.enabled
-            && (self.config.agent.allow_local_tools || !self.config.sandbox.enabled)
-        {
+        let builder = if self.config.builder.enabled && self.config.agent.allow_local_tools {
             let b = tools
                 .register_builder_tool(llm.clone(), Some(self.config.builder.to_builder_config()))
                 .await;
@@ -721,8 +719,8 @@ impl AppBuilder {
 
         // register_builder_tool() already calls register_dev_tools() internally,
         // so only register them here when the builder didn't already do it.
-        let builder_registered_dev_tools = self.config.builder.enabled
-            && (self.config.agent.allow_local_tools || !self.config.sandbox.enabled);
+        let builder_registered_dev_tools =
+            self.config.builder.enabled && self.config.agent.allow_local_tools;
         if self.config.agent.allow_local_tools && !builder_registered_dev_tools {
             tools.register_dev_tools();
         }
@@ -792,7 +790,7 @@ impl AppBuilder {
         // Seed workspace and backfill embeddings
         if let Some(ref ws) = workspace {
             // Import workspace files from disk FIRST if WORKSPACE_IMPORT_DIR is set.
-            // This lets Docker images / deployment scripts ship customized
+            // This lets packaged builds or deployment scripts ship customized
             // workspace templates (e.g., AGENTS.md, TOOLS.md) that override
             // the generic seeds. Only imports files that don't already exist
             // in the database — never overwrites user edits.

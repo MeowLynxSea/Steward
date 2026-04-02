@@ -206,7 +206,7 @@ pub fn box_bottom(width: usize) -> String {
 ///
 /// ```text
 ///   ✓ Database          libsql (connected)
-///   ✗ Docker            not running — start with: open -a Docker
+///   ✗ Service           not installed
 ///   ○ Embeddings        disabled
 /// ```
 pub fn check_line(kind: StatusKind, name: &str, detail: &str, name_width: usize) -> String {

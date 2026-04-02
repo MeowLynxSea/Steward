@@ -177,8 +177,8 @@ pub struct AgentDeps {
     pub transcription: Option<Arc<crate::llm::transcription::TranscriptionMiddleware>>,
     /// Document text extraction middleware for PDF, DOCX, PPTX, etc.
     pub document_extraction: Option<Arc<crate::document_extraction::DocumentExtractionMiddleware>>,
-    /// Sandbox readiness state for full-job routine dispatch.
-    pub sandbox_readiness: crate::agent::routine_engine::SandboxReadiness,
+    /// Local Claude Code execution configuration for jobs using the claude_code strategy.
+    pub claude_code_config: crate::config::ClaudeCodeConfig,
     /// Software builder for self-repair tool rebuilding.
     pub builder: Option<Arc<dyn crate::tools::SoftwareBuilder>>,
     /// Resolved LLM backend identifier (e.g., "nearai", "openai", "groq").
@@ -399,6 +399,7 @@ impl Agent {
                     .as_ref()
                     .map(|db| crate::tenant::AdminScope::new(Arc::clone(db))),
                 hooks: deps.hooks.clone(),
+                claude_code: deps.claude_code_config.clone(),
             },
         );
         if let Some(ref sse) = deps.sse_tx {
@@ -907,7 +908,6 @@ impl Agent {
                         self.deps.extension_manager.clone(),
                         self.tools().clone(),
                         self.safety().clone(),
-                        self.deps.sandbox_readiness,
                     ));
 
                     // Register routine tools

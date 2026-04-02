@@ -3,7 +3,7 @@
 //! Tools are the agent's interface to the outside world. They can:
 //! - Call external APIs
 //! - Interact with the marketplace
-//! - Execute sandboxed code (via WASM sandbox)
+//! - Execute isolated code (via the WASM runtime)
 //! - Delegate tasks to other services
 //! - Build new software and tools
 

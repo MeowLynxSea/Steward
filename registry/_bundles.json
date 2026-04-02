@@ -17,8 +17,8 @@
       "display_name": "Messaging Tools",
       "description": "Messaging-oriented WASM tools",
       "extensions": [
-        "tools/slack",
-        "tools/telegram"
+        "tools/slack-tool",
+        "tools/telegram-mtproto"
       ],
       "shared_auth": null
     },
@@ -30,8 +30,8 @@
         "tools/gmail",
         "tools/google-calendar",
         "tools/google-drive",
-        "tools/slack",
-        "tools/telegram"
+        "tools/slack-tool",
+        "tools/telegram-mtproto"
       ],
       "shared_auth": null
     }

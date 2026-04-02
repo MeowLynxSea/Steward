@@ -15,7 +15,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `router.rs` | Routes explicit `/commands` to `MessageIntent`. Natural language bypasses the router entirely. |
 | `scheduler.rs` | Parallel job scheduling. Maintains `jobs` map (full LLM-driven) and `subtasks` map (tool-exec/background). |
 | *(moved to `src/worker/job.rs`)* | Per-job execution now lives in `src/worker/job.rs` as `JobDelegate`, using the shared `run_agentic_loop()` engine. |
-| `agentic_loop.rs` | Shared agentic loop engine: `run_agentic_loop()`, `LoopDelegate` trait, `LoopOutcome`, `LoopSignal`, `TextAction`. All three execution paths (chat, job, container) delegate to this. |
+| `agentic_loop.rs` | Shared agentic loop engine: `run_agentic_loop()`, `LoopDelegate` trait, `LoopOutcome`, `LoopSignal`, `TextAction`. All execution paths (chat, job, Claude Code) delegate to this. |
 | `compaction.rs` | Context window management: summarize old turns, write to workspace daily log, trim context. Three strategies. |
 | `context_monitor.rs` | Detects memory pressure. Suggests `CompactionStrategy` based on usage level. |
 | `self_repair.rs` | Detects stuck jobs and broken tools, attempts recovery. |
@@ -26,7 +26,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `routine_engine.rs` | Cron ticker and event matcher. Fires routines when triggers match. Lightweight runs inline; full_job dispatches to `Scheduler`. |
 | `task.rs` | Task types for the scheduler: `Job`, `ToolExec`, `Background`. Used by `spawn_subtask` and `spawn_batch`. |
 | `cost_guard.rs` | LLM spend and action-rate enforcement. Tracks daily budget (cents) and hourly call rate. Lives in `AgentDeps`. |
-| `job_monitor.rs` | Subscribes to SSE broadcast and injects Claude Code (container) output back into the agent loop as `IncomingMessage`. |
+| `job_monitor.rs` | Subscribes to SSE broadcast and injects Claude Code job output back into the agent loop as `IncomingMessage`. |
 
 ## Session / Thread / Turn Model
 
@@ -50,11 +50,10 @@ Session (per user)
 
 ## Agentic Loop (dispatcher.rs)
 
-All three execution paths (chat, job, container) now use the shared `run_agentic_loop()` engine in `agentic_loop.rs`, each providing their own `LoopDelegate` implementation:
+All execution paths now use the shared `run_agentic_loop()` engine in `agentic_loop.rs`, each providing their own `LoopDelegate` implementation:
 
 - **`ChatDelegate`** (`dispatcher.rs`) — conversational turns, tool approval, skill context injection
 - **`JobDelegate`** (`src/worker/job.rs`) — background scheduler jobs, planning support, completion detection
-- **`ContainerDelegate`** (`src/worker/container.rs`) — Docker container worker, sequential tool exec, HTTP event streaming
 
 ```
 run_agentic_loop(delegate, reasoning, reason_ctx, config)

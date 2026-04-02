@@ -1,4 +1,4 @@
-//! Configuration for IronClaw.
+//! Configuration for IronCowork.
 //!
 //! Settings are loaded from env vars, the DB settings table, TOML config,
 //! and built-in defaults. Priority varies by subsystem:
@@ -21,7 +21,7 @@ pub(crate) mod llm;
 pub mod relay;
 mod routines;
 mod safety;
-mod sandbox;
+mod claude_code;
 mod search;
 mod secrets;
 mod skills;
@@ -52,7 +52,7 @@ pub use self::relay::RelayConfig;
 pub use self::routines::RoutineConfig;
 pub use self::safety::SafetyConfig;
 use self::safety::resolve_safety_config;
-pub use self::sandbox::{ClaudeCodeConfig, SandboxModeConfig};
+pub use self::claude_code::ClaudeCodeConfig;
 pub use self::search::WorkspaceSearchConfig;
 pub use self::secrets::SecretsConfig;
 pub use self::skills::SkillsConfig;
@@ -100,7 +100,6 @@ pub struct Config {
     pub heartbeat: HeartbeatConfig,
     pub hygiene: HygieneConfig,
     pub routines: RoutineConfig,
-    pub sandbox: SandboxModeConfig,
     pub claude_code: ClaudeCodeConfig,
     pub skills: SkillsConfig,
     pub transcription: TranscriptionConfig,
@@ -119,7 +118,7 @@ impl Config {
     /// - libSQL database at the given path
     /// - WASM and embeddings disabled
     /// - Skills enabled with the given directories
-    /// - Heartbeat, routines, sandbox, builder all disabled
+    /// - Heartbeat, routines, builder all disabled
     /// - Safety with injection check off, 100k output limit
     #[cfg(feature = "libsql")]
     pub fn for_testing(
@@ -166,10 +165,6 @@ impl Config {
             routines: RoutineConfig {
                 enabled: false,
                 ..RoutineConfig::default()
-            },
-            sandbox: SandboxModeConfig {
-                enabled: false,
-                ..SandboxModeConfig::default()
             },
             claude_code: ClaudeCodeConfig::default(),
             skills: SkillsConfig {
@@ -365,7 +360,6 @@ impl Config {
             heartbeat: HeartbeatConfig::resolve(settings)?,
             hygiene: HygieneConfig::resolve()?,
             routines: RoutineConfig::resolve()?,
-            sandbox: SandboxModeConfig::resolve(settings)?,
             claude_code: ClaudeCodeConfig::resolve(settings)?,
             skills: SkillsConfig::resolve()?,
             transcription: TranscriptionConfig::resolve(settings)?,

@@ -530,7 +530,7 @@ impl TestHarnessBuilder {
             http_interceptor: None,
             transcription: None,
             document_extraction: None,
-            sandbox_readiness: crate::agent::routine_engine::SandboxReadiness::DisabledByConfig,
+            claude_code_config: crate::config::ClaudeCodeConfig::default(),
             builder: None,
             llm_backend: "nearai".to_string(),
             tenant_rates: std::sync::Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
@@ -1355,14 +1355,14 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn test_sandbox_job_lifecycle() {
-        use crate::history::SandboxJobRecord;
+    async fn test_local_job_lifecycle() {
+        use crate::history::LocalJobRecord;
 
         let harness = TestHarnessBuilder::new().build().await;
         let db = &harness.db;
 
         let job_id = uuid::Uuid::new_v4();
-        let job = SandboxJobRecord {
+        let job = LocalJobRecord {
             id: job_id,
             task: "Build a test tool".to_string(),
             status: "creating".to_string(),
@@ -1377,11 +1377,11 @@ mod tests {
         };
 
         // Create
-        db.save_sandbox_job(&job).await.expect("save sandbox job");
+        db.save_local_job(&job).await.expect("save local job");
 
         // Get
         let fetched = db
-            .get_sandbox_job(job_id)
+            .get_local_job(job_id)
             .await
             .expect("get")
             .expect("should exist");
@@ -1389,7 +1389,7 @@ mod tests {
         assert_eq!(fetched.status, "creating");
 
         // Update status to running
-        db.update_sandbox_job_status(
+        db.update_local_job_status(
             job_id,
             "running",
             None,
@@ -1401,7 +1401,7 @@ mod tests {
         .expect("update to running");
 
         // Update to completed
-        db.update_sandbox_job_status(
+        db.update_local_job_status(
             job_id,
             "completed",
             Some(true),
@@ -1413,7 +1413,7 @@ mod tests {
         .expect("update to completed");
 
         let fetched = db
-            .get_sandbox_job(job_id)
+            .get_local_job(job_id)
             .await
             .expect("get")
             .expect("should exist");
@@ -1421,28 +1421,28 @@ mod tests {
         assert_eq!(fetched.success, Some(true));
 
         // List
-        let all = db.list_sandbox_jobs().await.expect("list");
+        let all = db.list_local_jobs().await.expect("list");
         assert!(!all.is_empty());
 
         // Summary
-        let summary = db.sandbox_job_summary().await.expect("summary");
+        let summary = db.local_job_summary().await.expect("summary");
         assert!(summary.total >= 1);
 
         // Per-user list
         let user_jobs = db
-            .list_sandbox_jobs_for_user("user1")
+            .list_local_jobs_for_user("user1")
             .await
             .expect("user list");
         assert!(!user_jobs.is_empty());
 
         // Ownership check
         let belongs = db
-            .sandbox_job_belongs_to_user(job_id, "user1")
+            .local_job_belongs_to_user(job_id, "user1")
             .await
             .expect("belongs check");
         assert!(belongs);
         let not_belongs = db
-            .sandbox_job_belongs_to_user(job_id, "other_user")
+            .local_job_belongs_to_user(job_id, "other_user")
             .await
             .expect("belongs check");
         assert!(!not_belongs);
@@ -1450,14 +1450,14 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn test_sandbox_job_mode() {
-        use crate::history::SandboxJobRecord;
+    async fn test_local_job_mode() {
+        use crate::history::LocalJobRecord;
 
         let harness = TestHarnessBuilder::new().build().await;
         let db = &harness.db;
 
         let job_id = uuid::Uuid::new_v4();
-        let job = SandboxJobRecord {
+        let job = LocalJobRecord {
             id: job_id,
             task: "Mode test".to_string(),
             status: "creating".to_string(),
@@ -1470,19 +1470,19 @@ mod tests {
             completed_at: None,
             credential_grants_json: "[]".to_string(),
         };
-        db.save_sandbox_job(&job).await.expect("save");
+        db.save_local_job(&job).await.expect("save");
 
         // Default mode
-        let mode = db.get_sandbox_job_mode(job_id).await.expect("get mode");
+        let mode = db.get_local_job_mode(job_id).await.expect("get mode");
         // Default is "worker" per schema or NULL
         assert!(mode.is_none() || mode.as_deref() == Some("worker"));
 
         // Update mode
-        db.update_sandbox_job_mode(job_id, "claude_code")
+        db.update_local_job_mode(job_id, "claude_code")
             .await
             .expect("update mode");
         let mode = db
-            .get_sandbox_job_mode(job_id)
+            .get_local_job_mode(job_id)
             .await
             .expect("get mode")
             .expect("should have mode");
@@ -1492,14 +1492,14 @@ mod tests {
     #[cfg(feature = "libsql")]
     #[tokio::test]
     async fn test_job_events() {
-        use crate::history::SandboxJobRecord;
+        use crate::history::LocalJobRecord;
 
         let harness = TestHarnessBuilder::new().build().await;
         let db = &harness.db;
 
-        // Create a sandbox job first (foreign key)
+        // Create a local job first (foreign key)
         let job_id = uuid::Uuid::new_v4();
-        let job = SandboxJobRecord {
+        let job = LocalJobRecord {
             id: job_id,
             task: "Event test".to_string(),
             status: "running".to_string(),
@@ -1512,7 +1512,7 @@ mod tests {
             completed_at: None,
             credential_grants_json: "[]".to_string(),
         };
-        db.save_sandbox_job(&job).await.expect("save job");
+        db.save_local_job(&job).await.expect("save job");
 
         // Save events
         db.save_job_event(

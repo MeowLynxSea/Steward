@@ -1184,6 +1184,7 @@ fn validate_settings_patch(payload: &PatchSettingsRequest) -> ApiResult<()> {
         let normalized = backend.trim().to_ascii_lowercase();
         let supported = [
             "openai",
+            "openai_compatible",
             "openai_codex",
             "anthropic",
             "groq",

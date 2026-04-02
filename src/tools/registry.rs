@@ -9,7 +9,6 @@ use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, ToolDefinition};
-use crate::orchestrator::job_manager::ContainerJobManager;
 use crate::secrets::SecretsStore;
 use crate::skills::catalog::SkillCatalog;
 use crate::skills::registry::SkillRegistry;
@@ -19,7 +18,7 @@ use crate::tools::builder::{
 use crate::tools::builtin::{
     ApplyPatchTool, CancelJobTool, CreateJobTool, EchoTool, ExtensionInfoTool, HttpTool,
     JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, MoveFileTool, PromptQueue,
+    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, MoveFileTool,
     ReadFileTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool,
     TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
     ToolSearchTool, ToolUpgradeTool, WriteFileTool,
@@ -73,7 +72,6 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "skill_install",
     "skill_remove",
     "web_fetch",
-    "restart",
     "image_generate",
     "image_edit",
     "image_analyze",
@@ -259,22 +257,10 @@ impl ToolRegistry {
         tracing::debug!("Registered tool_info discovery tool");
     }
 
-    /// Register only orchestrator-domain tools (safe for the main process).
-    ///
-    /// This registers tools that don't touch the filesystem or run shell commands:
-    /// echo, time, json, http. Use this when `allow_local_tools = false` and
-    /// container-domain tools should only be available inside sandboxed containers.
-    pub fn register_orchestrator_tools(&self) {
+    /// Register only main-process tools.
+    pub fn register_host_tools(&self) {
         self.register_builtin_tools();
-        // register_builtin_tools already only registers orchestrator-domain tools
-    }
-
-    /// Register container-domain tools (filesystem, shell, code).
-    ///
-    /// These tools are intended to run inside sandboxed Docker containers.
-    /// Call this in the worker process, not the orchestrator (unless `allow_local_tools = true`).
-    pub fn register_container_tools(&self) {
-        self.register_dev_tools();
+        // register_builtin_tools already only registers main-process tools
     }
 
     /// Get tool definitions filtered by domain.
@@ -368,37 +354,21 @@ impl ToolRegistry {
     }
 
     /// Register job management tools.
-    ///
-    /// Job tools allow the LLM to create, list, check status, and cancel jobs.
-    /// When sandbox deps are provided, `create_job` automatically delegates to
-    /// Docker containers. Otherwise it dispatches via the Scheduler (which
-    /// persists to DB and spawns a worker).
     #[allow(clippy::too_many_arguments)]
     pub fn register_job_tools(
         &self,
         context_manager: Arc<ContextManager>,
         scheduler_slot: Option<crate::tools::builtin::SchedulerSlot>,
-        job_manager: Option<Arc<ContainerJobManager>>,
         store: Option<Arc<dyn Database>>,
-        job_event_tx: Option<
-            tokio::sync::broadcast::Sender<(uuid::Uuid, String, ironclaw_common::AppEvent)>,
-        >,
         inject_tx: Option<tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>>,
-        prompt_queue: Option<PromptQueue>,
         secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
     ) {
         let mut create_tool = CreateJobTool::new(Arc::clone(&context_manager));
-        if let Some(slot) = scheduler_slot {
-            create_tool = create_tool.with_scheduler_slot(slot);
+        if let Some(ref slot) = scheduler_slot {
+            create_tool = create_tool.with_scheduler_slot(slot.clone());
         }
-        // Clone before moving into create_tool so cancel_job can also use them.
-        let jm_for_cancel = job_manager.clone();
-        let store_for_cancel = store.clone();
-        if let Some(jm) = job_manager {
-            create_tool = create_tool.with_sandbox(jm, store.clone());
-        }
-        if let (Some(etx), Some(itx)) = (job_event_tx, inject_tx) {
-            create_tool = create_tool.with_monitor_deps(etx, itx);
+        if let Some(itx) = inject_tx {
+            create_tool = create_tool.with_monitor_deps(itx);
         }
         if let Some(secrets) = secrets_store {
             create_tool = create_tool.with_secrets(secrets);
@@ -406,11 +376,7 @@ impl ToolRegistry {
         self.register_sync(Arc::new(create_tool));
         self.register_sync(Arc::new(ListJobsTool::new(Arc::clone(&context_manager))));
         self.register_sync(Arc::new(JobStatusTool::new(Arc::clone(&context_manager))));
-        let mut cancel_tool = CancelJobTool::new(Arc::clone(&context_manager));
-        if let Some(jm) = jm_for_cancel {
-            cancel_tool = cancel_tool.with_sandbox(jm, store_for_cancel);
-        }
-        self.register_sync(Arc::new(cancel_tool));
+        self.register_sync(Arc::new(CancelJobTool::new(Arc::clone(&context_manager))));
 
         // Base tools: create, list, status, cancel
         let mut job_tool_count = 4;
@@ -424,10 +390,9 @@ impl ToolRegistry {
             job_tool_count += 1;
         }
 
-        // Register prompt tool if queue is available
-        if let Some(pq) = prompt_queue {
+        if let Some(slot) = scheduler_slot {
             self.register_sync(Arc::new(JobPromptTool::new(
-                pq,
+                slot,
                 Arc::clone(&context_manager),
             )));
             job_tool_count += 1;
@@ -599,7 +564,7 @@ impl ToolRegistry {
     /// Register a WASM tool from bytes.
     ///
     /// This validates and compiles the WASM component, then registers it as a tool.
-    /// The tool will be executed in a sandboxed environment with the given capabilities.
+    /// The tool will be executed in the WASM runtime with the given capabilities.
     ///
     /// # Example
     ///

@@ -8,7 +8,6 @@ mod job;
 mod json;
 pub mod memory;
 pub mod path_utils;
-mod restart;
 pub mod routine;
 pub mod secrets_tools;
 pub(crate) mod shell;
@@ -25,11 +24,10 @@ pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFil
 pub use http::HttpTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
-    PromptQueue, SchedulerSlot,
+    SchedulerSlot,
 };
 pub use json::JsonTool;
 pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
-pub use restart::RestartTool;
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,

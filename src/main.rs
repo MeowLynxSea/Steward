@@ -1,7 +1,6 @@
 //! IronCowork - Main entry point.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use clap::Parser;
 use tokio::sync::mpsc;
@@ -22,9 +21,8 @@ use ironclaw::{
         ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
         create_session_manager,
     },
-    orchestrator::{ReaperConfig, SandboxReaper},
     task_runtime::TaskRuntime,
-    tracing_fmt::{init_app_tracing, init_cli_tracing, init_worker_tracing},
+    tracing_fmt::{init_app_tracing, init_cli_tracing},
 };
 /// Synchronous entry point. Loads `.env` files before the Tokio runtime
 /// starts so that `std::env::set_var` is safe (no worker threads yet).
@@ -155,29 +153,6 @@ async fn async_main() -> anyhow::Result<()> {
             let config = ironclaw::config::Config::from_env().await?;
             return ironclaw::cli::run_import_command(import_cmd, &config).await;
         }
-        Some(Command::Worker {
-            job_id,
-            orchestrator_url,
-            max_iterations,
-        }) => {
-            init_worker_tracing();
-            return ironclaw::worker::run_worker(*job_id, orchestrator_url, *max_iterations).await;
-        }
-        Some(Command::ClaudeBridge {
-            job_id,
-            orchestrator_url,
-            max_turns,
-            model,
-        }) => {
-            init_worker_tracing();
-            return ironclaw::worker::run_claude_bridge(
-                *job_id,
-                orchestrator_url,
-                *max_turns,
-                model,
-            )
-            .await;
-        }
         Some(Command::Login { openai_codex }) => {
             init_cli_tracing();
             if *openai_codex {
@@ -288,35 +263,6 @@ async fn async_main() -> anyhow::Result<()> {
 
     let config = components.config;
 
-    // ── Orchestrator / container job manager ────────────────────────────
-
-    let orch = ironclaw::orchestrator::setup_orchestrator(
-        &config,
-        &components.llm,
-        components.db.as_ref(),
-        components.secrets_store.as_ref(),
-    )
-    .await;
-    let container_job_manager = orch.container_job_manager;
-    let job_event_tx = orch.job_event_tx;
-    let prompt_queue = orch.prompt_queue;
-    let docker_status = orch.docker_status;
-
-    // Derive user-facing warning for the local CLI channel.
-    let docker_user_warning: Option<String> = match docker_status {
-        ironclaw::sandbox::DockerStatus::NotInstalled => Some(
-            "Sandbox is enabled but Docker is not installed -- \
-             full_job routines will fail until Docker is available."
-                .to_string(),
-        ),
-        ironclaw::sandbox::DockerStatus::NotRunning => Some(
-            "Sandbox is enabled but Docker is not running -- \
-             full_job routines will fail until Docker is started."
-                .to_string(),
-        ),
-        _ => None,
-    };
-
     // ── Message Ingress ────────────────────────────────────────────────
 
     let (inject_tx, inject_rx) = mpsc::channel::<IncomingMessage>(64);
@@ -351,19 +297,12 @@ async fn async_main() -> anyhow::Result<()> {
     let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
-    // Register job tools (sandbox deps auto-injected when container_job_manager is available)
+    // Register job tools.
     components.tools.register_job_tools(
         Arc::clone(&components.context_manager),
         Some(scheduler_slot.clone()),
-        container_job_manager.clone(),
         components.db.clone(),
-        job_event_tx.clone(),
         Some(inject_tx.clone()),
-        if config.sandbox.enabled {
-            Some(Arc::clone(&prompt_queue))
-        } else {
-            None
-        },
         components.secrets_store.clone(),
     );
 
@@ -399,8 +338,6 @@ async fn async_main() -> anyhow::Result<()> {
             },
             heartbeat_enabled: config.heartbeat.enabled,
             heartbeat_interval_secs: config.heartbeat.interval_secs,
-            sandbox_enabled: config.sandbox.enabled,
-            docker_status,
             claude_code_enabled: config.claude_code.enabled,
             routines_enabled: config.routines.enabled,
             skills_enabled: config.skills.enabled,
@@ -425,8 +362,6 @@ async fn async_main() -> anyhow::Result<()> {
         .recording_handle
         .as_ref()
         .map(|r| r.http_interceptor());
-    // Clone context_manager for the reaper before it's moved into Agent::new()
-    let reaper_context_manager = Arc::clone(&components.context_manager);
     let task_runtime = if let Some(store) = components.db.clone() {
         Arc::new(TaskRuntime::with_store(config.owner_id.clone(), store))
     } else {
@@ -502,13 +437,7 @@ async fn async_main() -> anyhow::Result<()> {
         document_extraction: Some(Arc::new(
             ironclaw::document_extraction::DocumentExtractionMiddleware::new(),
         )),
-        sandbox_readiness: if !config.sandbox.enabled {
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig
-        } else if docker_status.is_ok() {
-            ironclaw::agent::routine_engine::SandboxReadiness::Available
-        } else {
-            ironclaw::agent::routine_engine::SandboxReadiness::DockerUnavailable
-        },
+        claude_code_config: config.claude_code.clone(),
         builder: components.builder,
         llm_backend: config.llm.backend.clone(),
         tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(
@@ -534,28 +463,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Fill the scheduler slot now that Agent (and its Scheduler) exist.
     *scheduler_slot.write().await = Some(agent.scheduler());
 
-    // Spawn sandbox reaper for orphaned container cleanup
-    if let Some(ref jm) = container_job_manager {
-        let reaper_jm = Arc::clone(jm);
-        let reaper_config = ReaperConfig {
-            scan_interval: Duration::from_secs(config.sandbox.reaper_interval_secs),
-            orphan_threshold: Duration::from_secs(config.sandbox.orphan_threshold_secs),
-            ..ReaperConfig::default()
-        };
-        let reaper_ctx = Arc::clone(&reaper_context_manager);
-        tokio::spawn(async move {
-            match SandboxReaper::new(reaper_jm, reaper_ctx, reaper_config).await {
-                Ok(reaper) => reaper.run().await,
-                Err(e) => tracing::error!("Sandbox reaper failed to initialize: {}", e),
-            }
-        });
-    }
-
     agent.set_routine_engine_slot(Arc::clone(&routine_engine_slot));
-
-    if let Some(warning) = docker_user_warning {
-        tracing::warn!("{warning}");
-    }
 
     if let Some(message) = cli.message.clone() {
         inject_tx

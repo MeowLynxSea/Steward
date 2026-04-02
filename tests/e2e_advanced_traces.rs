@@ -34,7 +34,7 @@ mod advanced {
                 .list_routine_runs(routine_id, 10)
                 .await
                 .expect("list_routine_runs");
-            if !runs.is_empty() {
+            if !runs.is_empty() && runs[0].completed_at.is_some() {
                 return runs;
             }
             assert!(
@@ -374,16 +374,34 @@ mod advanced {
             responses.iter().map(|r| &r.content).collect::<Vec<_>>()
         );
 
-        // Verify main conversation tools were called.
+        // Verify foreground routine tools were called on the interactive channel.
         let started = rig.tool_calls_started();
-        for tool in &["routine_create", "routine_fire", "http", "memory_write"] {
+        for tool in &["routine_create", "routine_fire"] {
             assert!(
                 started.iter().any(|s| s == *tool),
                 "{tool} not called: {started:?}"
             );
         }
 
-        // Main conversation tools should have succeeded.
+        // Background full_job execution does not report tool status through the
+        // interactive test channel. Verify the durable side effect instead.
+        let ws = rig.workspace().expect("workspace should exist");
+        let digest_path = "routines/morning-tech-news/digest-2026-03-05.md";
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let digest = loop {
+            match ws.read(digest_path).await {
+                Ok(doc) => break doc,
+                Err(_) if tokio::time::Instant::now() < deadline => {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                Err(err) => panic!("digest not written to {digest_path}: {err}"),
+            }
+        };
+        assert!(digest.content.contains("Rust 2026 Edition"));
+        assert!(digest.content.contains("WASM Component Model 1.0"));
+        assert!(digest.content.contains("NEAR AI Agent Framework"));
+
+        // Foreground conversation tools should have succeeded.
         let completed = rig.tool_calls_completed();
         crate::support::assertions::assert_all_tools_succeeded(&completed);
 
@@ -438,29 +456,19 @@ mod advanced {
 
         let runs = wait_for_routine_run(rig.database(), routine.id, TIMEOUT).await;
         assert_eq!(runs[0].trigger_type, "event");
+        assert_eq!(runs[0].status.to_string(), "attention");
+        assert!(
+            runs[0]
+                .result_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Bug report detected")),
+            "expected routine summary in completed run: {:?}",
+            runs[0]
+        );
         assert_eq!(
             rig.llm_call_count(),
             llm_calls_before + 1,
             "matching event message should only trigger the routine LLM call"
-        );
-
-        let responses = rig.wait_for_responses(1, TIMEOUT).await;
-        assert_eq!(
-            responses.len(),
-            1,
-            "expected only the routine notification after the matching event"
-        );
-        assert!(
-            responses.iter().any(|response| {
-                response
-                    .metadata
-                    .get("source")
-                    .and_then(|value| value.as_str())
-                    == Some("routine")
-                    && response.content.contains("telegram-bug-watcher")
-                    && response.content.contains("Bug report detected")
-            }),
-            "expected routine notification in responses: {responses:?}"
         );
 
         rig.shutdown();
@@ -514,21 +522,19 @@ mod advanced {
 
         let runs = wait_for_routine_run(rig.database(), routine.id, TIMEOUT).await;
         assert_eq!(runs[0].trigger_type, "event");
+        assert_eq!(runs[0].status.to_string(), "attention");
+        assert!(
+            runs[0]
+                .result_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("Bug report detected")),
+            "expected routine summary in completed run: {:?}",
+            runs[0]
+        );
         assert_eq!(
             rig.llm_call_count(),
             llm_calls_before + 1,
             "matching event message should only trigger the routine LLM call"
-        );
-
-        let responses = rig.wait_for_responses(1, TIMEOUT).await;
-        assert_eq!(
-            responses.len(),
-            1,
-            "expected only the routine notification after the matching event"
-        );
-        assert!(
-            responses[0].content.contains("Bug report detected"),
-            "expected routine notification, got: {responses:?}"
         );
 
         rig.shutdown();

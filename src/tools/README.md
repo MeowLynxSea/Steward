@@ -120,7 +120,7 @@ Both are first-class in the extension system (`ironcowork tool install` handles 
 - Growing ecosystem of pre-built servers (GitHub, Notion, Postgres, etc.)
 - Any language (TypeScript/Python most common)
 - Can do websockets, streaming, background polling
-- Cost: external process with full system access (no sandbox), manages own credentials, IronClaw can't prevent leaks
+- Cost: external process with full system access, manages own credentials, IronCowork can't prevent leaks
 
 **Decision guide:**
 

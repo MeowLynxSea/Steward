@@ -33,7 +33,7 @@
 //!
 //! The master key for encrypting secrets can come from:
 //! - **OS Keychain** (recommended for local installs): Auto-generated and stored securely
-//! - **Environment variable** (for CI/Docker): Set `SECRETS_MASTER_KEY`
+//! - **Environment variable** (for CI or scripted installs): Set `SECRETS_MASTER_KEY`
 //!
 //! # Example
 //!

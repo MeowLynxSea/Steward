@@ -29,7 +29,7 @@ cargo check --all-features                            # both
 | `libsql/mod.rs` | libSQL/Turso backend struct, connection helpers, row parsing utilities |
 | `libsql/conversations.rs` | `ConversationStore` impl |
 | `libsql/jobs.rs` | `JobStore` impl |
-| `libsql/sandbox.rs` | `SandboxStore` impl |
+| `libsql/local_jobs.rs` | `LocalJobStore` impl |
 | `libsql/routines.rs` | `RoutineStore` impl |
 | `libsql/settings.rs` | `SettingsStore` impl |
 | `libsql/tool_failures.rs` | `ToolFailureStore` impl |
@@ -47,7 +47,7 @@ The `Database` supertrait is composed of seven sub-traits. Leaf consumers can de
 |-----------|---------|--------|
 | `ConversationStore` | 12 | Conversations, messages |
 | `JobStore` | 13 | Agent jobs, actions, LLM calls, estimation |
-| `SandboxStore` | 13 | Sandbox jobs, job events |
+| `LocalJobStore` | 13 | Local jobs, job events |
 | `RoutineStore` | 15 | Routines, routine runs |
 | `ToolFailureStore` | 4 | Self-repair tracking |
 | `SettingsStore` | 8 | Per-user key-value settings |
@@ -101,7 +101,7 @@ The `Database` supertrait is composed of seven sub-traits. Leaf consumers can de
 - `conversation_messages` — individual messages within a conversation
 - `agent_jobs` — job metadata and status
 - `job_actions` — event-sourced tool executions
-- `job_events` — sandbox job streaming events (renamed from `claude_code_events` in V7)
+- `job_events` — local job streaming events (renamed from `claude_code_events` in V7)
 - `dynamic_tools` — agent-built tools
 - `llm_calls` — cost/token tracking
 - `estimation_snapshots` — learning data

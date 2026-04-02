@@ -1,12 +1,12 @@
 //! Background job monitor that forwards Claude Code output to the main agent loop.
 //!
-//! When the main agent kicks off a sandbox job (especially Claude Code), this
+//! When the main agent kicks off a background job (especially Claude Code), this
 //! monitor subscribes to the broadcast event channel and injects relevant
 //! assistant messages back into the channel manager's stream. This lets the
 //! main agent see what the sub-agent is producing and surface it to the user.
 //!
 //! ```text
-//!   Container ──NDJSON──► Orchestrator ──broadcast──► JobMonitor
+//!   Local worker ──events──► Scheduler broadcast ──► JobMonitor
 //!                                                        │
 //!                                                  inject_tx (mpsc)
 //!                                                        │
@@ -52,8 +52,8 @@ pub fn spawn_job_monitor(
 }
 
 /// Like `spawn_job_monitor`, but also transitions the job's in-memory state
-/// when it receives a `JobResult` event. This ensures fire-and-forget sandbox
-/// jobs don't stay `InProgress` forever in the `ContextManager`.
+/// when it receives a `JobResult` event. This ensures fire-and-forget jobs
+/// don't stay `InProgress` forever in the `ContextManager`.
 pub fn spawn_job_monitor_with_context(
     job_id: Uuid,
     mut event_rx: broadcast::Receiver<(Uuid, String, AppEvent)>,
@@ -102,7 +102,7 @@ pub fn spawn_job_monitor_with_context(
                                     JobState::Failed
                                 };
                                 let reason = if status != "completed" {
-                                    Some(format!("Container finished: {}", status))
+                                    Some(format!("Job finished: {}", status))
                                 } else {
                                     None
                                 };
@@ -117,7 +117,7 @@ pub fn spawn_job_monitor_with_context(
                                 route.channel.clone(),
                                 route.user_id.clone(),
                                 format!(
-                                    "[Job {}] Container finished (status: {})",
+                                    "[Job {}] Job finished (status: {})",
                                     short_id, status
                                 ),
                             )
@@ -179,7 +179,7 @@ pub fn spawn_completion_watcher(
                         JobState::Failed
                     };
                     let reason = if status != "completed" {
-                        Some(format!("Container finished: {}", status))
+                        Some(format!("Job finished: {}", status))
                     } else {
                         None
                     };
@@ -394,9 +394,9 @@ mod tests {
         assert!(msg.is_internal);
     }
 
-    // === Regression: fire-and-forget sandbox jobs must transition out of InProgress ===
+    // === Regression: fire-and-forget jobs must transition out of InProgress ===
     // Before this fix, spawn_job_monitor only forwarded SSE messages but never
-    // updated ContextManager. Background sandbox jobs stayed InProgress forever,
+    // updated ContextManager. Background jobs stayed InProgress forever,
     // permanently consuming a max_jobs slot.
 
     #[tokio::test]
@@ -405,7 +405,7 @@ mod tests {
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();
-        cm.register_sandbox_job(job_id, "user-1", "Build app", "desc")
+        cm.register_local_job(job_id, "user-1", "Build app", "desc")
             .await
             .unwrap();
 
@@ -454,7 +454,7 @@ mod tests {
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();
-        cm.register_sandbox_job(job_id, "user-1", "Build app", "desc")
+        cm.register_local_job(job_id, "user-1", "Build app", "desc")
             .await
             .unwrap();
 
@@ -503,7 +503,7 @@ mod tests {
 
         let cm = Arc::new(ContextManager::new(5));
         let job_id = Uuid::new_v4();
-        cm.register_sandbox_job(job_id, "user-1", "Build app", "desc")
+        cm.register_local_job(job_id, "user-1", "Build app", "desc")
             .await
             .unwrap();
 

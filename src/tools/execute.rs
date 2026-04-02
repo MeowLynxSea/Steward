@@ -1,7 +1,7 @@
 //! Shared tool execution pipeline.
 //!
 //! Provides a single implementation of the validate → timeout → execute → serialize
-//! pipeline used by all agentic loop consumers (chat, job, container) and the
+//! pipeline used by all agentic loop consumers and the
 //! scheduler's subtask execution.
 
 use std::borrow::Cow;
@@ -15,7 +15,7 @@ use crate::tools::{ToolRegistry, prepare_tool_params, redact_params};
 /// Execute a tool with safety checks: lookup → validate → timeout → execute → serialize.
 ///
 /// This is the single canonical implementation of tool execution. All consumers
-/// (chat dispatcher, job worker, container runtime, scheduler subtasks) use this
+/// (chat dispatcher, job worker, scheduler subtasks) use this
 /// function instead of maintaining their own copies.
 pub async fn execute_tool_with_safety(
     tools: &ToolRegistry,

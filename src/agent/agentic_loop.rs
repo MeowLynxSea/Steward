@@ -66,7 +66,8 @@ impl Default for AgenticLoopConfig {
 /// Strategy trait — each consumer implements this to customize I/O and lifecycle.
 ///
 /// The shared loop calls these methods at well-defined points. Consumers
-/// implement only the behavior that differs between chat, job, and container
+/// implement only the behavior that differs between chat, background jobs, and
+/// other local delegates
 /// contexts. The loop itself handles the common logic: tool intent nudge,
 /// iteration counting, tool definition refresh, and the respond → execute → process cycle.
 ///
@@ -76,7 +77,7 @@ impl Default for AgenticLoopConfig {
 /// Delegates using borrowed references (e.g. `ChatDelegate<'a>`) must ensure all
 /// borrowed fields are `Send + Sync`. This is a load-bearing constraint: if a
 /// delegate needs to be spawned into a detached task, it must use `Arc`-based
-/// ownership instead of borrows (as `JobDelegate` and `ContainerDelegate` do).
+/// ownership instead of borrows (as `JobDelegate` does).
 #[async_trait]
 pub trait LoopDelegate: Send + Sync {
     /// Called at the start of each iteration. Check for external signals
@@ -130,7 +131,7 @@ pub trait LoopDelegate: Send + Sync {
 
 /// Run the unified agentic loop.
 ///
-/// This is the single implementation used by all three consumers (chat, job, container).
+/// This is the single implementation used by all loop consumers.
 /// The `delegate` provides consumer-specific behavior via the `LoopDelegate` trait.
 pub async fn run_agentic_loop(
     delegate: &dyn LoopDelegate,

@@ -52,16 +52,15 @@ impl ContextManager {
         Ok(job_id)
     }
 
-    /// Register a sandbox job with a pre-determined ID.
+    /// Register a local autonomous job with a pre-determined ID.
     ///
     /// Unlike `create_job_for_user` (which generates its own UUID), this method
-    /// accepts an existing `job_id` — used by `execute_sandbox()` which creates
-    /// the UUID before the container so it can be shared with Docker labels and
-    /// DB persistence.
+    /// accepts an existing `job_id` so runtime components can persist job state
+    /// before scheduling begins.
     ///
     /// The job starts in `InProgress` state since the container is about to be
     /// created. Counts against `max_jobs` like any other job.
-    pub async fn register_sandbox_job(
+    pub async fn register_local_job(
         &self,
         job_id: Uuid,
         user_id: impl Into<String>,
@@ -1307,22 +1306,22 @@ mod tests {
         }
     }
 
-    // === Regression: sandbox jobs must be visible to query tools ===
-    // Before the fix, execute_sandbox() only persisted to DB but never
-    // registered in ContextManager, making sandbox jobs invisible to
+    // === Regression: local jobs must be visible to query tools ===
+    // Before the fix, local job execution only persisted to DB but never
+    // registered in ContextManager, making local jobs invisible to
     // list_jobs, job_status, job_events, and resolve_job_id.
 
     #[tokio::test]
-    async fn register_sandbox_job_visible_to_queries() {
+    async fn register_local_job_visible_to_queries() {
         let manager = ContextManager::new(5);
         let job_id = Uuid::new_v4();
 
         manager
-            .register_sandbox_job(
+            .register_local_job(
                 job_id,
                 "user-42",
                 "Run tests",
-                "Execute test suite in sandbox",
+                "Execute test suite locally",
             )
             .await
             .unwrap();
@@ -1349,33 +1348,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_sandbox_job_respects_max_jobs() {
+    async fn register_local_job_respects_max_jobs() {
         let manager = ContextManager::new(2);
 
-        // Fill up the slots with sandbox jobs
+        // Fill up the slots with local jobs
         manager
-            .register_sandbox_job(Uuid::new_v4(), "user-1", "Job 1", "desc")
+            .register_local_job(Uuid::new_v4(), "user-1", "Job 1", "desc")
             .await
             .unwrap();
         manager
-            .register_sandbox_job(Uuid::new_v4(), "user-1", "Job 2", "desc")
+            .register_local_job(Uuid::new_v4(), "user-1", "Job 2", "desc")
             .await
             .unwrap();
 
         // Third should fail
         let result = manager
-            .register_sandbox_job(Uuid::new_v4(), "user-1", "Job 3", "desc")
+            .register_local_job(Uuid::new_v4(), "user-1", "Job 3", "desc")
             .await;
         assert!(matches!(result, Err(JobError::MaxJobsExceeded { max: 2 })));
     }
 
     #[tokio::test]
-    async fn register_sandbox_job_transitions_correctly() {
+    async fn register_local_job_transitions_correctly() {
         let manager = ContextManager::new(5);
         let job_id = Uuid::new_v4();
 
         manager
-            .register_sandbox_job(job_id, "user-1", "Task", "desc")
+            .register_local_job(job_id, "user-1", "Task", "desc")
             .await
             .unwrap();
 

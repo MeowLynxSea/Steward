@@ -15,7 +15,6 @@ use crate::llm::{
     ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
     create_session_manager,
 };
-use crate::orchestrator::{ReaperConfig, SandboxReaper};
 use crate::runtime_events::SseManager;
 use crate::task_runtime::TaskRuntime;
 use crate::tracing_fmt::init_app_tracing;
@@ -39,18 +38,6 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     .await?;
 
     let config = components.config;
-    let orch = crate::orchestrator::setup_orchestrator(
-        &config,
-        &components.llm,
-        components.db.as_ref(),
-        components.secrets_store.as_ref(),
-    )
-    .await;
-    let container_job_manager = orch.container_job_manager;
-    let job_event_tx = orch.job_event_tx;
-    let prompt_queue = orch.prompt_queue;
-    let docker_status = orch.docker_status;
-
     let active_tool_names = components.tools.list().await;
     let _ = bootstrap_hooks(
         &components.hooks,
@@ -70,19 +57,11 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     components.tools.register_job_tools(
         Arc::clone(&components.context_manager),
         Some(scheduler_slot.clone()),
-        container_job_manager.clone(),
         components.db.clone(),
-        job_event_tx.clone(),
         Some(inject_tx.clone()),
-        if config.sandbox.enabled {
-            Some(Arc::clone(&prompt_queue))
-        } else {
-            None
-        },
         components.secrets_store.clone(),
     );
 
-    let reaper_context_manager = Arc::clone(&components.context_manager);
     let task_runtime = if let Some(store) = components.db.clone() {
         Arc::new(TaskRuntime::with_store(config.owner_id.clone(), store))
     } else {
@@ -162,13 +141,7 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         document_extraction: Some(Arc::new(
             crate::document_extraction::DocumentExtractionMiddleware::new(),
         )),
-        sandbox_readiness: if !config.sandbox.enabled {
-            crate::agent::routine_engine::SandboxReadiness::DisabledByConfig
-        } else if docker_status.is_ok() {
-            crate::agent::routine_engine::SandboxReadiness::Available
-        } else {
-            crate::agent::routine_engine::SandboxReadiness::DockerUnavailable
-        },
+        claude_code_config: config.claude_code.clone(),
         builder: components.builder,
         llm_backend: config.llm.backend.clone(),
         tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(
@@ -192,22 +165,6 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     );
     *scheduler_slot.write().await = Some(agent.scheduler());
     agent.set_routine_engine_slot(Arc::clone(&routine_engine_slot));
-
-    if let Some(ref jm) = container_job_manager {
-        let reaper_jm = Arc::clone(jm);
-        let reaper_config = ReaperConfig {
-            scan_interval: Duration::from_secs(config.sandbox.reaper_interval_secs),
-            orphan_threshold: Duration::from_secs(config.sandbox.orphan_threshold_secs),
-            ..ReaperConfig::default()
-        };
-        let reaper_ctx = Arc::clone(&reaper_context_manager);
-        tokio::spawn(async move {
-            match SandboxReaper::new(reaper_jm, reaper_ctx, reaper_config).await {
-                Ok(reaper) => reaper.run().await,
-                Err(error) => tracing::error!("Sandbox reaper failed to initialize: {}", error),
-            }
-        });
-    }
 
     tokio::spawn(async move {
         if let Err(error) = agent.run().await {

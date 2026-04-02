@@ -16,13 +16,13 @@ use crate::agent::routine::{Routine, RoutineRun, RunStatus};
 use crate::config::DatabaseConfig;
 use crate::context::{ActionRecord, JobContext, JobState};
 use crate::db::{
-    ApiTokenRecord, ConversationStore, Database, JobStore, RoutineStore, SandboxStore,
+    ApiTokenRecord, ConversationStore, Database, JobStore, LocalJobStore, RoutineStore,
     SettingsStore, ToolFailureStore, UserRecord, UserStore, WorkspaceStore,
 };
 use crate::error::{DatabaseError, WorkspaceError};
 use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, JobEventRecord,
-    LlmCallRecord, SandboxJobRecord, SandboxJobSummary, SettingRow, Store,
+    LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow, Store,
 };
 use crate::workspace::{
     MemoryChunk, MemoryDocument, Repository, SearchConfig, SearchResult, WorkspaceEntry,
@@ -330,23 +330,23 @@ impl JobStore for PgBackend {
     }
 }
 
-// ==================== SandboxStore ====================
+// ==================== LocalJobStore ====================
 
 #[async_trait]
-impl SandboxStore for PgBackend {
-    async fn save_sandbox_job(&self, job: &SandboxJobRecord) -> Result<(), DatabaseError> {
-        self.store.save_sandbox_job(job).await
+impl LocalJobStore for PgBackend {
+    async fn save_local_job(&self, job: &LocalJobRecord) -> Result<(), DatabaseError> {
+        self.store.save_local_job(job).await
     }
 
-    async fn get_sandbox_job(&self, id: Uuid) -> Result<Option<SandboxJobRecord>, DatabaseError> {
-        self.store.get_sandbox_job(id).await
+    async fn get_local_job(&self, id: Uuid) -> Result<Option<LocalJobRecord>, DatabaseError> {
+        self.store.get_local_job(id).await
     }
 
-    async fn list_sandbox_jobs(&self) -> Result<Vec<SandboxJobRecord>, DatabaseError> {
-        self.store.list_sandbox_jobs().await
+    async fn list_local_jobs(&self) -> Result<Vec<LocalJobRecord>, DatabaseError> {
+        self.store.list_local_jobs().await
     }
 
-    async fn update_sandbox_job_status(
+    async fn update_local_job_status(
         &self,
         id: Uuid,
         status: &str,
@@ -356,48 +356,46 @@ impl SandboxStore for PgBackend {
         completed_at: Option<DateTime<Utc>>,
     ) -> Result<(), DatabaseError> {
         self.store
-            .update_sandbox_job_status(id, status, success, message, started_at, completed_at)
+            .update_local_job_status(id, status, success, message, started_at, completed_at)
             .await
     }
 
-    async fn cleanup_stale_sandbox_jobs(&self) -> Result<u64, DatabaseError> {
-        self.store.cleanup_stale_sandbox_jobs().await
+    async fn cleanup_stale_local_jobs(&self) -> Result<u64, DatabaseError> {
+        self.store.cleanup_stale_local_jobs().await
     }
 
-    async fn sandbox_job_summary(&self) -> Result<SandboxJobSummary, DatabaseError> {
-        self.store.sandbox_job_summary().await
+    async fn local_job_summary(&self) -> Result<LocalJobSummary, DatabaseError> {
+        self.store.local_job_summary().await
     }
 
-    async fn list_sandbox_jobs_for_user(
+    async fn list_local_jobs_for_user(
         &self,
         user_id: &str,
-    ) -> Result<Vec<SandboxJobRecord>, DatabaseError> {
-        self.store.list_sandbox_jobs_for_user(user_id).await
+    ) -> Result<Vec<LocalJobRecord>, DatabaseError> {
+        self.store.list_local_jobs_for_user(user_id).await
     }
 
-    async fn sandbox_job_summary_for_user(
+    async fn local_job_summary_for_user(
         &self,
         user_id: &str,
-    ) -> Result<SandboxJobSummary, DatabaseError> {
-        self.store.sandbox_job_summary_for_user(user_id).await
+    ) -> Result<LocalJobSummary, DatabaseError> {
+        self.store.local_job_summary_for_user(user_id).await
     }
 
-    async fn sandbox_job_belongs_to_user(
+    async fn local_job_belongs_to_user(
         &self,
         job_id: Uuid,
         user_id: &str,
     ) -> Result<bool, DatabaseError> {
-        self.store
-            .sandbox_job_belongs_to_user(job_id, user_id)
-            .await
+        self.store.local_job_belongs_to_user(job_id, user_id).await
     }
 
-    async fn update_sandbox_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
-        self.store.update_sandbox_job_mode(id, mode).await
+    async fn update_local_job_mode(&self, id: Uuid, mode: &str) -> Result<(), DatabaseError> {
+        self.store.update_local_job_mode(id, mode).await
     }
 
-    async fn get_sandbox_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
-        self.store.get_sandbox_job_mode(id).await
+    async fn get_local_job_mode(&self, id: Uuid) -> Result<Option<String>, DatabaseError> {
+        self.store.get_local_job_mode(id).await
     }
 
     async fn save_job_event(

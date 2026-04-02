@@ -671,37 +671,10 @@ impl TestRigBuilder {
             components.tools.register_job_tools(
                 Arc::clone(&components.context_manager),
                 Some(scheduler_slot.clone()),
-                None,
                 components.db.clone(),
                 None,
                 None,
-                None,
-                None,
             );
-
-            // Routine tools: create a RoutineEngine with the LLM and workspace.
-            if let (Some(db_arc), Some(ws)) = (&components.db, &components.workspace) {
-                use ironclaw::agent::routine_engine::RoutineEngine;
-                use ironclaw::config::RoutineConfig;
-
-                let routine_config = RoutineConfig::default();
-                let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel(16);
-                let engine = Arc::new(RoutineEngine::new(
-                    routine_config,
-                    ironclaw::tenant::AdminScope::new(Arc::clone(db_arc)),
-                    components.llm.clone(),
-                    Arc::clone(ws),
-                    notify_tx,
-                    None,
-                    None,
-                    components.tools.clone(),
-                    components.safety.clone(),
-                    ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
-                ));
-                components
-                    .tools
-                    .register_routine_tools(Arc::clone(db_arc), engine);
-            }
 
             // Skills tools: ensure tests use temp skill dirs (sandbox-safe) even if
             // AppBuilder did not wire them for this environment.
@@ -805,7 +778,7 @@ impl TestRigBuilder {
             http_interceptor,
             transcription: None,
             document_extraction: None,
-            sandbox_readiness: ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
+            claude_code_config: ironclaw::config::ClaudeCodeConfig::default(),
             builder: None,
             llm_backend: "nearai".to_string(),
             tenant_rates: std::sync::Arc::new(ironclaw::tenant::TenantRateRegistry::new(4, 3)),

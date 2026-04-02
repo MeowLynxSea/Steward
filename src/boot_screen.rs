@@ -22,8 +22,6 @@ pub struct BootInfo {
     pub embeddings_provider: Option<String>,
     pub heartbeat_enabled: bool,
     pub heartbeat_interval_secs: u64,
-    pub sandbox_enabled: bool,
-    pub docker_status: crate::sandbox::detect::DockerStatus,
     pub claude_code_enabled: bool,
     pub routines_enabled: bool,
     pub skills_enabled: bool,
@@ -184,16 +182,6 @@ pub fn print_boot_screen(info: &BootInfo) {
         tags.push("skills".to_string());
     }
 
-    // Sandbox / Docker
-    if info.sandbox_enabled {
-        let suffix = match info.docker_status {
-            crate::sandbox::detect::DockerStatus::Available => "",
-            crate::sandbox::detect::DockerStatus::NotRunning => ":stopped",
-            _ => ":unavail",
-        };
-        tags.push(format!("sandbox{suffix}"));
-    }
-
     // Embeddings
     if info.embeddings_enabled {
         if let Some(ref provider) = info.embeddings_provider {
@@ -249,7 +237,6 @@ pub fn print_boot_screen(info: &BootInfo) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sandbox::detect::DockerStatus;
 
     #[test]
     fn test_print_boot_screen_full() {
@@ -267,8 +254,6 @@ mod tests {
             embeddings_provider: Some("openai".to_string()),
             heartbeat_enabled: true,
             heartbeat_interval_secs: 1800,
-            sandbox_enabled: true,
-            docker_status: DockerStatus::Available,
             claude_code_enabled: false,
             routines_enabled: true,
             skills_enabled: true,
@@ -301,8 +286,6 @@ mod tests {
             embeddings_provider: None,
             heartbeat_enabled: false,
             heartbeat_interval_secs: 0,
-            sandbox_enabled: false,
-            docker_status: DockerStatus::Disabled,
             claude_code_enabled: false,
             routines_enabled: false,
             skills_enabled: false,
@@ -331,8 +314,6 @@ mod tests {
             embeddings_provider: None,
             heartbeat_enabled: false,
             heartbeat_interval_secs: 0,
-            sandbox_enabled: false,
-            docker_status: DockerStatus::Disabled,
             claude_code_enabled: false,
             routines_enabled: false,
             skills_enabled: false,

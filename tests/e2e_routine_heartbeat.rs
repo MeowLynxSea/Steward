@@ -345,6 +345,7 @@ mod tests {
                 extension_manager: extension_manager.clone(),
                 store: Some(ironclaw::tenant::AdminScope::new(db.clone())),
                 hooks: Arc::new(HookRegistry::new()),
+                claude_code: ironclaw::config::ClaudeCodeConfig::default(),
             },
         ));
 
@@ -358,7 +359,6 @@ mod tests {
             extension_manager,
             registry,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ))
     }
 
@@ -489,7 +489,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         // Insert a cron routine with next_fire_at in the past.
@@ -568,7 +567,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         // Insert an event routine matching "deploy.*production".
@@ -655,7 +653,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         let routine = make_routine(
@@ -764,7 +761,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         let mut filters = std::collections::HashMap::new();
@@ -907,7 +903,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         // Insert an event routine with 1-hour cooldown.
@@ -1090,7 +1085,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         (engine, db, dir)
@@ -1212,7 +1206,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         // Create a full_job routine with max_concurrent = 1
@@ -1320,7 +1313,6 @@ mod tests {
             None,
             tools,
             safety,
-            ironclaw::agent::routine_engine::SandboxReadiness::DisabledByConfig,
         ));
 
         // Insert a due cron routine

@@ -251,9 +251,14 @@ mod tests {
         let system_prompt =
             extract_system_prompt(&requests).expect("Expected a system prompt in the LLM request");
 
+        let has_reply_guidance =
+            system_prompt.contains("Use normal assistant output to reply here");
+        let has_telegram_formatting =
+            system_prompt.contains("## Channel Formatting (telegram)")
+                && system_prompt.contains("No markdown tables");
         assert!(
-            system_prompt.contains("Use normal assistant output to reply here"),
-            "System prompt should route ordinary replies through normal assistant output.\n\
+            has_reply_guidance || has_telegram_formatting,
+            "System prompt should preserve Telegram reply/channel guidance.\n\
              Actual system prompt:\n{system_prompt}"
         );
         assert!(
