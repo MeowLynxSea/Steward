@@ -10,7 +10,7 @@ use std::time::Duration;
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
-    http::{HeaderValue, Method, StatusCode},
+    http::{HeaderValue, Method, StatusCode, header},
     response::{
         IntoResponse,
         sse::{Event, KeepAlive, Sse},
@@ -30,6 +30,7 @@ use crate::channels::IncomingMessage;
 use crate::config::{EmbeddingsConfig, LlmConfig, hydrate_llm_keys_from_secrets};
 use crate::db::Database;
 use crate::history::{ConversationMessage, ConversationSummary};
+use crate::llm::{RuntimeLlmReloader, registry::ProviderRegistry};
 use crate::runtime_events::SseManager;
 use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::settings::Settings;
@@ -51,6 +52,7 @@ pub struct ApiState {
     session_manager: Option<Arc<SessionManager>>,
     workspace: Option<Arc<Workspace>>,
     secrets_store: Option<Arc<dyn SecretsStore + Send + Sync>>,
+    llm_reloader: Option<Arc<RuntimeLlmReloader>>,
     tool_count: usize,
     dev_loaded_tool_names: Vec<String>,
     workspace_index_jobs: Arc<tokio::sync::RwLock<HashMap<Uuid, WorkspaceIndexJobResponse>>>,
@@ -77,6 +79,7 @@ impl ApiState {
             session_manager,
             workspace,
             secrets_store: None,
+            llm_reloader: None,
             tool_count: 0,
             dev_loaded_tool_names: Vec::new(),
             workspace_index_jobs: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
@@ -88,6 +91,11 @@ impl ApiState {
         secrets_store: Arc<dyn SecretsStore + Send + Sync>,
     ) -> Self {
         self.secrets_store = Some(secrets_store);
+        self
+    }
+
+    pub fn with_llm_reloader(mut self, llm_reloader: Arc<RuntimeLlmReloader>) -> Self {
+        self.llm_reloader = Some(llm_reloader);
         self
     }
 
@@ -118,10 +126,14 @@ pub struct SettingsResponse {
     pub llm_custom_providers: Vec<crate::settings::CustomLlmProviderSettings>,
     pub llm_builtin_overrides:
         std::collections::HashMap<String, crate::settings::LlmBuiltinOverride>,
+    pub llm_ready: bool,
+    pub llm_onboarding_required: bool,
+    pub llm_readiness_error: Option<String>,
 }
 
-impl From<Settings> for SettingsResponse {
-    fn from(value: Settings) -> Self {
+impl SettingsResponse {
+    fn from_settings(value: Settings) -> Self {
+        let readiness = llm_readiness(&value);
         Self {
             llm_backend: value.llm_backend,
             selected_model: value.selected_model,
@@ -129,6 +141,9 @@ impl From<Settings> for SettingsResponse {
             openai_compatible_base_url: value.openai_compatible_base_url,
             llm_custom_providers: value.llm_custom_providers,
             llm_builtin_overrides: value.llm_builtin_overrides,
+            llm_ready: readiness.is_ok(),
+            llm_onboarding_required: readiness.is_err(),
+            llm_readiness_error: readiness.err(),
         }
     }
 }
@@ -390,6 +405,7 @@ impl IntoResponse for ApiError {
 pub fn router(state: ApiState) -> Router {
     let cors = CorsLayer::new()
         .allow_methods([Method::DELETE, Method::GET, Method::PATCH, Method::POST])
+        .allow_headers([header::CONTENT_TYPE])
         .allow_origin(AllowOrigin::predicate(
             |origin: &HeaderValue, _| match origin.to_str() {
                 Ok(origin) => {
@@ -397,6 +413,10 @@ pub fn router(state: ApiState) -> Router {
                         || origin.starts_with("http://localhost:")
                         || origin == "http://127.0.0.1"
                         || origin == "http://localhost"
+                        || origin.starts_with("tauri://")
+                        || origin.starts_with("app://")
+                        || origin.starts_with("http://tauri.localhost")
+                        || origin.starts_with("https://tauri.localhost")
                 }
                 Err(_) => false,
             },
@@ -463,7 +483,7 @@ async fn get_health(State(state): State<ApiState>) -> Json<HealthResponse> {
 
 async fn get_settings(State(state): State<ApiState>) -> ApiResult<Json<SettingsResponse>> {
     let settings = load_settings(&state).await?;
-    Ok(Json(SettingsResponse::from(settings)))
+    Ok(Json(SettingsResponse::from_settings(settings)))
 }
 
 async fn patch_settings(
@@ -495,7 +515,13 @@ async fn patch_settings(
         hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), &state.owner_id).await;
     }
 
-    Ok(Json(SettingsResponse::from(settings)))
+    if let Some(reloader) = state.llm_reloader.as_ref() {
+        reloader.reload_from_settings(&settings).await.map_err(|error| {
+            ApiError::internal(format!("failed to reload runtime model provider: {error}"))
+        })?;
+    }
+
+    Ok(Json(SettingsResponse::from_settings(settings)))
 }
 
 async fn get_events(
@@ -892,7 +918,8 @@ async fn patch_task_mode(
         },
     );
 
-    if matches!(target_mode, TaskMode::Yolo) && task.status == TaskStatus::WaitingApproval
+    if matches!(target_mode, TaskMode::Yolo)
+        && task.status == TaskStatus::WaitingApproval
         && let Some(inject_tx) = state.inject_tx.as_ref()
         && let Some(pending) = task.pending_approval.as_ref()
     {
@@ -1153,6 +1180,23 @@ fn validate_settings_patch(payload: &PatchSettingsRequest) -> ApiResult<()> {
         return Err(ApiError::bad_request("llm_backend cannot be empty"));
     }
 
+    if let Some(backend) = &payload.llm_backend {
+        let normalized = backend.trim().to_ascii_lowercase();
+        let supported = [
+            "openai",
+            "openai_codex",
+            "anthropic",
+            "groq",
+            "openrouter",
+            "ollama",
+        ];
+        if !supported.contains(&normalized.as_str()) {
+            return Err(ApiError::unprocessable_entity(format!(
+                "unsupported llm_backend '{backend}'"
+            )));
+        }
+    }
+
     if let Some(model) = &payload.selected_model
         && model.trim().is_empty()
     {
@@ -1167,6 +1211,78 @@ fn validate_resolved_settings(settings: &Settings) -> ApiResult<()> {
         .map_err(|e| ApiError::unprocessable_entity(format!("invalid LLM settings: {e}")))?;
     EmbeddingsConfig::resolve(settings)
         .map_err(|e| ApiError::unprocessable_entity(format!("invalid embeddings settings: {e}")))?;
+    llm_readiness(settings).map_err(ApiError::unprocessable_entity)?;
+    Ok(())
+}
+
+fn llm_readiness(settings: &Settings) -> Result<(), String> {
+    let Some(raw_backend) = settings.llm_backend.as_deref().map(str::trim) else {
+        return Err("Choose a model provider to continue.".to_string());
+    };
+    if raw_backend.is_empty() {
+        return Err("Choose a model provider to continue.".to_string());
+    }
+
+    let backend = raw_backend.to_lowercase();
+    let registry = ProviderRegistry::load();
+    let supported = [
+        "openai",
+        "openai_codex",
+        "anthropic",
+        "groq",
+        "openrouter",
+        "ollama",
+    ];
+    if !supported.contains(&backend.as_str()) {
+        return Err(format!(
+            "Provider '{raw_backend}' is no longer supported. Use OpenAI, Codex, Anthropic, Groq, OpenRouter, or Ollama."
+        ));
+    }
+
+    if backend == "openai_codex" {
+        let session_path = crate::llm::OpenAiCodexConfig::default().session_path;
+        if !session_path.exists() {
+            return Err("Codex requires ChatGPT OAuth login before it can be used.".to_string());
+        }
+    } else if let Some(definition) = registry.find(&backend) {
+        let builtin_override = settings.llm_builtin_overrides.get(definition.id.as_str());
+        if definition.api_key_required {
+            let has_api_key = builtin_override
+                .and_then(|entry| entry.api_key.as_deref())
+                .is_some_and(|value| !value.trim().is_empty());
+            if !has_api_key {
+                return Err(format!("{} requires an API key.", definition.id));
+            }
+        }
+
+        let base_url = builtin_override
+            .and_then(|entry| entry.base_url.as_deref())
+            .or(match definition.id.as_str() {
+                "ollama" => settings.ollama_base_url.as_deref(),
+                _ => None,
+            })
+            .or(definition.default_base_url.as_deref());
+        if definition.base_url_required && !base_url.is_some_and(|value| !value.trim().is_empty()) {
+            return Err(format!("{} requires a base URL.", definition.id));
+        }
+
+        let has_model = settings
+            .selected_model
+            .as_deref()
+            .or(builtin_override.and_then(|entry| entry.model.as_deref()))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some()
+            || !definition.default_model.trim().is_empty();
+        if !has_model {
+            return Err(format!("{} requires a model selection.", definition.id));
+        }
+    } else {
+        return Err(format!("Unknown model provider '{raw_backend}'."));
+    }
+
+    LlmConfig::resolve(settings)
+        .map_err(|error| format!("LLM configuration is incomplete: {error}"))?;
     Ok(())
 }
 
@@ -1430,7 +1546,11 @@ fn workspace_index_slug(path: &FsPath) -> String {
         .collect();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     source.hash(&mut hasher);
-    format!("{}-{:08x}", sanitized.trim_matches('-'), (hasher.finish() & 0xffff_ffff) as u32)
+    format!(
+        "{}-{:08x}",
+        sanitized.trim_matches('-'),
+        (hasher.finish() & 0xffff_ffff) as u32
+    )
 }
 
 fn workspace_index_slug_from_document_path(document_path: &str) -> Option<String> {
@@ -1467,9 +1587,10 @@ async fn run_workspace_index_job(
     .await?;
 
     let source_root_for_scan = source_root.clone();
-    let candidates = tokio::task::spawn_blocking(move || discover_index_candidates(&source_root_for_scan))
-        .await
-        .map_err(|e| format!("failed to join index discovery task: {e}"))??;
+    let candidates =
+        tokio::task::spawn_blocking(move || discover_index_candidates(&source_root_for_scan))
+            .await
+            .map_err(|e| format!("failed to join index discovery task: {e}"))??;
 
     update_workspace_index_job(&jobs, job_id, |job| {
         job.phase = "indexing".to_string();
@@ -1797,24 +1918,36 @@ mod tests {
         let Json(settings) = get_settings(State(state)).await.expect("settings");
         assert_eq!(settings.llm_backend, None);
         assert!(settings.llm_custom_providers.is_empty());
+        assert!(!settings.llm_ready);
+        assert!(settings.llm_onboarding_required);
     }
 
     #[tokio::test]
     async fn patch_settings_persists_updates() {
         let state = test_state().await;
+        let mut llm_builtin_overrides = std::collections::HashMap::new();
+        llm_builtin_overrides.insert(
+            "openai".to_string(),
+            crate::settings::LlmBuiltinOverride {
+                api_key: Some("test-openai-key".to_string()),
+                model: None,
+                base_url: None,
+            },
+        );
         let payload = PatchSettingsRequest {
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4.1".to_string()),
             ollama_base_url: None,
             openai_compatible_base_url: Some("http://127.0.0.1:11434/v1".to_string()),
             llm_custom_providers: None,
-            llm_builtin_overrides: None,
+            llm_builtin_overrides: Some(llm_builtin_overrides),
         };
 
         let Json(updated) = patch_settings(State(state.clone()), Json(payload))
             .await
             .expect("patch");
         assert_eq!(updated.llm_backend.as_deref(), Some("openai"));
+        assert!(updated.llm_ready);
 
         let stored = state
             .store

@@ -19,13 +19,12 @@ pub mod costs;
 pub mod error;
 pub mod failover;
 pub mod gemini_oauth;
-mod github_copilot;
-pub(crate) mod github_copilot_auth;
 mod nearai_chat;
 pub mod oauth_helpers;
 pub mod openai_codex_provider;
 pub mod openai_codex_session;
 mod provider;
+pub mod reloadable;
 mod reasoning;
 pub mod recording;
 pub mod registry;
@@ -41,25 +40,29 @@ pub mod transcription;
 mod codex_test_helpers;
 
 pub mod image_models;
-pub mod models;
 pub mod reasoning_models;
 pub mod vision_models;
 
 pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerProvider};
 pub use config::{
-    BedrockConfig, CacheRetention, LlmConfig, NearAiConfig, OAUTH_PLACEHOLDER, OpenAiCodexConfig,
-    RegistryProviderConfig,
+    BedrockConfig, CacheRetention, LlmConfig, NearAiConfig, OAUTH_PLACEHOLDER, OpenAiApiFormat,
+    OpenAiCodexConfig, RegistryProviderConfig,
 };
 pub use error::LlmError;
 pub use failover::{CooldownConfig, FailoverProvider};
 pub use gemini_oauth::GeminiOauthProvider;
 pub use nearai_chat::{DEFAULT_MODEL, ModelInfo, NearAiChatProvider, default_models};
 pub use openai_codex_provider::OpenAiCodexProvider;
-pub use openai_codex_session::{OpenAiCodexSession, OpenAiCodexSessionManager};
+pub use openai_codex_session::{
+    OpenAiCodexDeviceCode, OpenAiCodexSession, OpenAiCodexSessionManager,
+};
 pub use provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
     LlmProvider, ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
     ToolDefinition, ToolResult, generate_tool_call_id,
+};
+pub use reloadable::{
+    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
 };
 pub use reasoning::{
     ActionPlan, Reasoning, ReasoningContext, RespondOutput, RespondResult, ResponseAnomaly,
@@ -183,17 +186,6 @@ fn create_registry_provider(
         ProviderProtocol::OpenAiCompletions => create_openai_compat_from_registry(config),
         ProviderProtocol::Anthropic => create_anthropic_from_registry(config),
         ProviderProtocol::Ollama => create_ollama_from_registry(config),
-        ProviderProtocol::GithubCopilot => {
-            let provider =
-                github_copilot::GithubCopilotProvider::new(config, request_timeout_secs)?;
-            tracing::debug!(
-                provider = %config.provider_id,
-                model = %config.model,
-                base_url = %config.base_url,
-                "Using GitHub Copilot provider (token exchange)"
-            );
-            Ok(Arc::new(provider))
-        }
     }
 }
 
@@ -297,22 +289,26 @@ fn create_openai_compat_from_registry(
         reason: format!("Failed to create OpenAI-compatible client: {e}"),
     })?;
 
-    // Use CompletionsClient (Chat Completions API) instead of the default
-    // Client (Responses API). The Responses API path in rig-core handles
-    // tool results differently, which breaks IronClaw's tool call flow.
-    let client = client.completions_api();
-    let model = client.completion_model(&config.model);
-
     tracing::debug!(
         provider = %config.provider_id,
         model = %config.model,
         base_url = %config.base_url,
-        "Using OpenAI-compatible provider"
+        api_format = %config.api_format.as_str(),
+        "Using OpenAI-family provider"
     );
 
-    let adapter = RigAdapter::new(model, &config.model)
+    if config.provider_id == "openai" && matches!(config.api_format, OpenAiApiFormat::Responses) {
+        let adapter = RigAdapter::new(client.completion_model(&config.model), &config.model)
+            .with_unsupported_params(config.unsupported_params.clone());
+        Ok(Arc::new(adapter))
+    } else {
+        let adapter = RigAdapter::new(
+            client.completions_api().completion_model(&config.model),
+            &config.model,
+        )
         .with_unsupported_params(config.unsupported_params.clone());
-    Ok(Arc::new(adapter))
+        Ok(Arc::new(adapter))
+    }
 }
 
 fn create_anthropic_from_registry(

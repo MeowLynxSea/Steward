@@ -7,6 +7,38 @@ export async function notify(title: string, body: string): Promise<void> {
   }
 }
 
+export interface CodexLoginStartResponse {
+  login_id: string;
+  verification_uri: string;
+  user_code: string;
+}
+
+export type CodexLoginStatus =
+  | {
+      status: "pending";
+      verification_uri: string;
+      user_code: string;
+    }
+  | {
+      status: "success";
+    }
+  | {
+      status: "error";
+      message: string;
+    };
+
+export async function startOpenAiCodexLogin(): Promise<CodexLoginStartResponse> {
+  const core = await import("@tauri-apps/api/core");
+  return core.invoke<CodexLoginStartResponse>("start_openai_codex_login");
+}
+
+export async function getOpenAiCodexLoginStatus(loginId: string): Promise<CodexLoginStatus> {
+  const core = await import("@tauri-apps/api/core");
+  return core.invoke<CodexLoginStatus>("get_openai_codex_login_status", {
+    loginId
+  });
+}
+
 export async function listenForFolderDrops(
   onDrop: (path: string) => Promise<void> | void
 ): Promise<() => Promise<void>> {

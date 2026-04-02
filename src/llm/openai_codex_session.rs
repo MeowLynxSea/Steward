@@ -28,6 +28,15 @@ pub struct OpenAiCodexSession {
     pub(crate) created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OpenAiCodexDeviceCode {
+    pub device_auth_id: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub interval: u64,
+    pub expires_in: u64,
+}
+
 impl std::fmt::Debug for OpenAiCodexSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OpenAiCodexSession")
@@ -113,6 +122,19 @@ impl UserCodeResponse {
             return remaining.max(0) as u64;
         }
         900 // default 15 minutes
+    }
+}
+
+impl From<UserCodeResponse> for OpenAiCodexDeviceCode {
+    fn from(value: UserCodeResponse) -> Self {
+        let expires_in = value.expires_in_secs();
+        Self {
+            device_auth_id: value.device_auth_id,
+            user_code: value.user_code,
+            verification_uri: value.verification_uri,
+            interval: value.interval,
+            expires_in,
+        }
     }
 }
 
@@ -282,11 +304,40 @@ impl OpenAiCodexSessionManager {
     /// 2. Poll POST `/api/accounts/deviceauth/token` → get authorization_code + PKCE
     /// 3. Exchange via POST `/oauth/token` → get access_token + refresh_token
     pub async fn device_code_login(&self) -> Result<(), LlmError> {
+        let device = self.request_device_code().await?;
+
+        // Step 2: Display code to user
+        println!();
+        println!("===========================================================");
+        println!("               OpenAI Codex Authentication                  ");
+        println!("===========================================================");
+        println!();
+        println!("  1. Open this URL in any browser:");
+        println!("     {}", device.verification_uri);
+        println!();
+        println!("  2. Enter this code:");
+        println!();
+        println!("              [  {}  ]", device.user_code);
+        println!();
+        println!(
+            "  Waiting for authorization... (expires in {} min)",
+            device.expires_in / 60
+        );
+        println!("===========================================================");
+        println!();
+
+        self.finish_device_code_login(&device).await?;
+
+        println!();
+        println!("Authentication successful!");
+        println!();
+        Ok(())
+    }
+
+    pub async fn request_device_code(&self) -> Result<OpenAiCodexDeviceCode, LlmError> {
         let _guard = self.renewal_lock.lock().await;
 
         let auth_base = format!("{}/api/accounts", self.config.auth_endpoint);
-
-        // Step 1: Request device code
         let usercode_url = format!("{}/deviceauth/usercode", auth_base);
         let resp = self
             .client
@@ -328,31 +379,20 @@ impl OpenAiCodexSessionManager {
                 ),
             })?;
 
-        // Step 2: Display code to user
-        println!();
-        println!("===========================================================");
-        println!("               OpenAI Codex Authentication                  ");
-        println!("===========================================================");
-        println!();
-        println!("  1. Open this URL in any browser:");
-        println!("     {}", device.verification_uri);
-        println!();
-        println!("  2. Enter this code:");
-        println!();
-        println!("              [  {}  ]", device.user_code);
-        println!();
-        let expires_secs = device.expires_in_secs();
-        println!(
-            "  Waiting for authorization... (expires in {} min)",
-            expires_secs / 60
-        );
-        println!("===========================================================");
-        println!();
+        Ok(device.into())
+    }
 
-        // Step 3: Poll for authorization code
+    pub async fn finish_device_code_login(
+        &self,
+        device: &OpenAiCodexDeviceCode,
+    ) -> Result<(), LlmError> {
+        let _guard = self.renewal_lock.lock().await;
+
+        let auth_base = format!("{}/api/accounts", self.config.auth_endpoint);
         let poll_url = format!("{}/deviceauth/token", auth_base);
         let mut interval = std::time::Duration::from_secs(device.interval.max(5));
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(expires_secs);
+        let deadline =
+            tokio::time::Instant::now() + std::time::Duration::from_secs(device.expires_in);
 
         let auth_code = loop {
             tokio::time::sleep(interval).await;
@@ -472,9 +512,6 @@ impl OpenAiCodexSessionManager {
         self.save_session(&session).await?;
         self.set_session(session).await;
 
-        println!();
-        println!("Authentication successful!");
-        println!();
         Ok(())
     }
 

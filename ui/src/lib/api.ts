@@ -1,4 +1,5 @@
 import type {
+  PatchSettingsRequest,
   SessionDetail,
   SendSessionMessageResponse,
   SessionSummary,
@@ -49,7 +50,7 @@ export const apiClient = {
     return request<SettingsResponse>("/settings");
   },
 
-  patchSettings(payload: Partial<SettingsResponse>) {
+  patchSettings(payload: PatchSettingsRequest) {
     return request<SettingsResponse>("/settings", {
       method: "PATCH",
       body: JSON.stringify(payload)

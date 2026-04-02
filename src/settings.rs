@@ -55,6 +55,9 @@ pub struct LlmBuiltinOverride {
     /// Base URL override. Takes precedence over environment variables.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
+    /// Request format override for providers that support multiple API surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_format: Option<String>,
 }
 
 /// Canonical secret name for a built-in provider's API key.

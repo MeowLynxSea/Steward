@@ -110,6 +110,7 @@ pub fn verify_slack_signature(
 ///
 /// Computes `HMAC-SHA256(secret, body)` and compares against
 /// `prefix + hex_digest` in constant time.
+#[cfg(test)]
 pub fn verify_hmac_sha256_prefixed(
     secret: &str,
     body: &[u8],

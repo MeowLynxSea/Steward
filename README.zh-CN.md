@@ -127,7 +127,7 @@ fresh clone 的开发者启动说明见 [docs/developer-bootstrap.md](docs/devel
 日常开发命令：
 
 - 浏览器模式：`cargo run -- api serve --port 8765`，然后访问 `http://127.0.0.1:8765`
-- 桌面模式：依次运行 `npm --prefix ui run build -- --watch`、`cargo run -- api serve --port 8765`、`cargo tauri dev --config src-tauri/tauri.conf.json`
+- 桌面模式：直接运行 `cargo desktop`
 
 ## 配置
 

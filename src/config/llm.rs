@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use secrecy::SecretString;
 
 use crate::bootstrap::ironclaw_base_dir;
-use crate::config::helpers::{optional_env, parse_optional_env, validate_base_url};
+use crate::config::helpers::validate_base_url;
 use crate::error::ConfigError;
 use crate::llm::config::*;
 use crate::llm::registry::{ProviderProtocol, ProviderRegistry};
@@ -46,51 +46,28 @@ impl LlmConfig {
         }
     }
 
-    /// Resolve a model name from settings.selected_model -> env var -> hardcoded default.
-    fn resolve_model(
-        env_var: &str,
-        settings: &Settings,
-        default: &str,
-    ) -> Result<String, ConfigError> {
-        if let Some(model) = settings.selected_model.clone() {
-            Ok(model)
-        } else if let Some(model) = optional_env(env_var)? {
-            Ok(model)
-        } else {
-            Ok(default.to_string())
-        }
+    /// Resolve a model name from persisted settings or a hardcoded default.
+    fn resolve_model(settings: &Settings, default: &str) -> String {
+        settings
+            .selected_model
+            .clone()
+            .unwrap_or_else(|| default.to_string())
     }
 
     pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
         let registry = ProviderRegistry::load();
 
-        // Determine backend: db settings > env var > default ("nearai")
-        let (backend, backend_source) = if let Some(ref b) = settings.llm_backend {
-            (b.clone(), "db:llm_backend")
-        } else if let Some(b) = optional_env("LLM_BACKEND")? {
-            (b, "env:LLM_BACKEND")
-        } else {
-            ("nearai".to_string(), "default")
-        };
+        // Persisted settings are the only source of runtime LLM routing.
+        let backend = settings
+            .llm_backend
+            .clone()
+            .unwrap_or_else(|| "nearai".to_string());
         tracing::info!(
             backend = %backend,
-            source = %backend_source,
             db_llm_backend = ?settings.llm_backend,
             custom_providers_count = settings.llm_custom_providers.len(),
             "Resolving LLM backend"
         );
-        // Warn operators when a DB-persisted value silently overrides LLM_BACKEND.
-        if backend_source == "db:llm_backend"
-            && let Ok(env_val) = std::env::var("LLM_BACKEND")
-            && !env_val.is_empty()
-        {
-            tracing::warn!(
-                db_value = %backend,
-                env_value = %env_val,
-                "LLM_BACKEND env var is set but DB setting takes priority. \
-                 Unset llm_backend in the DB (via settings UI) to use the env var."
-            );
-        }
 
         // Validate the backend is known
         let backend_lower = backend.to_lowercase();
@@ -123,37 +100,28 @@ impl LlmConfig {
         }
 
         // Session config (used by NearAI provider for OAuth/session-token auth)
-        let nearai_auth_url = optional_env("NEARAI_AUTH_URL")?
-            .unwrap_or_else(|| "https://private.near.ai".to_string());
+        let nearai_auth_url = "https://private.near.ai".to_string();
         validate_base_url(&nearai_auth_url, "NEARAI_AUTH_URL")?;
         let session = SessionConfig {
             auth_base_url: nearai_auth_url,
-            session_path: optional_env("NEARAI_SESSION_PATH")?
-                .map(PathBuf::from)
-                .unwrap_or_else(default_session_path),
+            session_path: default_session_path(),
         };
 
         // Always resolve NEAR AI config (used for embeddings even when not the primary backend)
-        // Priority: DB (builtin_overrides) > env > default
         let nearai_override = settings.llm_builtin_overrides.get("nearai");
         let nearai_api_key = if let Some(key) = nearai_override.and_then(|o| o.api_key.as_ref()) {
             Some(SecretString::from(key.clone()))
         } else {
-            optional_env("NEARAI_API_KEY")?.map(SecretString::from)
+            None
         };
-        // Model priority: selected_model (DB) > builtin_overrides (DB) > env > default
         let nearai_model = if let Some(model) = settings.selected_model.clone() {
             model
         } else if let Some(model) = nearai_override.and_then(|o| o.model.clone()) {
-            model
-        } else if let Some(model) = optional_env("NEARAI_MODEL")? {
             model
         } else {
             crate::llm::DEFAULT_MODEL.to_string()
         };
         let nearai_base_url = if let Some(url) = nearai_override.and_then(|o| o.base_url.clone()) {
-            url
-        } else if let Some(url) = optional_env("NEARAI_BASE_URL")? {
             url
         } else if nearai_api_key.is_some() {
             "https://cloud-api.near.ai".to_string()
@@ -163,25 +131,19 @@ impl LlmConfig {
         validate_base_url(&nearai_base_url, "NEARAI_BASE_URL")?;
         let nearai = NearAiConfig {
             model: nearai_model,
-            cheap_model: optional_env("NEARAI_CHEAP_MODEL")?,
+            cheap_model: None,
             base_url: nearai_base_url,
             api_key: nearai_api_key,
-            fallback_model: optional_env("NEARAI_FALLBACK_MODEL")?,
-            max_retries: parse_optional_env("NEARAI_MAX_RETRIES", 3)?,
-            circuit_breaker_threshold: optional_env("CIRCUIT_BREAKER_THRESHOLD")?
-                .map(|s| s.parse())
-                .transpose()
-                .map_err(|e| ConfigError::InvalidValue {
-                    key: "CIRCUIT_BREAKER_THRESHOLD".to_string(),
-                    message: format!("must be a positive integer: {e}"),
-                })?,
-            circuit_breaker_recovery_secs: parse_optional_env("CIRCUIT_BREAKER_RECOVERY_SECS", 30)?,
-            response_cache_enabled: parse_optional_env("RESPONSE_CACHE_ENABLED", false)?,
-            response_cache_ttl_secs: parse_optional_env("RESPONSE_CACHE_TTL_SECS", 3600)?,
-            response_cache_max_entries: parse_optional_env("RESPONSE_CACHE_MAX_ENTRIES", 1000)?,
-            failover_cooldown_secs: parse_optional_env("LLM_FAILOVER_COOLDOWN_SECS", 300)?,
-            failover_cooldown_threshold: parse_optional_env("LLM_FAILOVER_THRESHOLD", 3)?,
-            smart_routing_cascade: parse_optional_env("SMART_ROUTING_CASCADE", true)?,
+            fallback_model: None,
+            max_retries: 3,
+            circuit_breaker_threshold: None,
+            circuit_breaker_recovery_secs: 30,
+            response_cache_enabled: false,
+            response_cache_ttl_secs: 3600,
+            response_cache_max_entries: 1000,
+            failover_cooldown_secs: 300,
+            failover_cooldown_threshold: 3,
+            smart_routing_cascade: true,
         };
 
         // Resolve registry provider config (for non-NearAI, non-Bedrock, non-Gemini, non-Codex backends)
@@ -197,75 +159,56 @@ impl LlmConfig {
             )?)
         };
 
-        let bedrock = if is_bedrock {
-            let explicit_region = settings
-                .bedrock_region
-                .clone()
-                .or(optional_env("BEDROCK_REGION")?);
-            if explicit_region.is_none() {
-                tracing::info!("BEDROCK_REGION not set, defaulting to us-east-1");
-            }
-            let region = explicit_region.unwrap_or_else(|| "us-east-1".to_string());
-            let model = settings
-                .selected_model
-                .clone()
-                .or(optional_env("BEDROCK_MODEL")?)
-                .ok_or_else(|| ConfigError::MissingRequired {
-                    key: "BEDROCK_MODEL".to_string(),
-                    hint: "Set BEDROCK_MODEL or selected_model when LLM_BACKEND=bedrock"
-                        .to_string(),
+        let bedrock =
+            if is_bedrock {
+                let explicit_region = settings.bedrock_region.clone();
+                if explicit_region.is_none() {
+                    tracing::info!("BEDROCK_REGION not set, defaulting to us-east-1");
+                }
+                let region = explicit_region.unwrap_or_else(|| "us-east-1".to_string());
+                let model = settings.selected_model.clone().ok_or_else(|| {
+                    ConfigError::MissingRequired {
+                        key: "selected_model".to_string(),
+                        hint: "Set selected_model when llm_backend=bedrock".to_string(),
+                    }
                 })?;
-            let cross_region = settings
-                .bedrock_cross_region
-                .clone()
-                .or(optional_env("BEDROCK_CROSS_REGION")?);
-            if let Some(ref cr) = cross_region
-                && !matches!(cr.as_str(), "us" | "eu" | "apac" | "global")
-            {
-                return Err(ConfigError::InvalidValue {
-                    key: "BEDROCK_CROSS_REGION".to_string(),
-                    message: format!(
-                        "'{}' is not valid, expected one of: us, eu, apac, global",
-                        cr
-                    ),
-                });
-            }
-            let profile = settings
-                .bedrock_profile
-                .clone()
-                .or(optional_env("AWS_PROFILE")?);
-            Some(BedrockConfig {
-                region,
-                model,
-                cross_region,
-                profile,
-            })
-        } else {
-            None
-        };
+                let cross_region = settings.bedrock_cross_region.clone();
+                if let Some(ref cr) = cross_region
+                    && !matches!(cr.as_str(), "us" | "eu" | "apac" | "global")
+                {
+                    return Err(ConfigError::InvalidValue {
+                        key: "BEDROCK_CROSS_REGION".to_string(),
+                        message: format!(
+                            "'{}' is not valid, expected one of: us, eu, apac, global",
+                            cr
+                        ),
+                    });
+                }
+                let profile = settings.bedrock_profile.clone();
+                Some(BedrockConfig {
+                    region,
+                    model,
+                    cross_region,
+                    profile,
+                })
+            } else {
+                None
+            };
 
         // Resolve OpenAI Codex config
         let openai_codex = if is_openai_codex {
-            // Model: settings.selected_model > OPENAI_CODEX_MODEL > OPENAI_MODEL > default
+            // Model: settings.selected_model > default
             let model = settings
                 .selected_model
                 .clone()
-                .or(optional_env("OPENAI_CODEX_MODEL")?)
-                .or(optional_env("OPENAI_MODEL")?)
                 .unwrap_or_else(|| "gpt-5.3-codex".to_string());
-            let auth_endpoint = optional_env("OPENAI_CODEX_AUTH_URL")?
-                .unwrap_or_else(|| "https://auth.openai.com".to_string());
+            let auth_endpoint = "https://auth.openai.com".to_string();
             validate_base_url(&auth_endpoint, "OPENAI_CODEX_AUTH_URL")?;
-            let api_base_url = optional_env("OPENAI_CODEX_API_URL")?
-                .unwrap_or_else(|| "https://chatgpt.com/backend-api/codex".to_string());
+            let api_base_url = "https://chatgpt.com/backend-api/codex".to_string();
             validate_base_url(&api_base_url, "OPENAI_CODEX_API_URL")?;
-            let client_id = optional_env("OPENAI_CODEX_CLIENT_ID")?
-                .unwrap_or_else(|| "app_EMoamEEZ73f0CkXaXp7hrann".to_string());
-            let session_path = optional_env("OPENAI_CODEX_SESSION_PATH")?
-                .map(PathBuf::from)
-                .unwrap_or_else(|| ironclaw_base_dir().join("openai_codex_session.json"));
-            let token_refresh_margin_secs =
-                parse_optional_env("OPENAI_CODEX_REFRESH_MARGIN_SECS", 300)?;
+            let client_id = "app_EMoamEEZ73f0CkXaXp7hrann".to_string();
+            let session_path = ironclaw_base_dir().join("openai_codex_session.json");
+            let token_refresh_margin_secs = 300;
             Some(OpenAiCodexConfig {
                 model,
                 auth_endpoint,
@@ -278,13 +221,11 @@ impl LlmConfig {
             None
         };
 
-        let request_timeout_secs = parse_optional_env("LLM_REQUEST_TIMEOUT_SECS", 120)?;
+        let request_timeout_secs = 120;
 
         let gemini_oauth = if backend_lower == "gemini_oauth" || backend_lower == "gemini-oauth" {
-            let model = Self::resolve_model("GEMINI_MODEL", settings, "gemini-2.5-flash")?;
-            let credentials_path = optional_env("GEMINI_CREDENTIALS_PATH")?
-                .map(PathBuf::from)
-                .unwrap_or_else(GeminiOauthConfig::default_credentials_path);
+            let model = Self::resolve_model(settings, "gemini-2.5-flash");
+            let credentials_path = GeminiOauthConfig::default_credentials_path();
             Some(GeminiOauthConfig {
                 model,
                 credentials_path,
@@ -295,11 +236,11 @@ impl LlmConfig {
 
         // Generic cheap model (works with any backend).
         // Falls back to NearAI-specific cheap_model in provider chain logic.
-        let cheap_model = optional_env("LLM_CHEAP_MODEL")?;
+        let cheap_model = None;
 
         // Generic smart routing cascade flag.
         // Defaults to true. Overrides NearAI-specific smart_routing_cascade.
-        let smart_routing_cascade = parse_optional_env("SMART_ROUTING_CASCADE", true)?;
+        let smart_routing_cascade = true;
 
         Ok(Self {
             backend: if is_nearai {
@@ -363,7 +304,6 @@ impl LlmConfig {
         let model = settings
             .selected_model
             .clone()
-            .or(optional_env("LLM_MODEL")?)
             .or_else(|| custom.default_model.clone())
             .unwrap_or_default();
         if model.is_empty() {
@@ -383,10 +323,11 @@ impl LlmConfig {
             auth_path: None,
             cache_retention: CacheRetention::default(),
             unsupported_params: Vec::new(),
+            api_format: OpenAiApiFormat::ChatCompletions,
         })
     }
 
-    /// Resolve a `RegistryProviderConfig` from the registry and env vars.
+    /// Resolve a `RegistryProviderConfig` from the registry and persisted settings.
     fn resolve_registry_provider(
         backend: &str,
         registry: &ProviderRegistry,
@@ -402,7 +343,7 @@ impl LlmConfig {
             protocol,
             api_key_env,
             base_url_env,
-            model_env,
+            _model_env,
             default_model,
             default_base_url,
             extra_headers_env,
@@ -440,39 +381,12 @@ impl LlmConfig {
             )
         };
 
-        // Codex auth.json override: when LLM_USE_CODEX_AUTH=true,
-        // credentials from the Codex CLI's auth.json take highest priority
-        // (over env vars AND secrets store). In ChatGPT mode, the base URL
-        // is also overridden to the private ChatGPT backend endpoint.
-        let mut codex_base_url_override: Option<String> = None;
-        let codex_creds = if parse_optional_env("LLM_USE_CODEX_AUTH", false)? {
-            let path = optional_env("CODEX_AUTH_PATH")?
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(crate::llm::codex_auth::default_codex_auth_path);
-            crate::llm::codex_auth::load_codex_credentials(&path)
-        } else {
-            None
-        };
-
-        let codex_refresh_token = codex_creds.as_ref().and_then(|c| c.refresh_token.clone());
-        let codex_auth_path = codex_creds.as_ref().and_then(|c| c.auth_path.clone());
-
-        let api_key = if let Some(creds) = codex_creds {
-            if creds.is_chatgpt_mode {
-                codex_base_url_override = Some(creds.base_url().to_string());
-            }
-            Some(creds.token)
-        } else if let Some(env_var) = api_key_env {
-            // Resolve API key: settings override (DB) > env var (including secrets store overlay)
-            if let Some(key) = settings
+        let api_key = if api_key_env.is_some() {
+            settings
                 .llm_builtin_overrides
                 .get(backend)
                 .and_then(|o| o.api_key.as_ref())
-            {
-                Some(SecretString::from(key.clone()))
-            } else {
-                optional_env(env_var)?.map(SecretString::from)
-            }
+                .map(|key| SecretString::from(key.clone()))
         } else {
             None
         };
@@ -488,21 +402,12 @@ impl LlmConfig {
             }
         }
 
-        // Resolve base URL: codex override > builtin_overrides (DB) > legacy settings (DB) > env var > registry default
-        let is_codex_chatgpt = codex_base_url_override.is_some();
-        let env_base_url = if let Some(env_var) = base_url_env {
-            optional_env(env_var)?
-        } else {
-            None
-        };
-        let base_url = codex_base_url_override
-            .or_else(|| {
-                // DB settings: per-provider base_url override
-                settings
-                    .llm_builtin_overrides
-                    .get(backend)
-                    .and_then(|o| o.base_url.clone())
-            })
+        // Resolve base URL: builtin_overrides (DB) > legacy settings (DB) > registry default
+        let is_codex_chatgpt = false;
+        let base_url = settings
+            .llm_builtin_overrides
+            .get(backend)
+            .and_then(|o| o.base_url.clone())
             .or_else(|| {
                 // DB settings: legacy settings fields
                 match backend {
@@ -513,7 +418,6 @@ impl LlmConfig {
                     _ => None,
                 }
             })
-            .or(env_base_url)
             .or_else(|| default_base_url.map(String::from))
             .unwrap_or_default();
 
@@ -533,7 +437,7 @@ impl LlmConfig {
             validate_base_url(&base_url, field)?;
         }
 
-        // Resolve model: selected_model (DB) > per-provider override (DB) > env var > registry default
+        // Resolve model: selected_model (DB) > per-provider override (DB) > registry default
         let model = settings
             .selected_model
             .clone()
@@ -543,34 +447,17 @@ impl LlmConfig {
                     .get(backend)
                     .and_then(|o| o.model.clone())
             })
-            .or(optional_env(model_env)?)
             .unwrap_or_else(|| default_model.to_string());
 
-        // Resolve extra headers
-        let extra_headers = if let Some(env_var) = extra_headers_env {
-            optional_env(env_var)?
-                .map(|val| parse_extra_headers_with_key(&val, env_var))
-                .transpose()?
-                .unwrap_or_default()
+        let extra_headers = if extra_headers_env.is_some() {
+            Vec::new()
         } else {
             Vec::new()
-        };
-        let extra_headers = if canonical_id == "github_copilot" {
-            merge_extra_headers(
-                crate::llm::github_copilot_auth::default_headers(),
-                extra_headers,
-            )
-        } else {
-            extra_headers
         };
 
         // Resolve OAuth token (Anthropic-specific: `claude login` flow).
         // Only check for OAuth token when the provider is actually Anthropic.
-        let oauth_token = if canonical_id == "anthropic" {
-            optional_env("ANTHROPIC_OAUTH_TOKEN")?.map(SecretString::from)
-        } else {
-            None
-        };
+        let oauth_token = None;
         let api_key = if api_key.is_none() && oauth_token.is_some() {
             // OAuth token present but no API key: use a placeholder so the
             // config block is populated. The provider factory will route to
@@ -580,21 +467,16 @@ impl LlmConfig {
             api_key
         };
 
-        // Resolve Anthropic prompt cache retention from env (default: Short).
-        let cache_retention: CacheRetention = if canonical_id == "anthropic" {
-            optional_env("ANTHROPIC_CACHE_RETENTION")?
-                .and_then(|val| match val.parse::<CacheRetention>() {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Invalid ANTHROPIC_CACHE_RETENTION: {e}; defaulting to short"
-                        );
-                        None
-                    }
-                })
-                .unwrap_or_default()
+        let cache_retention: CacheRetention = CacheRetention::default();
+        let api_format = if canonical_id == "openai" {
+            OpenAiApiFormat::from_settings(
+                settings
+                    .llm_builtin_overrides
+                    .get(backend)
+                    .and_then(|override_value| override_value.request_format.as_deref()),
+            )
         } else {
-            CacheRetention::default()
+            OpenAiApiFormat::ChatCompletions
         };
 
         Ok(RegistryProviderConfig {
@@ -606,10 +488,11 @@ impl LlmConfig {
             extra_headers,
             oauth_token,
             is_codex_chatgpt,
-            refresh_token: codex_refresh_token,
-            auth_path: codex_auth_path,
+            refresh_token: None,
+            auth_path: None,
             cache_retention,
             unsupported_params,
+            api_format,
         })
     }
 }
@@ -618,6 +501,7 @@ impl LlmConfig {
 ///
 /// Format: `Key1:Value1,Key2:Value2` (colon-separated, not `=`, because
 /// header values often contain `=`).
+#[cfg(test)]
 fn parse_extra_headers_with_key(
     val: &str,
     env_var_name: &str,
@@ -650,6 +534,7 @@ fn parse_extra_headers_with_key(
     Ok(headers)
 }
 
+#[cfg(test)]
 fn merge_extra_headers(
     defaults: Vec<(String, String)>,
     overrides: Vec<(String, String)>,
@@ -985,54 +870,6 @@ mod tests {
         assert_eq!(provider.model, "glm-5");
         assert_eq!(provider.base_url, "https://api.z.ai/api/paas/v4");
         assert_eq!(provider.protocol, ProviderProtocol::OpenAiCompletions);
-    }
-
-    #[test]
-    fn registry_provider_resolves_github_copilot_alias() {
-        let _guard = lock_env();
-        // SAFETY: Under ENV_MUTEX.
-        unsafe {
-            std::env::set_var("LLM_BACKEND", "github-copilot");
-            std::env::set_var("GITHUB_COPILOT_TOKEN", "gho_test_token");
-            std::env::set_var(
-                "GITHUB_COPILOT_EXTRA_HEADERS",
-                "Copilot-Integration-Id:custom-chat,X-Test:enabled",
-            );
-        }
-
-        let settings = Settings::default();
-
-        let cfg = LlmConfig::resolve(&settings).expect("resolve should succeed");
-        assert_eq!(cfg.backend, "github_copilot");
-        let provider = cfg.provider.expect("provider config should be present");
-        assert_eq!(provider.provider_id, "github_copilot");
-        assert_eq!(provider.base_url, "https://api.githubcopilot.com");
-        assert_eq!(provider.model, "gpt-4o");
-        assert!(
-            provider
-                .extra_headers
-                .iter()
-                .any(|(key, value)| { key == "Copilot-Integration-Id" && value == "custom-chat" })
-        );
-        assert!(
-            provider
-                .extra_headers
-                .iter()
-                .any(|(key, value)| key == "User-Agent" && value == "GitHubCopilotChat/0.26.7")
-        );
-        assert!(
-            provider
-                .extra_headers
-                .iter()
-                .any(|(key, value)| key == "X-Test" && value == "enabled")
-        );
-
-        // SAFETY: Under ENV_MUTEX.
-        unsafe {
-            std::env::remove_var("LLM_BACKEND");
-            std::env::remove_var("GITHUB_COPILOT_TOKEN");
-            std::env::remove_var("GITHUB_COPILOT_EXTRA_HEADERS");
-        }
     }
 
     #[test]

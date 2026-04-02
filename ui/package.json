@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
+    "lucide-svelte": "^1.0.1",
     "svelte": "^5.0.0"
   },
   "devDependencies": {

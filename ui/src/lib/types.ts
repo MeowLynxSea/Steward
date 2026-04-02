@@ -8,13 +8,42 @@ export type TaskStatus =
   | "cancelled"
   | "rejected";
 
+export interface LlmBuiltinOverride {
+  api_key: string | null;
+  model: string | null;
+  base_url: string | null;
+  request_format: string | null;
+}
+
+export interface CustomLlmProviderSettings {
+  id: string;
+  name: string;
+  adapter: string;
+  base_url: string | null;
+  default_model: string | null;
+  api_key: string | null;
+  builtin: boolean;
+}
+
 export interface SettingsResponse {
   llm_backend: string | null;
   selected_model: string | null;
   ollama_base_url: string | null;
   openai_compatible_base_url: string | null;
-  llm_custom_providers: Array<Record<string, unknown>>;
-  llm_builtin_overrides: Record<string, Record<string, unknown>>;
+  llm_custom_providers: CustomLlmProviderSettings[];
+  llm_builtin_overrides: Record<string, LlmBuiltinOverride>;
+  llm_ready: boolean;
+  llm_onboarding_required: boolean;
+  llm_readiness_error: string | null;
+}
+
+export interface PatchSettingsRequest {
+  llm_backend?: string | null;
+  selected_model?: string | null;
+  ollama_base_url?: string | null;
+  openai_compatible_base_url?: string | null;
+  llm_custom_providers?: CustomLlmProviderSettings[];
+  llm_builtin_overrides?: Record<string, LlmBuiltinOverride>;
 }
 
 export interface SessionSummary {

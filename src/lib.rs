@@ -51,6 +51,7 @@ pub mod config;
 pub mod context;
 pub mod db;
 pub mod document_extraction;
+pub mod desktop_runtime;
 pub mod error;
 pub mod estimation;
 pub mod evaluation;

@@ -127,24 +127,20 @@ That bootstrap prepares Rust + WASM prerequisites, installs UI dependencies, bui
 Daily development flows:
 
 - Browser mode: `cargo run -- api serve --port 8765`, then open `http://127.0.0.1:8765`
-- Desktop mode: run `npm --prefix ui run build -- --watch`, `cargo run -- api serve --port 8765`, then `cargo tauri dev --config src-tauri/tauri.conf.json`
+- Desktop mode: run `cargo desktop`
 
 ## Configuration
 
-The local bootstrap path is config-file and env-var driven:
+The local bootstrap path is desktop-first. Database bootstrap still uses `.env`
+for infrastructure concerns, but model-provider configuration now happens only
+through the app's onboarding flow and Settings page.
 
 ```env
 DATABASE_BACKEND=libsql
 LIBSQL_PATH=~/.ironcowork/ironcowork.db
-LLM_BACKEND=openai_compatible
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_API_KEY=sk-or-...
-LLM_MODEL=anthropic/claude-sonnet-4
 ```
 
 No NEAR login or PostgreSQL bootstrap should be required for the target product.
-
-See [docs/LLM_PROVIDERS.md](docs/LLM_PROVIDERS.md) for provider details.
 
 ## Security
 

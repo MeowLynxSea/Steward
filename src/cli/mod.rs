@@ -15,6 +15,7 @@ mod api;
 mod completion;
 mod config;
 mod doctor;
+mod desktop;
 pub mod fmt;
 mod hooks;
 #[cfg(feature = "import")]
@@ -35,6 +36,7 @@ pub use api::{ApiCommand, run_api_command};
 pub use completion::Completion;
 pub use config::{ConfigCommand, run_config_command};
 pub use doctor::run_doctor_command;
+pub use desktop::run_desktop_command;
 pub use hooks::{HooksCommand, run_hooks_command};
 #[cfg(feature = "import")]
 pub use import::{ImportCommand, run_import_command};
@@ -95,6 +97,13 @@ pub enum Command {
         long_about = "Starts the IronCowork local Axum API for browser and desktop clients.\nExample: ironcowork api serve --port 8765"
     )]
     Api(ApiCommand),
+
+    /// Launch the desktop app as a single local-first runtime
+    #[command(
+        about = "Launch desktop app",
+        long_about = "Builds the bundled frontend, starts the local API, waits for readiness, then launches the Tauri desktop shell.\nExample: ironcowork desktop"
+    )]
+    Desktop,
 
     /// Manage configuration settings
     #[command(

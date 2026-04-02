@@ -37,8 +37,6 @@ pub enum ProviderProtocol {
     Anthropic,
     /// Ollama API (OpenAI-ish, no API key required).
     Ollama,
-    /// GitHub Copilot API (OpenAI-compatible with token exchange).
-    GithubCopilot,
 }
 
 /// How the setup wizard should collect credentials for this provider.

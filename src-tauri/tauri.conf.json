@@ -4,20 +4,23 @@
   "version": "0.1.0",
   "identifier": "ai.ironcowork.desktop",
   "build": {
-    "beforeDevCommand": "",
+    "beforeDevCommand": "npm --prefix ../ui run build",
     "beforeBuildCommand": "npm --prefix ../ui run build",
-    "devUrl": "http://127.0.0.1:8765",
     "frontendDist": "../static"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "IronCowork",
-        "width": 1440,
-        "height": 920,
+        "width": 1280,
+        "height": 820,
         "resizable": true,
         "fullscreen": false,
-        "dragDropEnabled": true
+        "dragDropEnabled": true,
+        "decorations": false,
+        "transparent": true,
+        "shadow": true
       }
     ],
     "security": {

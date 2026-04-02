@@ -16,7 +16,10 @@ use ironclaw::{
     },
     config::Config,
     hooks::bootstrap_hooks,
-    llm::create_session_manager,
+    llm::{
+        ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
+        create_session_manager,
+    },
     orchestrator::{ReaperConfig, SandboxReaper},
     task_runtime::TaskRuntime,
     tracing_fmt::{init_app_tracing, init_cli_tracing, init_worker_tracing},
@@ -55,15 +58,13 @@ fn format_top_level_error(err: &anyhow::Error) {
     } else if lower.contains("connection refused") || lower.contains("connect error") {
         Some("check local service settings or libSQL file permissions")
     } else if lower.contains("session") && lower.contains("not found") {
-        Some("set LLM_BACKEND and provider credentials in your environment or config")
+        Some("configure a model provider from the desktop onboarding flow or settings page")
     } else if lower.contains("secrets_master_key") {
         Some("set SECRETS_MASTER_KEY in .env or rely on the OS keychain")
     } else if lower.contains("already running") {
         Some("stop the other instance or remove the stale PID file")
     } else if lower.contains("onboard") {
-        Some(
-            "the interactive onboarding flow is deprecated; configure env vars or config.toml directly",
-        )
+        Some("finish the desktop onboarding flow and save a valid provider configuration")
     } else {
         None
     };
@@ -90,6 +91,10 @@ async fn async_main() -> anyhow::Result<()> {
         Some(Command::Api(api_cmd)) => {
             init_cli_tracing();
             return run_api_command(api_cmd, cli.config.as_deref()).await;
+        }
+        Some(Command::Desktop) => {
+            init_cli_tracing();
+            return ironclaw::cli::run_desktop_command().await;
         }
         Some(Command::Registry(registry_cmd)) => {
             init_cli_tracing();
@@ -460,6 +465,26 @@ async fn async_main() -> anyhow::Result<()> {
         Arc::new(TaskRuntime::new())
     };
     let sse_manager = Arc::new(ironclaw::runtime_events::SseManager::new());
+    let primary_llm = components.llm.clone();
+    let cheap_llm = components
+        .cheap_llm
+        .clone()
+        .unwrap_or_else(|| primary_llm.clone());
+    let reloadable_llm_state = Arc::new(ReloadableLlmState::new(primary_llm, cheap_llm));
+    let runtime_llm_reloader = Arc::new(RuntimeLlmReloader::new(
+        Arc::clone(&reloadable_llm_state),
+        components.session.clone(),
+        config.owner_id.clone(),
+        components.secrets_store.clone(),
+    ));
+    let app_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+        Arc::clone(&reloadable_llm_state),
+        ReloadableSlot::Primary,
+    ));
+    let app_cheap_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+        Arc::clone(&reloadable_llm_state),
+        ReloadableSlot::Cheap,
+    ));
 
     if let Some(store) = components.db.clone() {
         let api_bind_addr = local_api_addr(DEFAULT_API_PORT);
@@ -473,7 +498,11 @@ async fn async_main() -> anyhow::Result<()> {
             Some(session_manager.clone()),
             components.workspace.clone(),
         )
-        .with_workbench_metadata(components.tools.count(), components.dev_loaded_tool_names.clone());
+        .with_llm_reloader(runtime_llm_reloader)
+        .with_workbench_metadata(
+            components.tools.count(),
+            components.dev_loaded_tool_names.clone(),
+        );
         tokio::spawn(async move {
             if let Err(error) = run_api(api_bind_addr, api_state).await {
                 tracing::error!(%error, "local api service exited");
@@ -484,8 +513,8 @@ async fn async_main() -> anyhow::Result<()> {
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
         store: components.db,
-        llm: components.llm,
-        cheap_llm: components.cheap_llm,
+        llm: app_llm,
+        cheap_llm: Some(app_cheap_llm),
         safety: components.safety,
         tools: components.tools,
         workspace: components.workspace,

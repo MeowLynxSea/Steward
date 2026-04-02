@@ -1,0 +1,6 @@
+[build]
+target-dir = "/Users/MeowLynxSea/Development/IronCowork/target"
+
+[alias]
+desktop = "tauri dev --config src-tauri/tauri.conf.json"
+desktop-build = "tauri build --config src-tauri/tauri.conf.json"

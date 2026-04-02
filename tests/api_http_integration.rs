@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use axum::{
     body::Body,
     http::{Request, StatusCode, header},
@@ -15,6 +14,7 @@ use ironclaw::{
     workspace::Workspace,
 };
 use serde_json::json;
+use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 use tower::util::ServiceExt;
 
@@ -53,10 +53,7 @@ async fn test_router() -> axum::Router {
     router(state)
 }
 
-async fn wait_for_workspace_index_job(
-    app: &axum::Router,
-    job_id: &str,
-) -> serde_json::Value {
+async fn wait_for_workspace_index_job(app: &axum::Router, job_id: &str) -> serde_json::Value {
     for _ in 0..40 {
         let response = app
             .clone()
@@ -139,7 +136,10 @@ async fn workbench_capabilities_endpoint_returns_workspace_tooling_snapshot() {
     assert_eq!(body["dev_loaded_tools"][0], "dev-helper");
     assert_eq!(body["dev_loaded_tools"][1], "debug-tool");
     assert_eq!(
-        body["mcp_servers"].as_array().expect("mcp server array").len(),
+        body["mcp_servers"]
+            .as_array()
+            .expect("mcp server array")
+            .len(),
         0
     );
 }
@@ -1550,7 +1550,11 @@ async fn workspace_endpoints_index_and_list_tree() {
         "beta details for recursive indexing",
     )
     .expect("write beta");
-    std::fs::write(source_dir.path().join("notes/image.bin"), [0, 159, 146, 150]).expect("write binary");
+    std::fs::write(
+        source_dir.path().join("notes/image.bin"),
+        [0, 159, 146, 150],
+    )
+    .expect("write binary");
 
     let app = router(ApiState::new(
         "http-test-user".to_string(),
@@ -1627,7 +1631,9 @@ async fn workspace_endpoints_index_and_list_tree() {
                 .method("POST")
                 .uri("/api/v0/workspace/search")
                 .header(header::CONTENT_TYPE, "application/json")
-                .body(Body::from(json!({ "query": "recursive indexing beta" }).to_string()))
+                .body(Body::from(
+                    json!({ "query": "recursive indexing beta" }).to_string(),
+                ))
                 .expect("search request"),
         )
         .await
