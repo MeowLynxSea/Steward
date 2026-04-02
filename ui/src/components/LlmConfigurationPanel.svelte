@@ -595,13 +595,6 @@
     color: rgba(49, 39, 30, 0.82);
   }
 
-  .field-hint {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.4;
-    color: rgba(61, 61, 61, 0.62);
-  }
-
   .field input {
     width: 100%;
     box-sizing: border-box;
