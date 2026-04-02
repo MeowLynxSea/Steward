@@ -146,8 +146,3 @@ fn set_auth_file_permissions(path: &Path) -> Result<(), Box<dyn std::error::Erro
 fn set_auth_file_permissions(_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}
