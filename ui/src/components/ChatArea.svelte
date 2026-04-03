@@ -1,13 +1,12 @@
 <script lang="ts">
   import {
-    Bot,
-    FileText,
-    GitBranch,
+    Check,
+    ChevronDown,
+    Circle,
+    Moon,
     Plus,
     Shield,
-    Sparkles,
-    Sun,
-    WandSparkles
+    Sun
   } from "lucide-svelte";
   import type { SessionDetail, TaskRecord } from "../lib/types";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
@@ -16,35 +15,36 @@
     session: SessionDetail | null;
     task: TaskRecord | null;
     modelName?: string | null;
+    availableModels?: string[];
     loading: boolean;
     onSendMessage: (content: string) => void;
     onApproveTask: (task: TaskRecord) => void;
     onApproveTaskAlways: (task: TaskRecord) => void;
     onRejectTask: (task: TaskRecord, reason: string) => void;
+    onSelectModel?: (model: string) => void;
   }
 
   let {
     session,
     task,
     modelName = null,
+    availableModels = [],
     loading,
     onSendMessage,
     onApproveTask,
     onApproveTaskAlways,
-    onRejectTask
+    onRejectTask,
+    onSelectModel
   }: Props = $props();
 
   let draftMessage = $state("");
   let rejectReason = $state("Rejected by user");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
+  let showModelDropdown = $state(false);
+  let darkMode = $state(false);
 
   const hasMessages = $derived(session && session.messages.length > 0);
-  const suggestions = [
-    "分析当前项目结构并建议改进方案",
-    "自动化构建和部署流程",
-    "提取并总结所有 PDF 文件的关键信息"
-  ];
-  const displayModelName = $derived(modelName?.trim() || "未设置模型");
+  const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
 
   function handleSubmit() {
     const content = draftMessage.trim();
@@ -70,66 +70,123 @@
       textareaRef.style.height = `${Math.min(textareaRef.scrollHeight, 200)}px`;
     }
   }
+
+  function toggleModelDropdown() {
+    showModelDropdown = !showModelDropdown;
+  }
+
+  function selectModel(model: string) {
+    showModelDropdown = false;
+    onSelectModel?.(model);
+  }
+
+  function toggleTheme() {
+    darkMode = !darkMode;
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+  }
+
+  function handleGlobalClick(event: MouseEvent) {
+    const target = event.target as HTMLElement;
+    if (showModelDropdown && !target.closest(".model-selector")) {
+      showModelDropdown = false;
+    }
+  }
 </script>
 
+<svelte:window onclick={handleGlobalClick} />
+
 <div class="chat-area">
+  <!-- Top Navigation Bar -->
+  <div class="chat-topbar">
+    <div class="topbar-left">
+      <div class="model-selector">
+        <button class="model-badge" onclick={toggleModelDropdown}>
+          {displayModelName}
+          <ChevronDown size={13} strokeWidth={2} />
+        </button>
+        {#if showModelDropdown}
+          <div class="model-dropdown">
+            <div class="dropdown-header">选择模型</div>
+            {#if availableModels.length > 0}
+              {#each availableModels as model}
+                <button
+                  class="dropdown-item {model === modelName ? 'active' : ''}"
+                  onclick={() => selectModel(model)}
+                >
+                  <span>{model}</span>
+                  {#if model === modelName}
+                    <Check size={14} strokeWidth={2} />
+                  {/if}
+                </button>
+              {/each}
+            {:else}
+              <div class="dropdown-item disabled">
+                <span>{displayModelName}</span>
+                <Check size={14} strokeWidth={2} />
+              </div>
+              <div class="dropdown-hint">在设置中配置更多模型</div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+      {#if session}
+        <span class="session-title">{session.session.title}</span>
+      {/if}
+    </div>
+    <div class="topbar-right">
+      <button class="topbar-icon" onclick={toggleTheme} aria-label={darkMode ? "切换到亮色模式" : "切换到暗色模式"}>
+        {#if darkMode}
+          <Moon size={16} strokeWidth={2} />
+        {:else}
+          <Sun size={16} strokeWidth={2} />
+        {/if}
+      </button>
+      <span class="status-indicator">
+        <Circle size={8} fill="#4ade80" strokeWidth={0} />
+      </span>
+    </div>
+  </div>
+
+  <!-- Messages Area -->
   {#if loading}
     <div class="loading-state">
       <p>加载中...</p>
     </div>
-  {:else if !session}
-    <div class="welcome-screen">
-      <h1 class="welcome-title">Hi，今天有什么安排？</h1>
-
-      <div class="quick-actions">
-        <button class="quick-action-btn" aria-label="灵感"><Sparkles size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="日程"><Sun size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="创作"><WandSparkles size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="模型"><Bot size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="文档"><FileText size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="集成"><GitBranch size={18} strokeWidth={2} /></button>
-        <button class="quick-action-btn" aria-label="更多"><Plus size={18} strokeWidth={2} /></button>
-      </div>
-
-      <div class="suggestion-chips">
-        {#each suggestions as suggestion}
-          <button class="suggestion-chip" onclick={() => { draftMessage = suggestion; }}>
-            {suggestion}
-          </button>
-        {/each}
+  {:else if !session || !hasMessages}
+    <div class="empty-chat">
+      <div class="empty-chat-inner">
+        <p class="empty-hint">开始新的对话</p>
       </div>
     </div>
   {:else}
     <div class="message-list">
-      {#if !hasMessages}
-        <div class="empty-state">
-          <p>开始新的对话</p>
-        </div>
-      {:else}
-        {#each session.messages as message}
-          <div class="message {message.role}">
-            <div class="message-avatar">
-              {message.role === "user" ? "我" : "AI"}
-            </div>
-            <div class="message-content">
+      {#each session.messages as message}
+        <div class="message {message.role}">
+          {#if message.role === "user"}
+            <div class="user-bubble">
               {message.content}
             </div>
-          </div>
-        {/each}
-      {/if}
+          {:else}
+            <div class="assistant-text">
+              {message.content}
+            </div>
+          {/if}
+        </div>
+      {/each}
     </div>
-
-    {#if task?.pending_approval}
-      <TaskApprovalCard
-        {task}
-        bind:rejectReason
-        onApprove={() => task && onApproveTask(task)}
-        onApproveAlways={() => task && onApproveTaskAlways(task)}
-        onReject={() => task && onRejectTask(task, rejectReason)}
-      />
-    {/if}
   {/if}
 
+  {#if task?.pending_approval}
+    <TaskApprovalCard
+      {task}
+      bind:rejectReason
+      onApprove={() => task && onApproveTask(task)}
+      onApproveAlways={() => task && onApproveTaskAlways(task)}
+      onReject={() => task && onRejectTask(task, rejectReason)}
+    />
+  {/if}
+
+  <!-- Input Area -->
   <div class="input-container">
     <div class="input-box">
       <textarea
@@ -138,7 +195,7 @@
         onkeydown={handleKeydown}
         oninput={autoResize}
         class="input-textarea"
-        placeholder={session ? `发送消息到 ${displayModelName}` : "Cowork, 发消息、上传文件、打开文件夹或创建定时任务..."}
+        placeholder="发送消息到 {displayModelName}"
         rows="1"
       ></textarea>
 
@@ -148,19 +205,9 @@
             <Plus size={15} strokeWidth={2} />
           </button>
           <button class="input-chip">
-            <Bot size={15} strokeWidth={2} />
-            <span>{displayModelName}</span>
-          </button>
-          <button class="input-chip">
             <Shield size={15} strokeWidth={2} />
             <span>权限 · 全自动</span>
           </button>
-          {#if task}
-            <button class="input-chip active">
-              <Sparkles size={15} strokeWidth={2} />
-              <span>Cowork</span>
-            </button>
-          {/if}
         </div>
 
         <div class="input-actions-right">
@@ -180,82 +227,172 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    background: #f5f0e8;
+    background: var(--bg-primary);
     height: 100%;
   }
 
+  /* Top Navigation */
+  .chat-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 24px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-primary);
+    flex-shrink: 0;
+  }
+
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .model-selector {
+    position: relative;
+  }
+
+  .model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .model-badge:hover {
+    background: var(--bg-active);
+  }
+
+  .model-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    min-width: 240px;
+    background: var(--bg-surface);
+    border-radius: 14px;
+    box-shadow: var(--shadow-dropdown);
+    padding: 6px;
+    z-index: 50;
+    animation: dropdownIn 0.15s ease;
+  }
+
+  @keyframes dropdownIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .dropdown-header {
+    padding: 8px 12px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s ease;
+    text-align: left;
+  }
+
+  .dropdown-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .dropdown-item.active {
+    background: var(--bg-active);
+    font-weight: 500;
+  }
+
+  .dropdown-item.disabled {
+    cursor: default;
+    opacity: 0.8;
+  }
+
+  .dropdown-hint {
+    padding: 6px 12px 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+
+  .session-title {
+    font-size: 14px;
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .topbar-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease;
+  }
+
+  .topbar-icon:hover {
+    background: var(--bg-hover);
+  }
+
+  .status-indicator {
+    display: inline-flex;
+    align-items: center;
+    color: var(--accent-green);
+  }
+
+  /* Messages */
   .loading-state {
     flex: 1;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: rgba(61, 61, 61, 0.6);
+    color: var(--text-muted);
   }
 
-  .welcome-screen {
+  .empty-chat {
     flex: 1;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 40px;
+  }
+
+  .empty-chat-inner {
     text-align: center;
   }
 
-  .welcome-title {
-    font-size: 32px;
-    font-weight: 600;
-    color: #3d3d3d;
-    margin-bottom: 24px;
-  }
-
-  .quick-actions {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 32px;
-  }
-
-  .quick-action-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-    background: #e8e4dc;
-    color: #5c5c5c;
-    font-size: 18px;
-    border: none;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .quick-action-btn:hover {
-    background: #ddd8ce;
-    transform: translateY(-2px);
-  }
-
-  .suggestion-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    justify-content: center;
-    max-width: 600px;
-  }
-
-  .suggestion-chip {
-    padding: 10px 16px;
-    border-radius: 20px;
-    background: #e8e4dc;
-    color: #5c5c5c;
-    font-size: 13px;
-    cursor: pointer;
-    border: none;
-    transition: all 0.15s ease;
-  }
-
-  .suggestion-chip:hover {
-    background: #ddd8ce;
+  .empty-hint {
+    color: var(--text-muted);
+    font-size: 15px;
   }
 
   .message-list {
@@ -264,72 +401,54 @@
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
-  }
-
-  .empty-state {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(61, 61, 61, 0.5);
+    gap: 20px;
   }
 
   .message {
     display: flex;
-    gap: 12px;
-    max-width: 85%;
+    max-width: 100%;
   }
 
   .message.user {
-    align-self: flex-end;
-    flex-direction: row-reverse;
+    justify-content: flex-end;
   }
 
-  .message-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: #e8e4dc;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    font-weight: 600;
-    color: #5c5c5c;
-    flex-shrink: 0;
+  .message.assistant {
+    justify-content: flex-start;
   }
 
-  .message.user .message-avatar {
-    background: #3d3d3d;
-    color: white;
-  }
-
-  .message-content {
-    background: #ffffff;
-    padding: 12px 16px;
-    border-radius: 16px;
-    font-size: 14px;
+  .user-bubble {
+    max-width: 70%;
+    padding: 12px 18px;
+    border-radius: 20px 20px 4px 20px;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-size: 15px;
     line-height: 1.6;
-    color: #3d3d3d;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
     white-space: pre-wrap;
   }
 
-  .message.user .message-content {
-    background: #e8e4dc;
+  .assistant-text {
+    max-width: 85%;
+    padding: 4px 0;
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.7;
+    white-space: pre-wrap;
   }
 
+  /* Input */
   .input-container {
-    padding: 24px;
-    background: #f5f0e8;
+    padding: 16px 24px 24px;
+    background: var(--bg-primary);
+    flex-shrink: 0;
   }
 
   .input-box {
-    background: #ffffff;
-    border-radius: 16px;
+    background: var(--bg-surface);
+    border-radius: 20px;
     padding: 16px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    box-shadow: var(--shadow-card);
   }
 
   .input-textarea {
@@ -340,23 +459,22 @@
     background: transparent;
     font-size: 15px;
     line-height: 1.5;
-    color: #3d3d3d;
+    color: var(--text-primary);
     resize: none;
     outline: none;
     font-family: inherit;
   }
 
   .input-textarea::placeholder {
-    color: rgba(61, 61, 61, 0.4);
+    color: var(--text-muted);
   }
 
   .input-toolbar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
+    margin-top: 10px;
+    padding-top: 10px;
   }
 
   .input-actions-left {
@@ -377,8 +495,8 @@
     gap: 6px;
     padding: 6px 12px;
     border-radius: 20px;
-    background: #f5f0e8;
-    color: #6b6b6b;
+    background: var(--bg-input);
+    color: var(--text-tertiary);
     font-size: 13px;
     font-weight: 500;
     border: none;
@@ -391,20 +509,15 @@
   }
 
   .input-chip:hover {
-    background: #e8e4dc;
-  }
-
-  .input-chip.active {
-    background: #3d3d3d;
-    color: white;
+    background: var(--bg-elevated);
   }
 
   .send-btn {
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: #d1ccc4;
-    color: white;
+    background: var(--bg-elevated);
+    color: var(--text-on-dark);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -416,6 +529,6 @@
 
   .send-btn:hover,
   .send-btn.active {
-    background: #3d3d3d;
+    background: var(--accent-primary);
   }
 </style>

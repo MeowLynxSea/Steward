@@ -78,6 +78,10 @@ export const apiClient = {
     return request<SessionDetail>(`/sessions/${id}`);
   },
 
+  deleteSession(id: string) {
+    return request<void>(`/sessions/${id}`, { method: "DELETE" });
+  },
+
   sendSessionMessage(id: string, content: string, mode?: "ask" | "yolo") {
     return request<SendSessionMessageResponse>(`/sessions/${id}/messages`, {
       method: "POST",

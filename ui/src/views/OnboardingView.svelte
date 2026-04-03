@@ -4,11 +4,26 @@
   let { onComplete }: { onComplete: () => void | Promise<void> } = $props();
 </script>
 
-<LlmConfigurationPanel
-  mode="onboarding"
-  eyebrow="Onboarding"
-  title="Connect a model provider"
-  description="IronCowork stays locked until a usable provider configuration is saved. Choose a provider, add the required credentials, and confirm the model you want the desktop app to use."
-  submitLabel="Continue"
-  {onComplete}
-/>
+<div class="onboarding-wrapper">
+  <LlmConfigurationPanel
+    mode="onboarding"
+    eyebrow="欢迎使用"
+    title="连接模型服务"
+    description="AionUi 需要至少一个可用的模型服务配置。请选择一个提供商，填写所需凭据，确认要使用的模型。"
+    submitLabel="继续"
+    {onComplete}
+  />
+</div>
+
+<style>
+  .onboarding-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg-primary);
+  }
+</style>

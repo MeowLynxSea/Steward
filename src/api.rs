@@ -476,7 +476,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/settings", get(get_settings).patch(patch_settings))
         .route("/api/v0/events", get(get_events))
         .route("/api/v0/sessions", get(list_sessions).post(create_session))
-        .route("/api/v0/sessions/{id}", get(get_session))
+        .route("/api/v0/sessions/{id}", get(get_session).delete(delete_session))
         .route("/api/v0/sessions/{id}/messages", post(post_session_message))
         .route("/api/v0/sessions/{id}/stream", get(stream_session))
         .route("/api/v0/tasks", get(list_tasks))
@@ -685,6 +685,23 @@ async fn get_session(
             .collect(),
         current_task: load_session_task(&state, session_id).await,
     }))
+}
+
+async fn delete_session(
+    State(state): State<ApiState>,
+    Path(session_id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    ensure_session_belongs_to_user(&state, session_id).await?;
+
+    state
+        .store
+        .delete_conversation(session_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to delete session: {e}")))?;
+
+    tracing::info!(session_id = %session_id, "session deleted through api");
+
+    Ok(Json(serde_json::json!({ "deleted": true })))
 }
 
 async fn post_session_message(

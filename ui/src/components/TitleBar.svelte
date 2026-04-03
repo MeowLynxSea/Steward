@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { ChevronLeft, ChevronRight, Minus, Square, X } from "lucide-svelte";
+  import { AlignJustify, Minus, Square, X } from "lucide-svelte";
 
   interface Props {
     title?: string;
@@ -11,7 +11,7 @@
   }
 
   let {
-    title = "IronCowork",
+    title = "AionUi",
     leftSidebarCollapsed = false,
     rightSidebarCollapsed = false,
     onToggleLeft,
@@ -32,7 +32,6 @@
   async function close() {
     await appWindow.close();
   }
-
 </script>
 
 <header class="titlebar">
@@ -46,11 +45,7 @@
     {/if}
 
     <button class="sidebar-toggle" onclick={onToggleLeft} aria-label={leftSidebarCollapsed ? "展开左侧边栏" : "收起左侧边栏"}>
-      {#if leftSidebarCollapsed}
-        <ChevronRight size={16} strokeWidth={2.25} />
-      {:else}
-        <ChevronLeft size={16} strokeWidth={2.25} />
-      {/if}
+      <AlignJustify size={16} strokeWidth={2} />
     </button>
   </div>
 
@@ -60,11 +55,7 @@
 
   <div class="titlebar-side titlebar-side-right">
     <button class="sidebar-toggle" onclick={onToggleRight} aria-label={rightSidebarCollapsed ? "展开右侧边栏" : "收起右侧边栏"}>
-      {#if rightSidebarCollapsed}
-        <ChevronLeft size={16} strokeWidth={2.25} />
-      {:else}
-        <ChevronRight size={16} strokeWidth={2.25} />
-      {/if}
+      <AlignJustify size={16} strokeWidth={2} />
     </button>
 
     {#if !isMac}
@@ -88,10 +79,10 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    height: 48px;
+    height: 42px;
     padding: 0 14px;
-    background: #faf8f5;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    background: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-default);
     user-select: none;
     -webkit-user-select: none;
     app-region: drag;
@@ -118,7 +109,7 @@
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.02em;
-    color: #3d3d3d;
+    color: var(--text-primary);
   }
 
   .traffic-lights,
@@ -137,8 +128,8 @@
     padding: 0 10px;
     border: none;
     border-radius: 9px;
-    background: rgba(0, 0, 0, 0.04);
-    color: #5c5c5c;
+    background: transparent;
+    color: var(--text-secondary);
     font-size: 14px;
     font-weight: 600;
     transition: background 0.15s ease, color 0.15s ease;
@@ -149,8 +140,8 @@
   }
 
   .sidebar-toggle:hover {
-    background: rgba(0, 0, 0, 0.08);
-    color: #2f2f2f;
+    background: var(--bg-hover);
+    color: var(--text-primary);
   }
 
   .window-control {
@@ -220,13 +211,13 @@
     justify-content: center;
     background: transparent;
     border: none;
-    color: #5c5c5c;
+    color: var(--text-secondary);
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
   }
 
   .window-btn-icon:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--bg-hover);
   }
 
   .close-btn:hover {

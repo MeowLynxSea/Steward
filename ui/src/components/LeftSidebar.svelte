@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MessageSquarePlus, Search, Settings, SlidersHorizontal, Sparkles } from "lucide-svelte";
+  import { List, Plus, Search, Settings, Trash2, Zap } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
 
   interface Props {
@@ -8,17 +8,18 @@
     collapsed?: boolean;
     onSelect: (id: string) => void;
     onCreate: () => void;
+    onDelete: (id: string) => void;
     onSettings: () => void;
   }
 
-  let { sessions, activeId, collapsed = false, onSelect, onCreate, onSettings }: Props = $props();
+  let { sessions, activeId, collapsed = false, onSelect, onCreate, onDelete, onSettings }: Props = $props();
 </script>
 
 <aside class="left-sidebar {collapsed ? 'collapsed' : ''}">
   {#if collapsed}
     <div class="collapsed-content">
-      <button class="collapsed-icon {activeId ? 'active' : ''}" onclick={onCreate} aria-label="新会话">
-        <MessageSquarePlus size={16} strokeWidth={2} />
+      <button class="collapsed-icon" onclick={onCreate} aria-label="新会话">
+        <Plus size={16} strokeWidth={2} />
       </button>
 
       {#each sessions.slice(0, 5) as session}
@@ -27,7 +28,7 @@
           onclick={() => onSelect(session.id)}
           title={session.title}
         >
-          <Sparkles size={16} strokeWidth={2} />
+          <Zap size={14} strokeWidth={2} />
         </button>
       {/each}
 
@@ -37,39 +38,52 @@
       </button>
     </div>
   {:else}
-    <div class="sidebar-heading">
-      <span class="heading-label">会话</span>
+    <div class="sidebar-brand">
+      <div class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2L2 19h20L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span class="brand-name">AionUi</span>
     </div>
 
-    <button class="new-chat-btn" onclick={onCreate}>
-      <MessageSquarePlus size={16} strokeWidth={2} />
-      <span>新会话</span>
-    </button>
-
-    <div class="toolbar">
-      <button class="btn btn-icon btn-ghost" aria-label="搜索">
+    <div class="action-row">
+      <button class="new-chat-btn" onclick={onCreate}>
+        <Plus size={16} strokeWidth={2} />
+        <span>新会话</span>
+      </button>
+      <button class="toolbar-icon" aria-label="搜索">
         <Search size={16} strokeWidth={2} />
       </button>
-      <button class="btn btn-icon btn-ghost" aria-label="筛选">
-        <SlidersHorizontal size={16} strokeWidth={2} />
+      <button class="toolbar-icon" aria-label="列表">
+        <List size={16} strokeWidth={2} />
       </button>
     </div>
 
     <div class="session-list">
-      <div class="section-title">今天</div>
+      <div class="section-title">最近7天</div>
       {#each sessions as session}
-        <button
-          class="session-item {session.id === activeId ? 'active' : ''}"
-          onclick={() => onSelect(session.id)}
-        >
-          <span class="session-icon"><Sparkles size={15} strokeWidth={2} /></span>
-          <span class="session-name">{session.title}</span>
-        </button>
+        <div class="session-row">
+          <button
+            class="session-item {session.id === activeId ? 'active' : ''}"
+            onclick={() => onSelect(session.id)}
+          >
+            <span class="session-icon"><Zap size={14} strokeWidth={2} /></span>
+            <span class="session-name">{session.title}</span>
+          </button>
+          <button
+            class="session-delete"
+            onclick={(e) => { e.stopPropagation(); onDelete(session.id); }}
+            aria-label="删除会话"
+          >
+            <Trash2 size={13} strokeWidth={2} />
+          </button>
+        </div>
       {/each}
     </div>
 
     <div class="bottom-actions">
-      <button class="btn btn-ghost settings-btn" onclick={onSettings}>
+      <button class="settings-btn" onclick={onSettings}>
         <Settings size={16} strokeWidth={2} />
         <span>设置</span>
       </button>
@@ -79,9 +93,9 @@
 
 <style>
   .left-sidebar {
-    width: 260px;
-    background: #faf8f5;
-    border-right: 1px solid rgba(0, 0, 0, 0.06);
+    width: 240px;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-default);
     display: flex;
     flex-direction: column;
     padding: 16px;
@@ -98,7 +112,7 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     height: 100%;
     padding-top: 4px;
   }
@@ -109,132 +123,134 @@
     border-radius: 10px;
     background: transparent;
     border: none;
-    color: #5c5c5c;
+    color: var(--text-secondary);
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    transition: background 0.15s ease, color 0.15s ease;
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
   .collapsed-icon:hover {
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--bg-hover);
   }
 
   .collapsed-icon.active {
-    background: #e8e4dc;
-    color: #3d3d3d;
+    background: var(--bg-active);
+    color: var(--text-primary);
   }
 
   .collapsed-spacer {
     flex: 1;
   }
 
-  .sidebar-heading {
+  .sidebar-brand {
     display: flex;
     align-items: center;
-    padding: 4px 0 16px;
+    gap: 10px;
+    padding: 0 4px 20px;
   }
 
-  .heading-label,
-  .section-title {
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: rgba(61, 61, 61, 0.56);
+  .brand-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .brand-name {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+  }
+
+  .action-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 20px;
   }
 
   .new-chat-btn {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    border-radius: 12px;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 10px;
     background: transparent;
-    border: 1px solid rgba(0, 0, 0, 0.1);
-    color: #3d3d3d;
+    border: 1px solid var(--border-input);
+    color: var(--text-primary);
     font-size: 14px;
     font-weight: 500;
-    width: 100%;
-    margin-bottom: 16px;
+    flex: 1;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
 
   .new-chat-btn:hover {
-    background: rgba(0, 0, 0, 0.03);
-    border-color: rgba(0, 0, 0, 0.15);
+    background: var(--bg-hover);
+    border-color: var(--border-default);
   }
 
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-bottom: 16px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-    margin-bottom: 16px;
-  }
-
-  .btn {
+  .toolbar-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
-    padding: 8px 14px;
-    border-radius: 10px;
-    font-size: 14px;
-    font-weight: 500;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    transition: background 0.15s ease, transform 0.15s ease;
+    flex-shrink: 0;
+    transition: background 0.15s ease;
   }
 
-  .btn:hover {
-    transform: translateY(-1px);
-  }
-
-  .btn-ghost {
-    background: transparent;
-    color: #6b6b6b;
-  }
-
-  .btn-ghost:hover {
-    background: rgba(0, 0, 0, 0.05);
-  }
-
-  .btn-icon {
-    width: 36px;
-    height: 36px;
-    padding: 0;
+  .toolbar-icon:hover {
+    background: var(--bg-hover);
   }
 
   .session-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     flex: 1;
     overflow-y: auto;
   }
 
   .section-title {
-    padding: 8px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    padding: 8px 10px 6px;
+  }
+
+  .session-row {
+    display: flex;
+    align-items: center;
+    border-radius: 10px;
+    position: relative;
+  }
+
+  .session-row:hover .session-delete {
+    opacity: 1;
   }
 
   .session-item {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 12px;
+    padding: 9px 12px;
     border-radius: 10px;
     background: transparent;
     border: none;
-    color: #5c5c5c;
+    color: var(--text-secondary);
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
     text-align: left;
@@ -242,12 +258,35 @@
   }
 
   .session-item:hover {
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--bg-hover);
   }
 
   .session-item.active {
-    background: #e8e4dc;
-    color: #3d3d3d;
+    background: var(--bg-active);
+    color: var(--text-primary);
+  }
+
+  .session-delete {
+    position: absolute;
+    right: 6px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .session-delete:hover {
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
   }
 
   .session-icon {
@@ -255,6 +294,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    color: var(--accent-gold);
   }
 
   .session-name {
@@ -265,13 +305,28 @@
   }
 
   .bottom-actions {
-    padding-top: 16px;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
-    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-default);
+    margin-top: 8px;
   }
 
   .settings-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    font-size: 14px;
+    font-weight: 500;
     width: 100%;
-    justify-content: flex-start;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .settings-btn:hover {
+    background: var(--bg-hover);
   }
 </style>

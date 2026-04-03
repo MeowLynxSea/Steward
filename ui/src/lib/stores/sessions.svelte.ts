@@ -68,6 +68,24 @@ class SessionsState {
     }
   }
 
+  async delete(id: string) {
+    this.error = null;
+    try {
+      await apiClient.deleteSession(id);
+      if (this.activeId === id) {
+        this.disconnect();
+        this.active = null;
+        this.activeId = "";
+      }
+      await this.fetchList();
+      if (!this.activeId && this.list.length > 0) {
+        await this.select(this.list[0].id);
+      }
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to delete session";
+    }
+  }
+
   async sendMessage(content: string) {
     if (!content.trim() || !this.activeId || !this.active) return;
 

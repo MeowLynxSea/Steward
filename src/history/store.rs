@@ -1910,6 +1910,19 @@ impl Store {
         Ok(row.is_some())
     }
 
+    pub async fn delete_conversation(
+        &self,
+        conversation_id: Uuid,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.conn().await?;
+        conn.execute(
+            "DELETE FROM conversations WHERE id = $1",
+            &[&conversation_id],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Load messages for a conversation with cursor-based pagination.
     ///
     /// Returns `(messages_oldest_first, has_more)`.

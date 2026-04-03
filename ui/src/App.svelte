@@ -21,7 +21,24 @@
   let appError = $state("");
   let leftSidebarCollapsed = $state(false);
   let rightSidebarCollapsed = $state(false);
+  let showSettings = $state(false);
   let showMountModal = $state(false);
+
+  function openSettings() {
+    showSettings = true;
+  }
+
+  function closeSettings() {
+    showSettings = false;
+    router.navigate("sessions");
+  }
+
+  // Sync settings modal state with router
+  $effect(() => {
+    if (router.current === "settings") {
+      showSettings = true;
+    }
+  });
   let mountDisplayName = $state("");
   let selectedMountPath = $state("");
   let selectingMountPath = $state(false);
@@ -69,6 +86,24 @@
   function handleSendMessage(content: string) {
     void sessionsStore.sendMessage(content);
   }
+
+  function handleSelectModel(model: string) {
+    settingsStore.updateField("selected_model", model);
+    void settingsStore.save();
+  }
+
+  const availableModels = $derived.by(() => {
+    const models: string[] = [];
+    const current = settingsStore.data.selected_model;
+    if (current) models.push(current);
+
+    for (const provider of settingsStore.data.llm_custom_providers) {
+      if (provider.default_model && !models.includes(provider.default_model)) {
+        models.push(provider.default_model);
+      }
+    }
+    return models;
+  });
 
   function handleApproveTask(task: TaskRecord) {
     void tasksStore.approve(task);
@@ -140,7 +175,7 @@
 </script>
 
 <svelte:head>
-  <title>IronCowork</title>
+  <title>AionUi</title>
 </svelte:head>
 
 {#if appLoading}
@@ -161,7 +196,7 @@
 {:else if settingsStore.data.llm_onboarding_required}
   <div class="app-container">
     <TitleBar
-      title="IronCowork"
+      title="AionUi"
       leftSidebarCollapsed={true}
       rightSidebarCollapsed={true}
       onToggleLeft={() => undefined}
@@ -171,12 +206,10 @@
       <OnboardingView onComplete={handleOnboardingComplete} />
     </div>
   </div>
-{:else if router.current === "settings"}
-  <SettingsView />
 {:else}
   <div class="app-container">
     <TitleBar
-      title="IronCowork"
+      title="AionUi"
       leftSidebarCollapsed={leftSidebarCollapsed}
       rightSidebarCollapsed={rightSidebarCollapsed}
       onToggleLeft={() => leftSidebarCollapsed = !leftSidebarCollapsed}
@@ -190,7 +223,8 @@
         collapsed={leftSidebarCollapsed}
         onSelect={(id) => void sessionsStore.select(id)}
         onCreate={() => void sessionsStore.create("新会话")}
-        onSettings={() => router.navigate("settings")}
+        onDelete={(id) => void sessionsStore.delete(id)}
+        onSettings={openSettings}
       />
 
       <div class="center-area">
@@ -198,11 +232,13 @@
           session={sessionsStore.active}
           task={sessionsStore.active?.current_task ?? null}
           modelName={settingsStore.data.selected_model}
+          availableModels={availableModels}
           loading={sessionsStore.loading}
           onSendMessage={handleSendMessage}
           onApproveTask={handleApproveTask}
           onApproveTaskAlways={handleApproveTaskAlways}
           onRejectTask={handleRejectTask}
+          onSelectModel={handleSelectModel}
         />
       </div>
 
@@ -293,6 +329,10 @@
         </div>
       </div>
     {/if}
+
+    {#if showSettings}
+      <SettingsView onClose={closeSettings} />
+    {/if}
   </div>
 {/if}
 
@@ -306,7 +346,7 @@
     padding: 0;
     font-family: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background: transparent;
-    color: #3d3d3d;
+    color: var(--text-primary);
     overflow: hidden;
   }
 
@@ -324,9 +364,9 @@
     width: 100vw;
     height: 100vh;
     overflow: hidden;
-    border-radius: 18px;
-    background: #f5f0e8;
-    box-shadow: 0 10px 30px rgba(33, 28, 24, 0.12);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    box-shadow: var(--shadow-container);
   }
 
   .main-layout {
@@ -344,18 +384,16 @@
     align-items: center;
     justify-content: center;
     padding: 28px;
-    background: rgba(28, 20, 10, 0.28);
+    background: rgba(0, 0, 0, 0.28);
     backdrop-filter: blur(10px);
   }
 
   .global-mount-modal {
     width: min(100%, 420px);
     border-radius: 24px;
-    border: 1px solid rgba(92, 72, 40, 0.14);
-    background:
-      radial-gradient(circle at top right, rgba(214, 184, 108, 0.18), transparent 34%),
-      linear-gradient(180deg, #fffaf0 0%, #f6efdf 100%);
-    box-shadow: 0 24px 60px rgba(47, 32, 12, 0.22);
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-dropdown);
     display: flex;
     flex-direction: column;
     gap: 14px;
@@ -378,7 +416,7 @@
 
   .mount-modal-head strong {
     font-size: 16px;
-    color: #3e301b;
+    color: var(--text-primary);
   }
 
   .modal-icon-button,
@@ -405,8 +443,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    background: rgba(122, 94, 52, 0.08);
-    color: #5c4828;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
   }
 
   .folder-picker-button {
@@ -416,8 +454,8 @@
     justify-content: center;
     gap: 10px;
     border-radius: 16px;
-    background: #5c4828;
-    color: #fff9ee;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
     font: inherit;
     font-weight: 600;
   }
@@ -428,13 +466,13 @@
     gap: 6px;
     padding: 14px;
     border-radius: 18px;
-    border: 1px dashed rgba(92, 72, 40, 0.18);
-    background: rgba(255, 255, 255, 0.62);
+    border: 1px dashed var(--border-input);
+    background: var(--bg-surface);
   }
 
   .picked-folder.selected {
     border-style: solid;
-    background: rgba(201, 150, 57, 0.1);
+    background: var(--bg-elevated);
   }
 
   .picked-folder-label {
@@ -442,24 +480,24 @@
     font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #7b6441;
+    color: var(--text-tertiary);
   }
 
   .picked-folder-path {
     font-size: 13px;
-    color: #3f301d;
+    color: var(--text-primary);
     word-break: break-word;
   }
 
   .mount-name-input {
     width: 100%;
     box-sizing: border-box;
-    border: 1px solid rgba(92, 72, 40, 0.14);
+    border: 1px solid var(--border-input);
     border-radius: 14px;
-    background: rgba(255, 255, 255, 0.88);
+    background: var(--bg-input);
     padding: 12px 14px;
     font: inherit;
-    color: #3b2b18;
+    color: var(--text-primary);
   }
 
   .mount-modal-actions {
@@ -480,13 +518,13 @@
   }
 
   .modal-action.primary {
-    background: #5c4828;
-    color: #fff9ee;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
   }
 
   .modal-action.secondary {
-    background: rgba(122, 94, 52, 0.11);
-    color: #5c4828;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
   }
 
   .modal-action:disabled {
@@ -508,7 +546,7 @@
     flex-direction: column;
     min-width: 0;
     min-height: 0;
-    background: #f5f0e8;
+    background: var(--bg-primary);
     overflow: hidden;
   }
 
@@ -519,7 +557,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f5f0e8;
+    background: var(--bg-primary);
   }
 
   .loading-content,
@@ -530,12 +568,12 @@
   .loading-content h2,
   .error-content h2 {
     margin-bottom: 8px;
-    color: #3d3d3d;
+    color: var(--text-primary);
   }
 
   .loading-content p,
   .error-content p {
-    color: rgba(61, 61, 61, 0.6);
+    color: var(--text-muted);
     margin-bottom: 16px;
   }
 
@@ -558,11 +596,11 @@
   }
 
   .btn-primary {
-    background: #3d3d3d;
-    color: #ffffff;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
   }
 
   .btn-primary:hover {
-    background: #2a2a2a;
+    opacity: 0.9;
   }
 </style>

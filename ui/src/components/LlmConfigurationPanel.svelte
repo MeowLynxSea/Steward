@@ -430,19 +430,16 @@
     overflow: hidden;
     padding: 16px;
     box-sizing: border-box;
-    background:
-      radial-gradient(circle at top left, rgba(204, 175, 133, 0.28), transparent 38%),
-      radial-gradient(circle at bottom right, rgba(89, 124, 109, 0.18), transparent 32%),
-      #f5f0e8;
+    background: var(--bg-primary);
   }
 
   .configuration-card {
     width: min(960px, 100%);
     padding: 28px;
     border-radius: 28px;
-    background: rgba(255, 251, 246, 0.9);
-    border: 1px solid rgba(81, 63, 47, 0.08);
-    box-shadow: 0 18px 50px rgba(47, 34, 21, 0.12);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    box-shadow: var(--shadow-container);
     backdrop-filter: blur(18px);
   }
 
@@ -485,14 +482,14 @@
     font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
-    color: rgba(78, 64, 51, 0.6);
+    color: var(--text-muted);
   }
 
   h2 {
     margin: 0;
     font-size: 32px;
     line-height: 1.05;
-    color: #2d241b;
+    color: var(--text-primary);
   }
 
   .configuration-card-onboarding h2 {
@@ -502,7 +499,7 @@
   .description {
     margin: 10px 0 0;
     max-width: 620px;
-    color: rgba(61, 61, 61, 0.72);
+    color: var(--text-secondary);
     font-size: 15px;
     line-height: 1.6;
   }
@@ -531,9 +528,9 @@
     align-items: flex-start;
     padding: 14px;
     border-radius: 18px;
-    border: 1px solid rgba(84, 67, 52, 0.08);
-    background: rgba(255, 255, 255, 0.78);
-    color: #31271e;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    color: var(--text-primary);
     text-align: left;
     cursor: pointer;
     transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
@@ -546,9 +543,9 @@
   }
 
   .provider-card.selected {
-    border-color: rgba(93, 128, 112, 0.5);
-    background: linear-gradient(180deg, rgba(236, 244, 240, 0.98), rgba(255, 255, 255, 0.98));
-    box-shadow: 0 14px 30px rgba(55, 86, 73, 0.12);
+    border-color: var(--accent-gold);
+    background: var(--bg-elevated);
+    box-shadow: var(--shadow-card);
   }
 
   .provider-card strong {
@@ -559,7 +556,7 @@
 
   .provider-card p {
     margin: 0;
-    color: rgba(61, 61, 61, 0.68);
+    color: var(--text-tertiary);
     font-size: 13px;
     line-height: 1.45;
   }
@@ -592,7 +589,7 @@
   .field span {
     font-size: 13px;
     font-weight: 600;
-    color: rgba(49, 39, 30, 0.82);
+    color: var(--text-secondary);
   }
 
   .field input {
@@ -601,9 +598,9 @@
     min-height: 48px;
     padding: 0 14px;
     border-radius: 14px;
-    border: 1px solid rgba(86, 68, 52, 0.12);
-    background: rgba(255, 255, 255, 0.9);
-    color: #31271e;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-primary);
     font: inherit;
     outline: none;
   }
@@ -614,8 +611,8 @@
     gap: 6px;
     padding: 6px;
     border-radius: 16px;
-    background: rgba(255, 255, 255, 0.92);
-    border: 1px solid rgba(86, 68, 52, 0.12);
+    background: var(--bg-input);
+    border: 1px solid var(--border-input);
   }
 
   .segment-button {
@@ -624,7 +621,7 @@
     border: none;
     border-radius: 12px;
     background: transparent;
-    color: rgba(49, 39, 30, 0.72);
+    color: var(--text-secondary);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
@@ -632,9 +629,9 @@
   }
 
   .segment-button.active {
-    background: #31271e;
-    color: #fffaf4;
-    box-shadow: 0 8px 20px rgba(49, 39, 30, 0.16);
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
+    box-shadow: var(--shadow-card);
   }
 
   .input-with-icon {
@@ -645,7 +642,7 @@
     position: absolute;
     top: 16px;
     left: 14px;
-    color: rgba(86, 68, 52, 0.48);
+    color: var(--text-muted);
   }
 
   .input-with-icon input {
@@ -656,8 +653,8 @@
     margin-top: 18px;
     padding: 16px;
     border-radius: 18px;
-    background: rgba(255, 255, 255, 0.74);
-    border: 1px solid rgba(84, 67, 52, 0.08);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
   }
 
   .configuration-card-onboarding .oauth-panel {
@@ -670,12 +667,12 @@
     margin: 0;
     font-size: 15px;
     font-weight: 700;
-    color: #2d241b;
+    color: var(--text-primary);
   }
 
   .oauth-copy {
     margin: 6px 0 0;
-    color: rgba(61, 61, 61, 0.68);
+    color: var(--text-secondary);
     font-size: 14px;
   }
 
@@ -683,7 +680,7 @@
     margin-top: 16px;
     padding: 14px;
     border-radius: 16px;
-    background: rgba(245, 240, 232, 0.9);
+    background: var(--bg-elevated);
   }
 
   .oauth-card p {
@@ -697,8 +694,8 @@
     min-height: 48px;
     padding: 0 18px;
     border-radius: 14px;
-    background: #2d241b;
-    color: #fffaf4;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
     font-size: 18px;
     font-weight: 700;
     letter-spacing: 0.16em;
@@ -731,21 +728,21 @@
   }
 
   .status.ready {
-    color: #2e7056;
+    color: var(--accent-green);
   }
 
   .status.pending {
-    color: #8b6844;
+    color: var(--accent-gold);
   }
 
   .status.error {
-    color: #b2483c;
+    color: var(--accent-danger-text);
   }
 
   .subtle {
     margin-top: 4px;
     font-size: 13px;
-    color: rgba(61, 61, 61, 0.62);
+    color: var(--text-tertiary);
   }
 
   .submit-button {
@@ -754,8 +751,8 @@
     padding: 0 18px;
     border: none;
     border-radius: 14px;
-    background: #31271e;
-    color: #fffaf4;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
@@ -763,7 +760,8 @@
 
   .submit-button.secondary {
     margin-top: 16px;
-    background: #4e6558;
+    background: var(--bg-elevated);
+    color: var(--text-primary);
   }
 
   @media (max-width: 720px) {
