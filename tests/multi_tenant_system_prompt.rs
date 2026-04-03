@@ -253,9 +253,8 @@ mod tests {
 
         let has_reply_guidance =
             system_prompt.contains("Use normal assistant output to reply here");
-        let has_telegram_formatting =
-            system_prompt.contains("## Channel Formatting (telegram)")
-                && system_prompt.contains("No markdown tables");
+        let has_telegram_formatting = system_prompt.contains("## Channel Formatting (telegram)")
+            && system_prompt.contains("No markdown tables");
         assert!(
             has_reply_guidance || has_telegram_formatting,
             "System prompt should preserve Telegram reply/channel guidance.\n\

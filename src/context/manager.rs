@@ -1317,12 +1317,7 @@ mod tests {
         let job_id = Uuid::new_v4();
 
         manager
-            .register_local_job(
-                job_id,
-                "user-42",
-                "Run tests",
-                "Execute test suite locally",
-            )
+            .register_local_job(job_id, "user-42", "Run tests", "Execute test suite locally")
             .await
             .unwrap();
 

@@ -9,6 +9,10 @@ import type {
   WorkbenchCapabilities,
   WorkspaceEntry,
   WorkspaceIndexJob,
+  WorkspaceMountCheckpoint,
+  WorkspaceMountDetail,
+  WorkspaceMountDiff,
+  WorkspaceMountSummary,
   WorkspaceSearchResult
 } from "./types";
 
@@ -153,6 +157,65 @@ export const apiClient = {
     return request<{ results: WorkspaceSearchResult[] }>("/workspace/search", {
       method: "POST",
       body: JSON.stringify({ query })
+    });
+  },
+
+  createWorkspaceMount(path: string, display_name?: string, bypass_write = true) {
+    return request<WorkspaceMountSummary>("/workspace/mounts", {
+      method: "POST",
+      body: JSON.stringify({ path, display_name, bypass_write })
+    });
+  },
+
+  listWorkspaceMounts() {
+    return request<{ mounts: WorkspaceMountSummary[] }>("/workspace/mounts");
+  },
+
+  getWorkspaceMount(id: string) {
+    return request<WorkspaceMountDetail>(`/workspace/mounts/${id}`);
+  },
+
+  getWorkspaceMountDiff(id: string, scopePath?: string) {
+    const query = scopePath ? `?scope_path=${encodeURIComponent(scopePath)}` : "";
+    return request<WorkspaceMountDiff>(`/workspace/mounts/${id}/diff${query}`);
+  },
+
+  createWorkspaceCheckpoint(id: string, label?: string, summary?: string) {
+    return request<WorkspaceMountCheckpoint>(`/workspace/mounts/${id}/checkpoints`, {
+      method: "POST",
+      body: JSON.stringify({ label, summary, created_by: "user", is_auto: false })
+    });
+  },
+
+  keepWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
+    return request<WorkspaceMountDetail>(`/workspace/mounts/${id}/keep`, {
+      method: "POST",
+      body: JSON.stringify({ scope_path: scopePath, checkpoint_id: checkpointId })
+    });
+  },
+
+  revertWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
+    return request<WorkspaceMountDetail>(`/workspace/mounts/${id}/revert`, {
+      method: "POST",
+      body: JSON.stringify({ scope_path: scopePath, checkpoint_id: checkpointId })
+    });
+  },
+
+  resolveWorkspaceMountConflict(
+    id: string,
+    path: string,
+    resolution: "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge",
+    renamedCopyPath?: string,
+    mergedContent?: string
+  ) {
+    return request<WorkspaceMountDetail>(`/workspace/mounts/${id}/resolve-conflict`, {
+      method: "POST",
+      body: JSON.stringify({
+        path,
+        resolution,
+        renamed_copy_path: renamedCopyPath,
+        merged_content: mergedContent
+      })
     });
   }
 };

@@ -141,10 +141,11 @@ impl RuntimeLlmReloader {
             hydrate_llm_keys_from_secrets(&mut hydrated, secrets.as_ref(), &self.owner_id).await;
         }
 
-        let llm_config = LlmConfig::resolve(&hydrated).map_err(|error| LlmError::RequestFailed {
-            provider: "settings".to_string(),
-            reason: error.to_string(),
-        })?;
+        let llm_config =
+            LlmConfig::resolve(&hydrated).map_err(|error| LlmError::RequestFailed {
+                provider: "settings".to_string(),
+                reason: error.to_string(),
+            })?;
         let (primary, cheap, recording_handle) =
             build_provider_chain(&llm_config, self.session.clone()).await?;
         let cheap = cheap.unwrap_or_else(|| primary.clone());

@@ -234,7 +234,8 @@ impl ExtensionManager {
             return match kind_hint.unwrap_or_else(|| infer_kind_from_url(url)) {
                 ExtensionKind::McpServer => self.install_mcp_from_url(name, url, user_id).await,
                 ExtensionKind::WasmTool => {
-                    self.install_wasm_tool_from_url_with_caps(name, url, None).await
+                    self.install_wasm_tool_from_url_with_caps(name, url, None)
+                        .await
                 }
             };
         }
@@ -294,7 +295,9 @@ impl ExtensionManager {
                     extensions.push(InstalledExtension {
                         name: server.name.clone(),
                         kind: ExtensionKind::McpServer,
-                        display_name: registry_entry.as_ref().map(|entry| entry.display_name.clone()),
+                        display_name: registry_entry
+                            .as_ref()
+                            .map(|entry| entry.display_name.clone()),
                         description: server.description.clone(),
                         url: Some(server.url.clone()),
                         authenticated,
@@ -328,12 +331,20 @@ impl ExtensionManager {
                     } else {
                         None
                     }
-                    .or_else(|| registry_entry.as_ref().and_then(|entry| entry.version.clone()));
+                    .or_else(|| {
+                        registry_entry
+                            .as_ref()
+                            .and_then(|entry| entry.version.clone())
+                    });
                     extensions.push(InstalledExtension {
                         name: name.clone(),
                         kind: ExtensionKind::WasmTool,
-                        display_name: registry_entry.as_ref().map(|entry| entry.display_name.clone()),
-                        description: registry_entry.as_ref().map(|entry| entry.description.clone()),
+                        display_name: registry_entry
+                            .as_ref()
+                            .map(|entry| entry.display_name.clone()),
+                        description: registry_entry
+                            .as_ref()
+                            .map(|entry| entry.description.clone()),
                         url: None,
                         authenticated: auth_state == ToolAuthState::Ready,
                         active,
@@ -354,7 +365,9 @@ impl ExtensionManager {
                 .map(|entry| (entry.name.clone(), entry.kind))
                 .collect();
             for entry in self.registry.all_entries().await {
-                if let Some(filter) = kind_filter && entry.kind != filter {
+                if let Some(filter) = kind_filter
+                    && entry.kind != filter
+                {
                     continue;
                 }
                 if installed.contains(&(entry.name.clone(), entry.kind)) {
@@ -398,7 +411,10 @@ impl ExtensionManager {
                 self.mcp_clients.write().await.remove(name);
                 self.remove_mcp_server(name, user_id).await?;
                 if let Ok(server) = self.get_mcp_server(name, user_id).await {
-                    let _ = self.secrets.delete(user_id, &server.token_secret_name()).await;
+                    let _ = self
+                        .secrets
+                        .delete(user_id, &server.token_secret_name())
+                        .await;
                     let _ = self
                         .secrets
                         .delete(user_id, &server.refresh_token_secret_name())
@@ -439,7 +455,9 @@ impl ExtensionManager {
                 }
 
                 let wasm_path = self.wasm_tools_dir.join(format!("{}.wasm", name));
-                let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+                let cap_path = self
+                    .wasm_tools_dir
+                    .join(format!("{}.capabilities.json", name));
                 if wasm_path.exists() {
                     tokio::fs::remove_file(&wasm_path)
                         .await
@@ -470,12 +488,18 @@ impl ExtensionManager {
             let outcome = self.upgrade_one_tool(&tool_name).await;
             results.push(outcome);
         }
-        let upgraded = results.iter().filter(|item| item.status == "upgraded").count();
+        let upgraded = results
+            .iter()
+            .filter(|item| item.status == "upgraded")
+            .count();
         let up_to_date = results
             .iter()
             .filter(|item| item.status == "already_up_to_date")
             .count();
-        let failed = results.iter().filter(|item| item.status == "failed").count();
+        let failed = results
+            .iter()
+            .filter(|item| item.status == "failed")
+            .count();
         Ok(UpgradeResult {
             message: format!(
                 "{} extension(s) checked: {} upgraded, {} already up to date, {} failed",
@@ -500,7 +524,9 @@ impl ExtensionManager {
                 "connected": self.mcp_clients.read().await.contains_key(name),
             })),
             ExtensionKind::WasmTool => {
-                let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+                let cap_path = self
+                    .wasm_tools_dir
+                    .join(format!("{}.capabilities.json", name));
                 let wasm_path = self.wasm_tools_dir.join(format!("{}.wasm", name));
                 let mut value = serde_json::json!({
                     "name": name,
@@ -514,9 +540,8 @@ impl ExtensionManager {
                 {
                     value["version"] =
                         serde_json::json!(cap.version.unwrap_or_else(|| "unknown".to_string()));
-                    value["wit_version"] = serde_json::json!(
-                        cap.wit_version.unwrap_or_else(|| "unknown".to_string())
-                    );
+                    value["wit_version"] =
+                        serde_json::json!(cap.wit_version.unwrap_or_else(|| "unknown".to_string()));
                 }
                 Ok(value)
             }
@@ -563,7 +588,9 @@ impl ExtensionManager {
                             name: field.name.clone(),
                             prompt: field.prompt.clone(),
                             optional: field.optional,
-                            provided: self.is_tool_setup_field_provided(name, field, &saved_fields).await,
+                            provided: self
+                                .is_tool_setup_field_provided(name, field, &saved_fields)
+                                .await,
                             input_type: field.input_type,
                         });
                     }
@@ -603,7 +630,8 @@ impl ExtensionManager {
                 let mut allowed_secrets = HashSet::new();
                 let mut setup_fields = Vec::<ToolFieldSetupSchema>::new();
                 if let Some(setup) = &cap.setup {
-                    allowed_secrets.extend(setup.required_secrets.iter().map(|item| item.name.clone()));
+                    allowed_secrets
+                        .extend(setup.required_secrets.iter().map(|item| item.name.clone()));
                     setup_fields = setup.required_fields.clone();
                 }
                 if let Some(auth) = &cap.auth {
@@ -614,10 +642,8 @@ impl ExtensionManager {
                     if !allowed_secrets.contains(secret_name) || secret_value.trim().is_empty() {
                         continue;
                     }
-                    let params =
-                        CreateSecretParams::new(secret_name, secret_value.trim()).with_provider(
-                            name.to_string(),
-                        );
+                    let params = CreateSecretParams::new(secret_name, secret_value.trim())
+                        .with_provider(name.to_string());
                     self.secrets
                         .create(user_id, params)
                         .await
@@ -670,7 +696,10 @@ impl ExtensionManager {
         let activate_result = self.activate(name, user_id).await;
         match activate_result {
             Ok(result) => Ok(ConfigureResult {
-                message: format!("Configuration saved and '{}' activated. {}", name, result.message),
+                message: format!(
+                    "Configuration saved and '{}' activated. {}",
+                    name, result.message
+                ),
                 activated: true,
                 restart_required,
                 auth_url: None,
@@ -724,7 +753,8 @@ impl ExtensionManager {
 
         let mut payload = HashMap::new();
         payload.insert(secret_name, token.to_string());
-        self.configure(name, &payload, &HashMap::new(), user_id).await
+        self.configure(name, &payload, &HashMap::new(), user_id)
+            .await
     }
 
     async fn install_from_entry(
@@ -733,7 +763,9 @@ impl ExtensionManager {
         user_id: &str,
     ) -> Result<InstallResult, ExtensionError> {
         match &entry.source {
-            ExtensionSource::McpUrl { url } => self.install_mcp_from_url(&entry.name, url, user_id).await,
+            ExtensionSource::McpUrl { url } => {
+                self.install_mcp_from_url(&entry.name, url, user_id).await
+            }
             ExtensionSource::WasmDownload {
                 wasm_url,
                 capabilities_url,
@@ -745,10 +777,13 @@ impl ExtensionManager {
                 )
                 .await
             }
-            ExtensionSource::Discovered { url } => self.install_mcp_from_url(&entry.name, url, user_id).await,
-            ExtensionSource::WasmBuildable { .. } => Err(ExtensionError::InstallFailed(
-                format!("Buildable extension '{}' is not supported in the stripped runtime", entry.name),
-            )),
+            ExtensionSource::Discovered { url } => {
+                self.install_mcp_from_url(&entry.name, url, user_id).await
+            }
+            ExtensionSource::WasmBuildable { .. } => Err(ExtensionError::InstallFailed(format!(
+                "Buildable extension '{}' is not supported in the stripped runtime",
+                entry.name
+            ))),
         }
     }
 
@@ -807,7 +842,9 @@ impl ExtensionManager {
                 .bytes()
                 .await
                 .map_err(|e| ExtensionError::DownloadFailed(e.to_string()))?;
-            let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+            let cap_path = self
+                .wasm_tools_dir
+                .join(format!("{}.capabilities.json", name));
             tokio::fs::write(&cap_path, &cap_bytes)
                 .await
                 .map_err(|e| ExtensionError::InstallFailed(e.to_string()))?;
@@ -866,7 +903,10 @@ impl ExtensionManager {
         };
 
         if let Some(env_var) = &auth.env_var
-            && std::env::var(env_var).ok().filter(|value| !value.trim().is_empty()).is_some()
+            && std::env::var(env_var)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .is_some()
         {
             return Ok(AuthResult::authenticated(name, ExtensionKind::WasmTool));
         }
@@ -880,7 +920,10 @@ impl ExtensionManager {
             return Ok(AuthResult::authenticated(name, ExtensionKind::WasmTool));
         }
 
-        let setup = cap.setup.as_ref().and_then(|setup| setup.required_secrets.first());
+        let setup = cap
+            .setup
+            .as_ref()
+            .and_then(|setup| setup.required_secrets.first());
         let instructions = auth
             .instructions
             .clone()
@@ -985,10 +1028,9 @@ impl ExtensionManager {
             )));
         }
 
-        let runtime = self
-            .wasm_tool_runtime
-            .as_ref()
-            .ok_or_else(|| ExtensionError::ActivationFailed("WASM runtime not available".to_string()))?;
+        let runtime = self.wasm_tool_runtime.as_ref().ok_or_else(|| {
+            ExtensionError::ActivationFailed("WASM runtime not available".to_string())
+        })?;
 
         let wasm_path = self.wasm_tools_dir.join(format!("{}.wasm", name));
         if !wasm_path.exists() {
@@ -997,7 +1039,9 @@ impl ExtensionManager {
                 name
             )));
         }
-        let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+        let cap_path = self
+            .wasm_tools_dir
+            .join(format!("{}.capabilities.json", name));
         let cap_path_option = cap_path.exists().then_some(cap_path.as_path());
 
         WasmToolLoader::new(Arc::clone(runtime), Arc::clone(&self.tool_registry))
@@ -1006,12 +1050,12 @@ impl ExtensionManager {
             .await
             .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
 
-        if let Some(hooks) = &self.hooks && let Some(cap_path) = cap_path_option {
+        if let Some(hooks) = &self.hooks
+            && let Some(cap_path) = cap_path_option
+        {
             let source = format!("plugin.tool:{}", name);
             let _ = crate::hooks::bootstrap::register_plugin_bundle_from_capabilities_file(
-                hooks,
-                &source,
-                cap_path,
+                hooks, &source, cap_path,
             )
             .await;
         }
@@ -1051,10 +1095,7 @@ impl ExtensionManager {
         Ok(())
     }
 
-    async fn load_mcp_servers(
-        &self,
-        user_id: &str,
-    ) -> Result<McpServersFile, ExtensionError> {
+    async fn load_mcp_servers(&self, user_id: &str) -> Result<McpServersFile, ExtensionError> {
         if let Some(store) = &self.store {
             crate::tools::mcp::config::load_mcp_servers_from_db(store.as_ref(), user_id)
                 .await
@@ -1091,7 +1132,9 @@ impl ExtensionManager {
     }
 
     async fn load_tool_capabilities(&self, name: &str) -> Option<CapabilitiesFile> {
-        let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+        let cap_path = self
+            .wasm_tools_dir
+            .join(format!("{}.capabilities.json", name));
         let bytes = tokio::fs::read(cap_path).await.ok()?;
         CapabilitiesFile::from_bytes(&bytes).ok()
     }
@@ -1122,7 +1165,9 @@ impl ExtensionManager {
         fields: &HashMap<String, String>,
     ) -> Result<(), ExtensionError> {
         let store = self.store.as_ref().ok_or_else(|| {
-            ExtensionError::Other("Settings store unavailable for setup field persistence".to_string())
+            ExtensionError::Other(
+                "Settings store unavailable for setup field persistence".to_string(),
+            )
         })?;
         let key = Self::setup_fields_setting_key(name);
         let value = serde_json::to_value(fields)
@@ -1281,7 +1326,9 @@ impl ExtensionManager {
     }
 
     async fn upgrade_one_tool(&self, name: &str) -> UpgradeOutcome {
-        let cap_path = self.wasm_tools_dir.join(format!("{}.capabilities.json", name));
+        let cap_path = self
+            .wasm_tools_dir
+            .join(format!("{}.capabilities.json", name));
         let declared_wit = if cap_path.exists() {
             tokio::fs::read(&cap_path)
                 .await

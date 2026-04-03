@@ -46,6 +46,7 @@ mod embedding_cache;
 mod embeddings;
 pub mod hygiene;
 pub mod layer;
+pub mod mounts;
 pub mod privacy;
 #[cfg(feature = "postgres")]
 mod repository;
@@ -59,6 +60,12 @@ pub use document::{
 pub use embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
 pub use embeddings::{
     EmbeddingProvider, MockEmbeddings, NearAiEmbeddings, OllamaEmbeddings, OpenAiEmbeddings,
+};
+pub use mounts::{
+    ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
+    MountedFileDiff, MountedFileStatus, WorkspaceMount, WorkspaceMountCheckpoint,
+    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView, WorkspaceMountSummary,
+    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
 };
 #[cfg(feature = "postgres")]
 pub use repository::Repository;
@@ -242,6 +249,168 @@ impl WorkspaceStorage {
             #[cfg(feature = "postgres")]
             Self::Repo(repo) => repo.list_all_paths(user_id, agent_id).await,
             Self::Db(db) => db.list_all_paths(user_id, agent_id).await,
+        }
+    }
+
+    async fn list_workspace_tree(
+        &self,
+        user_id: &str,
+        agent_id: Option<Uuid>,
+        uri: &str,
+    ) -> Result<Vec<WorkspaceTreeEntry>, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.list_workspace_tree(user_id, agent_id, uri).await,
+            Self::Db(db) => db.list_workspace_tree(user_id, agent_id, uri).await,
+        }
+    }
+
+    async fn create_workspace_mount(
+        &self,
+        request: &CreateMountRequest,
+    ) -> Result<WorkspaceMountSummary, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.create_workspace_mount(request).await,
+            Self::Db(db) => db.create_workspace_mount(request).await,
+        }
+    }
+
+    async fn list_workspace_mounts(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.list_workspace_mounts(user_id).await,
+            Self::Db(db) => db.list_workspace_mounts(user_id).await,
+        }
+    }
+
+    async fn get_workspace_mount(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.get_workspace_mount(user_id, mount_id).await,
+            Self::Db(db) => db.get_workspace_mount(user_id, mount_id).await,
+        }
+    }
+
+    async fn read_workspace_mount_file(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        path: &str,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => {
+                repo.read_workspace_mount_file(user_id, mount_id, path)
+                    .await
+            }
+            Self::Db(db) => db.read_workspace_mount_file(user_id, mount_id, path).await,
+        }
+    }
+
+    async fn write_workspace_mount_file(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        path: &str,
+        content: &[u8],
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => {
+                repo.write_workspace_mount_file(user_id, mount_id, path, content)
+                    .await
+            }
+            Self::Db(db) => {
+                db.write_workspace_mount_file(user_id, mount_id, path, content)
+                    .await
+            }
+        }
+    }
+
+    async fn delete_workspace_mount_file(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        path: &str,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => {
+                repo.delete_workspace_mount_file(user_id, mount_id, path)
+                    .await
+            }
+            Self::Db(db) => {
+                db.delete_workspace_mount_file(user_id, mount_id, path)
+                    .await
+            }
+        }
+    }
+
+    async fn diff_workspace_mount(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => {
+                repo.diff_workspace_mount(user_id, mount_id, scope_path)
+                    .await
+            }
+            Self::Db(db) => db.diff_workspace_mount(user_id, mount_id, scope_path).await,
+        }
+    }
+
+    async fn create_workspace_checkpoint(
+        &self,
+        request: &CreateCheckpointRequest,
+    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.create_workspace_checkpoint(request).await,
+            Self::Db(db) => db.create_workspace_checkpoint(request).await,
+        }
+    }
+
+    async fn keep_workspace_mount(
+        &self,
+        request: &MountActionRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.keep_workspace_mount(request).await,
+            Self::Db(db) => db.keep_workspace_mount(request).await,
+        }
+    }
+
+    async fn revert_workspace_mount(
+        &self,
+        request: &MountActionRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.revert_workspace_mount(request).await,
+            Self::Db(db) => db.revert_workspace_mount(request).await,
+        }
+    }
+
+    async fn resolve_workspace_mount_conflict(
+        &self,
+        request: &ConflictResolutionRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            #[cfg(feature = "postgres")]
+            Self::Repo(repo) => repo.resolve_workspace_mount_conflict(request).await,
+            Self::Db(db) => db.resolve_workspace_mount_conflict(request).await,
         }
     }
 
@@ -653,19 +822,9 @@ impl Workspace {
 
     // ==================== File Operations ====================
 
-    /// Read a file by path.
-    ///
-    /// Returns the document if it exists, or an error if not found.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let doc = workspace.read("context/vision.md").await?;
-    /// println!("{}", doc.content);
-    /// ```
-    pub async fn read(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
+    async fn read_memory_path(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
         let path = normalize_path(path);
         if self.is_multi_scope() && is_identity_path(&path) {
-            // Identity files must only come from the primary scope.
             self.storage
                 .get_document_by_path(&self.user_id, self.agent_id, &path)
                 .await
@@ -678,6 +837,77 @@ impl Workspace {
                 .get_document_by_path(&self.user_id, self.agent_id, &path)
                 .await
         }
+    }
+
+    async fn write_memory_path(
+        &self,
+        path: &str,
+        content: &str,
+    ) -> Result<MemoryDocument, WorkspaceError> {
+        let path = normalize_path(path);
+        if is_system_prompt_file(&path) && !content.is_empty() {
+            reject_if_injected(&path, content)?;
+        }
+        let doc = self
+            .storage
+            .get_or_create_document_by_path(&self.user_id, self.agent_id, &path)
+            .await?;
+        self.storage.update_document(doc.id, content).await?;
+        self.reindex_document(doc.id).await?;
+        self.storage.get_document_by_id(doc.id).await
+    }
+
+    async fn delete_memory_path(&self, path: &str) -> Result<(), WorkspaceError> {
+        let path = normalize_path(path);
+        self.storage
+            .delete_document_by_path(&self.user_id, self.agent_id, &path)
+            .await
+    }
+
+    /// Read a file by path.
+    ///
+    /// Returns the document if it exists, or an error if not found.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let doc = workspace.read("context/vision.md").await?;
+    /// println!("{}", doc.content);
+    /// ```
+    pub async fn read(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
+        if let Some(uri) = WorkspaceUri::parse(path) {
+            return match uri {
+                WorkspaceUri::MemoryRoot => Err(WorkspaceError::InvalidDocType {
+                    doc_type: path.to_string(),
+                }),
+                WorkspaceUri::MemoryPath(path) => self.read_memory_path(&path).await,
+                WorkspaceUri::MountsRoot | WorkspaceUri::MountRoot(_) => {
+                    Err(WorkspaceError::InvalidDocType {
+                        doc_type: path.to_string(),
+                    })
+                }
+                WorkspaceUri::MountPath(mount_id, mount_path) => {
+                    let file = self
+                        .storage
+                        .read_workspace_mount_file(&self.user_id, mount_id, &mount_path)
+                        .await?;
+                    Ok(MemoryDocument {
+                        id: Uuid::new_v4(),
+                        user_id: self.user_id.clone(),
+                        agent_id: self.agent_id,
+                        path: file.uri,
+                        content: file.content.unwrap_or_default(),
+                        created_at: file.updated_at,
+                        updated_at: file.updated_at,
+                        metadata: serde_json::json!({
+                            "mount_id": mount_id,
+                            "status": file.status,
+                            "is_binary": file.is_binary,
+                        }),
+                    })
+                }
+            };
+        }
+        self.read_memory_path(path).await
     }
 
     /// Read a file from the **primary scope only**, ignoring additional read scopes.
@@ -706,20 +936,42 @@ impl Workspace {
     /// workspace.write("projects/alpha/README.md", "# Project Alpha\n\nDescription here.").await?;
     /// ```
     pub async fn write(&self, path: &str, content: &str) -> Result<MemoryDocument, WorkspaceError> {
-        let path = normalize_path(path);
-        // Scan system-prompt-injected files for prompt injection.
-        if is_system_prompt_file(&path) && !content.is_empty() {
-            reject_if_injected(&path, content)?;
+        if let Some(uri) = WorkspaceUri::parse(path) {
+            return match uri {
+                WorkspaceUri::MemoryRoot
+                | WorkspaceUri::MountsRoot
+                | WorkspaceUri::MountRoot(_) => Err(WorkspaceError::InvalidDocType {
+                    doc_type: path.to_string(),
+                }),
+                WorkspaceUri::MemoryPath(path) => self.write_memory_path(&path, content).await,
+                WorkspaceUri::MountPath(mount_id, mount_path) => {
+                    let file = self
+                        .storage
+                        .write_workspace_mount_file(
+                            &self.user_id,
+                            mount_id,
+                            &mount_path,
+                            content.as_bytes(),
+                        )
+                        .await?;
+                    Ok(MemoryDocument {
+                        id: Uuid::new_v4(),
+                        user_id: self.user_id.clone(),
+                        agent_id: self.agent_id,
+                        path: file.uri,
+                        content: file.content.unwrap_or_default(),
+                        created_at: file.updated_at,
+                        updated_at: file.updated_at,
+                        metadata: serde_json::json!({
+                            "mount_id": mount_id,
+                            "status": file.status,
+                            "is_binary": file.is_binary,
+                        }),
+                    })
+                }
+            };
         }
-        let doc = self
-            .storage
-            .get_or_create_document_by_path(&self.user_id, self.agent_id, &path)
-            .await?;
-        self.storage.update_document(doc.id, content).await?;
-        self.reindex_document(doc.id).await?;
-
-        // Return updated doc
-        self.storage.get_document_by_id(doc.id).await
+        self.write_memory_path(path, content).await
     }
 
     /// Append content to a file.
@@ -924,10 +1176,22 @@ impl Workspace {
     ///
     /// Also deletes associated chunks.
     pub async fn delete(&self, path: &str) -> Result<(), WorkspaceError> {
-        let path = normalize_path(path);
-        self.storage
-            .delete_document_by_path(&self.user_id, self.agent_id, &path)
-            .await
+        if let Some(uri) = WorkspaceUri::parse(path) {
+            return match uri {
+                WorkspaceUri::MemoryRoot
+                | WorkspaceUri::MountsRoot
+                | WorkspaceUri::MountRoot(_) => Err(WorkspaceError::InvalidDocType {
+                    doc_type: path.to_string(),
+                }),
+                WorkspaceUri::MemoryPath(path) => self.delete_memory_path(&path).await,
+                WorkspaceUri::MountPath(mount_id, mount_path) => self
+                    .storage
+                    .delete_workspace_mount_file(&self.user_id, mount_id, &mount_path)
+                    .await
+                    .map(|_| ()),
+            };
+        }
+        self.delete_memory_path(path).await
     }
 
     /// List files and directories in a path.
@@ -947,6 +1211,28 @@ impl Workspace {
     /// }
     /// ```
     pub async fn list(&self, directory: &str) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
+        if let Some(uri) = WorkspaceUri::parse(directory) {
+            let tree = self
+                .storage
+                .list_workspace_tree(
+                    &self.user_id,
+                    self.agent_id,
+                    match uri {
+                        WorkspaceUri::MemoryRoot => WorkspaceUri::root_uri(),
+                        _ => directory,
+                    },
+                )
+                .await?;
+            return Ok(tree
+                .into_iter()
+                .map(|entry| WorkspaceEntry {
+                    path: entry.uri,
+                    is_directory: entry.is_directory,
+                    updated_at: entry.updated_at,
+                    content_preview: entry.content_preview,
+                })
+                .collect());
+        }
         let directory = normalize_directory(directory);
         if self.is_multi_scope() {
             // Iterate per-scope rather than using list_directory_multi because
@@ -997,6 +1283,120 @@ impl Workspace {
                 .list_all_paths(&self.user_id, self.agent_id)
                 .await
         }
+    }
+
+    pub async fn list_tree(&self, uri: &str) -> Result<Vec<WorkspaceTreeEntry>, WorkspaceError> {
+        self.storage
+            .list_workspace_tree(&self.user_id, self.agent_id, uri)
+            .await
+    }
+
+    pub async fn create_mount(
+        &self,
+        display_name: impl Into<String>,
+        source_root: impl Into<String>,
+        bypass_write: bool,
+    ) -> Result<WorkspaceMountSummary, WorkspaceError> {
+        self.storage
+            .create_workspace_mount(&CreateMountRequest {
+                user_id: self.user_id.clone(),
+                display_name: display_name.into(),
+                source_root: source_root.into(),
+                bypass_write,
+            })
+            .await
+    }
+
+    pub async fn list_mounts(&self) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+        self.storage.list_workspace_mounts(&self.user_id).await
+    }
+
+    pub async fn get_mount(&self, mount_id: Uuid) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.storage
+            .get_workspace_mount(&self.user_id, mount_id)
+            .await
+    }
+
+    pub async fn diff_mount(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        self.storage
+            .diff_workspace_mount(&self.user_id, mount_id, scope_path)
+            .await
+    }
+
+    pub async fn create_checkpoint(
+        &self,
+        mount_id: Uuid,
+        label: Option<String>,
+        summary: Option<String>,
+        created_by: impl Into<String>,
+        is_auto: bool,
+    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+        self.storage
+            .create_workspace_checkpoint(&CreateCheckpointRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                label,
+                summary,
+                created_by: created_by.into(),
+                is_auto,
+            })
+            .await
+    }
+
+    pub async fn keep_mount(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<String>,
+        checkpoint_id: Option<Uuid>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.storage
+            .keep_workspace_mount(&MountActionRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                scope_path,
+                checkpoint_id,
+            })
+            .await
+    }
+
+    pub async fn revert_mount(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<String>,
+        checkpoint_id: Option<Uuid>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.storage
+            .revert_workspace_mount(&MountActionRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                scope_path,
+                checkpoint_id,
+            })
+            .await
+    }
+
+    pub async fn resolve_mount_conflict(
+        &self,
+        mount_id: Uuid,
+        path: impl Into<String>,
+        resolution: impl Into<String>,
+        renamed_copy_path: Option<String>,
+        merged_content: Option<String>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.storage
+            .resolve_workspace_mount_conflict(&ConflictResolutionRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                path: path.into(),
+                resolution: resolution.into(),
+                renamed_copy_path,
+                merged_content,
+            })
+            .await
     }
 
     // ==================== Convenience Methods ====================

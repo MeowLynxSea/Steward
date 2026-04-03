@@ -1,11 +1,19 @@
 import { apiClient } from "../api";
-import type { WorkspaceEntry, WorkspaceIndexJob, WorkspaceSearchResult } from "../types";
+import type {
+  MountedFileDiff,
+  WorkspaceEntry,
+  WorkspaceIndexJob,
+  WorkspaceMountDetail,
+  WorkspaceSearchResult
+} from "../types";
 
 class WorkspaceState {
-  path = $state("");
+  path = $state("workspace://");
   entries = $state<WorkspaceEntry[]>([]);
   searchResults = $state<WorkspaceSearchResult[]>([]);
   searchQuery = $state("");
+  selectedMount = $state<WorkspaceMountDetail | null>(null);
+  mountDiff = $state<MountedFileDiff[]>([]);
   indexJob = $state<WorkspaceIndexJob | null>(null);
   loading = $state(false);
   searchLoading = $state(false);
@@ -13,7 +21,7 @@ class WorkspaceState {
   status = $state<string>("");
   #indexPollTimer: number | null = null;
 
-  async fetch(path = "") {
+  async fetch(path = "workspace://") {
     this.loading = true;
     this.error = null;
     try {
@@ -33,6 +41,9 @@ class WorkspaceState {
       const response = await apiClient.getWorkspaceTree(this.path);
       this.path = response.path;
       this.entries = response.entries;
+      if (this.selectedMount) {
+        await this.loadMount(this.selectedMount.summary.mount.id);
+      }
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to refresh workspace";
     }
@@ -72,6 +83,95 @@ class WorkspaceState {
       this.error = e instanceof Error ? e.message : "Failed to index workspace";
     } finally {
       this.loading = false;
+    }
+  }
+
+  async createMount(path: string, displayName?: string) {
+    const trimmed = path.trim();
+    if (!trimmed) {
+      this.error = "Please enter a folder path to mount";
+      return;
+    }
+    this.error = null;
+    this.loading = true;
+    try {
+      const mount = await apiClient.createWorkspaceMount(trimmed, displayName, true);
+      this.status = `Mounted ${mount.mount.display_name}`;
+      await this.fetch("workspace://mounts");
+      await this.loadMount(mount.mount.id);
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to create mount";
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  async loadMount(id: string) {
+    this.error = null;
+    try {
+      this.selectedMount = await apiClient.getWorkspaceMount(id);
+      const diff = await apiClient.getWorkspaceMountDiff(id);
+      this.mountDiff = diff.entries;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to load mount";
+    }
+  }
+
+  async keepMount(id: string, scopePath?: string, checkpointId?: string) {
+    this.error = null;
+    try {
+      this.selectedMount = await apiClient.keepWorkspaceMount(id, scopePath, checkpointId);
+      const diff = await apiClient.getWorkspaceMountDiff(id);
+      this.mountDiff = diff.entries;
+      await this.refresh();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to keep mount changes";
+    }
+  }
+
+  async revertMount(id: string, scopePath?: string, checkpointId?: string) {
+    this.error = null;
+    try {
+      this.selectedMount = await apiClient.revertWorkspaceMount(id, scopePath, checkpointId);
+      const diff = await apiClient.getWorkspaceMountDiff(id);
+      this.mountDiff = diff.entries;
+      await this.refresh();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to revert mount changes";
+    }
+  }
+
+  async createCheckpoint(id: string, label?: string, summary?: string) {
+    this.error = null;
+    try {
+      await apiClient.createWorkspaceCheckpoint(id, label, summary);
+      await this.loadMount(id);
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to create checkpoint";
+    }
+  }
+
+  async resolveConflict(
+    id: string,
+    path: string,
+    resolution: "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge",
+    renamedCopyPath?: string,
+    mergedContent?: string
+  ) {
+    this.error = null;
+    try {
+      this.selectedMount = await apiClient.resolveWorkspaceMountConflict(
+        id,
+        path,
+        resolution,
+        renamedCopyPath,
+        mergedContent
+      );
+      const diff = await apiClient.getWorkspaceMountDiff(id);
+      this.mountDiff = diff.entries;
+      await this.refresh();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to resolve mount conflict";
     }
   }
 

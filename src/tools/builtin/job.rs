@@ -138,12 +138,9 @@ fn read_project_dir_param(params: &serde_json::Value) -> Result<Option<PathBuf>,
     params
         .get("project_dir")
         .map(|value| {
-            value
-                .as_str()
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    ToolError::InvalidParameters("project_dir must be a string".to_string())
-                })
+            value.as_str().map(PathBuf::from).ok_or_else(|| {
+                ToolError::InvalidParameters("project_dir must be a string".to_string())
+            })
         })
         .transpose()
 }
@@ -629,9 +626,7 @@ impl Tool for JobEventsTool {
             .get_context(job_id)
             .await
             .map_err(|_| {
-                ToolError::ExecutionFailed(format!(
-                    "job {job_id} not found or context unavailable"
-                ))
+                ToolError::ExecutionFailed(format!("job {job_id} not found or context unavailable"))
             })?;
 
         if job_ctx.user_id != ctx.user_id {
@@ -737,9 +732,7 @@ impl Tool for JobPromptTool {
             .get_context(job_id)
             .await
             .map_err(|_| {
-                ToolError::ExecutionFailed(format!(
-                    "job {job_id} not found or context unavailable"
-                ))
+                ToolError::ExecutionFailed(format!("job {job_id} not found or context unavailable"))
             })?;
 
         if job_ctx.user_id != ctx.user_id {
@@ -799,7 +792,10 @@ mod tests {
 
         let job_id = result.result.get("job_id").unwrap().as_str().unwrap();
         assert!(!job_id.is_empty());
-        assert_eq!(result.result.get("status").unwrap().as_str(), Some("pending"));
+        assert_eq!(
+            result.result.get("status").unwrap().as_str(),
+            Some("pending")
+        );
     }
 
     #[test]
@@ -823,7 +819,10 @@ mod tests {
         manager.create_job("Job 2", "Desc 2").await.unwrap();
 
         let tool = ListJobsTool::new(manager);
-        let result = tool.execute(serde_json::json!({}), &JobContext::default()).await.unwrap();
+        let result = tool
+            .execute(serde_json::json!({}), &JobContext::default())
+            .await
+            .unwrap();
         let jobs = result.result.get("jobs").unwrap().as_array().unwrap();
         assert_eq!(jobs.len(), 2);
     }
@@ -844,7 +843,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.result.get("title").unwrap().as_str(), Some("Test Job"));
+        assert_eq!(
+            result.result.get("title").unwrap().as_str(),
+            Some("Test Job")
+        );
     }
 
     #[tokio::test]
@@ -869,7 +871,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(result.result.get("status").and_then(|v| v.as_str()), Some("cancelled"));
+        assert_eq!(
+            result.result.get("status").and_then(|v| v.as_str()),
+            Some("cancelled")
+        );
         let updated = manager.get_context(job_id).await.unwrap();
         assert_eq!(updated.state, JobState::Cancelled);
     }

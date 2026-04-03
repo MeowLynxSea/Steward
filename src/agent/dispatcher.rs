@@ -658,22 +658,32 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 _ => {}
             }
 
+            if let Some(reject_msg) = self
+                .agent
+                .mounted_workspace_redirect_for_tool(&self.message.user_id, &tc.name, &tc.arguments)
+                .await
+            {
+                preflight.push((tc, PreflightOutcome::Rejected(reject_msg)));
+                continue;
+            }
+
             // Check if tool requires approval
             let task_mode = self.agent.task_mode_for_thread(self.thread_id).await;
             if task_mode != TaskMode::Yolo
                 && !self.agent.config.auto_approve_tools
                 && let Some(tool) = tool_opt
             {
-                use crate::tools::ApprovalRequirement;
-                let requirement = tool.requires_approval(&tc.arguments);
-                let needs_approval = match requirement {
-                    ApprovalRequirement::Never => false,
-                    ApprovalRequirement::UnlessAutoApproved => {
-                        let sess = self.session.lock().await;
-                        !sess.is_tool_auto_approved(&tc.name)
-                    }
-                    ApprovalRequirement::Always => true,
-                };
+                let (needs_approval, allow_always) = self
+                    .agent
+                    .approval_decision_for_tool(
+                        &self.session,
+                        &self.message.user_id,
+                        &tc.name,
+                        &tool,
+                        &tc.arguments,
+                        task_mode,
+                    )
+                    .await;
 
                 if needs_approval {
                     // In non-DM relay channels, auto-deny approval-
@@ -701,7 +711,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                         continue;
                     }
 
-                    let allow_always = !matches!(requirement, ApprovalRequirement::Always);
                     approval_needed = Some((idx, tc, tool, allow_always));
                     break;
                 }
@@ -1094,7 +1103,7 @@ enum PreflightOutcome {
     Runnable,
 }
 
-fn preflight_rejection_tool_message(
+pub(super) fn preflight_rejection_tool_message(
     safety: &crate::safety::SafetyLayer,
     tool_name: &str,
     tool_call_id: &str,

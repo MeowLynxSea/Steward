@@ -78,6 +78,11 @@
         {/if}
         {#if tasksStore.detail.task.status === "waiting_approval" && tasksStore.detail.task.pending_approval}
           <button class="button button-primary" onclick={() => void tasksStore.approve(tasksStore.detail!.task)}>Approve</button>
+          {#if tasksStore.detail.task.pending_approval.allow_always}
+            <button class="button button-secondary" onclick={() => void tasksStore.approve(tasksStore.detail!.task, true)}>
+              Always Allow
+            </button>
+          {/if}
           <button class="button button-secondary" onclick={() => void tasksStore.reject(tasksStore.detail!.task, rejectReason)}>Reject</button>
         {/if}
       </div>
@@ -102,6 +107,7 @@
           task={tasksStore.detail.task}
           bind:rejectReason
           onApprove={() => void tasksStore.approve(tasksStore.detail!.task)}
+          onApproveAlways={() => void tasksStore.approve(tasksStore.detail!.task, true)}
           onReject={() => void tasksStore.reject(tasksStore.detail!.task, rejectReason)}
         />
       {/if}

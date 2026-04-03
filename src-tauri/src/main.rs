@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use ironclaw::api::DEFAULT_API_PORT;
 use ironclaw::llm::{OpenAiCodexConfig, OpenAiCodexDeviceCode, OpenAiCodexSessionManager};
-use tauri::Manager;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::RwLock;
 
@@ -85,7 +85,10 @@ async fn index_dropped_path(
 ) -> Result<(), String> {
     let payload = serde_json::json!({ "path": path });
     reqwest::Client::new()
-        .post(format!("{}/api/v0/workspace/index", api_base.0.trim_end_matches('/')))
+        .post(format!(
+            "{}/api/v0/workspace/index",
+            api_base.0.trim_end_matches('/')
+        ))
         .json(&payload)
         .send()
         .await
@@ -163,6 +166,77 @@ async fn get_openai_codex_login_status(
         .ok_or_else(|| format!("unknown Codex login id '{login_id}'"))
 }
 
+#[cfg(target_os = "macos")]
+fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
+    let output = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "try",
+            "-e",
+            "POSIX path of (choose folder with prompt \"Select a folder to mount\")",
+            "-e",
+            "on error number -128",
+            "-e",
+            "return \"\"",
+            "-e",
+            "end try",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
+    let output = std::process::Command::new("sh")
+        .args(["-c", "zenity --file-selection --directory 2>/dev/null || true"])
+        .output()
+        .map_err(|error| error.to_string())?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
+             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; \
+             if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { \
+               Write-Output $dialog.SelectedPath \
+             }",
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(path))
+    }
+}
+
+#[tauri::command]
+async fn pick_mount_directory() -> Result<Option<String>, String> {
+    pick_directory_with_system_dialog()
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(ApiBase(format!("http://127.0.0.1:{DEFAULT_API_PORT}")))
@@ -172,7 +246,8 @@ fn main() {
             notify,
             index_dropped_path,
             start_openai_codex_login,
-            get_openai_codex_login_status
+            get_openai_codex_login_status,
+            pick_mount_directory
         ])
         .setup(|app| {
             tauri::async_runtime::block_on(async {

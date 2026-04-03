@@ -19,6 +19,7 @@
     loading: boolean;
     onSendMessage: (content: string) => void;
     onApproveTask: (task: TaskRecord) => void;
+    onApproveTaskAlways: (task: TaskRecord) => void;
     onRejectTask: (task: TaskRecord, reason: string) => void;
   }
 
@@ -29,6 +30,7 @@
     loading,
     onSendMessage,
     onApproveTask,
+    onApproveTaskAlways,
     onRejectTask
   }: Props = $props();
 
@@ -122,6 +124,7 @@
         {task}
         bind:rejectReason
         onApprove={() => task && onApproveTask(task)}
+        onApproveAlways={() => task && onApproveTaskAlways(task)}
         onReject={() => task && onRejectTask(task, rejectReason)}
       />
     {/if}

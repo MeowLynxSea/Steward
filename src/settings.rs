@@ -376,7 +376,6 @@ pub struct ChannelSettings {
     /// If empty, inherits from signal_allow_from.
     #[serde(default)]
     pub signal_group_allow_from: Option<String>,
-
 }
 
 impl Default for ChannelSettings {

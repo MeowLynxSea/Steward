@@ -68,3 +68,13 @@ export async function listenForFolderDrops(
     return async () => {};
   }
 }
+
+export async function pickDirectory(): Promise<string | null> {
+  try {
+    const core = await import("@tauri-apps/api/core");
+    const selection = await core.invoke<string | null>("pick_mount_directory");
+    return selection ?? null;
+  } catch {
+    return null;
+  }
+}

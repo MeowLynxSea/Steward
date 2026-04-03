@@ -12,6 +12,7 @@
 mod agent;
 mod builder;
 mod channels;
+mod claude_code;
 mod database;
 pub(crate) mod embeddings;
 mod heartbeat;
@@ -21,7 +22,6 @@ pub(crate) mod llm;
 pub mod relay;
 mod routines;
 mod safety;
-mod claude_code;
 mod search;
 mod secrets;
 mod skills;
@@ -43,6 +43,7 @@ pub use self::channels::{
     ChannelsConfig, CliConfig, DEFAULT_GATEWAY_PORT, GatewayConfig, GatewayOidcConfig, HttpConfig,
     SignalConfig,
 };
+pub use self::claude_code::ClaudeCodeConfig;
 pub use self::database::{DatabaseBackend, DatabaseConfig, SslMode, default_libsql_path};
 pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
@@ -52,7 +53,6 @@ pub use self::relay::RelayConfig;
 pub use self::routines::RoutineConfig;
 pub use self::safety::SafetyConfig;
 use self::safety::resolve_safety_config;
-pub use self::claude_code::ClaudeCodeConfig;
 pub use self::search::WorkspaceSearchConfig;
 pub use self::secrets::SecretsConfig;
 pub use self::skills::SkillsConfig;

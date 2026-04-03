@@ -315,6 +315,18 @@ pub enum WorkspaceError {
 
     #[error("Write rejected for '{path}': prompt injection detected ({reason})")]
     InjectionRejected { path: String, reason: String },
+
+    #[error("Workspace operation is not supported by the active backend: {operation}")]
+    Unsupported { operation: String },
+
+    #[error("Workspace mount not found: {mount_id}")]
+    MountNotFound { mount_id: String },
+
+    #[error("Workspace mount path not found: {mount_id}:{path}")]
+    MountPathNotFound { mount_id: String, path: String },
+
+    #[error("Workspace mount conflict at '{path}': {reason}")]
+    MountConflict { path: String, reason: String },
 }
 
 /// Local runtime errors.

@@ -308,10 +308,7 @@ impl RegistryCatalog {
             return Ok(m);
         }
 
-        let prefixes: &[(&str, &str)] = &[
-            ("tools", "tool"),
-            ("mcp-servers", "mcp_server"),
-        ];
+        let prefixes: &[(&str, &str)] = &[("tools", "tool"), ("mcp-servers", "mcp_server")];
 
         let matches: Vec<_> = prefixes
             .iter()

@@ -24,10 +24,10 @@ pub mod oauth_helpers;
 pub mod openai_codex_provider;
 pub mod openai_codex_session;
 mod provider;
-pub mod reloadable;
 mod reasoning;
 pub mod recording;
 pub mod registry;
+pub mod reloadable;
 pub mod response_cache;
 pub mod retry;
 mod rig_adapter;
@@ -61,9 +61,6 @@ pub use provider::{
     LlmProvider, ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
     ToolDefinition, ToolResult, generate_tool_call_id,
 };
-pub use reloadable::{
-    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
-};
 pub use reasoning::{
     ActionPlan, Reasoning, ReasoningContext, RespondOutput, RespondResult, ResponseAnomaly,
     ResponseMetadata, SILENT_REPLY_TOKEN, TOOL_INTENT_NUDGE, TRUNCATED_TOOL_CALL_NOTICE,
@@ -71,6 +68,9 @@ pub use reasoning::{
 };
 pub use recording::RecordingLlm;
 pub use registry::{ProviderDefinition, ProviderProtocol, ProviderRegistry};
+pub use reloadable::{
+    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
+};
 pub use response_cache::{CachedProvider, ResponseCacheConfig};
 pub use retry::{RetryConfig, RetryProvider};
 pub use rig_adapter::RigAdapter;

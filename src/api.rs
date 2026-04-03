@@ -36,7 +36,10 @@ use crate::secrets::{CreateSecretParams, SecretsStore};
 use crate::settings::Settings;
 use crate::task_runtime::{TaskDetail, TaskMode, TaskRecord, TaskRuntime, TaskStatus};
 use crate::tools::mcp::config::{EffectiveTransport, load_mcp_servers_from_db};
-use crate::workspace::{SearchResult, Workspace, WorkspaceEntry};
+use crate::workspace::{
+    SearchResult, Workspace, WorkspaceMountCheckpoint, WorkspaceMountDetail, WorkspaceMountDiff,
+    WorkspaceMountSummary, WorkspaceTreeEntry,
+};
 
 pub const DEFAULT_API_HOST: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 pub const DEFAULT_API_PORT: u16 = 8765;
@@ -278,7 +281,49 @@ pub struct WorkspaceTreeQuery {
 #[derive(Debug, Serialize)]
 pub struct WorkspaceTreeResponse {
     pub path: String,
-    pub entries: Vec<WorkspaceEntry>,
+    pub entries: Vec<WorkspaceTreeEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWorkspaceMountRequest {
+    pub path: String,
+    pub display_name: Option<String>,
+    #[serde(default = "default_true")]
+    pub bypass_write: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceMountListResponse {
+    pub mounts: Vec<WorkspaceMountSummary>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceDiffQuery {
+    pub scope_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateWorkspaceCheckpointRequest {
+    pub label: Option<String>,
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub created_by: Option<String>,
+    #[serde(default)]
+    pub is_auto: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceActionRequest {
+    pub scope_path: Option<String>,
+    pub checkpoint_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResolveWorkspaceConflictRequest {
+    pub path: String,
+    pub resolution: String,
+    pub renamed_copy_path: Option<String>,
+    pub merged_content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,6 +370,10 @@ pub struct ApproveTaskRequest {
     pub approval_id: Option<Uuid>,
     #[serde(default)]
     pub always: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,6 +499,31 @@ pub fn router(state: ApiState) -> Router {
         .route("/api/v0/workspace/index/{id}", get(get_workspace_index_job))
         .route("/api/v0/workspace/tree", get(get_workspace_tree))
         .route("/api/v0/workspace/search", post(search_workspace))
+        .route(
+            "/api/v0/workspace/mounts",
+            get(list_workspace_mounts).post(create_workspace_mount),
+        )
+        .route("/api/v0/workspace/mounts/{id}", get(get_workspace_mount))
+        .route(
+            "/api/v0/workspace/mounts/{id}/diff",
+            get(get_workspace_mount_diff),
+        )
+        .route(
+            "/api/v0/workspace/mounts/{id}/checkpoints",
+            post(create_workspace_checkpoint),
+        )
+        .route(
+            "/api/v0/workspace/mounts/{id}/keep",
+            post(keep_workspace_mount),
+        )
+        .route(
+            "/api/v0/workspace/mounts/{id}/revert",
+            post(revert_workspace_mount),
+        )
+        .route(
+            "/api/v0/workspace/mounts/{id}/resolve-conflict",
+            post(resolve_workspace_mount_conflict),
+        )
         .fallback_service(ServeDir::new("static").append_index_html_on_directories(true))
         .with_state(state)
         .layer(cors)
@@ -516,9 +590,12 @@ async fn patch_settings(
     }
 
     if let Some(reloader) = state.llm_reloader.as_ref() {
-        reloader.reload_from_settings(&settings).await.map_err(|error| {
-            ApiError::internal(format!("failed to reload runtime model provider: {error}"))
-        })?;
+        reloader
+            .reload_from_settings(&settings)
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("failed to reload runtime model provider: {error}"))
+            })?;
     }
 
     Ok(Json(SettingsResponse::from_settings(settings)))
@@ -1119,9 +1196,9 @@ async fn get_workspace_tree(
         .workspace
         .as_ref()
         .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
-    let path = query.path.unwrap_or_default();
+    let path = query.path.unwrap_or_else(|| "workspace://".to_string());
     let entries = workspace
-        .list(&path)
+        .list_tree(&path)
         .await
         .map_err(|e| ApiError::internal(format!("failed to list workspace tree: {e}")))?;
     Ok(Json(WorkspaceTreeResponse { path, entries }))
@@ -1158,6 +1235,163 @@ async fn search_workspace(
             })
             .collect(),
     }))
+}
+
+async fn create_workspace_mount(
+    State(state): State<ApiState>,
+    Json(payload): Json<CreateWorkspaceMountRequest>,
+) -> ApiResult<Json<WorkspaceMountSummary>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let canonical_path = std::fs::canonicalize(payload.path.trim())
+        .map_err(|e| ApiError::bad_request(format!("path is not accessible: {e}")))?;
+    if !canonical_path.is_dir() {
+        return Err(ApiError::bad_request("path must be a directory"));
+    }
+    let display_name = payload.display_name.unwrap_or_else(|| {
+        canonical_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("mount")
+            .to_string()
+    });
+    let mount = workspace
+        .create_mount(
+            display_name,
+            canonical_path.display().to_string(),
+            payload.bypass_write,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to create workspace mount: {e}")))?;
+    Ok(Json(mount))
+}
+
+async fn list_workspace_mounts(
+    State(state): State<ApiState>,
+) -> ApiResult<Json<WorkspaceMountListResponse>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let mounts = workspace
+        .list_mounts()
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to list workspace mounts: {e}")))?;
+    Ok(Json(WorkspaceMountListResponse { mounts }))
+}
+
+async fn get_workspace_mount(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+) -> ApiResult<Json<WorkspaceMountDetail>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let detail = workspace.get_mount(mount_id).await.map_err(|e| match e {
+        crate::error::WorkspaceError::MountNotFound { .. } => {
+            ApiError::not_found(format!("workspace mount {mount_id} not found"))
+        }
+        other => ApiError::internal(format!("failed to load workspace mount: {other}")),
+    })?;
+    Ok(Json(detail))
+}
+
+async fn get_workspace_mount_diff(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+    Query(query): Query<WorkspaceDiffQuery>,
+) -> ApiResult<Json<WorkspaceMountDiff>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let diff = workspace
+        .diff_mount(mount_id, query.scope_path.as_deref())
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to diff workspace mount: {e}")))?;
+    Ok(Json(diff))
+}
+
+async fn create_workspace_checkpoint(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+    Json(payload): Json<CreateWorkspaceCheckpointRequest>,
+) -> ApiResult<Json<WorkspaceMountCheckpoint>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let checkpoint = workspace
+        .create_checkpoint(
+            mount_id,
+            payload.label,
+            payload.summary,
+            payload.created_by.unwrap_or_else(|| "user".to_string()),
+            payload.is_auto,
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to create workspace checkpoint: {e}")))?;
+    Ok(Json(checkpoint))
+}
+
+async fn keep_workspace_mount(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+    Json(payload): Json<WorkspaceActionRequest>,
+) -> ApiResult<Json<WorkspaceMountDetail>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let detail = workspace
+        .keep_mount(mount_id, payload.scope_path, payload.checkpoint_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to keep workspace mount: {e}")))?;
+    Ok(Json(detail))
+}
+
+async fn revert_workspace_mount(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+    Json(payload): Json<WorkspaceActionRequest>,
+) -> ApiResult<Json<WorkspaceMountDetail>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let detail = workspace
+        .revert_mount(mount_id, payload.scope_path, payload.checkpoint_id)
+        .await
+        .map_err(|e| ApiError::internal(format!("failed to revert workspace mount: {e}")))?;
+    Ok(Json(detail))
+}
+
+async fn resolve_workspace_mount_conflict(
+    State(state): State<ApiState>,
+    Path(mount_id): Path<Uuid>,
+    Json(payload): Json<ResolveWorkspaceConflictRequest>,
+) -> ApiResult<Json<WorkspaceMountDetail>> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| ApiError::conflict("workspace is not available"))?;
+    let detail = workspace
+        .resolve_mount_conflict(
+            mount_id,
+            payload.path,
+            payload.resolution,
+            payload.renamed_copy_path,
+            payload.merged_content,
+        )
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!("failed to resolve workspace mount conflict: {e}"))
+        })?;
+    Ok(Json(detail))
 }
 
 async fn load_settings(state: &ApiState) -> ApiResult<Settings> {

@@ -124,9 +124,17 @@ export interface TaskDetail {
 
 export interface WorkspaceEntry {
   path: string;
+  uri?: string;
+  name?: string;
   is_directory: boolean;
   updated_at: string | null;
   content_preview: string | null;
+  kind?: string;
+  status?: string | null;
+  bypass_write?: boolean | null;
+  dirty_count?: number;
+  conflict_count?: number;
+  pending_delete_count?: number;
 }
 
 export interface WorkspaceIndexJob {
@@ -155,6 +163,60 @@ export interface WorkspaceSearchResult {
   score: number;
   fts_rank: number | null;
   vector_rank: number | null;
+}
+
+export interface WorkspaceMount {
+  id: string;
+  user_id: string;
+  display_name: string;
+  source_root?: string;
+  bypass_read: boolean;
+  bypass_write: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceMountSummary {
+  mount: WorkspaceMount;
+  dirty_count: number;
+  conflict_count: number;
+  pending_delete_count: number;
+}
+
+export interface WorkspaceMountCheckpoint {
+  id: string;
+  mount_id: string;
+  parent_checkpoint_id: string | null;
+  label: string | null;
+  summary: string | null;
+  created_by: string;
+  is_auto: boolean;
+  base_generation: number;
+  created_at: string;
+  changed_files: string[];
+}
+
+export interface MountedFileDiff {
+  path: string;
+  uri: string;
+  status: string;
+  is_binary: boolean;
+  base_content: string | null;
+  working_content: string | null;
+  remote_content: string | null;
+  diff_text: string | null;
+  conflict_reason: string | null;
+}
+
+export interface WorkspaceMountDiff {
+  mount_id: string;
+  entries: MountedFileDiff[];
+}
+
+export interface WorkspaceMountDetail {
+  summary: WorkspaceMountSummary;
+  checkpoints: WorkspaceMountCheckpoint[];
+  open_change_count: number;
 }
 
 export interface WorkbenchMcpServer {

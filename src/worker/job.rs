@@ -448,7 +448,10 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
                             "message": "Claude Code job cancelled",
                         }),
                     );
-                    self.persist_status(JobState::Cancelled, Some("Stopped by scheduler".to_string()));
+                    self.persist_status(
+                        JobState::Cancelled,
+                        Some("Stopped by scheduler".to_string()),
+                    );
                     return Ok(());
                 }
                 Ok(Some(WorkerMessage::Ping | WorkerMessage::Start)) => {}
@@ -482,9 +485,15 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         });
 
         if !dir.exists() {
-            std::fs::create_dir_all(&dir).map_err(|e| crate::error::ToolError::ExecutionFailed {
-                name: "claude_code".to_string(),
-                reason: format!("failed to create project directory {}: {}", dir.display(), e),
+            std::fs::create_dir_all(&dir).map_err(|e| {
+                crate::error::ToolError::ExecutionFailed {
+                    name: "claude_code".to_string(),
+                    reason: format!(
+                        "failed to create project directory {}: {}",
+                        dir.display(),
+                        e
+                    ),
+                }
             })?;
         }
 
@@ -530,91 +539,96 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
         let max_turns_str = max_turns.to_string();
 
         #[cfg(unix)]
-        let (mut child, stdout, stderr) = {
-            let (pty, pts) = pty_process::open().map_err(|e| {
-                crate::error::ToolError::ExecutionFailed {
-                    name: "claude_code".to_string(),
-                    reason: format!("failed to allocate PTY: {}", e),
+        let (mut child, stdout, stderr) =
+            {
+                let (pty, pts) =
+                    pty_process::open().map_err(|e| crate::error::ToolError::ExecutionFailed {
+                        name: "claude_code".to_string(),
+                        reason: format!("failed to allocate PTY: {}", e),
+                    })?;
+
+                let mut cmd = pty_process::Command::new("claude");
+                cmd = cmd
+                    .arg("-p")
+                    .arg(prompt)
+                    .arg("--output-format")
+                    .arg("stream-json")
+                    .arg("--verbose")
+                    .arg("--max-turns")
+                    .arg(&max_turns_str)
+                    .arg("--model")
+                    .arg(&self.deps.claude_code.model);
+
+                if let Some(session_id) = resume_session_id {
+                    cmd = cmd.arg("--resume").arg(session_id);
                 }
-            })?;
 
-            let mut cmd = pty_process::Command::new("claude");
-            cmd = cmd
-                .arg("-p")
-                .arg(prompt)
-                .arg("--output-format")
-                .arg("stream-json")
-                .arg("--verbose")
-                .arg("--max-turns")
-                .arg(&max_turns_str)
-                .arg("--model")
-                .arg(&self.deps.claude_code.model);
+                cmd = cmd.envs(extra_env.iter());
+                cmd = cmd.current_dir(project_dir);
+                cmd = cmd.stderr(std::process::Stdio::piped());
 
-            if let Some(session_id) = resume_session_id {
-                cmd = cmd.arg("--resume").arg(session_id);
-            }
+                let mut child =
+                    cmd.spawn(pts)
+                        .map_err(|e| crate::error::ToolError::ExecutionFailed {
+                            name: "claude_code".to_string(),
+                            reason: format!("failed to spawn claude with PTY: {}", e),
+                        })?;
 
-            cmd = cmd.envs(extra_env.iter());
-            cmd = cmd.current_dir(project_dir);
-            cmd = cmd.stderr(std::process::Stdio::piped());
+                let stderr = child.stderr.take().ok_or_else(|| {
+                    crate::error::ToolError::ExecutionFailed {
+                        name: "claude_code".to_string(),
+                        reason: "failed to capture claude stderr".to_string(),
+                    }
+                })?;
 
-            let mut child = cmd.spawn(pts).map_err(|e| crate::error::ToolError::ExecutionFailed {
-                name: "claude_code".to_string(),
-                reason: format!("failed to spawn claude with PTY: {}", e),
-            })?;
-
-            let stderr = child.stderr.take().ok_or_else(|| {
-                crate::error::ToolError::ExecutionFailed {
-                    name: "claude_code".to_string(),
-                    reason: "failed to capture claude stderr".to_string(),
-                }
-            })?;
-
-            let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(pty);
-            (child, stdout, stderr)
-        };
+                let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(pty);
+                (child, stdout, stderr)
+            };
 
         #[cfg(not(unix))]
-        let (mut child, stdout, stderr) = {
-            let mut cmd = tokio::process::Command::new("claude");
-            cmd.arg("-p")
-                .arg(prompt)
-                .arg("--output-format")
-                .arg("stream-json")
-                .arg("--verbose")
-                .arg("--max-turns")
-                .arg(&max_turns_str)
-                .arg("--model")
-                .arg(&self.deps.claude_code.model);
+        let (mut child, stdout, stderr) =
+            {
+                let mut cmd = tokio::process::Command::new("claude");
+                cmd.arg("-p")
+                    .arg(prompt)
+                    .arg("--output-format")
+                    .arg("stream-json")
+                    .arg("--verbose")
+                    .arg("--max-turns")
+                    .arg(&max_turns_str)
+                    .arg("--model")
+                    .arg(&self.deps.claude_code.model);
 
-            if let Some(session_id) = resume_session_id {
-                cmd.arg("--resume").arg(session_id);
-            }
-
-            cmd.envs(extra_env);
-            cmd.current_dir(project_dir)
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-
-            let mut child = cmd.spawn().map_err(|e| crate::error::ToolError::ExecutionFailed {
-                name: "claude_code".to_string(),
-                reason: format!("failed to spawn claude: {}", e),
-            })?;
-            let stdout_pipe = child.stdout.take().ok_or_else(|| {
-                crate::error::ToolError::ExecutionFailed {
-                    name: "claude_code".to_string(),
-                    reason: "failed to capture claude stdout".to_string(),
+                if let Some(session_id) = resume_session_id {
+                    cmd.arg("--resume").arg(session_id);
                 }
-            })?;
-            let stderr = child.stderr.take().ok_or_else(|| {
-                crate::error::ToolError::ExecutionFailed {
-                    name: "claude_code".to_string(),
-                    reason: "failed to capture claude stderr".to_string(),
-                }
-            })?;
-            let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(stdout_pipe);
-            (child, stdout, stderr)
-        };
+
+                cmd.envs(extra_env);
+                cmd.current_dir(project_dir)
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::piped());
+
+                let mut child =
+                    cmd.spawn()
+                        .map_err(|e| crate::error::ToolError::ExecutionFailed {
+                            name: "claude_code".to_string(),
+                            reason: format!("failed to spawn claude: {}", e),
+                        })?;
+                let stdout_pipe = child.stdout.take().ok_or_else(|| {
+                    crate::error::ToolError::ExecutionFailed {
+                        name: "claude_code".to_string(),
+                        reason: "failed to capture claude stdout".to_string(),
+                    }
+                })?;
+                let stderr = child.stderr.take().ok_or_else(|| {
+                    crate::error::ToolError::ExecutionFailed {
+                        name: "claude_code".to_string(),
+                        reason: "failed to capture claude stderr".to_string(),
+                    }
+                })?;
+                let stdout: Box<dyn tokio::io::AsyncRead + Unpin + Send> = Box::new(stdout_pipe);
+                (child, stdout, stderr)
+            };
 
         let job_id = self.job_id;
         let sse = self.deps.sse_tx.clone();
@@ -623,9 +637,15 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                log_job_event(store.clone(), sse.clone(), job_id, "status", serde_json::json!({
-                    "message": line,
-                }));
+                log_job_event(
+                    store.clone(),
+                    sse.clone(),
+                    job_id,
+                    "status",
+                    serde_json::json!({
+                        "message": line,
+                    }),
+                );
             }
         });
 
@@ -641,7 +661,9 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
 
             match serde_json::from_str::<ClaudeStreamEvent>(line) {
                 Ok(event) => {
-                    if event.event_type == "system" && let Some(value) = event.session_id.clone() {
+                    if event.event_type == "system"
+                        && let Some(value) = event.session_id.clone()
+                    {
                         session_id = Some(value);
                     }
                     for (event_type, data) in stream_event_to_job_events(&event) {
@@ -659,10 +681,13 @@ Report when the job is complete or if you encounter issues you cannot resolve."#
             }
         }
 
-        let status = child.wait().await.map_err(|e| crate::error::ToolError::ExecutionFailed {
-            name: "claude_code".to_string(),
-            reason: format!("failed waiting for claude: {}", e),
-        })?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| crate::error::ToolError::ExecutionFailed {
+                name: "claude_code".to_string(),
+                reason: format!("failed waiting for claude: {}", e),
+            })?;
         let _ = stderr_handle.await;
 
         if !status.success() {
@@ -1493,11 +1518,12 @@ fn build_permission_settings(allowed_tools: &[String]) -> String {
     .expect("static JSON structure is valid")
 }
 
-fn stream_event_to_job_events(
-    event: &ClaudeStreamEvent,
-) -> Vec<(String, serde_json::Value)> {
+fn stream_event_to_job_events(event: &ClaudeStreamEvent) -> Vec<(String, serde_json::Value)> {
     let mut events = Vec::new();
-    let blocks = event.message.as_ref().and_then(|message| message.content.as_ref());
+    let blocks = event
+        .message
+        .as_ref()
+        .and_then(|message| message.content.as_ref());
 
     match event.event_type.as_str() {
         "system" => {
@@ -1514,7 +1540,9 @@ fn stream_event_to_job_events(
                 for block in blocks {
                     match block.block_type.as_str() {
                         "text" => {
-                            if let Some(text) = block.text.as_deref().filter(|text| !text.is_empty()) {
+                            if let Some(text) =
+                                block.text.as_deref().filter(|text| !text.is_empty())
+                            {
                                 events.push((
                                     "message".to_string(),
                                     serde_json::json!({
@@ -1555,7 +1583,12 @@ fn stream_event_to_job_events(
             }
         }
         "result" => {
-            if let Some(text) = event.result.as_ref().and_then(|value| value.as_str()).filter(|text| !text.is_empty()) {
+            if let Some(text) = event
+                .result
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .filter(|text| !text.is_empty())
+            {
                 events.push((
                     "message".to_string(),
                     serde_json::json!({
@@ -1598,7 +1631,10 @@ fn log_job_event(
         let event_type = event_type.to_string();
         let data_for_store = data.clone();
         tokio::spawn(async move {
-            if let Err(error) = store.save_job_event(job_id, &event_type, &data_for_store).await {
+            if let Err(error) = store
+                .save_job_event(job_id, &event_type, &data_for_store)
+                .await
+            {
                 tracing::warn!(job_id = %job_id, %event_type, "Failed to persist event: {}", error);
             }
         });

@@ -397,6 +397,7 @@ impl TaskRuntime {
                 "risk": infer_risk(&pending.tool_name),
             }),
             |task| {
+                let display_parameters = sanitize_task_parameters(&pending.display_parameters);
                 task.status = TaskStatus::WaitingApproval;
                 task.current_step = Some(TaskCurrentStep {
                     id: pending.request_id.to_string(),
@@ -410,9 +411,9 @@ impl TaskRuntime {
                     operations: vec![TaskOperation {
                         kind: "tool_call".to_string(),
                         tool_name: pending.tool_name.clone(),
-                        path: extract_path(&pending.display_parameters),
-                        destination_path: extract_destination_path(&pending.display_parameters),
-                        parameters: pending.display_parameters.clone(),
+                        path: extract_path(&display_parameters),
+                        destination_path: extract_destination_path(&display_parameters),
+                        parameters: display_parameters,
                     }],
                     allow_always: pending.allow_always,
                 });
@@ -707,6 +708,47 @@ fn extract_string_field(parameters: &Value, keys: &[&str]) -> Option<String> {
     let object = parameters.as_object()?;
     keys.iter()
         .find_map(|key| object.get(*key)?.as_str().map(str::to_string))
+}
+
+fn sanitize_task_parameters(parameters: &Value) -> Value {
+    match parameters {
+        Value::Object(map) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in map {
+                if is_display_path_key(key) {
+                    sanitized.insert(
+                        key.clone(),
+                        value
+                            .as_str()
+                            .map(|path| Value::String(format_display_path(path)))
+                            .unwrap_or_else(|| sanitize_task_parameters(value)),
+                    );
+                } else {
+                    sanitized.insert(key.clone(), sanitize_task_parameters(value));
+                }
+            }
+            Value::Object(sanitized)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sanitize_task_parameters).collect()),
+        other => other.clone(),
+    }
+}
+
+fn is_display_path_key(key: &str) -> bool {
+    matches!(
+        key,
+        "path" | "source_path" | "destination_path" | "target_path" | "to" | "renamed_copy_path"
+    )
+}
+
+fn format_display_path(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    let parts: Vec<&str> = trimmed.split('/').filter(|part| !part.is_empty()).collect();
+    match parts.as_slice() {
+        [] => "workspace item".to_string(),
+        [single] => (*single).to_string(),
+        [.., parent, leaf] => format!(".../{parent}/{leaf}"),
+    }
 }
 
 #[cfg(test)]

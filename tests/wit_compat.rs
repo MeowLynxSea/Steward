@@ -110,7 +110,9 @@ fn discover_extensions() -> Vec<DiscoveredExtension> {
             serde_json::from_str(&content).expect("failed to parse manifest");
 
         let name = manifest["name"].as_str().unwrap_or("unknown").to_string();
-        let source_dir = manifest["source"]["dir"].as_str().map(|d| repo_root.join(d));
+        let source_dir = manifest["source"]["dir"]
+            .as_str()
+            .map(|d| repo_root.join(d));
         let crate_name = manifest["source"]["crate_name"]
             .as_str()
             .map(|s| s.to_string());
@@ -329,8 +331,8 @@ fn wit_files_contain_version_annotation() {
 #[test]
 fn wit_version_constants_match_wit_files() {
     let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let tool_wit =
-        std::fs::read_to_string(repo_root.join("wit/tool.wit")).expect("failed to read wit/tool.wit");
+    let tool_wit = std::fs::read_to_string(repo_root.join("wit/tool.wit"))
+        .expect("failed to read wit/tool.wit");
     let expected_tool = format!(
         "package near:agent@{};",
         ironclaw::tools::wasm::WIT_TOOL_VERSION

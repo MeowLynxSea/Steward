@@ -52,6 +52,11 @@
     await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
   }
 
+  async function approveSessionTaskAlways(task: TaskRecord) {
+    await tasksStore.approve(task, true);
+    await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
+  }
+
   async function rejectSessionTask(task: TaskRecord) {
     await tasksStore.reject(task, rejectReason);
     await Promise.all([tasksStore.refresh(), sessionsStore.refreshActiveTaskDetail()]);
@@ -196,6 +201,7 @@
             task={sessionTask}
             bind:rejectReason
             onApprove={() => void approveSessionTask(sessionTask)}
+            onApproveAlways={() => void approveSessionTaskAlways(sessionTask)}
             onReject={() => void rejectSessionTask(sessionTask)}
           />
         {/if}

@@ -689,10 +689,7 @@ mod tests {
 
     #[test]
     fn extension_kind_serde_roundtrip() {
-        for kind in [
-            ExtensionKind::McpServer,
-            ExtensionKind::WasmTool,
-        ] {
+        for kind in [ExtensionKind::McpServer, ExtensionKind::WasmTool] {
             let json = serde_json::to_value(kind).unwrap();
             let back: ExtensionKind = serde_json::from_value(json).unwrap();
             assert_eq!(back, kind);

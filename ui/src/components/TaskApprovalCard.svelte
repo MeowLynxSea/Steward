@@ -6,12 +6,14 @@
     rejectReason = $bindable(),
     showForm = true,
     onApprove,
+    onApproveAlways,
     onReject
   }: {
     task: TaskRecord;
     rejectReason: string;
     showForm?: boolean;
     onApprove: () => void;
+    onApproveAlways?: () => void;
     onReject: () => void;
   } = $props();
 </script>
@@ -48,6 +50,9 @@
 
   <div class="action-row">
     <button class="button button-primary" onclick={onApprove}>Approve</button>
+    {#if task.pending_approval?.allow_always && onApproveAlways}
+      <button class="button button-secondary" onclick={onApproveAlways}>Always Allow</button>
+    {/if}
     <button class="button button-ghost" onclick={onReject}>Reject</button>
   </div>
 </article>

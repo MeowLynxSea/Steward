@@ -5,9 +5,7 @@
 
 use tokio::sync::RwLock;
 
-use crate::extensions::{
-    ExtensionKind, RegistryEntry, ResultSource, SearchResult,
-};
+use crate::extensions::{ExtensionKind, RegistryEntry, ResultSource, SearchResult};
 
 /// Curated extension registry with fuzzy search.
 pub struct ExtensionRegistry {

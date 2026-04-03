@@ -76,12 +76,9 @@ async fn register_plugin_bundles(
     dev_loaded_tool_names: &[String],
 ) -> HookRegistrationSummary {
     let mut summary = HookRegistrationSummary::default();
-    let files = collect_plugin_capability_files(
-        wasm_tools_dir,
-        active_tool_names,
-        dev_loaded_tool_names,
-    )
-    .await;
+    let files =
+        collect_plugin_capability_files(wasm_tools_dir, active_tool_names, dev_loaded_tool_names)
+            .await;
 
     for (source, path) in files {
         let registered =

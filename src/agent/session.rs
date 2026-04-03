@@ -39,6 +39,12 @@ pub struct Session {
     /// Tools that have been auto-approved for this session ("always approve").
     #[serde(default)]
     pub auto_approved_tools: HashSet<String>,
+    /// Absolute filesystem prefixes auto-approved for this session.
+    ///
+    /// Used for path-scoped approvals on host filesystem tools so "always
+    /// allow" does not silently approve the entire tool class.
+    #[serde(default)]
+    pub auto_approved_path_prefixes: HashSet<String>,
 }
 
 impl Session {
@@ -54,6 +60,7 @@ impl Session {
             last_active_at: now,
             metadata: serde_json::Value::Null,
             auto_approved_tools: HashSet::new(),
+            auto_approved_path_prefixes: HashSet::new(),
         }
     }
 
@@ -65,6 +72,18 @@ impl Session {
     /// Add a tool to the auto-approved set.
     pub fn auto_approve_tool(&mut self, tool_name: impl Into<String>) {
         self.auto_approved_tools.insert(tool_name.into());
+    }
+
+    /// Check if an absolute filesystem path is covered by a session-scoped approval prefix.
+    pub fn is_path_auto_approved(&self, path: &std::path::Path) -> bool {
+        self.auto_approved_path_prefixes
+            .iter()
+            .any(|prefix| path.starts_with(std::path::Path::new(prefix)))
+    }
+
+    /// Add an absolute filesystem prefix to the auto-approved set.
+    pub fn auto_approve_path_prefix(&mut self, prefix: impl Into<String>) {
+        self.auto_approved_path_prefixes.insert(prefix.into());
     }
 
     /// Create a new thread in this session.
@@ -1211,6 +1230,19 @@ mod tests {
         // Idempotent
         session.auto_approve_tool("shell");
         assert_eq!(session.auto_approved_tools.len(), 1);
+    }
+
+    #[test]
+    fn test_auto_approved_path_prefixes() {
+        let mut session = Session::new("user-1");
+        let root = std::env::temp_dir().join("cowork-approval-root");
+        let nested = root.join("nested/file.txt");
+        let outside = std::env::temp_dir().join("cowork-other/file.txt");
+
+        assert!(!session.is_path_auto_approved(&nested));
+        session.auto_approve_path_prefix(root.display().to_string());
+        assert!(session.is_path_auto_approved(&nested));
+        assert!(!session.is_path_auto_approved(&outside));
     }
 
     #[test]

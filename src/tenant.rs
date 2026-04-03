@@ -120,10 +120,7 @@ impl TenantScope {
     }
 
     /// Fetch a local job by ID, returning `None` if it doesn't belong to this user.
-    pub async fn get_local_job(
-        &self,
-        id: Uuid,
-    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
+    pub async fn get_local_job(&self, id: Uuid) -> Result<Option<LocalJobRecord>, DatabaseError> {
         match self.inner.get_local_job(id).await? {
             Some(job) if job.user_id == self.user_id => Ok(Some(job)),
             _ => Ok(None),
@@ -595,10 +592,7 @@ impl AdminScope {
         self.inner.cleanup_stale_local_jobs().await
     }
 
-    pub async fn get_local_job(
-        &self,
-        id: Uuid,
-    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
+    pub async fn get_local_job(&self, id: Uuid) -> Result<Option<LocalJobRecord>, DatabaseError> {
         self.inner.get_local_job(id).await
     }
 

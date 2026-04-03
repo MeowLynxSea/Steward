@@ -78,8 +78,10 @@ impl Tool for ReadFileTool {
 
     fn description(&self) -> &str {
         "Read a file from the LOCAL FILESYSTEM. NOT for workspace memory paths \
-         (use memory_read for those). Returns file content as text. \
-         For large files, you can specify offset and limit to read a portion."
+         (use memory_read for those). If the path is inside a mounted workspace directory, \
+         prefer `workspace://mounts/<mount-id>/...` via memory_read instead. \
+         Reading unmounted disk paths may require ask-mode approval. \
+         Returns file content as text. For large files, you can specify offset and limit to read a portion."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -88,7 +90,7 @@ impl Tool for ReadFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read"
+                    "description": "Path to the file to read. Prefer `workspace://mounts/<mount-id>/...` in mounted areas; use local disk paths only when you intentionally need raw filesystem access."
                 },
                 "offset": {
                     "type": "integer",
@@ -204,8 +206,10 @@ impl Tool for WriteFileTool {
 
     fn description(&self) -> &str {
         "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace memory \
-         (use memory_write for that). Creates the file if it doesn't exist, overwrites if it does. \
-         Parent directories are created automatically. Use apply_patch for targeted edits."
+         (use memory_write for that). If the target is inside a mounted workspace directory, \
+         prefer `workspace://mounts/<mount-id>/...` via memory_write so changes stay in the workspace branch first. \
+         Writing unmounted disk paths may require ask-mode approval and 'always allow' can promote the directory into a mount. \
+         Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use apply_patch for targeted edits."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -214,7 +218,7 @@ impl Tool for WriteFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write"
+                    "description": "Path to the file to write. Prefer `workspace://mounts/<mount-id>/...` for mounted directories; use local disk paths only for explicit raw filesystem operations."
                 },
                 "content": {
                     "type": "string",
@@ -318,7 +322,7 @@ impl Tool for MoveFileTool {
     }
 
     fn description(&self) -> &str {
-        "Move or rename a file on the LOCAL FILESYSTEM. Creates parent directories for the destination when needed."
+        "Move or rename a file on the LOCAL FILESYSTEM. If the source or destination is inside a mounted workspace directory, prefer mounted workspace paths first. Raw disk moves may require ask-mode approval. Creates parent directories for the destination when needed."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -327,11 +331,11 @@ impl Tool for MoveFileTool {
             "properties": {
                 "source_path": {
                     "type": "string",
-                    "description": "Existing source file path"
+                    "description": "Existing source file path. Prefer mounted workspace paths for mounted directories."
                 },
                 "destination_path": {
                     "type": "string",
-                    "description": "Destination file path"
+                    "description": "Destination file path. Prefer mounted workspace paths for mounted directories."
                 },
                 "create_parent": {
                     "type": "boolean",
@@ -432,7 +436,7 @@ impl Tool for ListDirTool {
 
     fn description(&self) -> &str {
         "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace memory \
-         (use memory_tree for that). Shows files and subdirectories with their sizes."
+         (use memory_tree for that). If the directory is mounted into the workspace, prefer `workspace://mounts/<mount-id>` via memory_tree instead. Listing unmounted directories may require ask-mode approval. Shows files and subdirectories with their sizes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -441,7 +445,7 @@ impl Tool for ListDirTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the directory to list (defaults to current directory)"
+                    "description": "Path to the directory to list (defaults to current directory). Prefer mounted workspace paths for mounted directories."
                 },
                 "recursive": {
                     "type": "boolean",
@@ -626,7 +630,8 @@ impl Tool for ApplyPatchTool {
     fn description(&self) -> &str {
         "Apply targeted edits to a file using search/replace. Finds the exact 'old_string' \
          and replaces it with 'new_string'. Use for surgical code changes without rewriting entire files. \
-         The old_string must match exactly (including whitespace and indentation)."
+         The old_string must match exactly (including whitespace and indentation). \
+         If the file lives inside a mounted workspace directory, prefer mounted workspace paths first; editing unmounted disk files may require ask-mode approval."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

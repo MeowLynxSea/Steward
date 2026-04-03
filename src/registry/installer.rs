@@ -1177,5 +1177,4 @@ mod tests {
         assert!(caps_path.exists());
         assert!(result.has_capabilities);
     }
-
 }

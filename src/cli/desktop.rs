@@ -46,12 +46,7 @@ pub async fn run_desktop_command() -> anyhow::Result<()> {
     // Warm the native shell in the same profile/features that `cargo tauri dev`
     // uses so the final launch phase can reuse incremental artifacts.
     let tauri_build_status = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "ironcowork-tauri",
-            "--no-default-features",
-        ])
+        .args(["build", "-p", "ironcowork-tauri", "--no-default-features"])
         .current_dir(&repo_root)
         .status()
         .context("failed to prebuild tauri desktop shell")?;

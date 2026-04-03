@@ -13,6 +13,7 @@ use crate::agent::Agent;
 use crate::agent::compaction::ContextCompactor;
 use crate::agent::dispatcher::{
     AgenticLoopResult, check_auth_required, execute_chat_tool_standalone, parse_auth_result,
+    preflight_rejection_tool_message,
 };
 use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState};
 use crate::agent::submission::SubmissionResult;
@@ -1071,13 +1072,23 @@ impl Agent {
         if approved {
             // If always, add to auto-approved set
             if always {
-                let mut sess = session.lock().await;
-                sess.auto_approve_tool(&pending.tool_name);
-                tracing::info!(
-                    "Auto-approved tool '{}' for session {}",
-                    pending.tool_name,
-                    sess.id
-                );
+                if self.is_path_scoped_filesystem_tool(&pending.tool_name) {
+                    self.promote_filesystem_approval(
+                        &session,
+                        &message.user_id,
+                        &pending.tool_name,
+                        &pending.parameters,
+                    )
+                    .await?;
+                } else {
+                    let mut sess = session.lock().await;
+                    sess.auto_approve_tool(&pending.tool_name);
+                    tracing::info!(
+                        "Auto-approved tool '{}' for session {}",
+                        pending.tool_name,
+                        sess.id
+                    );
+                }
             }
 
             // Reset thread state to processing
@@ -1119,9 +1130,25 @@ impl Agent {
                 )
                 .await;
 
-            let tool_result = self
-                .execute_chat_tool(&pending.tool_name, &pending.parameters, &job_ctx)
-                .await;
+            let tool_result = if let Some(reject_msg) = self
+                .mounted_workspace_redirect_for_tool(
+                    &message.user_id,
+                    &pending.tool_name,
+                    &pending.parameters,
+                )
+                .await
+            {
+                let (content, _) = preflight_rejection_tool_message(
+                    self.safety(),
+                    &pending.tool_name,
+                    &pending.tool_call_id,
+                    &reject_msg,
+                );
+                Ok(content)
+            } else {
+                self.execute_chat_tool(&pending.tool_name, &pending.parameters, &job_ctx)
+                    .await
+            };
 
             let tool_ref = self.tools().get(&pending.tool_name).await;
             let _ = self
@@ -1237,28 +1264,36 @@ impl Agent {
             )> = None;
 
             for (idx, tc) in deferred_tool_calls.iter().enumerate() {
+                if let Some(reject_msg) = self
+                    .mounted_workspace_redirect_for_tool(&message.user_id, &tc.name, &tc.arguments)
+                    .await
+                {
+                    context_messages.push(ChatMessage::tool_result(
+                        &tc.id,
+                        &tc.name,
+                        preflight_rejection_tool_message(
+                            self.safety(),
+                            &tc.name,
+                            &tc.id,
+                            &reject_msg,
+                        )
+                        .0,
+                    ));
+                    continue;
+                }
+
                 if let Some(tool) = self.tools().get(&tc.name).await {
-                    // Match dispatcher.rs: when auto_approve_tools is true, skip
-                    // all approval checks (including ApprovalRequirement::Always).
                     let task_mode = self.task_mode_for_thread(thread_id).await;
-                    let (needs_approval, allow_always) = if task_mode
-                        == crate::task_runtime::TaskMode::Yolo
-                        || self.config.auto_approve_tools
-                    {
-                        (false, true)
-                    } else {
-                        use crate::tools::ApprovalRequirement;
-                        let requirement = tool.requires_approval(&tc.arguments);
-                        let needs = match requirement {
-                            ApprovalRequirement::Never => false,
-                            ApprovalRequirement::UnlessAutoApproved => {
-                                let sess = session.lock().await;
-                                !sess.is_tool_auto_approved(&tc.name)
-                            }
-                            ApprovalRequirement::Always => true,
-                        };
-                        (needs, !matches!(requirement, ApprovalRequirement::Always))
-                    };
+                    let (needs_approval, allow_always) = self
+                        .approval_decision_for_tool(
+                            &session,
+                            &message.user_id,
+                            &tc.name,
+                            &tool,
+                            &tc.arguments,
+                            task_mode,
+                        )
+                        .await;
 
                     if needs_approval {
                         approval_needed = Some((idx, tc.clone(), tool, allow_always));

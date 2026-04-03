@@ -581,10 +581,7 @@ impl Store {
     }
 
     /// Get a local job by ID.
-    pub async fn get_local_job(
-        &self,
-        id: Uuid,
-    ) -> Result<Option<LocalJobRecord>, DatabaseError> {
+    pub async fn get_local_job(&self, id: Uuid) -> Result<Option<LocalJobRecord>, DatabaseError> {
         let conn = self.conn().await?;
         let row = conn
             .query_opt(

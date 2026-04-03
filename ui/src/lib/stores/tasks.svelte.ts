@@ -97,11 +97,11 @@ class TasksState {
     }
   }
 
-  async approve(task: TaskRecord) {
+  async approve(task: TaskRecord, always = false) {
     this.error = null;
     try {
-      this.status = `Approving ${task.title}`;
-      await apiClient.approveTask(task.id, task.pending_approval?.id);
+      this.status = `${always ? "Always allowing" : "Approving"} ${task.title}`;
+      await apiClient.approveTask(task.id, task.pending_approval?.id, always);
       await this.#refreshActiveTask();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to approve task";

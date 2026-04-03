@@ -8,6 +8,7 @@
 //! - `thread_ops` - Thread/session operations (user input, undo, approval, persistence)
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::StreamExt;
@@ -32,7 +33,7 @@ use crate::llm::LlmProvider;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
 use crate::task_runtime::{TaskMode, TaskRuntime};
-use crate::tools::ToolRegistry;
+use crate::tools::{ApprovalRequirement, Tool, ToolRegistry};
 use crate::workspace::Workspace;
 
 /// Static greeting persisted to DB and broadcast on first launch.
@@ -277,6 +278,348 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub(super) fn is_path_scoped_filesystem_tool(&self, tool_name: &str) -> bool {
+        matches!(
+            tool_name,
+            "read_file" | "write_file" | "list_dir" | "apply_patch" | "move_file"
+        )
+    }
+
+    pub(super) fn resolve_filesystem_access_paths(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> Result<Vec<PathBuf>, Error> {
+        let normalize = |value: &str| -> Result<PathBuf, Error> {
+            if value.contains('\0') {
+                return Err(Error::Tool(crate::error::ToolError::InvalidParameters {
+                    name: tool_name.to_string(),
+                    reason: "path contains null byte".to_string(),
+                }));
+            }
+            let path = PathBuf::from(value);
+            if path.is_absolute() {
+                Ok(path.canonicalize().unwrap_or(path))
+            } else {
+                let joined = std::env::current_dir()
+                    .unwrap_or_else(|_| PathBuf::from("."))
+                    .join(path);
+                Ok(joined.canonicalize().unwrap_or(joined))
+            }
+        };
+        let required = |name: &str| {
+            params
+                .get(name)
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| {
+                    Error::Tool(crate::error::ToolError::InvalidParameters {
+                        name: tool_name.to_string(),
+                        reason: format!("missing '{name}' parameter"),
+                    })
+                })
+        };
+        match tool_name {
+            "read_file" | "write_file" | "apply_patch" => Ok(vec![normalize(required("path")?)?]),
+            "list_dir" => {
+                let value = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
+                Ok(vec![normalize(value)?])
+            }
+            "move_file" => Ok(vec![
+                normalize(required("source_path")?)?,
+                normalize(required("destination_path")?)?,
+            ]),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    fn nearest_existing_directory(path: &Path) -> Option<PathBuf> {
+        let mut current = if path.exists() && path.is_dir() {
+            path.to_path_buf()
+        } else {
+            path.parent()?.to_path_buf()
+        };
+
+        loop {
+            if current.exists() && current.is_dir() {
+                return Some(current.canonicalize().unwrap_or_else(|_| current.clone()));
+            }
+            current = current.parent()?.to_path_buf();
+        }
+    }
+
+    fn mount_scope_roots(&self, tool_name: &str, paths: &[PathBuf]) -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        for path in paths {
+            let candidate = if tool_name == "list_dir" {
+                Self::nearest_existing_directory(path)
+                    .or_else(|| path.parent().map(|parent| parent.to_path_buf()))
+            } else {
+                Self::nearest_existing_directory(path)
+            };
+            if let Some(root) = candidate
+                && !roots.iter().any(|existing| existing == &root)
+            {
+                roots.push(root);
+            }
+        }
+        roots
+    }
+
+    fn filesystem_access_path_arguments(
+        &self,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> Result<Vec<(&'static str, String)>, Error> {
+        let required = |name: &'static str| {
+            params
+                .get(name)
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string())
+                .ok_or_else(|| {
+                    Error::Tool(crate::error::ToolError::InvalidParameters {
+                        name: tool_name.to_string(),
+                        reason: format!("missing '{name}' parameter"),
+                    })
+                })
+        };
+
+        match tool_name {
+            "read_file" | "write_file" | "apply_patch" => Ok(vec![("path", required("path")?)]),
+            "list_dir" => Ok(vec![(
+                "path",
+                params
+                    .get("path")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+            )]),
+            "move_file" => Ok(vec![
+                ("source_path", required("source_path")?),
+                ("destination_path", required("destination_path")?),
+            ]),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    async fn filesystem_paths_are_mounted(&self, user_id: &str, paths: &[PathBuf]) -> bool {
+        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
+            return false;
+        };
+        let Ok(mounts) = workspace.list_mounts().await else {
+            return false;
+        };
+        paths.iter().all(|path| {
+            mounts
+                .iter()
+                .any(|mount| path.starts_with(Path::new(&mount.mount.source_root)))
+        })
+    }
+
+    async fn filesystem_access_is_preapproved(
+        &self,
+        session: &Arc<tokio::sync::Mutex<crate::agent::Session>>,
+        user_id: &str,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> bool {
+        if !self.is_path_scoped_filesystem_tool(tool_name) {
+            return false;
+        }
+        let Ok(paths) = self.resolve_filesystem_access_paths(tool_name, params) else {
+            return false;
+        };
+        if paths.is_empty() {
+            return false;
+        }
+        {
+            let sess = session.lock().await;
+            if paths.iter().all(|path| sess.is_path_auto_approved(path)) {
+                return true;
+            }
+        }
+        self.filesystem_paths_are_mounted(user_id, &paths).await
+    }
+
+    pub(super) async fn mounted_workspace_redirect_for_tool(
+        &self,
+        user_id: &str,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> Option<String> {
+        if !self.is_path_scoped_filesystem_tool(tool_name) {
+            return None;
+        }
+
+        let path_args = self
+            .filesystem_access_path_arguments(tool_name, params)
+            .ok()?;
+        if path_args.is_empty() {
+            return None;
+        }
+
+        let paths = self
+            .resolve_filesystem_access_paths(tool_name, params)
+            .ok()?;
+        if paths.is_empty() {
+            return None;
+        }
+
+        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
+            return None;
+        };
+        let mounts = workspace.list_mounts().await.ok()?;
+
+        let mut redirects = Vec::new();
+        for ((param_name, raw_path), normalized_path) in
+            path_args.into_iter().zip(paths.into_iter())
+        {
+            if raw_path.starts_with("workspace://") {
+                continue;
+            }
+
+            let mut selected: Option<(usize, String)> = None;
+            for mount in &mounts {
+                let root = Path::new(&mount.mount.source_root);
+                if !normalized_path.starts_with(root) {
+                    continue;
+                }
+
+                let rel = normalized_path
+                    .strip_prefix(root)
+                    .ok()
+                    .map(|value| {
+                        value
+                            .iter()
+                            .map(|segment| segment.to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                            .join("/")
+                    })
+                    .unwrap_or_default();
+                let uri = crate::workspace::WorkspaceUri::mount_uri(
+                    mount.mount.id,
+                    if rel.is_empty() {
+                        None
+                    } else {
+                        Some(rel.as_str())
+                    },
+                );
+                let depth = root.components().count();
+
+                match &selected {
+                    Some((best_depth, _)) if *best_depth >= depth => {}
+                    _ => selected = Some((depth, uri)),
+                }
+            }
+
+            if let Some((_, uri)) = selected {
+                redirects.push((param_name, uri));
+            }
+        }
+
+        if redirects.is_empty() {
+            return None;
+        }
+
+        let mut message = format!(
+            "Tool '{tool_name}' is targeting a raw filesystem path inside a mounted workspace directory. \
+             Mounted workspace content must be accessed via workspace URIs, not direct disk paths."
+        );
+        let guidance = match tool_name {
+            "read_file" => "Use memory_read with:",
+            "list_dir" => "Use memory_tree with:",
+            _ => "Use workspace tools such as memory_read or memory_write with:",
+        };
+        message.push('\n');
+        message.push_str(guidance);
+        for (param_name, uri) in redirects {
+            message.push_str(&format!("\n- {param_name}: {uri}"));
+        }
+        message.push_str("\nDo not access mounted workspace files through raw local paths.");
+        Some(message)
+    }
+
+    pub(super) async fn approval_decision_for_tool(
+        &self,
+        session: &Arc<tokio::sync::Mutex<crate::agent::Session>>,
+        user_id: &str,
+        tool_name: &str,
+        tool: &Arc<dyn Tool>,
+        params: &serde_json::Value,
+        task_mode: TaskMode,
+    ) -> (bool, bool) {
+        if task_mode == TaskMode::Yolo || self.config.auto_approve_tools {
+            return (false, true);
+        }
+
+        let requirement = tool.requires_approval(params);
+        let allow_always = !matches!(requirement, ApprovalRequirement::Always);
+        let needs_approval = match requirement {
+            ApprovalRequirement::Never => false,
+            ApprovalRequirement::UnlessAutoApproved => {
+                if self
+                    .filesystem_access_is_preapproved(session, user_id, tool_name, params)
+                    .await
+                {
+                    false
+                } else {
+                    let sess = session.lock().await;
+                    !sess.is_tool_auto_approved(tool_name)
+                }
+            }
+            ApprovalRequirement::Always => true,
+        };
+
+        (needs_approval, allow_always)
+    }
+
+    pub(super) async fn promote_filesystem_approval(
+        &self,
+        session: &Arc<tokio::sync::Mutex<crate::agent::Session>>,
+        user_id: &str,
+        tool_name: &str,
+        params: &serde_json::Value,
+    ) -> Result<(), Error> {
+        let paths = self
+            .resolve_filesystem_access_paths(tool_name, params)
+            .map_err(Error::from)?;
+        let roots = self.mount_scope_roots(tool_name, &paths);
+
+        {
+            let mut sess = session.lock().await;
+            for root in &roots {
+                sess.auto_approve_path_prefix(root.display().to_string());
+            }
+        }
+
+        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
+            return Ok(());
+        };
+        let mut existing_mounts = workspace.list_mounts().await?;
+        for root in roots {
+            if existing_mounts
+                .iter()
+                .any(|mount| root.starts_with(Path::new(&mount.mount.source_root)))
+            {
+                continue;
+            }
+            if !root.exists() || !root.is_dir() {
+                tracing::warn!(path = %root.display(), "Skipping mount promotion for non-directory path");
+                continue;
+            }
+            let display_name = root
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .unwrap_or("mount")
+                .to_string();
+            let summary = workspace
+                .create_mount(display_name, root.display().to_string(), true)
+                .await?;
+            existing_mounts.push(summary);
+        }
+        Ok(())
+    }
+
     pub(super) fn task_runtime(&self) -> Option<&Arc<TaskRuntime>> {
         self.deps.task_runtime.as_ref()
     }
@@ -328,7 +671,9 @@ impl Agent {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        self.channels.send_status(channel_name, status, metadata).await
+        self.channels
+            .send_status(channel_name, status, metadata)
+            .await
     }
 
     pub(super) async fn broadcast_channel(
@@ -337,7 +682,9 @@ impl Agent {
         user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
-        self.channels.broadcast(channel_name, user_id, response).await
+        self.channels
+            .broadcast(channel_name, user_id, response)
+            .await
     }
 
     pub(super) async fn shutdown_channels(&self) -> Result<(), ChannelError> {
@@ -843,9 +1190,14 @@ impl Agent {
                                     },
                                 );
                             } else if !targeted_ok
-                                && effective_user.as_deref().or(notify_user.as_deref()).is_none()
+                                && effective_user
+                                    .as_deref()
+                                    .or(notify_user.as_deref())
+                                    .is_none()
                             {
-                                tracing::warn!("Dropping heartbeat notification with no user target");
+                                tracing::warn!(
+                                    "Dropping heartbeat notification with no user target"
+                                );
                             }
                         }
                     });
@@ -957,7 +1309,10 @@ impl Agent {
                                         &user,
                                         ironclaw_common::AppEvent::Response {
                                             content: response.content.clone(),
-                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                            thread_id: response
+                                                .thread_id
+                                                .clone()
+                                                .unwrap_or_default(),
                                         },
                                     );
                                 }
@@ -1742,8 +2097,102 @@ mod tests {
         chat_tool_execution_metadata, is_single_message_repl, resolve_routine_notification_user,
         should_fallback_routine_notification, truncate_for_preview,
     };
+    #[cfg(feature = "libsql")]
+    use crate::agent::{Agent, AgentDeps};
     use crate::channels::IncomingMessage;
+    #[cfg(feature = "libsql")]
+    use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::error::ChannelError;
+    #[cfg(feature = "libsql")]
+    use crate::hooks::HookRegistry;
+    #[cfg(feature = "libsql")]
+    use crate::safety::SafetyLayer;
+    #[cfg(feature = "libsql")]
+    use crate::testing::{StubLlm, test_db};
+    #[cfg(feature = "libsql")]
+    use crate::tools::ToolRegistry;
+    #[cfg(feature = "libsql")]
+    use crate::workspace::WorkspaceUri;
+    #[cfg(feature = "libsql")]
+    use std::sync::Arc;
+    #[cfg(feature = "libsql")]
+    use std::time::Duration;
+    #[cfg(feature = "libsql")]
+    use tokio::sync::mpsc;
+    #[cfg(feature = "libsql")]
+    use tokio_stream::wrappers::ReceiverStream;
+
+    #[cfg(feature = "libsql")]
+    fn make_empty_message_stream() -> crate::channels::MessageStream {
+        let (_tx, rx) = mpsc::channel(1);
+        Box::pin(ReceiverStream::new(rx))
+    }
+
+    #[cfg(feature = "libsql")]
+    fn make_test_agent_with_db(db: Arc<dyn crate::db::Database>) -> Agent {
+        let deps = AgentDeps {
+            owner_id: "default".to_string(),
+            store: Some(db),
+            llm: Arc::new(StubLlm::default()),
+            cheap_llm: None,
+            safety: Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+            tools: Arc::new(ToolRegistry::new()),
+            workspace: None,
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: SkillsConfig::default(),
+            hooks: Arc::new(HookRegistry::new()),
+            cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
+                crate::agent::cost_guard::CostGuardConfig::default(),
+            )),
+            sse_tx: None,
+            http_interceptor: None,
+            transcription: None,
+            document_extraction: None,
+            claude_code_config: crate::config::ClaudeCodeConfig::default(),
+            builder: None,
+            llm_backend: "nearai".to_string(),
+            tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            task_runtime: None,
+        };
+
+        Agent::new_with_message_stream(
+            AgentConfig {
+                name: "test-agent".to_string(),
+                max_parallel_jobs: 1,
+                job_timeout: Duration::from_secs(60),
+                stuck_threshold: Duration::from_secs(60),
+                repair_check_interval: Duration::from_secs(30),
+                max_repair_attempts: 1,
+                use_planning: false,
+                session_idle_timeout: Duration::from_secs(300),
+                allow_local_tools: false,
+                max_cost_per_day_cents: None,
+                max_actions_per_hour: None,
+                max_cost_per_user_per_day_cents: None,
+                max_tool_iterations: 8,
+                auto_approve_tools: false,
+                default_timezone: "UTC".to_string(),
+                max_jobs_per_user: None,
+                max_tokens_per_job: 0,
+                multi_tenant: false,
+                max_llm_concurrent_per_user: None,
+                max_jobs_concurrent_per_user: None,
+            },
+            deps,
+            make_empty_message_stream(),
+            None,
+            None,
+            None,
+            None,
+            Some(Arc::new(crate::context::ContextManager::new(1))),
+            None,
+        )
+    }
 
     #[test]
     fn test_truncate_short_input() {
@@ -1913,5 +2362,49 @@ mod tests {
         assert!(is_single_message_repl(&repl)); // safety: test-only assertion
         assert!(!is_single_message_repl(&gateway)); // safety: test-only assertion
         assert!(!is_single_message_repl(&plain_repl)); // safety: test-only assertion
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn mounted_workspace_redirect_rejects_raw_disk_paths() {
+        let (db, _db_dir) = test_db().await;
+        let agent = make_test_agent_with_db(db);
+        let user_id = "mount-redirect-user";
+
+        let mount_dir = tempfile::tempdir().expect("mount tempdir");
+        let nested_dir = mount_dir.path().join("src");
+        std::fs::create_dir_all(&nested_dir).expect("create nested dir");
+        let raw_file = nested_dir.join("lib.rs");
+        std::fs::write(&raw_file, "pub fn mounted() {}\n").expect("write mounted file");
+
+        let tenant = agent.tenant_ctx(user_id).await;
+        let workspace = tenant.workspace().cloned().expect("workspace");
+        let mount = workspace
+            .create_mount("project", mount_dir.path().display().to_string(), true)
+            .await
+            .expect("create mount");
+
+        let redirect = agent
+            .mounted_workspace_redirect_for_tool(
+                user_id,
+                "read_file",
+                &serde_json::json!({ "path": raw_file.display().to_string() }),
+            )
+            .await
+            .expect("redirect message");
+
+        let expected_uri = WorkspaceUri::mount_uri(mount.mount.id, Some("src/lib.rs"));
+        assert!(
+            redirect.contains(&expected_uri),
+            "redirect should include workspace uri, got: {redirect}"
+        );
+        assert!(
+            redirect.contains("memory_read"),
+            "redirect should point the agent to memory_read, got: {redirect}"
+        );
+        assert!(
+            !redirect.contains(&raw_file.display().to_string()),
+            "redirect should not echo the raw disk path back to the agent, got: {redirect}"
+        );
     }
 }

@@ -831,6 +831,81 @@ CREATE INDEX IF NOT EXISTS idx_task_timeline_events_task
     ON task_timeline_events(user_id, task_id, id ASC);
 "#,
     ),
+    (
+        17,
+        "workspace_mount_branches",
+        r#"
+CREATE TABLE IF NOT EXISTS workspace_mounts (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    source_root TEXT NOT NULL,
+    bypass_read INTEGER NOT NULL DEFAULT 1,
+    bypass_write INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mounts_user
+    ON workspace_mounts(user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_snapshots (
+    id TEXT PRIMARY KEY,
+    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    content BLOB NOT NULL,
+    is_binary INTEGER NOT NULL DEFAULT 0,
+    content_hash TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_snapshots_mount_path
+    ON workspace_mount_snapshots(mount_id, relative_path, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_files (
+    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    is_binary INTEGER NOT NULL DEFAULT 0,
+    base_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    working_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    remote_hash TEXT,
+    base_hash TEXT,
+    working_hash TEXT,
+    conflict_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (mount_id, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_files_mount_status
+    ON workspace_mount_files(mount_id, status, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_checkpoints (
+    id TEXT PRIMARY KEY,
+    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    parent_checkpoint_id TEXT REFERENCES workspace_mount_checkpoints(id) ON DELETE SET NULL,
+    label TEXT,
+    summary TEXT,
+    created_by TEXT NOT NULL,
+    is_auto INTEGER NOT NULL DEFAULT 0,
+    base_generation INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_checkpoints_mount
+    ON workspace_mount_checkpoints(mount_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_checkpoint_files (
+    checkpoint_id TEXT NOT NULL REFERENCES workspace_mount_checkpoints(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    PRIMARY KEY (checkpoint_id, relative_path)
+);
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

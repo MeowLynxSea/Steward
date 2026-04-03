@@ -400,7 +400,6 @@ impl MessageTransport for RecordingBroadcastChannel {
             .push((user_id.to_string(), response));
         Ok(())
     }
-
 }
 
 /// Assembled test components.
@@ -1040,8 +1039,7 @@ mod tests {
     async fn test_harness_with_channel() {
         let harness = TestHarnessBuilder::new().with_stub_channel().build().await;
 
-        let (sender, channel) =
-            harness.channel.as_ref().expect("channel should be present");
+        let (sender, channel) = harness.channel.as_ref().expect("channel should be present");
 
         // Inject a message via sender
         sender

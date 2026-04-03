@@ -136,7 +136,9 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
             .as_ref()
             .map(|recording| recording.http_interceptor()),
         transcription: config.transcription.create_provider().map(|provider| {
-            Arc::new(crate::llm::transcription::TranscriptionMiddleware::new(provider))
+            Arc::new(crate::llm::transcription::TranscriptionMiddleware::new(
+                provider,
+            ))
         }),
         document_extraction: Some(Arc::new(
             crate::document_extraction::DocumentExtractionMiddleware::new(),

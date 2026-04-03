@@ -116,10 +116,7 @@ pub fn spawn_job_monitor_with_context(
                             let mut msg = IncomingMessage::new(
                                 route.channel.clone(),
                                 route.user_id.clone(),
-                                format!(
-                                    "[Job {}] Job finished (status: {})",
-                                    short_id, status
-                                ),
+                                format!("[Job {}] Job finished (status: {})", short_id, status),
                             )
                             .into_internal();
                             if let Some(ref thread_id) = route.thread_id {
