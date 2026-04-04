@@ -21,7 +21,6 @@ fn libsql_config(path: &std::path::Path) -> ironclaw::config::DatabaseConfig {
         backend: ironclaw::config::DatabaseBackend::LibSql,
         url: secrecy::SecretString::from(String::new()),
         pool_size: 1,
-        ssl_mode: ironclaw::config::SslMode::Prefer,
         libsql_path: Some(path.to_path_buf()),
         libsql_url: None,
         libsql_auth_token: None,
@@ -225,9 +224,6 @@ async fn extension_manager_with_process_manager_constructs() {
 #[test]
 fn database_handles_default_is_empty() {
     let handles = DatabaseHandles::default();
-
-    #[cfg(feature = "postgres")]
-    assert!(handles.pg_pool.is_none());
 
     #[cfg(feature = "libsql")]
     assert!(handles.libsql_db.is_none());

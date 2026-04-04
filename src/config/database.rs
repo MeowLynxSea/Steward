@@ -12,15 +12,12 @@ pub enum DatabaseBackend {
     /// libSQL/Turso embedded database.
     #[default]
     LibSql,
-    /// Legacy PostgreSQL backend retained only for migration compatibility.
-    Postgres,
 }
 
 impl std::fmt::Display for DatabaseBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::LibSql => write!(f, "libsql"),
-            Self::Postgres => write!(f, "postgres"),
         }
     }
 }
@@ -30,52 +27,9 @@ impl std::str::FromStr for DatabaseBackend {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "postgres" | "postgresql" | "pg" => Ok(Self::Postgres),
             "libsql" | "turso" | "sqlite" => Ok(Self::LibSql),
             _ => Err(format!(
-                "invalid database backend '{}', expected 'postgres' or 'libsql'",
-                s
-            )),
-        }
-    }
-}
-
-/// PostgreSQL SSL/TLS mode, matching libpq semantics for the common cases.
-///
-/// Default is `Prefer`: attempt TLS, fall back to plaintext.  This is the
-/// safest non-breaking default — local Postgres without TLS keeps working
-/// while managed providers (Neon, Supabase, RDS) automatically get TLS.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SslMode {
-    /// Never use TLS (equivalent to libpq `sslmode=disable`).
-    Disable,
-    /// Try TLS first; fall back to plaintext on failure (default).
-    #[default]
-    Prefer,
-    /// Require TLS; fail if the server does not support it.
-    Require,
-}
-
-impl std::fmt::Display for SslMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Disable => write!(f, "disable"),
-            Self::Prefer => write!(f, "prefer"),
-            Self::Require => write!(f, "require"),
-        }
-    }
-}
-
-impl std::str::FromStr for SslMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "disable" => Ok(Self::Disable),
-            "prefer" => Ok(Self::Prefer),
-            "require" => Ok(Self::Require),
-            _ => Err(format!(
-                "invalid DATABASE_SSLMODE '{}', expected 'disable', 'prefer', or 'require'",
+                "invalid database backend '{}', expected 'libsql'",
                 s
             )),
         }
@@ -85,14 +39,12 @@ impl std::str::FromStr for SslMode {
 /// Database configuration.
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
-    /// Which backend to use (default: Postgres).
+    /// Which backend to use (default: LibSql).
     pub backend: DatabaseBackend,
 
-    // -- PostgreSQL fields --
+    // -- Legacy fields (kept for compatibility, not used for libsql) --
     pub url: SecretString,
     pub pool_size: usize,
-    /// TLS mode for PostgreSQL connections (default: Prefer).
-    pub ssl_mode: SslMode,
 
     // -- libSQL fields --
     /// Path to local libSQL database file (default: ~/.ironcowork/ironcowork.db).
@@ -115,37 +67,17 @@ impl DatabaseConfig {
         };
 
         let url = optional_env("DATABASE_URL")?
-            .or_else(|| {
-                if backend == DatabaseBackend::LibSql {
-                    Some("unused://libsql".to_string())
-                } else {
-                    None
-                }
-            })
+            .or_else(|| Some("unused://libsql".to_string()))
             .ok_or_else(|| ConfigError::MissingRequired {
                 key: "DATABASE_URL".to_string(),
-                hint: "PostgreSQL bootstrap is no longer supported; use libSQL settings instead"
-                    .to_string(),
+                hint: "DATABASE_URL is required for bootstrap compatibility".to_string(),
             })?;
 
         let pool_size = parse_optional_env("DATABASE_POOL_SIZE", 10)?;
 
-        let ssl_mode: SslMode = if let Some(s) = optional_env("DATABASE_SSLMODE")? {
-            s.parse().map_err(|e| ConfigError::InvalidValue {
-                key: "DATABASE_SSLMODE".to_string(),
-                message: e,
-            })?
-        } else {
-            SslMode::default()
-        };
-
-        let libsql_path = optional_env("LIBSQL_PATH")?.map(PathBuf::from).or_else(|| {
-            if backend == DatabaseBackend::LibSql {
-                Some(default_libsql_path())
-            } else {
-                None
-            }
-        });
+        let libsql_path = optional_env("LIBSQL_PATH")?
+            .map(PathBuf::from)
+            .or_else(|| Some(default_libsql_path()));
 
         let libsql_url = optional_env("LIBSQL_URL")?;
         let libsql_auth_token = optional_env("LIBSQL_AUTH_TOKEN")?.map(SecretString::from);
@@ -161,24 +93,10 @@ impl DatabaseConfig {
             backend,
             url: SecretString::from(url),
             pool_size,
-            ssl_mode,
             libsql_path,
             libsql_url,
             libsql_auth_token,
         })
-    }
-
-    /// Create a config from a raw PostgreSQL URL (legacy compatibility only).
-    pub fn from_postgres_url(url: &str, pool_size: usize) -> Self {
-        Self {
-            backend: DatabaseBackend::Postgres,
-            url: SecretString::from(url.to_string()),
-            pool_size,
-            ssl_mode: SslMode::from_env(),
-            libsql_path: None,
-            libsql_url: None,
-            libsql_auth_token: None,
-        }
     }
 
     /// Create a config for a libSQL database (for wizard/testing).
@@ -195,7 +113,6 @@ impl DatabaseConfig {
             backend: DatabaseBackend::LibSql,
             url: SecretString::from("unused://libsql".to_string()),
             pool_size: 1,
-            ssl_mode: SslMode::default(),
             libsql_path: Some(PathBuf::from(path)),
             libsql_url: turso_url.map(String::from),
             libsql_auth_token: turso_token.map(|t| SecretString::from(t.to_string())),
@@ -205,20 +122,6 @@ impl DatabaseConfig {
     /// Get the database URL (exposes the secret).
     pub fn url(&self) -> &str {
         self.url.expose_secret()
-    }
-}
-
-impl SslMode {
-    /// Read from `DATABASE_SSLMODE` env var, defaulting to `Prefer`.
-    ///
-    /// Silently falls back to `Prefer` on missing or unparseable values.
-    /// Used by lightweight CLI tools (status, doctor) that don't run the
-    /// full config pipeline.
-    pub fn from_env() -> Self {
-        std::env::var("DATABASE_SSLMODE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or_default()
     }
 }
 
@@ -232,28 +135,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssl_mode_default_is_prefer() {
-        assert_eq!(SslMode::default(), SslMode::Prefer);
+    fn database_backend_default_is_libsql() {
+        assert_eq!(DatabaseBackend::default(), DatabaseBackend::LibSql);
     }
 
     #[test]
-    fn ssl_mode_parse_roundtrip() {
-        for mode in [SslMode::Disable, SslMode::Prefer, SslMode::Require] {
-            let s = mode.to_string();
-            let parsed: SslMode = s.parse().expect("should parse");
-            assert_eq!(parsed, mode);
-        }
+    fn database_backend_parse_libsql() {
+        assert_eq!(
+            "libsql".parse::<DatabaseBackend>().unwrap(),
+            DatabaseBackend::LibSql
+        );
+        assert_eq!(
+            "turso".parse::<DatabaseBackend>().unwrap(),
+            DatabaseBackend::LibSql
+        );
+        assert_eq!(
+            "sqlite".parse::<DatabaseBackend>().unwrap(),
+            DatabaseBackend::LibSql
+        );
     }
 
     #[test]
-    fn ssl_mode_parse_case_insensitive() {
-        assert_eq!("DISABLE".parse::<SslMode>().unwrap(), SslMode::Disable);
-        assert_eq!("Prefer".parse::<SslMode>().unwrap(), SslMode::Prefer);
-        assert_eq!("REQUIRE".parse::<SslMode>().unwrap(), SslMode::Require);
-    }
-
-    #[test]
-    fn ssl_mode_parse_invalid() {
-        assert!("invalid".parse::<SslMode>().is_err());
+    fn database_backend_parse_invalid() {
+        assert!("postgres".parse::<DatabaseBackend>().is_err());
+        assert!("invalid".parse::<DatabaseBackend>().is_err());
     }
 }

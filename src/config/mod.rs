@@ -44,7 +44,7 @@ pub use self::channels::{
     SignalConfig,
 };
 pub use self::claude_code::ClaudeCodeConfig;
-pub use self::database::{DatabaseBackend, DatabaseConfig, SslMode, default_libsql_path};
+pub use self::database::{DatabaseBackend, DatabaseConfig, default_libsql_path};
 pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
 pub use self::hygiene::HygieneConfig;
@@ -132,7 +132,6 @@ impl Config {
                 backend: DatabaseBackend::LibSql,
                 url: secrecy::SecretString::from("unused://test".to_string()),
                 pool_size: 1,
-                ssl_mode: SslMode::Disable,
                 libsql_path: Some(libsql_path),
                 libsql_url: None,
                 libsql_auth_token: None,

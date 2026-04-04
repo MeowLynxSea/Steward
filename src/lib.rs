@@ -41,7 +41,6 @@
 //! - **Continuous learning** - Improve estimates from historical data
 
 pub mod agent;
-pub mod api;
 pub mod app;
 pub mod boot_screen;
 pub mod bootstrap;
@@ -59,6 +58,7 @@ pub mod extensions;
 pub mod file_archive_workflow;
 pub mod history;
 pub mod hooks;
+pub mod ipc;
 #[cfg(feature = "import")]
 pub mod import;
 pub mod llm;

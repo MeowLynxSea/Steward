@@ -324,6 +324,60 @@ impl SessionManager {
     /// Remove sessions that have been idle for longer than the given duration.
     ///
     /// Returns the number of sessions pruned.
+    /// List all sessions with their user IDs.
+    ///
+    /// Returns a vector of (user_id, session) pairs.
+    pub async fn list_sessions(&self) -> Vec<(String, Arc<Mutex<Session>>)> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .iter()
+            .map(|(user_id, session)| (user_id.clone(), Arc::clone(session)))
+            .collect()
+    }
+
+    /// Get a session by its UUID.
+    ///
+    /// Returns the session if found, None otherwise.
+    pub async fn get_session_by_id(&self, session_id: Uuid) -> Option<Arc<Mutex<Session>>> {
+        let sessions = self.sessions.read().await;
+        sessions
+            .values()
+            .find(|s| s.try_lock().map(|lock| lock.id == session_id).unwrap_or(false))
+            .cloned()
+    }
+
+    /// Delete a session by user ID.
+    ///
+    /// Returns true if a session was deleted, false if no session existed.
+    pub async fn delete_session(&self, user_id: &str) -> bool {
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(user_id).is_some()
+    }
+
+    /// Delete a session by its UUID.
+    ///
+    /// Returns true if a session was deleted, false if no session existed.
+    pub async fn delete_session_by_id(&self, session_id: Uuid) -> bool {
+        let mut sessions = self.sessions.write().await;
+        // Find the session with the given UUID
+        let user_id_to_remove = {
+            let mut found = None;
+            for (uid, session) in sessions.iter() {
+                if session.try_lock().map(|s| s.id == session_id).unwrap_or(false) {
+                    found = Some(uid.clone());
+                    break;
+                }
+            }
+            found
+        };
+        if let Some(uid) = user_id_to_remove {
+            sessions.remove(&uid);
+            true
+        } else {
+            false
+        }
+    }
+
     pub async fn prune_stale_sessions(&self, max_idle: std::time::Duration) -> usize {
         let cutoff = chrono::Utc::now() - chrono::TimeDelta::seconds(max_idle.as_secs() as i64);
 

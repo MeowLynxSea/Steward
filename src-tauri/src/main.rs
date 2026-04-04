@@ -3,11 +3,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use ironclaw::api::DEFAULT_API_PORT;
+mod commands;
+
+use ironclaw::desktop_runtime::TauriEventEmitterHandle;
+use crate::commands::{
+    approve_task, create_session, create_workspace_checkpoint, create_workspace_mount,
+    delete_session, delete_task, get_session, get_settings, get_task, get_workbench_capabilities,
+    get_workspace_index_job, get_workspace_mount, get_workspace_mount_diff, get_workspace_tree,
+    index_workspace, keep_workspace_mount, list_sessions, list_tasks, list_workspace_mounts,
+    patch_settings, patch_task_mode, reject_task, resolve_workspace_mount_conflict,
+    revert_workspace_mount, search_workspace, send_session_message,
+};
+use ironclaw::ipc::AppState;
 use ironclaw::llm::{OpenAiCodexConfig, OpenAiCodexDeviceCode, OpenAiCodexSessionManager};
+use ironclaw::runtime_events::RuntimeEventEmitter;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::RwLock;
 
@@ -16,8 +28,33 @@ use objc2_app_kit::{NSColor, NSWindow};
 #[cfg(target_os = "macos")]
 use objc2_quartz_core::CALayer;
 
-struct ApiBase(String);
 struct CodexLoginJobs(Arc<RwLock<HashMap<String, CodexLoginJob>>>);
+
+/// Tauri event emitter that implements RuntimeEventEmitter.
+/// Emits events to the frontend via Tauri's event system.
+struct TauriEventEmitter {
+    app: tauri::AppHandle,
+}
+
+impl TauriEventEmitter {
+    fn new(app: tauri::AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl RuntimeEventEmitter for TauriEventEmitter {
+    fn emit_for_user(&self, user_id: &str, event: ironclaw_common::AppEvent) {
+        // Map AppEvent type to Tauri event name
+        let tauri_event_name = format!("session:{}", event.event_type());
+        let payload = serde_json::json!({
+            "user_id": user_id,
+            "event": event,
+        });
+        if let Err(e) = self.app.emit(&tauri_event_name, payload) {
+            tracing::warn!("Failed to emit Tauri event {}: {}", tauri_event_name, e);
+        }
+    }
+}
 
 #[derive(Clone, serde::Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -76,26 +113,6 @@ async fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<()
         .body(body)
         .show()
         .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-async fn index_dropped_path(
-    path: String,
-    api_base: tauri::State<'_, ApiBase>,
-) -> Result<(), String> {
-    let payload = serde_json::json!({ "path": path });
-    reqwest::Client::new()
-        .post(format!(
-            "{}/api/v0/workspace/index",
-            api_base.0.trim_end_matches('/')
-        ))
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|error| error.to_string())?
-        .error_for_status()
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -239,19 +256,47 @@ async fn pick_mount_directory() -> Result<Option<String>, String> {
 
 fn main() {
     tauri::Builder::default()
-        .manage(ApiBase(format!("http://127.0.0.1:{DEFAULT_API_PORT}")))
         .manage(CodexLoginJobs(Arc::new(RwLock::new(HashMap::new()))))
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             notify,
-            index_dropped_path,
             start_openai_codex_login,
             get_openai_codex_login_status,
-            pick_mount_directory
+            pick_mount_directory,
+            get_settings,
+            patch_settings,
+            list_sessions,
+            create_session,
+            get_session,
+            delete_session,
+            send_session_message,
+            list_tasks,
+            get_task,
+            delete_task,
+            approve_task,
+            reject_task,
+            patch_task_mode,
+            index_workspace,
+            get_workspace_index_job,
+            get_workspace_tree,
+            search_workspace,
+            list_workspace_mounts,
+            create_workspace_mount,
+            get_workspace_mount,
+            get_workspace_mount_diff,
+            create_workspace_checkpoint,
+            keep_workspace_mount,
+            revert_workspace_mount,
+            resolve_workspace_mount_conflict,
+            get_workbench_capabilities
         ])
         .setup(|app| {
-            tauri::async_runtime::block_on(async {
-                ironclaw::desktop_runtime::start_embedded_runtime(DEFAULT_API_PORT)
+            let tauri_emitter: Option<TauriEventEmitterHandle> = {
+                let emitter = TauriEventEmitter::new(app.handle().clone());
+                Some(Arc::new(emitter) as TauriEventEmitterHandle)
+            };
+            let app_state: AppState = tauri::async_runtime::block_on(async {
+                ironclaw::desktop_runtime::start_embedded_runtime(tauri_emitter)
                     .await
                     .map_err(|error| {
                         std::io::Error::other(format!(
@@ -259,12 +304,7 @@ fn main() {
                         ))
                     })
             })?;
-
-            if let Some(window) = app.get_webview_window("main") {
-                let api_base = format!("http://127.0.0.1:{DEFAULT_API_PORT}/api/v0");
-                let escaped = serde_json::to_string(&api_base)?;
-                window.eval(&format!("window.__IRONCOWORK_API_BASE__ = {escaped};"))?;
-            }
+            app.manage(app_state);
 
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

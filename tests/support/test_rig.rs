@@ -775,6 +775,7 @@ impl TestRigBuilder {
             hooks: components.hooks,
             cost_guard: components.cost_guard,
             sse_tx: None,
+            emitter: None,
             http_interceptor,
             transcription: None,
             document_extraction: None,

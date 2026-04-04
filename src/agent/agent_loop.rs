@@ -30,6 +30,7 @@ use crate::error::{ChannelError, Error};
 use crate::extensions::ExtensionManager;
 use crate::hooks::HookRegistry;
 use crate::llm::LlmProvider;
+use crate::runtime_events::RuntimeEventEmitter;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
 use crate::task_runtime::{TaskMode, TaskRuntime};
@@ -172,6 +173,8 @@ pub struct AgentDeps {
     pub cost_guard: Arc<crate::agent::cost_guard::CostGuard>,
     /// SSE manager for live job event streaming to the web gateway.
     pub sse_tx: Option<Arc<crate::runtime_events::SseManager>>,
+    /// Optional Tauri event emitter for native desktop events.
+    pub emitter: Option<Arc<dyn RuntimeEventEmitter>>,
     /// HTTP interceptor for trace recording/replay.
     pub http_interceptor: Option<Arc<dyn crate::llm::recording::HttpInterceptor>>,
     /// Audio transcription middleware for voice messages.
@@ -194,19 +197,20 @@ pub struct AgentDeps {
 #[derive(Clone, Default)]
 pub(super) struct AgentChannels {
     transport: Option<Arc<dyn MessageTransport>>,
-    sse: Option<Arc<crate::runtime_events::SseManager>>,
+    /// Optional Tauri event emitter for native desktop events.
+    emitter: Option<Arc<dyn RuntimeEventEmitter>>,
     owner_id: String,
 }
 
 impl AgentChannels {
     pub(super) fn new(
         transport: Option<Arc<dyn MessageTransport>>,
-        sse: Option<Arc<crate::runtime_events::SseManager>>,
+        emitter: Option<Arc<dyn RuntimeEventEmitter>>,
         owner_id: String,
     ) -> Self {
         Self {
             transport,
-            sse,
+            emitter,
             owner_id,
         }
     }
@@ -229,18 +233,18 @@ impl AgentChannels {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        // Mirror status updates to SSE so the web UI receives them in real-time.
-        if let Some(sse) = self.sse.as_ref() {
-            let user_id = metadata
-                .get("notify_user")
-                .and_then(|v| v.as_str())
-                .unwrap_or(&self.owner_id);
-            let thread_id = metadata
-                .get("notify_thread_id")
-                .and_then(|v| v.as_str())
-                .map(String::from);
-            if let Some(event) = status_update_to_app_event(&status, thread_id) {
-                sse.broadcast_for_user(user_id, event);
+        // Mirror status updates to SSE/Tauri so the web UI receives them in real-time.
+        let user_id = metadata
+            .get("notify_user")
+            .and_then(|v| v.as_str())
+            .unwrap_or(&self.owner_id);
+        let thread_id = metadata
+            .get("notify_thread_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if let Some(event) = status_update_to_app_event(&status, thread_id) {
+            if let Some(emitter) = self.emitter.as_ref() {
+                emitter.emit_for_user(user_id, event);
             }
         }
         if let Some(transport) = self.transport.as_ref() {
@@ -650,8 +654,8 @@ impl Agent {
         self.deps.task_runtime.as_ref()
     }
 
-    pub(super) fn sse(&self) -> Option<&Arc<crate::runtime_events::SseManager>> {
-        self.deps.sse_tx.as_ref()
+    pub(super) fn emitter(&self) -> Option<&Arc<dyn RuntimeEventEmitter>> {
+        self.deps.emitter.as_ref()
     }
 
     pub(super) fn emit_sse_event_for_message(
@@ -659,8 +663,8 @@ impl Agent {
         message: &IncomingMessage,
         event: ironclaw_common::AppEvent,
     ) {
-        if let Some(sse) = self.sse() {
-            sse.broadcast_for_user(&message.user_id, event);
+        if let Some(emitter) = self.emitter() {
+            emitter.emit_for_user(&message.user_id, event);
         }
     }
 
@@ -784,7 +788,7 @@ impl Agent {
         }
         let scheduler = Arc::new(scheduler);
 
-        let sse_for_channels = deps.sse_tx.clone();
+        let emitter_for_channels = deps.emitter.clone();
         let owner_for_channels = deps.owner_id.clone();
 
         Self {
@@ -792,7 +796,7 @@ impl Agent {
             deps,
             channels: AgentChannels::new(
                 transport,
-                sse_for_channels,
+                emitter_for_channels,
                 owner_for_channels,
             ),
             message_stream: tokio::sync::Mutex::new(Some(message_stream)),
@@ -1017,7 +1021,7 @@ impl Agent {
         let repair_interval = self.config.repair_check_interval;
         let repair_channels = self.channels.clone();
         let repair_owner_id = self.owner_id().to_string();
-        let repair_sse = self.deps.sse_tx.clone();
+        let repair_emitter = self.deps.emitter.clone();
         let repair_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(repair_interval).await;
@@ -1065,8 +1069,8 @@ impl Agent {
 
                     if let Some(msg) = notification {
                         let response = OutgoingResponse::text(format!("Self-Repair: {}", msg));
-                        if let Some(ref sse) = repair_sse {
-                            sse.broadcast_for_user(
+                        if let Some(ref emitter) = repair_emitter {
+                            emitter.emit_for_user(
                                 &repair_owner_id,
                                 ironclaw_common::AppEvent::Response {
                                     content: response.content.clone(),
@@ -1090,8 +1094,8 @@ impl Agent {
                                 "Self-Repair: Tool '{}' repaired: {}",
                                 tool.name, message
                             ));
-                            if let Some(ref sse) = repair_sse {
-                                sse.broadcast_for_user(
+                            if let Some(ref emitter) = repair_emitter {
+                                emitter.emit_for_user(
                                     &repair_owner_id,
                                     ironclaw_common::AppEvent::Response {
                                         content: response.content.clone(),
@@ -1164,7 +1168,7 @@ impl Agent {
                     .await;
                     let notify_user = heartbeat_notify_user;
                     let channels = self.channels.clone();
-                    let sse = self.deps.sse_tx.clone();
+                    let emitter = self.deps.emitter.clone();
                     let is_multi_tenant = hb_config.multi_tenant;
                     tokio::spawn(async move {
                         while let Some(response) = notify_rx.recv().await {
@@ -1184,12 +1188,12 @@ impl Agent {
                             };
 
                             // Prefer the configured ingress target. If no transport
-                            // is attached, SSE remains the API-first delivery path.
+                            // is attached, use Tauri emitter for native delivery.
                             let targeted_ok = if let Some(channel) = notify_channel.as_ref() {
                                 let target = effective_user.as_deref().or(notify_target.as_deref());
                                 if let Some(user) = target {
-                                    if let Some(ref sse) = sse {
-                                        sse.broadcast_for_user(
+                                    if let Some(ref emitter) = emitter {
+                                        emitter.emit_for_user(
                                             user,
                                             ironclaw_common::AppEvent::Response {
                                                 content: response.content.clone(),
@@ -1214,15 +1218,16 @@ impl Agent {
                             if !targeted_ok
                                 && let Some(user) =
                                     effective_user.as_deref().or(notify_user.as_deref())
-                                && let Some(ref sse) = sse
                             {
-                                sse.broadcast_for_user(
-                                    user,
-                                    ironclaw_common::AppEvent::Response {
-                                        content: response.content.clone(),
-                                        thread_id: response.thread_id.clone().unwrap_or_default(),
-                                    },
-                                );
+                                if let Some(ref emitter) = emitter {
+                                    emitter.emit_for_user(
+                                        user,
+                                        ironclaw_common::AppEvent::Response {
+                                            content: response.content.clone(),
+                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                        },
+                                    );
+                                }
                             } else if !targeted_ok
                                 && effective_user
                                     .as_deref()
@@ -1306,7 +1311,7 @@ impl Agent {
 
                     // Spawn notification forwarder (mirrors heartbeat pattern)
                     let channels = self.channels.clone();
-                    let sse = self.deps.sse_tx.clone();
+                    let emitter = self.deps.emitter.clone();
                     let extension_manager = self.deps.extension_manager.clone();
                     tokio::spawn(async move {
                         while let Some(response) = notify_rx.recv().await {
@@ -1338,8 +1343,8 @@ impl Agent {
                             // Prefer the configured ingress target. If no transport
                             // is attached, SSE remains the API-first delivery path.
                             let targeted_ok = if let Some(channel) = notify_channel.as_ref() {
-                                if let Some(ref sse) = sse {
-                                    sse.broadcast_for_user(
+                                if let Some(ref emitter) = emitter {
+                                    emitter.emit_for_user(
                                         &user,
                                         ironclaw_common::AppEvent::Response {
                                             content: response.content.clone(),
@@ -1374,15 +1379,16 @@ impl Agent {
 
                             if !targeted_ok
                                 && let Some(user) = fallback_user
-                                && let Some(ref sse) = sse
                             {
-                                sse.broadcast_for_user(
-                                    &user,
-                                    ironclaw_common::AppEvent::Response {
-                                        content: response.content.clone(),
-                                        thread_id: response.thread_id.clone().unwrap_or_default(),
-                                    },
-                                );
+                                if let Some(ref emitter) = emitter {
+                                    emitter.emit_for_user(
+                                        &user,
+                                        ironclaw_common::AppEvent::Response {
+                                            content: response.content.clone(),
+                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                        },
+                                    );
+                                }
                             }
                         }
                     });
@@ -2399,6 +2405,7 @@ mod tests {
                 crate::agent::cost_guard::CostGuardConfig::default(),
             )),
             sse_tx: None,
+            emitter: None,
             http_interceptor: None,
             transcription: None,
             document_extraction: None,

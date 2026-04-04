@@ -1,19 +1,11 @@
 //! Database abstraction layer.
 //!
 //! Provides a backend-agnostic `Database` trait that unifies all persistence
-//! operations. Two implementations exist behind feature flags:
-//!
-//! - `postgres` (default): Uses `deadpool-postgres` + `tokio-postgres`
-//! - `libsql`: Uses libSQL (Turso's SQLite fork) for embedded/edge deployment
+//! operations. The only supported backend is libSQL (Turso's SQLite fork)
+//! for embedded/edge deployment.
 //!
 //! The existing `Store`, `Repository`, `SecretsStore`, and `WasmToolStore`
 //! types become thin wrappers that delegate to `Arc<dyn Database>`.
-
-#[cfg(feature = "postgres")]
-pub mod postgres;
-
-#[cfg(feature = "postgres")]
-pub mod tls;
 
 #[cfg(feature = "libsql")]
 pub mod libsql;
@@ -52,7 +44,7 @@ use crate::workspace::{SearchConfig, SearchResult};
 ///
 /// This is the shared helper for CLI commands and other call sites that need
 /// a simple `Arc<dyn Database>` without retaining backend-specific handles
-/// (e.g., `pg_pool` or `libsql_conn` for the secrets store). The main agent
+/// (e.g., `libsql_conn` for the secrets store). The main agent
 /// startup in `main.rs` uses its own initialization block because it also
 /// captures those backend-specific handles.
 pub async fn connect_from_config(
@@ -68,8 +60,6 @@ pub async fn connect_from_config(
 /// a backend-specific handle rather than the generic `Arc<dyn Database>`.
 #[derive(Default)]
 pub struct DatabaseHandles {
-    #[cfg(feature = "postgres")]
-    pub pg_pool: Option<deadpool_postgres::Pool>,
     #[cfg(feature = "libsql")]
     pub libsql_db: Option<Arc<::libsql::Database>>,
 }
@@ -110,21 +100,9 @@ pub async fn connect_with_handles(
 
             Ok((Arc::new(backend) as Arc<dyn Database>, handles))
         }
-        #[cfg(feature = "postgres")]
-        crate::config::DatabaseBackend::Postgres => {
-            let pg = postgres::PgBackend::new(config)
-                .await
-                .map_err(|e| DatabaseError::Pool(e.to_string()))?;
-            pg.run_migrations().await?;
-            tracing::info!("PostgreSQL database connected and migrations applied");
-
-            handles.pg_pool = Some(pg.pool());
-
-            Ok((Arc::new(pg) as Arc<dyn Database>, handles))
-        }
         #[allow(unreachable_patterns)]
         _ => Err(DatabaseError::Pool(format!(
-            "Database backend '{}' is not available. Rebuild with the appropriate feature flag.",
+            "Database backend '{}' is not available. Only libsql is supported.",
             config.backend
         ))),
     }
@@ -168,21 +146,9 @@ pub async fn create_secrets_store(
                 crypto,
             )))
         }
-        #[cfg(feature = "postgres")]
-        crate::config::DatabaseBackend::Postgres => {
-            let pg = postgres::PgBackend::new(config)
-                .await
-                .map_err(|e| DatabaseError::Pool(e.to_string()))?;
-            pg.run_migrations().await?;
-
-            Ok(Arc::new(crate::secrets::PostgresSecretsStore::new(
-                pg.pool(),
-                crypto,
-            )))
-        }
         #[allow(unreachable_patterns)]
         _ => Err(DatabaseError::Pool(format!(
-            "Database backend '{}' is not available for secrets. Rebuild with the appropriate feature flag.",
+            "Database backend '{}' is not available for secrets. Only libsql is supported.",
             config.backend
         ))),
     }
@@ -191,7 +157,7 @@ pub async fn create_secrets_store(
 // ==================== Wizard / testing helpers ====================
 
 /// Connect to the database WITHOUT running migrations, validating
-/// prerequisites when applicable (PostgreSQL version, pgvector).
+/// prerequisites when applicable.
 ///
 /// Returns both the `Database` trait object and backend-specific handles.
 /// Used by the wizard to test connectivity before committing — call
@@ -228,92 +194,12 @@ pub async fn connect_without_migrations(
 
             Ok((Arc::new(backend) as Arc<dyn Database>, handles))
         }
-        #[cfg(feature = "postgres")]
-        crate::config::DatabaseBackend::Postgres => {
-            let pg = postgres::PgBackend::new(config)
-                .await
-                .map_err(|e| DatabaseError::Pool(e.to_string()))?;
-
-            handles.pg_pool = Some(pg.pool());
-
-            // Validate PostgreSQL prerequisites (version, pgvector)
-            validate_postgres(&pg.pool()).await?;
-
-            Ok((Arc::new(pg) as Arc<dyn Database>, handles))
-        }
         #[allow(unreachable_patterns)]
         _ => Err(DatabaseError::Pool(format!(
-            "Database backend '{}' is not available. Rebuild with the appropriate feature flag.",
+            "Database backend '{}' is not available. Only libsql is supported.",
             config.backend
         ))),
     }
-}
-
-/// Validate PostgreSQL prerequisites (version >= 15, pgvector available).
-///
-/// Returns `Ok(())` if all prerequisites are met, or a `DatabaseError`
-/// with a user-facing message describing the issue.
-#[cfg(feature = "postgres")]
-async fn validate_postgres(pool: &deadpool_postgres::Pool) -> Result<(), DatabaseError> {
-    let client = pool
-        .get()
-        .await
-        .map_err(|e| DatabaseError::Pool(format!("Failed to connect: {}", e)))?;
-
-    // Check PostgreSQL server version (need 15+ for pgvector).
-    let version_row = client
-        .query_one("SHOW server_version", &[])
-        .await
-        .map_err(|e| DatabaseError::Query(format!("Failed to query server version: {}", e)))?;
-    let version_str: &str = version_row.get(0);
-    let major_version = version_str
-        .split('.')
-        .next()
-        .and_then(|v| v.parse::<u32>().ok())
-        .ok_or_else(|| {
-            DatabaseError::Pool(format!(
-                "Could not parse PostgreSQL version from '{}'. \
-                 Expected a numeric major version (e.g., '15.2').",
-                version_str
-            ))
-        })?;
-
-    const MIN_PG_MAJOR_VERSION: u32 = 15;
-
-    if major_version < MIN_PG_MAJOR_VERSION {
-        return Err(DatabaseError::Pool(format!(
-            "PostgreSQL {} detected. IronClaw requires PostgreSQL {} or later \
-             for pgvector support.\n\
-             Upgrade: https://www.postgresql.org/download/",
-            version_str, MIN_PG_MAJOR_VERSION
-        )));
-    }
-
-    // Check if pgvector extension is available.
-    let pgvector_row = client
-        .query_opt(
-            "SELECT 1 FROM pg_available_extensions WHERE name = 'vector'",
-            &[],
-        )
-        .await
-        .map_err(|e| {
-            DatabaseError::Query(format!("Failed to check pgvector availability: {}", e))
-        })?;
-
-    if pgvector_row.is_none() {
-        return Err(DatabaseError::Pool(format!(
-            "pgvector extension not found on your PostgreSQL server.\n\n\
-             Install it:\n  \
-             macOS:   brew install pgvector\n  \
-             Ubuntu:  apt install postgresql-{0}-pgvector\n  \
-             Container image:  use pgvector/pgvector:pg{0}\n  \
-             Source:  https://github.com/pgvector/pgvector#installation\n\n\
-             Then restart PostgreSQL and retry the connection check.",
-            major_version
-        )));
-    }
-
-    Ok(())
 }
 
 // ==================== User management record types ====================
@@ -770,16 +656,9 @@ pub trait WorkspaceStore: Send + Sync {
     // ==================== Multi-scope read methods ====================
     //
     // Default implementations loop over user_ids calling single-scope methods,
-    // then merge results. Backends can override with efficient SQL (e.g.,
-    // `WHERE user_id = ANY($1::text[])`).
+    // then merge results. Backends can override with efficient SQL.
 
     /// Hybrid search across multiple user scopes, merging results by score.
-    ///
-    /// **Note:** The default implementation calls `hybrid_search` per scope and
-    /// merges by raw score. Because RRF scores are normalized independently
-    /// within each scope, scores are not directly comparable across scopes.
-    /// The Postgres backend overrides this with a single combined query that
-    /// applies RRF once to the unified result set.
     async fn hybrid_search_multi(
         &self,
         user_ids: &[String],
@@ -1120,9 +999,7 @@ mod tests {
     use super::*;
 
     /// Regression test: `create_secrets_store` selects the correct backend at
-    /// runtime based on `DatabaseConfig`, not at compile time. Previously the
-    /// CLI duplicated this logic with compile-time `#[cfg]` gates that always
-    /// chose postgres when both features were enabled (PR #209).
+    /// runtime based on `DatabaseConfig`.
     #[cfg(feature = "libsql")]
     #[tokio::test]
     async fn test_create_secrets_store_libsql_backend() {
@@ -1138,7 +1015,6 @@ mod tests {
             libsql_auth_token: None,
             url: SecretString::from("unused://libsql".to_string()),
             pool_size: 1,
-            ssl_mode: crate::config::SslMode::default(),
         };
 
         let master_key = SecretString::from("a]".repeat(16));

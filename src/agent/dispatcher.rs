@@ -137,36 +137,41 @@ impl Agent {
             tokio::sync::mpsc::unbounded_channel::<crate::llm::StreamDelta>();
         reasoning = reasoning.with_stream_tx(stream_tx);
 
-        // Spawn the SSE forwarding task (needs owned clones).
-        let sse_forwarder = if let Some(sse) = self.sse().cloned() {
+        // Spawn the Tauri forwarding task (needs owned clones).
+        let emitter = self.emitter().cloned();
+        let sse_forwarder = if emitter.is_some() {
             let user_id = message.user_id.clone();
             let tid = message.thread_id.clone();
             Some(tokio::spawn(async move {
                 while let Some(delta) = stream_rx.recv().await {
                     match delta {
                         crate::llm::StreamDelta::TextDelta(content) => {
-                            sse.broadcast_for_user(
-                                &user_id,
-                                ironclaw_common::AppEvent::StreamChunk {
-                                    content,
-                                    thread_id: tid.clone(),
-                                },
-                            );
+                            if let Some(ref emitter) = emitter {
+                                emitter.emit_for_user(
+                                    &user_id,
+                                    ironclaw_common::AppEvent::StreamChunk {
+                                        content,
+                                        thread_id: tid.clone(),
+                                    },
+                                );
+                            }
                         }
                         crate::llm::StreamDelta::ThinkingDelta(content) => {
-                            sse.broadcast_for_user(
-                                &user_id,
-                                ironclaw_common::AppEvent::Thinking {
-                                    message: content,
-                                    thread_id: tid.clone(),
-                                },
-                            );
+                            if let Some(ref emitter) = emitter {
+                                emitter.emit_for_user(
+                                    &user_id,
+                                    ironclaw_common::AppEvent::Thinking {
+                                        message: content,
+                                        thread_id: tid.clone(),
+                                    },
+                                );
+                            }
                         }
                     }
                 }
             }))
         } else {
-            // No SSE — just drain so the sender never blocks.
+            // No emitter — just drain so the sender never blocks.
             Some(tokio::spawn(async move {
                 while stream_rx.recv().await.is_some() {}
             }))
@@ -1561,6 +1566,7 @@ mod tests {
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
             sse_tx: None,
+            emitter: None,
             http_interceptor: None,
             transcription: None,
             document_extraction: None,
@@ -2445,6 +2451,7 @@ mod tests {
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
             sse_tx: None,
+            emitter: None,
             http_interceptor: None,
             transcription: None,
             document_extraction: None,
@@ -2575,6 +2582,7 @@ mod tests {
                 hooks: Arc::new(HookRegistry::new()),
                 cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
                 sse_tx: None,
+                emitter: None,
                 http_interceptor: None,
                 transcription: None,
                 document_extraction: None,

@@ -1,25 +1,66 @@
 use std::sync::Arc;
-use std::time::Duration;
 
-use anyhow::Context;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::agent::{Agent, AgentDeps};
-use crate::api::{ApiState, local_api_addr, run_api};
 use crate::app::{AppBuilder, AppBuilderFlags};
 use crate::channels::{IncomingMessage, MessageStream};
 use crate::config::Config;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
-    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
+    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot,
     create_session_manager,
 };
-use crate::runtime_events::SseManager;
+use crate::runtime_events::{RuntimeEventEmitter, SseManager};
 use crate::task_runtime::TaskRuntime;
 use crate::tracing_fmt::init_app_tracing;
+use crate::agent::SessionManager as AgentSessionManager;
+use crate::tools::mcp::McpSessionManager;
+use crate::workspace::Workspace;
+use crate::db::Database;
 
-pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
+/// Optional Tauri event emitter for native desktop events.
+/// When provided, events will be emitted via Tauri in addition to SSE.
+pub type TauriEventEmitterHandle = Arc<dyn RuntimeEventEmitter>;
+
+/// Application state shared with the Tauri IPC layer.
+/// Created during desktop runtime startup and passed to IPC commands.
+pub struct AppState {
+    pub owner_id: String,
+    pub db: Option<Arc<dyn Database>>,
+    pub workspace: Option<Arc<Workspace>>,
+    pub agent_session_manager: Arc<AgentSessionManager>,
+    pub task_runtime: Arc<TaskRuntime>,
+    pub tools: Arc<crate::tools::ToolRegistry>,
+    pub mcp_session_manager: Arc<McpSessionManager>,
+}
+
+impl AppState {
+    pub fn new(
+        owner_id: String,
+        db: Option<Arc<dyn Database>>,
+        workspace: Option<Arc<Workspace>>,
+        agent_session_manager: Arc<AgentSessionManager>,
+        task_runtime: Arc<TaskRuntime>,
+        tools: Arc<crate::tools::ToolRegistry>,
+        mcp_session_manager: Arc<McpSessionManager>,
+    ) -> Self {
+        Self {
+            owner_id,
+            db,
+            workspace,
+            agent_session_manager,
+            task_runtime,
+            tools,
+            mcp_session_manager,
+        }
+    }
+}
+
+pub async fn start_embedded_runtime(
+    tauri_emitter: Option<TauriEventEmitterHandle>,
+) -> anyhow::Result<AppState> {
     let _ = dotenvy::dotenv();
     crate::bootstrap::load_ironclaw_env();
 
@@ -74,12 +115,6 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| primary_llm.clone());
     let reloadable_llm_state = Arc::new(ReloadableLlmState::new(primary_llm, cheap_llm));
-    let runtime_llm_reloader = Arc::new(RuntimeLlmReloader::new(
-        Arc::clone(&reloadable_llm_state),
-        components.session.clone(),
-        config.owner_id.clone(),
-        components.secrets_store.clone(),
-    ));
     let app_llm: Arc<dyn crate::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Primary,
@@ -87,34 +122,15 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
     let app_cheap_llm: Arc<dyn crate::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Cheap,
-    ));
+));
 
-    if let Some(store) = components.db.clone() {
-        let api_bind_addr = local_api_addr(api_port);
-        let mut api_state = ApiState::new(
-            config.owner_id.clone(),
-            api_bind_addr,
-            store,
-            sse_manager.clone(),
-            Some(task_runtime.clone()),
-            Some(inject_tx.clone()),
-            Some(session_manager.clone()),
-            components.workspace.clone(),
-        )
-        .with_llm_reloader(runtime_llm_reloader)
-        .with_workbench_metadata(
-            components.tools.count(),
-            components.dev_loaded_tool_names.clone(),
-        );
-        if let Some(secrets_store) = components.secrets_store.clone() {
-            api_state = api_state.with_secrets_store(secrets_store);
-        }
-        tokio::spawn(async move {
-            if let Err(error) = run_api(api_bind_addr, api_state).await {
-                tracing::error!(%error, "embedded local api service exited");
-            }
-        });
-    }
+    // Clone values needed for AppState BEFORE moving components into AgentDeps
+    let app_state_db = components.db.clone();
+    let app_state_workspace = components.workspace.clone();
+    let app_state_tools = Arc::clone(&components.tools);
+    let app_state_mcp = Arc::clone(&components.mcp_session_manager);
+    let app_state_session_manager = Arc::clone(&session_manager);
+    let app_state_task_runtime = Arc::clone(&task_runtime);
 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
@@ -131,6 +147,7 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         hooks: components.hooks,
         cost_guard: components.cost_guard,
         sse_tx: Some(sse_manager),
+        emitter: tauri_emitter.clone(),
         http_interceptor: components
             .recording_handle
             .as_ref()
@@ -174,25 +191,13 @@ pub async fn start_embedded_runtime(api_port: u16) -> anyhow::Result<()> {
         }
     });
 
-    wait_for_api_ready(api_port).await?;
-    Ok(())
-}
-
-async fn wait_for_api_ready(api_port: u16) -> anyhow::Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()
-        .context("failed to create embedded runtime readiness probe client")?;
-    let health_url = format!("http://127.0.0.1:{api_port}/api/v0/health");
-
-    for _ in 0..120 {
-        if let Ok(response) = client.get(&health_url).send().await
-            && response.status().is_success()
-        {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-
-    anyhow::bail!("embedded local api failed to become ready on {health_url}")
+    Ok(AppState::new(
+        config.owner_id.clone(),
+        app_state_db,
+        app_state_workspace,
+        app_state_session_manager,
+        app_state_task_runtime,
+        app_state_tools,
+        app_state_mcp,
+    ))
 }

@@ -8,17 +8,16 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use ironclaw::{
     agent::{Agent, AgentDeps},
-    api::{ApiState, DEFAULT_API_PORT, local_api_addr, run_api},
     app::{AppBuilder, AppBuilderFlags},
     channels::{IncomingMessage, MessageStream},
     cli::{
-        Cli, Command, run_api_command, run_mcp_command, run_pairing_command, run_service_command,
+        Cli, Command, run_mcp_command, run_pairing_command, run_service_command,
         run_status_command, run_tool_command,
     },
     config::Config,
     hooks::bootstrap_hooks,
     llm::{
-        ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
+        ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot,
         create_session_manager,
     },
     task_runtime::TaskRuntime,
@@ -87,10 +86,6 @@ async fn async_main() -> anyhow::Result<()> {
         Some(Command::Config(config_cmd)) => {
             init_cli_tracing();
             return ironclaw::cli::run_config_command(config_cmd.clone()).await;
-        }
-        Some(Command::Api(api_cmd)) => {
-            init_cli_tracing();
-            return run_api_command(api_cmd, cli.config.as_deref()).await;
         }
         Some(Command::Desktop) => {
             init_cli_tracing();
@@ -374,12 +369,6 @@ async fn async_main() -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| primary_llm.clone());
     let reloadable_llm_state = Arc::new(ReloadableLlmState::new(primary_llm, cheap_llm));
-    let runtime_llm_reloader = Arc::new(RuntimeLlmReloader::new(
-        Arc::clone(&reloadable_llm_state),
-        components.session.clone(),
-        config.owner_id.clone(),
-        components.secrets_store.clone(),
-    ));
     let app_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Primary,
@@ -388,30 +377,6 @@ async fn async_main() -> anyhow::Result<()> {
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Cheap,
     ));
-
-    if let Some(store) = components.db.clone() {
-        let api_bind_addr = local_api_addr(DEFAULT_API_PORT);
-        let api_state = ApiState::new(
-            config.owner_id.clone(),
-            api_bind_addr,
-            store,
-            sse_manager.clone(),
-            Some(task_runtime.clone()),
-            Some(inject_tx.clone()),
-            Some(session_manager.clone()),
-            components.workspace.clone(),
-        )
-        .with_llm_reloader(runtime_llm_reloader)
-        .with_workbench_metadata(
-            components.tools.count(),
-            components.dev_loaded_tool_names.clone(),
-        );
-        tokio::spawn(async move {
-            if let Err(error) = run_api(api_bind_addr, api_state).await {
-                tracing::error!(%error, "local api service exited");
-            }
-        });
-    }
 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
@@ -428,6 +393,7 @@ async fn async_main() -> anyhow::Result<()> {
         hooks: components.hooks,
         cost_guard: components.cost_guard,
         sse_tx: Some(sse_manager),
+        emitter: None,
         http_interceptor,
         transcription: config.transcription.create_provider().map(|p| {
             Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(

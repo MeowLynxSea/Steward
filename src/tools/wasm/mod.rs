@@ -119,8 +119,6 @@ pub use rate_limiter::{LimitType, RateLimitError, RateLimitResult, RateLimiter};
 // Storage (V2)
 #[cfg(feature = "libsql")]
 pub use storage::LibSqlWasmToolStore;
-#[cfg(feature = "postgres")]
-pub use storage::PostgresWasmToolStore;
 pub use storage::{
     StoreToolParams, StoredCapabilities, StoredWasmTool, StoredWasmToolWithBinary, ToolStatus,
     TrustLevel, WasmStorageError, WasmToolStore, compute_binary_hash, verify_binary_integrity,

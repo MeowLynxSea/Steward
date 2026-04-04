@@ -14,6 +14,17 @@ use tokio_stream::wrappers::BroadcastStream;
 
 const MAX_CONNECTIONS: u64 = 100;
 
+/// Trait for runtime event emitters (SSE or Tauri).
+///
+/// This trait abstracts over different event broadcasting mechanisms,
+/// allowing the codebase to work with both SSE (Server-Sent Events)
+/// and Tauri native events without changing the call sites.
+pub trait RuntimeEventEmitter: Send + Sync {
+    /// Emit an event for a specific user.
+    fn emit_for_user(&self, user_id: &str, event: AppEvent);
+}
+
+
 #[derive(Debug, Clone)]
 pub(crate) struct ScopedEvent {
     pub(crate) user_id: Option<String>,

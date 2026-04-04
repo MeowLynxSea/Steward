@@ -1,31 +1,28 @@
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { StreamEnvelope } from "./types";
 
-function getApiBase(): string {
-  return (globalThis as { __IRONCOWORK_API_BASE__?: string }).__IRONCOWORK_API_BASE__ ?? "/api/v0";
-}
-
-const STREAM_EVENT_TYPES = new Set([
-  "session.response",
-  "session.approval_needed",
-  "session.status",
-  "session.error",
-  "session.stream_chunk",
-  "session.thinking",
-  "session.tool_started",
-  "session.tool_completed",
-  "session.tool_result",
-  "session.reasoning_update",
-  "session.suggestions",
-  "session.turn_cost",
-  "session.image_generated",
-  "task.created",
-  "task.updated",
-  "task.waiting_approval",
-  "task.mode_changed",
-  "task.completed",
-  "task.failed",
-  "task.rejected"
-]);
+const STREAM_EVENT_TYPES = [
+  "session:response",
+  "session:approval_needed",
+  "session:status",
+  "session:error",
+  "session:stream_chunk",
+  "session:thinking",
+  "session:tool_started",
+  "session:tool_completed",
+  "session:tool_result",
+  "session:reasoning_update",
+  "session:suggestions",
+  "session:turn_cost",
+  "session:image_generated",
+  "task:created",
+  "task:updated",
+  "task:waiting_approval",
+  "task:mode_changed",
+  "task:completed",
+  "task:failed",
+  "task:rejected"
+];
 
 export interface StreamHandle {
   readonly closed: boolean;
@@ -33,54 +30,48 @@ export interface StreamHandle {
 }
 
 /**
- * Creates a typed SSE stream connection to the backend.
+ * Creates a typed event stream connection to the backend via Tauri IPC.
  *
  * Lifecycle:
- * - Immediately opens an EventSource to `API_BASE + path`.
+ * - Immediately starts listening to all session events via Tauri `listen()`.
  * - Parses each event as a typed RuntimeEvent and forwards to `onEvent`.
- * - Returns a handle with a `close()` method that shuts down the connection.
+ * - Returns a handle with a `close()` method that shuts down the listener.
  * - Calling `close()` is idempotent.
  *
  * The caller is responsible for calling `close()` when the subscription
  * is no longer needed (e.g. on component destroy or session switch).
  */
 export function createEventStream(
-  path: string,
+  _path: string,
   onEvent: (event: StreamEnvelope) => void
 ): StreamHandle {
-  const url = `${getApiBase()}${path}`;
-  const source = new EventSource(url);
+  const unlisteners: UnlistenFn[] = [];
   let closed = false;
 
-  function handleMessage(event: MessageEvent<string>) {
+  function handlePayload(payload: unknown) {
     try {
-      const payload = JSON.parse(event.data) as StreamEnvelope;
-      onEvent(payload);
+      const event = payload as StreamEnvelope;
+      onEvent(event);
     } catch {
       // Silently ignore malformed payloads so the stream stays alive.
     }
   }
 
-  function handleError() {
-    // EventSource auto-reconnects by spec.
-    // If the stream was explicitly closed, clean up listeners.
-    if (closed) {
-      cleanup();
-    }
+  // Subscribe to all known event types.
+  for (const type of STREAM_EVENT_TYPES) {
+    listen(type, (event) => handlePayload(event.payload)).then((unlisten) => {
+      if (!closed) {
+        unlisteners.push(unlisten);
+      }
+    });
   }
 
   function cleanup() {
-    source.removeEventListener("error", handleError as EventListener);
-    for (const type of STREAM_EVENT_TYPES) {
-      source.removeEventListener(type, handleMessage as EventListener);
+    for (const unlisten of unlisteners) {
+      unlisten();
     }
+    unlisteners.length = 0;
   }
-
-  // Subscribe to all known event types.
-  for (const type of STREAM_EVENT_TYPES) {
-    source.addEventListener(type, handleMessage as EventListener);
-  }
-  source.addEventListener("error", handleError as EventListener);
 
   return {
     get closed() {
@@ -90,7 +81,6 @@ export function createEventStream(
       if (closed) return;
       closed = true;
       cleanup();
-      source.close();
     }
   };
 }

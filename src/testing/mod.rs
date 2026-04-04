@@ -526,6 +526,7 @@ impl TestHarnessBuilder {
             hooks,
             cost_guard,
             sse_tx: None,
+            emitter: None,
             http_interceptor: None,
             transcription: None,
             document_extraction: None,
