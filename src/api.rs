@@ -681,6 +681,9 @@ async fn get_session(
         session: summary,
         messages: messages
             .into_iter()
+            // Filter out internal message roles (e.g. tool_calls) that are
+            // not meant for direct display in the web UI.
+            .filter(|m| m.role == "user" || m.role == "assistant")
             .map(SessionMessageResponse::from)
             .collect(),
         current_task: load_session_task(&state, session_id).await,

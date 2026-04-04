@@ -395,6 +395,9 @@ pub struct Reasoning {
     /// Channel-specific conversation context (e.g., sender number, UUID, group ID).
     /// This is passed to the LLM to provide clarity about who/group it's talking to.
     conversation_context: std::collections::HashMap<String, String>,
+    /// Optional sender for streaming text deltas back to the caller.
+    /// Set on each [`ToolCompletionRequest`] built by this engine.
+    stream_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::llm::StreamDelta>>,
 }
 
 impl Reasoning {
@@ -408,6 +411,7 @@ impl Reasoning {
             model_name: None,
             is_group_chat: false,
             conversation_context: std::collections::HashMap::new(),
+            stream_tx: None,
         }
     }
 
@@ -454,6 +458,19 @@ impl Reasoning {
     /// Mark this as a group chat context, enabling group-specific guidance.
     pub fn with_group_chat(mut self, is_group: bool) -> Self {
         self.is_group_chat = is_group;
+        self
+    }
+
+    /// Set a streaming delta sender for real-time text streaming.
+    ///
+    /// When set, each [`ToolCompletionRequest`] built by this engine will
+    /// carry the sender so that streaming-capable providers can push text
+    /// deltas as they arrive from the upstream API.
+    pub fn with_stream_tx(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::llm::StreamDelta>,
+    ) -> Self {
+        self.stream_tx = Some(tx);
         self
     }
 
@@ -715,6 +732,7 @@ Respond in JSON format:
                 .with_temperature(0.7)
                 .with_tool_choice("auto");
             request.metadata = context.metadata.clone();
+            request.stream_tx = self.stream_tx.clone();
             if let Some(ref model) = context.model_override {
                 request.model = Some(model.clone());
             }

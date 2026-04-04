@@ -873,9 +873,12 @@ impl Agent {
             .await?
         {
             SubmissionResult::Response { content } => Ok(Some(content)),
-            SubmissionResult::Ok { message } => Ok(message),
+            SubmissionResult::Ok { message } => Ok(Some(message.unwrap_or_default())),
             SubmissionResult::Error { message } => Ok(Some(format!("Error: {}", message))),
-            _ => Ok(None),
+            other => {
+                tracing::debug!(?other, "Unhandled SubmissionResult from system command");
+                Ok(Some(String::new()))
+            }
         }
     }
 

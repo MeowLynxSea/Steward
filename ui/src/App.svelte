@@ -87,6 +87,10 @@
     void sessionsStore.sendMessage(content);
   }
 
+  function handleSuggestionClick(suggestion: string) {
+    void sessionsStore.sendMessage(suggestion);
+  }
+
   function handleSelectModel(model: string) {
     settingsStore.updateField("selected_model", model);
     void settingsStore.save();
@@ -175,7 +179,7 @@
 </script>
 
 <svelte:head>
-  <title>AionUi</title>
+  <title>Steward</title>
 </svelte:head>
 
 {#if appLoading}
@@ -196,7 +200,7 @@
 {:else if settingsStore.data.llm_onboarding_required}
   <div class="app-container">
     <TitleBar
-      title="AionUi"
+      title="Steward"
       leftSidebarCollapsed={true}
       rightSidebarCollapsed={true}
       onToggleLeft={() => undefined}
@@ -209,7 +213,7 @@
 {:else}
   <div class="app-container">
     <TitleBar
-      title="AionUi"
+      title="Steward"
       leftSidebarCollapsed={leftSidebarCollapsed}
       rightSidebarCollapsed={rightSidebarCollapsed}
       onToggleLeft={() => leftSidebarCollapsed = !leftSidebarCollapsed}
@@ -231,10 +235,12 @@
         <ChatArea
           session={sessionsStore.active}
           task={sessionsStore.active?.current_task ?? null}
+          streaming={sessionsStore.streaming}
           modelName={settingsStore.data.selected_model}
           availableModels={availableModels}
           loading={sessionsStore.loading}
           onSendMessage={handleSendMessage}
+          onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}
           onApproveTaskAlways={handleApproveTaskAlways}
           onRejectTask={handleRejectTask}

@@ -272,8 +272,22 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Request for a completion with tool use.
+/// A delta emitted during streaming LLM completion.
+///
+/// Providers that support streaming send these through the optional
+/// `stream_tx` channel on [`ToolCompletionRequest`] while the HTTP
+/// response is still being received. The caller can consume deltas
+/// in a separate task to forward them to SSE / the web UI.
 #[derive(Debug, Clone)]
+pub enum StreamDelta {
+    /// A chunk of assistant text content.
+    TextDelta(String),
+    /// A chunk of thinking/reasoning content (for models that expose it).
+    ThinkingDelta(String),
+}
+
+/// Request for a completion with tool use.
+#[derive(Clone)]
 pub struct ToolCompletionRequest {
     pub messages: Vec<ChatMessage>,
     pub tools: Vec<ToolDefinition>,
@@ -286,6 +300,29 @@ pub struct ToolCompletionRequest {
     pub tool_choice: Option<String>,
     /// Opaque metadata passed through to the provider (e.g. thread_id for chaining).
     pub metadata: std::collections::HashMap<String, String>,
+    /// Optional channel for streaming text deltas back to the caller.
+    ///
+    /// When set, providers that support streaming will send [`StreamDelta`]
+    /// values through this channel as they arrive from the upstream API.
+    /// The final complete response is still returned from `complete_with_tools`.
+    /// Providers that do not support streaming simply ignore this field.
+    pub stream_tx: Option<tokio::sync::mpsc::UnboundedSender<StreamDelta>>,
+}
+
+impl std::fmt::Debug for ToolCompletionRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolCompletionRequest")
+            .field("messages", &self.messages)
+            .field("tools", &self.tools)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("temperature", &self.temperature)
+            .field("stop_sequences", &self.stop_sequences)
+            .field("tool_choice", &self.tool_choice)
+            .field("metadata", &self.metadata)
+            .field("stream_tx", &self.stream_tx.is_some())
+            .finish()
+    }
 }
 
 impl ToolCompletionRequest {
@@ -300,6 +337,7 @@ impl ToolCompletionRequest {
             stop_sequences: None,
             tool_choice: None,
             metadata: std::collections::HashMap::new(),
+            stream_tx: None,
         }
     }
 

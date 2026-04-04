@@ -130,6 +130,48 @@ impl Agent {
             .with_model_name(self.llm().active_model_name())
             .with_group_chat(is_group_chat);
 
+        // Set up real LLM streaming: create a channel so the LLM provider
+        // can push token deltas as they arrive, and spawn a task that
+        // forwards them to SSE as `StreamChunk` events.
+        let (stream_tx, mut stream_rx) =
+            tokio::sync::mpsc::unbounded_channel::<crate::llm::StreamDelta>();
+        reasoning = reasoning.with_stream_tx(stream_tx);
+
+        // Spawn the SSE forwarding task (needs owned clones).
+        let sse_forwarder = if let Some(sse) = self.sse().cloned() {
+            let user_id = message.user_id.clone();
+            let tid = message.thread_id.clone();
+            Some(tokio::spawn(async move {
+                while let Some(delta) = stream_rx.recv().await {
+                    match delta {
+                        crate::llm::StreamDelta::TextDelta(content) => {
+                            sse.broadcast_for_user(
+                                &user_id,
+                                ironclaw_common::AppEvent::StreamChunk {
+                                    content,
+                                    thread_id: tid.clone(),
+                                },
+                            );
+                        }
+                        crate::llm::StreamDelta::ThinkingDelta(content) => {
+                            sse.broadcast_for_user(
+                                &user_id,
+                                ironclaw_common::AppEvent::Thinking {
+                                    message: content,
+                                    thread_id: tid.clone(),
+                                },
+                            );
+                        }
+                    }
+                }
+            }))
+        } else {
+            // No SSE — just drain so the sender never blocks.
+            Some(tokio::spawn(async move {
+                while stream_rx.recv().await.is_some() {}
+            }))
+        };
+
         // Pass channel-specific conversation context to the LLM.
         // This helps the agent know who/group it's talking to.
         for (key, value) in self.channels.conversation_context(&message.metadata) {
@@ -205,6 +247,15 @@ impl Agent {
             &loop_config,
         )
         .await?;
+
+        // Wait for the SSE forwarder to drain any remaining deltas.
+        // Reasoning drops its stream_tx clone when respond_with_tools returns,
+        // but the channel stays open until *all* senders are dropped.
+        // We explicitly drop reasoning here so the forwarder can finish.
+        drop(reasoning);
+        if let Some(handle) = sse_forwarder {
+            let _ = handle.await;
+        }
 
         match outcome {
             LoopOutcome::Response(text) => Ok(AgenticLoopResult::Response(text)),
@@ -468,10 +519,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         _metadata: crate::llm::ResponseMetadata,
         _reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
-        // Strip internal "[Called tool ...]" text that can leak when
-        // provider flattening (e.g. NEAR AI) converts tool_calls to
-        // plain text and the LLM echoes it back.
-        let sanitized = strip_internal_tool_call_text(text);
+        let sanitized = sanitize_user_visible_response(text);
         TextAction::Return(LoopOutcome::Response(sanitized))
     }
 
@@ -1189,6 +1237,10 @@ fn compact_messages_for_retry(messages: &[ChatMessage]) -> Vec<ChatMessage> {
     compacted
 }
 
+pub(crate) fn sanitize_user_visible_response(text: &str) -> String {
+    strip_internal_tool_call_text(text)
+}
+
 /// Strip internal `[Called tool ...]` and `[Tool ... returned: ...]` markers
 /// from a response string. These markers are inserted by provider-level message
 /// flattening (e.g. NEAR AI) and can leak into the user-visible response when
@@ -1213,12 +1265,141 @@ fn strip_internal_tool_call_text(text: &str) -> String {
             acc
         });
 
+    let result = strip_tool_call_dump_paragraphs(&result);
+
+    // Strip JSON tool-call blocks that some LLM providers output inline.
+    // Pattern: `{"calls":[{"call_id":...,"name":...},...]}` on a single line or
+    // spanning the entire remaining text. Only strip when it looks like a
+    // tool-call array (has "calls" + "call_id" + "name" keys).
+    let result = strip_json_tool_call_blocks(&result);
+
     let result = result.trim();
     if result.is_empty() {
         "I wasn't able to complete that request. Could you try rephrasing or providing more details?".to_string()
     } else {
         result.to_string()
     }
+}
+
+fn strip_tool_call_dump_paragraphs(text: &str) -> String {
+    text.split("\n\n")
+        .filter(|paragraph| {
+            let trimmed = paragraph.trim();
+            !(trimmed.starts_with('{')
+                && (trimmed.contains("\"calls\"") || trimmed.contains("\"tool_calls\""))
+                && trimmed.contains("\"name\"")
+                && (trimmed.contains("\"call_id\"")
+                    || trimmed.contains("\"tool_call_id\"")
+                    || trimmed.contains("\"result_preview\"")
+                    || trimmed.contains("\"result\"")))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Strip JSON blocks that look like inline tool calls from the response text.
+///
+/// Some LLM backends emit tool calls as JSON in the text content rather than
+/// using the native tool_calls API field. These blocks confuse users when
+/// displayed verbatim. This function detects and removes them while preserving
+/// surrounding prose.
+fn strip_json_tool_call_blocks(text: &str) -> String {
+    // Quick bail: no indication of tool call JSON
+    if !text.contains("\"calls\"")
+        && !text.contains("\"call_id\"")
+        && !text.contains("\"tool_calls\"")
+    {
+        return text.to_string();
+    }
+
+    // Try to find JSON blocks that look like tool calls. We look for patterns
+    // like `{"calls":[...]}` that may appear at the start, end, or as a
+    // standalone line.
+    let mut result = String::with_capacity(text.len());
+    let mut remaining = text;
+
+    while !remaining.is_empty() {
+        // Find potential JSON start
+        let Some(brace_pos) = remaining.find('{') else {
+            result.push_str(remaining);
+            break;
+        };
+
+        // Check if this looks like a tool call JSON block
+        let after_brace = &remaining[brace_pos..];
+
+        // Try to parse as JSON and check for tool-call structure
+        if let Some(json_end) = find_balanced_brace(after_brace) {
+            let json_candidate = &after_brace[..json_end + 1];
+            if is_tool_call_json(json_candidate) {
+                // Strip this JSON block
+                result.push_str(&remaining[..brace_pos]);
+                remaining = &after_brace[json_end + 1..];
+                continue;
+            }
+        }
+
+        // Not a tool-call JSON, keep the text up to and including the brace
+        result.push_str(&remaining[..brace_pos + 1]);
+        remaining = &remaining[brace_pos + 1..];
+    }
+
+    result
+}
+
+/// Find the position of the closing brace that matches the opening brace at position 0.
+fn find_balanced_brace(text: &str) -> Option<usize> {
+    if !text.starts_with('{') {
+        return None;
+    }
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+    for (i, ch) in text.char_indices() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+        if in_string {
+            match ch {
+                '\\' => escape_next = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Check whether a JSON string looks like an inline tool-call block.
+fn is_tool_call_json(json_str: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) else {
+        return false;
+    };
+    // Pattern 1: {"calls": [{"call_id": ..., "name": ...}, ...]}
+    if let Some(calls) = value.get("calls").and_then(|v| v.as_array()) {
+        return calls.iter().any(|call| {
+            call.get("name").is_some()
+                && (call.get("call_id").is_some() || call.get("id").is_some())
+        });
+    }
+    // Pattern 2: {"tool_calls": [{"name": ..., ...}]}
+    if let Some(calls) = value.get("tool_calls").and_then(|v| v.as_array()) {
+        return calls.iter().any(|call| call.get("name").is_some());
+    }
+    false
 }
 
 /// Extract `<suggestions>["...","..."]</suggestions>` from a response string.
@@ -2507,6 +2688,48 @@ mod tests {
         let input = "This is a normal response with [brackets] inside.";
         let result = super::strip_internal_tool_call_text(input);
         assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_json_tool_call_blocks_removes_calls_format() {
+        let input = r#"Here is my response. {"calls":[{"call_id":"turn0_0","name":"echo","parameters":{"message":"hello"}}]}"#;
+        let result = super::strip_internal_tool_call_text(input);
+        assert_eq!(result, "Here is my response.");
+    }
+
+    #[test]
+    fn test_strip_json_tool_call_blocks_removes_tool_calls_format() {
+        let input = r#"{"tool_calls":[{"name":"search","arguments":{"q":"test"}}]} Here is the result."#;
+        let result = super::strip_internal_tool_call_text(input);
+        assert_eq!(result, "Here is the result.");
+    }
+
+    #[test]
+    fn test_strip_json_tool_call_blocks_preserves_normal_json() {
+        let input = r#"The config is {"host":"localhost","port":8080} and it works."#;
+        let result = super::strip_internal_tool_call_text(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_json_tool_call_blocks_only_calls_yields_fallback() {
+        let input = r#"{"calls":[{"call_id":"turn0_0","name":"echo","parameters":{}}]}"#;
+        let result = super::strip_internal_tool_call_text(input);
+        assert!(result.contains("wasn't able to complete"));
+    }
+
+    #[test]
+    fn test_strip_tool_call_dump_paragraphs_removes_quasi_json_dump() {
+        let input = concat!(
+            "调用一个工具试试\n\n",
+            "{\"calls\":[{\"call_id\":\"turn0_0\",\"name\":\"echo\",",
+            "\"result\":\"<tool_output name=\"echo\">\\n\"Hello\"\\n\",",
+            "\"result_preview\":\"<tool_output name=\"echo\">\\n\"Hello\"\\n\",",
+            "\"tool_call_id\":\"call_function_qqsk8u51hgfl_1\"}]}",
+            "\n\n工具调用成功！✅"
+        );
+        let result = super::strip_internal_tool_call_text(input);
+        assert_eq!(result, "调用一个工具试试\n\n工具调用成功！✅");
     }
 
     #[test]

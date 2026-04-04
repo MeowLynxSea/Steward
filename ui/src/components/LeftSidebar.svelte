@@ -44,7 +44,7 @@
           <path d="M12 2L2 19h20L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
         </svg>
       </div>
-      <span class="brand-name">AionUi</span>
+      <span class="brand-name">Steward</span>
     </div>
 
     <div class="action-row">

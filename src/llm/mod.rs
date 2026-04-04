@@ -58,8 +58,8 @@ pub use openai_codex_session::{
 };
 pub use provider::{
     ChatMessage, CompletionRequest, CompletionResponse, ContentPart, FinishReason, ImageUrl,
-    LlmProvider, ModelMetadata, Role, ToolCall, ToolCompletionRequest, ToolCompletionResponse,
-    ToolDefinition, ToolResult, generate_tool_call_id,
+    LlmProvider, ModelMetadata, Role, StreamDelta, ToolCall, ToolCompletionRequest,
+    ToolCompletionResponse, ToolDefinition, ToolResult, generate_tool_call_id,
 };
 pub use reasoning::{
     ActionPlan, Reasoning, ReasoningContext, RespondOutput, RespondResult, ResponseAnomaly,

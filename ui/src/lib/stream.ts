@@ -1,12 +1,23 @@
 import type { StreamEnvelope } from "./types";
 
-const API_BASE = (globalThis as { __IRONCOWORK_API_BASE__?: string }).__IRONCOWORK_API_BASE__ ?? "/api/v0";
+function getApiBase(): string {
+  return (globalThis as { __IRONCOWORK_API_BASE__?: string }).__IRONCOWORK_API_BASE__ ?? "/api/v0";
+}
 
 const STREAM_EVENT_TYPES = new Set([
   "session.response",
   "session.approval_needed",
   "session.status",
   "session.error",
+  "session.stream_chunk",
+  "session.thinking",
+  "session.tool_started",
+  "session.tool_completed",
+  "session.tool_result",
+  "session.reasoning_update",
+  "session.suggestions",
+  "session.turn_cost",
+  "session.image_generated",
   "task.created",
   "task.updated",
   "task.waiting_approval",
@@ -37,7 +48,7 @@ export function createEventStream(
   path: string,
   onEvent: (event: StreamEnvelope) => void
 ): StreamHandle {
-  const url = `${API_BASE}${path}`;
+  const url = `${getApiBase()}${path}`;
   const source = new EventSource(url);
   let closed = false;
 

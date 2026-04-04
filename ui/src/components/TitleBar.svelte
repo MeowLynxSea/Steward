@@ -11,7 +11,7 @@
   }
 
   let {
-    title = "AionUi",
+    title = "Steward",
     leftSidebarCollapsed = false,
     rightSidebarCollapsed = false,
     onToggleLeft,

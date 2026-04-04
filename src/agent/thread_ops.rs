@@ -518,6 +518,7 @@ impl Agent {
                         _ => response, // fail-open: use original
                     }
                 };
+                let response = crate::agent::dispatcher::sanitize_user_visible_response(&response);
 
                 thread.complete_turn(&response);
                 let (turn_number, tool_calls, narrative) = thread

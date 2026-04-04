@@ -315,6 +315,91 @@ impl NearAiChatProvider {
         })
     }
 
+    /// Send a streaming HTTP request and return the raw [`reqwest::Response`].
+    ///
+    /// Like `send_request`, handles 401 session renewal for session token auth.
+    async fn send_streaming_request<T: Serialize>(
+        &self,
+        body: &T,
+    ) -> Result<reqwest::Response, LlmError> {
+        match self.send_streaming_request_inner(body).await {
+            Ok(result) => Ok(result),
+            Err(LlmError::SessionExpired { .. }) if !self.uses_api_key() => {
+                self.session.handle_auth_failure().await?;
+                self.send_streaming_request_inner(body).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Inner streaming request (single attempt). Returns the response with
+    /// body unconsumed so the caller can read the SSE byte stream.
+    async fn send_streaming_request_inner<T: Serialize>(
+        &self,
+        body: &T,
+    ) -> Result<reqwest::Response, LlmError> {
+        let url = self.api_url("chat/completions");
+        let token = self.resolve_bearer_token().await?;
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("Content-Type", "application/json")
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| LlmError::RequestFailed {
+                provider: "nearai_chat".to_string(),
+                reason: e.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = Some(crate::llm::retry::parse_retry_after(
+                response.headers().get("retry-after"),
+            ));
+            let response_text =
+                response
+                    .text()
+                    .await
+                    .map_err(|e| LlmError::RequestFailed {
+                        provider: "nearai_chat".to_string(),
+                        reason: format!("Failed to read error body: {e}"),
+                    })?;
+
+            if status.as_u16() == 401 {
+                if !self.uses_api_key() {
+                    let lower = response_text.to_lowercase();
+                    let is_session_expired = lower.contains("session")
+                        && (lower.contains("expired") || lower.contains("invalid"));
+                    if is_session_expired {
+                        return Err(LlmError::SessionExpired {
+                            provider: "nearai_chat".to_string(),
+                        });
+                    }
+                }
+                return Err(LlmError::AuthFailed {
+                    provider: "nearai_chat".to_string(),
+                });
+            }
+            if status.as_u16() == 429 {
+                return Err(LlmError::RateLimited {
+                    provider: "nearai_chat".to_string(),
+                    retry_after,
+                });
+            }
+
+            let truncated = crate::agent::truncate_for_preview(&response_text, 512);
+            return Err(LlmError::RequestFailed {
+                provider: "nearai_chat".to_string(),
+                reason: format!("HTTP {}: {}", status, truncated),
+            });
+        }
+
+        Ok(response)
+    }
+
     /// Fetch available models from the NEAR AI API.
     ///
     /// Handles session renewal on 401 (same pattern as `send_request`).
@@ -481,6 +566,7 @@ impl LlmProvider for NearAiChatProvider {
             stop: req.stop_sequences,
             tools: None,
             tool_choice: None,
+            stream: false,
         };
 
         let response: ChatCompletionResponse = self.send_request(&request).await?;
@@ -525,6 +611,7 @@ impl LlmProvider for NearAiChatProvider {
         &self,
         req: ToolCompletionRequest,
     ) -> Result<ToolCompletionResponse, LlmError> {
+        let stream_tx = req.stream_tx.clone();
         let model = req.model.unwrap_or_else(|| self.active_model_name());
         let mut raw_messages = req.messages;
         crate::llm::provider::sanitize_tool_messages(&mut raw_messages);
@@ -552,6 +639,7 @@ impl LlmProvider for NearAiChatProvider {
             })
             .collect();
 
+        let use_streaming = stream_tx.is_some();
         let request = ChatCompletionRequest {
             model,
             messages,
@@ -560,8 +648,43 @@ impl LlmProvider for NearAiChatProvider {
             stop: req.stop_sequences,
             tools: if tools.is_empty() { None } else { Some(tools) },
             tool_choice: req.tool_choice,
+            stream: use_streaming,
         };
 
+        // ── Streaming path ─────────────────────────────────────────
+        if let Some(ref tx) = stream_tx {
+            let http_resp = self.send_streaming_request(&request).await?;
+            let (content, tool_calls, finish_reason_str, usage) =
+                consume_openai_stream(http_resp, tx).await?;
+
+            let finish_reason = match finish_reason_str.as_deref() {
+                Some("stop") => FinishReason::Stop,
+                Some("length") => FinishReason::Length,
+                Some("tool_calls") => FinishReason::ToolUse,
+                Some("content_filter") => FinishReason::ContentFilter,
+                _ => {
+                    if !tool_calls.is_empty() {
+                        FinishReason::ToolUse
+                    } else {
+                        FinishReason::Unknown
+                    }
+                }
+            };
+
+            let (input_tokens, output_tokens) = parse_usage(usage.as_ref());
+
+            return Ok(ToolCompletionResponse {
+                content,
+                tool_calls,
+                finish_reason,
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            });
+        }
+
+        // ── Non-streaming path (original) ──────────────────────────
         let response: ChatCompletionResponse = self.send_request(&request).await?;
 
         let choice =
@@ -689,6 +812,10 @@ struct ChatCompletionRequest {
     tools: Option<Vec<ChatCompletionTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<String>,
+    /// When true, the API returns a stream of SSE events instead of a
+    /// single JSON response.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 /// Content field that serializes as either a string or an array of content parts.
@@ -1090,6 +1217,190 @@ fn parse_usage(usage: Option<&ChatCompletionUsage>) -> (u32, u32) {
         }
     });
     (input, output)
+}
+
+// ── OpenAI-compatible streaming (SSE) types ────────────────────────
+
+/// A single SSE chunk from the streaming Chat Completions API.
+#[derive(Debug, Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
+    #[serde(default)]
+    usage: Option<ChatCompletionUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamChoice {
+    delta: StreamDeltaPayload,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StreamDeltaPayload {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<StreamToolCallDelta>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StreamToolCallDelta {
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<StreamFunctionDelta>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct StreamFunctionDelta {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+/// Consume a streaming HTTP response, sending deltas through `stream_tx`
+/// and accumulating the final result.
+async fn consume_openai_stream(
+    response: reqwest::Response,
+    stream_tx: &tokio::sync::mpsc::UnboundedSender<crate::llm::StreamDelta>,
+) -> Result<(Option<String>, Vec<ToolCall>, Option<String>, Option<ChatCompletionUsage>), LlmError>
+{
+    use futures::StreamExt;
+
+    let mut content_buf = String::new();
+    let mut reasoning_buf = String::new();
+    // Indexed accumulator for tool calls (OpenAI streams them chunk by chunk)
+    let mut tc_ids: Vec<String> = Vec::new();
+    let mut tc_names: Vec<String> = Vec::new();
+    let mut tc_args: Vec<String> = Vec::new();
+    let mut finish_reason: Option<String> = None;
+    let mut final_usage: Option<ChatCompletionUsage> = None;
+
+    let mut byte_stream = response.bytes_stream();
+    let mut line_buf = String::new();
+
+    while let Some(chunk_result) = byte_stream.next().await {
+        let chunk = chunk_result.map_err(|e| LlmError::RequestFailed {
+            provider: "nearai_chat".to_string(),
+            reason: format!("Stream read error: {e}"),
+        })?;
+        let text = String::from_utf8_lossy(&chunk);
+        line_buf.push_str(&text);
+
+        // Process complete SSE lines
+        while let Some(newline_pos) = line_buf.find('\n') {
+            let line = line_buf[..newline_pos].trim().to_string();
+            line_buf = line_buf[newline_pos + 1..].to_string();
+
+            if line.is_empty() || line.starts_with(':') {
+                continue;
+            }
+            let data = if let Some(stripped) = line.strip_prefix("data: ") {
+                stripped.trim()
+            } else if let Some(stripped) = line.strip_prefix("data:") {
+                stripped.trim()
+            } else {
+                continue;
+            };
+
+            if data == "[DONE]" {
+                break;
+            }
+
+            let parsed: StreamChunk = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+
+            if let Some(usage) = parsed.usage {
+                final_usage = Some(usage);
+            }
+
+            for choice in &parsed.choices {
+                if let Some(ref fr) = choice.finish_reason {
+                    finish_reason = Some(fr.clone());
+                }
+
+                // Text content delta
+                if let Some(ref c) = choice.delta.content {
+                    if !c.is_empty() {
+                        content_buf.push_str(c);
+                        let _ =
+                            stream_tx.send(crate::llm::StreamDelta::TextDelta(c.clone()));
+                    }
+                }
+
+                // Reasoning content delta
+                if let Some(ref r) = choice.delta.reasoning_content {
+                    if !r.is_empty() {
+                        reasoning_buf.push_str(r);
+                        let _ = stream_tx
+                            .send(crate::llm::StreamDelta::ThinkingDelta(r.clone()));
+                    }
+                }
+
+                // Tool call deltas
+                if let Some(ref tcs) = choice.delta.tool_calls {
+                    for tc_delta in tcs {
+                        let idx = tc_delta.index;
+                        // Ensure vectors are large enough
+                        while tc_ids.len() <= idx {
+                            tc_ids.push(String::new());
+                            tc_names.push(String::new());
+                            tc_args.push(String::new());
+                        }
+                        if let Some(ref id) = tc_delta.id {
+                            tc_ids[idx] = id.clone();
+                        }
+                        if let Some(ref f) = tc_delta.function {
+                            if let Some(ref name) = f.name {
+                                tc_names[idx].push_str(name);
+                            }
+                            if let Some(ref args) = f.arguments {
+                                tc_args[idx].push_str(args);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Build tool calls from accumulated deltas
+    let tool_calls: Vec<ToolCall> = tc_ids
+        .into_iter()
+        .zip(tc_names)
+        .zip(tc_args)
+        .filter(|((id, name), _)| !id.is_empty() || !name.is_empty())
+        .map(|((id, name), args)| {
+            let arguments = serde_json::from_str(&args)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            ToolCall {
+                id,
+                name,
+                arguments,
+                reasoning: None,
+            }
+        })
+        .collect();
+
+    let content = if content_buf.is_empty() {
+        if reasoning_buf.is_empty() {
+            None
+        } else {
+            // Fall back to reasoning content when content is empty
+            // (same logic as non-streaming path for GLM-5 etc.)
+            Some(reasoning_buf)
+        }
+    } else {
+        Some(content_buf)
+    };
+
+    Ok((content, tool_calls, finish_reason, final_usage))
 }
 
 #[cfg(test)]
@@ -1680,6 +1991,7 @@ mod tests {
             stop: None,
             tools: None,
             tool_choice: None,
+            stream: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["model"], "gpt-4o");
@@ -1714,6 +2026,7 @@ mod tests {
                 },
             }]),
             tool_choice: Some("auto".to_string()),
+            stream: false,
         };
         let json = serde_json::to_value(&req).unwrap();
         // f32 precision: 0.7f32 serializes as 0.699999988... in JSON

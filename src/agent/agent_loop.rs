@@ -192,11 +192,23 @@ pub struct AgentDeps {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct AgentChannels(Option<Arc<dyn MessageTransport>>);
+pub(super) struct AgentChannels {
+    transport: Option<Arc<dyn MessageTransport>>,
+    sse: Option<Arc<crate::runtime_events::SseManager>>,
+    owner_id: String,
+}
 
 impl AgentChannels {
-    pub(super) fn from_transport(transport: Option<Arc<dyn MessageTransport>>) -> Self {
-        Self(transport)
+    pub(super) fn new(
+        transport: Option<Arc<dyn MessageTransport>>,
+        sse: Option<Arc<crate::runtime_events::SseManager>>,
+        owner_id: String,
+    ) -> Self {
+        Self {
+            transport,
+            sse,
+            owner_id,
+        }
     }
 
     pub(super) async fn respond(
@@ -204,7 +216,7 @@ impl AgentChannels {
         message: &IncomingMessage,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
-        if let Some(transport) = self.0.as_ref() {
+        if let Some(transport) = self.transport.as_ref() {
             transport.respond(message, response).await
         } else {
             Ok(())
@@ -217,7 +229,21 @@ impl AgentChannels {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        if let Some(transport) = self.0.as_ref() {
+        // Mirror status updates to SSE so the web UI receives them in real-time.
+        if let Some(sse) = self.sse.as_ref() {
+            let user_id = metadata
+                .get("notify_user")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&self.owner_id);
+            let thread_id = metadata
+                .get("notify_thread_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            if let Some(event) = status_update_to_app_event(&status, thread_id) {
+                sse.broadcast_for_user(user_id, event);
+            }
+        }
+        if let Some(transport) = self.transport.as_ref() {
             let _ = channel_name;
             transport.send_status(status, metadata).await
         } else {
@@ -231,7 +257,7 @@ impl AgentChannels {
         user_id: &str,
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
-        if let Some(transport) = self.0.as_ref() {
+        if let Some(transport) = self.transport.as_ref() {
             transport.broadcast(channel_name, user_id, response).await
         } else {
             Ok(())
@@ -239,7 +265,7 @@ impl AgentChannels {
     }
 
     pub(super) async fn shutdown_all(&self) -> Result<(), ChannelError> {
-        if let Some(transport) = self.0.as_ref() {
+        if let Some(transport) = self.transport.as_ref() {
             transport.shutdown().await
         } else {
             Ok(())
@@ -250,7 +276,7 @@ impl AgentChannels {
         &self,
         metadata: &serde_json::Value,
     ) -> HashMap<String, String> {
-        self.0
+        self.transport
             .as_ref()
             .map(|transport| transport.conversation_context(metadata))
             .unwrap_or_default()
@@ -671,6 +697,7 @@ impl Agent {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
+        // SSE mirroring is handled inside AgentChannels::send_status().
         self.channels
             .send_status(channel_name, status, metadata)
             .await
@@ -757,10 +784,17 @@ impl Agent {
         }
         let scheduler = Arc::new(scheduler);
 
+        let sse_for_channels = deps.sse_tx.clone();
+        let owner_for_channels = deps.owner_id.clone();
+
         Self {
             config,
             deps,
-            channels: AgentChannels::from_transport(transport),
+            channels: AgentChannels::new(
+                transport,
+                sse_for_channels,
+                owner_for_channels,
+            ),
             message_stream: tokio::sync::Mutex::new(Some(message_stream)),
             context_manager,
             scheduler,
@@ -1444,8 +1478,21 @@ impl Agent {
             // Store successfully extracted document text in workspace for indexing
             self.store_extracted_documents(&message).await;
 
+            // Notify the web UI that processing has started
+            self.emit_sse_event_for_message(
+                &message,
+                ironclaw_common::AppEvent::Thinking {
+                    message: "正在处理...".to_string(),
+                    thread_id: message.thread_id.clone(),
+                },
+            );
+
             match self.handle_message(&message).await {
                 Ok(Some(response)) if !response.is_empty() => {
+                    // Real streaming happens in the dispatcher via the SSE
+                    // forwarder task — StreamChunk events arrive as the LLM
+                    // produces tokens.  We just emit the final Response event
+                    // so the frontend can commit the completed message.
                     self.emit_sse_event_for_message(
                         &message,
                         ironclaw_common::AppEvent::Response {
@@ -1468,38 +1515,36 @@ impl Agent {
                             modified: Some(new_content),
                         }) => {
                             // Skip channel delivery for "api" — SSE already delivered the response above.
-                            if message.channel != "api" {
-                                if let Err(e) = self
+                            if message.channel != "api"
+                                && let Err(e) = self
                                     .send_channel_response(
                                         &message,
                                         OutgoingResponse::text(new_content),
                                     )
                                     .await
-                                {
-                                    tracing::error!(
-                                        channel = %message.channel,
-                                        error = %e,
-                                        "Failed to send response to channel"
-                                    );
-                                }
+                            {
+                                tracing::error!(
+                                    channel = %message.channel,
+                                    error = %e,
+                                    "Failed to send response to channel"
+                                );
                             }
                         }
                         _ => {
                             // Skip channel delivery for "api" — SSE already delivered the response above.
-                            if message.channel != "api" {
-                                if let Err(e) = self
+                            if message.channel != "api"
+                                && let Err(e) = self
                                     .send_channel_response(
                                         &message,
                                         OutgoingResponse::text(response),
                                     )
                                     .await
-                                {
-                                    tracing::error!(
-                                        channel = %message.channel,
-                                        error = %e,
-                                        "Failed to send response to channel"
-                                    );
-                                }
+                            {
+                                tracing::error!(
+                                    channel = %message.channel,
+                                    error = %e,
+                                    "Failed to send response to channel"
+                                );
                             }
                         }
                     }
@@ -1514,9 +1559,17 @@ impl Agent {
                     );
                 }
                 Ok(None) => {
-                    // Shutdown signal received (/quit, /exit, /shutdown)
-                    tracing::debug!("Shutdown command received, exiting...");
-                    break;
+                    // Shutdown signal only from REPL /quit command.
+                    // For API/web channels, treat as empty response — never
+                    // terminate the agent loop from an API message.
+                    if message.channel == "repl" || message.channel == "cli" {
+                        tracing::debug!("Shutdown command received from {}, exiting...", message.channel);
+                        break;
+                    }
+                    tracing::debug!(
+                        channel = %message.channel,
+                        "Ignoring shutdown signal from non-interactive channel"
+                    );
                 }
                 Err(e) => {
                     self.emit_sse_event_for_message(
@@ -2054,7 +2107,7 @@ impl Agent {
                 // Suppress silent replies (e.g. from group chat "nothing to say" responses)
                 if crate::llm::is_silent_reply(&content) {
                     tracing::debug!("Suppressing silent reply token");
-                    Ok(None)
+                    Ok(Some(String::new()))
                 } else {
                     Ok(Some(content))
                 }
@@ -2076,7 +2129,9 @@ impl Agent {
                 if should_exit {
                     Ok(None)
                 } else {
-                    Ok(output_message)
+                    // Treat None as empty string so the main loop does not
+                    // mis-interpret it as a shutdown signal.
+                    Ok(Some(output_message.unwrap_or_default()))
                 }
             }
             SubmissionResult::Error { message } => Ok(Some(format!("Error: {}", message))),
@@ -2091,11 +2146,205 @@ impl Agent {
     }
 }
 
+/// Split a response string into UTF-8-safe chunks suitable for progressive
+/// delivery to the web UI. Only used by tests now — real streaming replaces this.
+#[cfg(test)]
+fn split_into_stream_chunks(text: &str) -> Vec<String> {
+    const MIN_CHARS: usize = 12;
+    const MAX_CHARS: usize = 28;
+
+    if text.chars().count() <= MAX_CHARS {
+        return vec![text.to_string()];
+    }
+
+    let mut chunks = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut chars_seen = 0usize;
+        let mut preferred_split = None;
+        let mut split_at = remaining.len();
+
+        for (idx, ch) in remaining.char_indices() {
+            chars_seen += 1;
+            let next_idx = idx + ch.len_utf8();
+
+            if chars_seen >= MIN_CHARS && is_stream_chunk_boundary(ch) {
+                preferred_split = Some(next_idx);
+            }
+
+            if chars_seen >= MAX_CHARS {
+                split_at = preferred_split.unwrap_or(next_idx);
+                break;
+            }
+        }
+
+        if chars_seen < MAX_CHARS {
+            split_at = remaining.len();
+        }
+
+        chunks.push(remaining[..split_at].to_string());
+        remaining = &remaining[split_at..];
+    }
+
+    chunks
+}
+
+#[cfg(test)]
+fn is_stream_chunk_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '\n'
+            | ' '
+            | '\t'
+            | '.'
+            | ','
+            | '!'
+            | '?'
+            | ';'
+            | ':'
+            | '。'
+            | '，'
+            | '、'
+            | '！'
+            | '？'
+            | '；'
+            | '：'
+    )
+}
+
+/// Convert a channel [`StatusUpdate`] into an [`AppEvent`] suitable for SSE
+/// broadcast to the web UI.  Returns `None` for status variants that have no
+/// meaningful SSE counterpart.
+fn status_update_to_app_event(
+    status: &crate::channels::StatusUpdate,
+    thread_id: Option<String>,
+) -> Option<ironclaw_common::AppEvent> {
+    use crate::channels::StatusUpdate;
+
+    match status {
+        StatusUpdate::Thinking(message) => Some(ironclaw_common::AppEvent::Thinking {
+            message: message.clone(),
+            thread_id,
+        }),
+        StatusUpdate::ToolStarted { name } => Some(ironclaw_common::AppEvent::ToolStarted {
+            name: name.clone(),
+            thread_id,
+        }),
+        StatusUpdate::ToolCompleted {
+            name,
+            success,
+            error,
+            parameters,
+        } => Some(ironclaw_common::AppEvent::ToolCompleted {
+            name: name.clone(),
+            success: *success,
+            error: error.clone(),
+            parameters: parameters.clone(),
+            thread_id,
+        }),
+        StatusUpdate::ToolResult { name, preview } => {
+            Some(ironclaw_common::AppEvent::ToolResult {
+                name: name.clone(),
+                preview: preview.clone(),
+                thread_id,
+            })
+        }
+        StatusUpdate::StreamChunk(content) => Some(ironclaw_common::AppEvent::StreamChunk {
+            content: content.clone(),
+            thread_id,
+        }),
+        StatusUpdate::Status(message) => Some(ironclaw_common::AppEvent::Status {
+            message: message.clone(),
+            thread_id,
+        }),
+        StatusUpdate::ImageGenerated { data_url, path } => {
+            Some(ironclaw_common::AppEvent::ImageGenerated {
+                data_url: data_url.clone(),
+                path: path.clone(),
+                thread_id,
+            })
+        }
+        StatusUpdate::Suggestions { suggestions } => {
+            Some(ironclaw_common::AppEvent::Suggestions {
+                suggestions: suggestions.clone(),
+                thread_id,
+            })
+        }
+        StatusUpdate::TurnCost {
+            input_tokens,
+            output_tokens,
+            cost_usd,
+        } => Some(ironclaw_common::AppEvent::TurnCost {
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+            cost_usd: cost_usd.clone(),
+            thread_id,
+        }),
+        StatusUpdate::ReasoningUpdate {
+            narrative,
+            decisions,
+        } => Some(ironclaw_common::AppEvent::ReasoningUpdate {
+            narrative: narrative.clone(),
+            decisions: decisions
+                .iter()
+                .map(|d| ironclaw_common::ToolDecisionDto {
+                    tool_name: d.tool_name.clone(),
+                    rationale: d.rationale.clone(),
+                })
+                .collect(),
+            thread_id,
+        }),
+        StatusUpdate::ApprovalNeeded {
+            request_id,
+            tool_name,
+            description,
+            parameters,
+            allow_always,
+        } => Some(ironclaw_common::AppEvent::ApprovalNeeded {
+            request_id: request_id.clone(),
+            tool_name: tool_name.clone(),
+            description: description.clone(),
+            parameters: serde_json::to_string(parameters).unwrap_or_default(),
+            thread_id,
+            allow_always: *allow_always,
+        }),
+        StatusUpdate::AuthRequired {
+            extension_name,
+            instructions,
+            auth_url,
+            setup_url,
+        } => Some(ironclaw_common::AppEvent::AuthRequired {
+            extension_name: extension_name.clone(),
+            instructions: instructions.clone(),
+            auth_url: auth_url.clone(),
+            setup_url: setup_url.clone(),
+        }),
+        StatusUpdate::AuthCompleted {
+            extension_name,
+            success,
+            message,
+        } => Some(ironclaw_common::AppEvent::AuthCompleted {
+            extension_name: extension_name.clone(),
+            success: *success,
+            message: message.clone(),
+        }),
+        StatusUpdate::JobStarted {
+            job_id,
+            title,
+            browse_url,
+        } => Some(ironclaw_common::AppEvent::JobStarted {
+            job_id: job_id.clone(),
+            title: title.clone(),
+            browse_url: browse_url.clone(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         chat_tool_execution_metadata, is_single_message_repl, resolve_routine_notification_user,
-        should_fallback_routine_notification, truncate_for_preview,
+        should_fallback_routine_notification, split_into_stream_chunks, truncate_for_preview,
     };
     #[cfg(feature = "libsql")]
     use crate::agent::{Agent, AgentDeps};
@@ -2362,6 +2611,24 @@ mod tests {
         assert!(is_single_message_repl(&repl)); // safety: test-only assertion
         assert!(!is_single_message_repl(&gateway)); // safety: test-only assertion
         assert!(!is_single_message_repl(&plain_repl)); // safety: test-only assertion
+    }
+
+    #[test]
+    fn split_into_stream_chunks_preserves_unicode_content() {
+        let text = "调用一个工具试试。Hello! Tools are working correctly. 🎉 这是第二句，用来验证分片不会切坏 UTF-8。";
+        let chunks = split_into_stream_chunks(text);
+
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn split_into_stream_chunks_splits_medium_text_for_visible_streaming() {
+        let text = "This response should be split into multiple visible chunks for the web UI.";
+        let chunks = split_into_stream_chunks(text);
+
+        assert!(chunks.len() > 1);
+        assert_eq!(chunks.concat(), text);
     }
 
     #[cfg(feature = "libsql")]

@@ -9,7 +9,7 @@
     mode="onboarding"
     eyebrow="欢迎使用"
     title="连接模型服务"
-    description="AionUi 需要至少一个可用的模型服务配置。请选择一个提供商，填写所需凭据，确认要使用的模型。"
+    description="Steward 需要至少一个可用的模型服务配置。请选择一个提供商，填写所需凭据，确认要使用的模型。"
     submitLabel="继续"
     {onComplete}
   />

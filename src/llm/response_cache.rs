@@ -551,6 +551,7 @@ mod tests {
             stop_sequences: None,
             tool_choice: None,
             metadata: Default::default(),
+            stream_tx: None,
         };
 
         cached.complete_with_tools(req.clone()).await.unwrap();
