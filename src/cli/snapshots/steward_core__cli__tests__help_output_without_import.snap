@@ -1,12 +1,8 @@
 ---
 source: src/cli/mod.rs
-assertion_line: 337
 expression: help
 ---
-Steward local runtime commands.
-Examples:
-  steward run
-  steward config list
+Local-first AI automation runtime
 
 Usage: steward [OPTIONS] [COMMAND]
 
@@ -31,17 +27,8 @@ Commands:
   help        Print this message or the help of the given subcommand(s)
 
 Options:
-      --no-db
-          Skip database connection (for testing)
-
-  -m, --message <MESSAGE>
-          Single message mode - send one message and exit
-
-  -c, --config <CONFIG>
-          Configuration file path (optional, uses env vars by default)
-
-  -h, --help
-          Print help (see a summary with '-h')
-
-  -V, --version
-          Print version
+      --no-db              Skip database connection (for testing)
+  -m, --message <MESSAGE>  Single message mode - send one message and exit
+  -c, --config <CONFIG>    Configuration file path (optional, uses env vars by default)
+  -h, --help               Print help (see more with '--help')
+  -V, --version            Print version
