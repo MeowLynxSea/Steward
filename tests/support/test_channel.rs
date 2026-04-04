@@ -15,10 +15,10 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
-use ironclaw::channels::{
+use steward_core::channels::{
     IncomingMessage, MessageStream, MessageTransport, OutgoingResponse, StatusUpdate,
 };
-use ironclaw::error::ChannelError;
+use steward_core::error::ChannelError;
 
 // ---------------------------------------------------------------------------
 // TestChannel

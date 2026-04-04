@@ -1,4 +1,4 @@
-//! IronCowork core runtime.
+//! Steward core runtime.
 //!
 //! Phase 0 keeps the Rust agent engine, safety model, tool runtime, and
 //! workspace retrieval stack while the product shell is being transformed into

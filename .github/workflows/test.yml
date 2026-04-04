@@ -184,7 +184,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
       - name: Build Docker image
-        run: docker build -t ironclaw-test:ci .
+        run: docker build -t steward-test:ci .
 
   version-check:
     name: Version Bump Check

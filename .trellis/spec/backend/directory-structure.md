@@ -1,6 +1,6 @@
 # Directory Structure
 
-> How backend code is organized in this project during the IronClaw -> IronCowork migration.
+> How backend code is organized in this project during the Steward -> Steward migration.
 
 ---
 
@@ -42,11 +42,11 @@ ui/
 
 Real examples in the current codebase:
 
-- API routing and DTOs: [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs)
-- Runtime boot wiring: [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs)
-- Session lifecycle logic: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/session_manager.rs)
-- Task approval emission: [src/agent/thread_ops.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/thread_ops.rs)
-- Desktop bridge: [src-tauri/src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src-tauri/src/main.rs)
+- API routing and DTOs: [src/api.rs](/Users/MeowLynxSea/Development/Steward/src/api.rs)
+- Runtime boot wiring: [src/main.rs](/Users/MeowLynxSea/Development/Steward/src/main.rs)
+- Session lifecycle logic: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/Steward/src/agent/session_manager.rs)
+- Task approval emission: [src/agent/thread_ops.rs](/Users/MeowLynxSea/Development/Steward/src/agent/thread_ops.rs)
+- Desktop bridge: [src-tauri/src/main.rs](/Users/MeowLynxSea/Development/Steward/src-tauri/src/main.rs)
 
 ---
 
@@ -64,7 +64,7 @@ Real examples in the current codebase:
 
 As the migration continues, logic should move toward:
 
-- `crates/ironcowork-api` for Axum routes
+- `crates/steward-api` for Axum routes
 - retained core/runtime crates for agent, storage, workspace, and tools
 - `src-tauri/` only for native capabilities
 
@@ -85,9 +85,9 @@ Until that split exists, write code so that extraction is straightforward: keep 
 
 ### Good
 
-- [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs) keeps request/response types near the route handlers that use them.
-- [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs) wires `ApiState`, `TaskRuntime`, `SseManager`, and session manager together without owning their business rules.
-- [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/IronCowork/tests/api_http_integration.rs) validates the HTTP layer from the outside instead of unit-testing handlers in isolation only.
+- [src/api.rs](/Users/MeowLynxSea/Development/Steward/src/api.rs) keeps request/response types near the route handlers that use them.
+- [src/main.rs](/Users/MeowLynxSea/Development/Steward/src/main.rs) wires `ApiState`, `TaskRuntime`, `SseManager`, and session manager together without owning their business rules.
+- [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/Steward/tests/api_http_integration.rs) validates the HTTP layer from the outside instead of unit-testing handlers in isolation only.
 
 ### Bad
 

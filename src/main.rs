@@ -1,4 +1,4 @@
-//! IronCowork - Main entry point.
+//! Steward - Main entry point.
 
 use std::sync::Arc;
 
@@ -6,7 +6,7 @@ use clap::Parser;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
-use ironclaw::{
+use steward_core::{
     agent::{Agent, AgentDeps},
     app::{AppBuilder, AppBuilderFlags},
     channels::{IncomingMessage, MessageStream},
@@ -27,7 +27,7 @@ use ironclaw::{
 /// starts so that `std::env::set_var` is safe (no worker threads yet).
 fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
-    ironclaw::bootstrap::load_ironclaw_env();
+    steward_core::bootstrap::load_steward_env();
 
     let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -42,7 +42,7 @@ fn main() -> anyhow::Result<()> {
 
 /// Format a top-level error with color and recovery hints.
 fn format_top_level_error(err: &anyhow::Error) {
-    use ironclaw::cli::fmt;
+    use steward_core::cli::fmt;
     let msg = format!("{err:#}");
 
     eprintln!();
@@ -85,19 +85,19 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Config(config_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_config_command(config_cmd.clone()).await;
+            return steward_core::cli::run_config_command(config_cmd.clone()).await;
         }
         Some(Command::Desktop) => {
             init_cli_tracing();
-            return ironclaw::cli::run_desktop_command().await;
+            return steward_core::cli::run_desktop_command().await;
         }
         Some(Command::Registry(registry_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_registry_command(registry_cmd.clone()).await;
+            return steward_core::cli::run_registry_command(registry_cmd.clone()).await;
         }
         Some(Command::Routines(routines_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_routines_cli(routines_cmd, cli.config.as_deref()).await;
+            return steward_core::cli::run_routines_cli(routines_cmd, cli.config.as_deref()).await;
         }
         Some(Command::Mcp(mcp_cmd)) => {
             init_cli_tracing();
@@ -105,7 +105,7 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Memory(mem_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_memory_command(mem_cmd).await;
+            return steward_core::cli::run_memory_command(mem_cmd).await;
         }
         Some(Command::Pairing(pairing_cmd)) => {
             init_cli_tracing();
@@ -117,22 +117,22 @@ async fn async_main() -> anyhow::Result<()> {
         }
         Some(Command::Skills(skills_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_skills_command(skills_cmd.clone(), cli.config.as_deref())
+            return steward_core::cli::run_skills_command(skills_cmd.clone(), cli.config.as_deref())
                 .await;
         }
         Some(Command::Hooks(hooks_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_hooks_command(hooks_cmd.clone(), cli.config.as_deref())
+            return steward_core::cli::run_hooks_command(hooks_cmd.clone(), cli.config.as_deref())
                 .await;
         }
         Some(Command::Models(models_cmd)) => {
             init_cli_tracing();
-            return ironclaw::cli::run_models_command(models_cmd.clone(), cli.config.as_deref())
+            return steward_core::cli::run_models_command(models_cmd.clone(), cli.config.as_deref())
                 .await;
         }
         Some(Command::Doctor) => {
             init_cli_tracing();
-            return ironclaw::cli::run_doctor_command().await;
+            return steward_core::cli::run_doctor_command().await;
         }
         Some(Command::Status) => {
             init_cli_tracing();
@@ -145,8 +145,8 @@ async fn async_main() -> anyhow::Result<()> {
         #[cfg(feature = "import")]
         Some(Command::Import(import_cmd)) => {
             init_cli_tracing();
-            let config = ironclaw::config::Config::from_env().await?;
-            return ironclaw::cli::run_import_command(import_cmd, &config).await;
+            let config = steward_core::config::Config::from_env().await?;
+            return steward_core::cli::run_import_command(import_cmd, &config).await;
         }
         Some(Command::Login { openai_codex }) => {
             init_cli_tracing();
@@ -158,7 +158,7 @@ async fn async_main() -> anyhow::Result<()> {
                         .await
                         .map_err(|e| anyhow::anyhow!("{}", e))?;
                     config.llm.openai_codex.unwrap_or_else(|| {
-                        use ironclaw::llm::OpenAiCodexConfig;
+                        use steward_core::llm::OpenAiCodexConfig;
                         let mut cfg = OpenAiCodexConfig::default();
                         if let Ok(v) = std::env::var("OPENAI_CODEX_AUTH_URL") {
                             cfg.auth_endpoint = v;
@@ -175,7 +175,7 @@ async fn async_main() -> anyhow::Result<()> {
                         cfg
                     })
                 };
-                let mgr = ironclaw::llm::OpenAiCodexSessionManager::new(codex_config)
+                let mgr = steward_core::llm::OpenAiCodexSessionManager::new(codex_config)
                     .map_err(|e| anyhow::anyhow!("{}", e))?;
                 mgr.device_code_login()
                     .await
@@ -185,7 +185,7 @@ async fn async_main() -> anyhow::Result<()> {
                 );
             } else {
                 println!("Specify a provider to authenticate with:");
-                println!("  ironcowork login --openai-codex   (ChatGPT subscription)");
+                println!("  steward login --openai-codex   (ChatGPT subscription)");
             }
             return Ok(());
         }
@@ -195,14 +195,14 @@ async fn async_main() -> anyhow::Result<()> {
     }
 
     // ── PID lock (prevent multiple instances) ────────────────────────
-    let _pid_lock = match ironclaw::bootstrap::PidLock::acquire() {
+    let _pid_lock = match steward_core::bootstrap::PidLock::acquire() {
         Ok(lock) => Some(lock),
-        Err(ironclaw::bootstrap::PidLockError::AlreadyRunning { pid }) => {
+        Err(steward_core::bootstrap::PidLockError::AlreadyRunning { pid }) => {
             anyhow::bail!(
-                "Another IronCowork instance is already running (PID {}). \
+                "Another Steward instance is already running (PID {}). \
                  If this is incorrect, remove the stale PID file: {}",
                 pid,
-                ironclaw::bootstrap::pid_lock_path().display()
+                steward_core::bootstrap::pid_lock_path().display()
             );
         }
         Err(e) => {
@@ -223,7 +223,7 @@ async fn async_main() -> anyhow::Result<()> {
     let toml_path = cli.config.as_deref();
     let config = match Config::from_env_with_toml(toml_path).await {
         Ok(c) => c,
-        Err(ironclaw::error::ConfigError::MissingRequired { key, hint }) => {
+        Err(steward_core::error::ConfigError::MissingRequired { key, hint }) => {
             anyhow::bail!(
                 "Configuration error: Missing required setting '{}'. {}. \
                  Set the required environment variables or config.toml values directly.",
@@ -240,7 +240,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Initialize tracing for the local runtime after env/config loading.
     init_app_tracing();
 
-    tracing::debug!("Starting IronCowork...");
+    tracing::debug!("Starting Steward...");
     tracing::debug!("Loaded configuration for agent: {}", config.agent.name);
     tracing::debug!("LLM backend: {}", config.llm.backend);
 
@@ -289,7 +289,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Lazy scheduler slot — filled after Agent::new creates the Scheduler.
     // Allows CreateJobTool to dispatch local jobs via the Scheduler even though
     // the Scheduler is created after tools are registered (chicken-and-egg).
-    let scheduler_slot: ironclaw::tools::builtin::SchedulerSlot =
+    let scheduler_slot: steward_core::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
     // Register job tools.
@@ -311,7 +311,7 @@ async fn async_main() -> anyhow::Result<()> {
         .map(|c| c.model_name().to_string());
 
     if cli.message.is_none() {
-        let boot_info = ironclaw::boot_screen::BootInfo {
+        let boot_info = steward_core::boot_screen::BootInfo {
             version: env!("CARGO_PKG_VERSION").to_string(),
             agent_name: config.agent.name.clone(),
             llm_backend: config.llm.backend.to_string(),
@@ -341,7 +341,7 @@ async fn async_main() -> anyhow::Result<()> {
             tunnel_provider: None,
             startup_elapsed: Some(startup_start.elapsed()),
         };
-        ironclaw::boot_screen::print_boot_screen(&boot_info);
+        steward_core::boot_screen::print_boot_screen(&boot_info);
     }
 
     // ── Run the agent ──────────────────────────────────────────────────
@@ -362,18 +362,18 @@ async fn async_main() -> anyhow::Result<()> {
     } else {
         Arc::new(TaskRuntime::new())
     };
-    let sse_manager = Arc::new(ironclaw::runtime_events::SseManager::new());
+    let sse_manager = Arc::new(steward_core::runtime_events::SseManager::new());
     let primary_llm = components.llm.clone();
     let cheap_llm = components
         .cheap_llm
         .clone()
         .unwrap_or_else(|| primary_llm.clone());
     let reloadable_llm_state = Arc::new(ReloadableLlmState::new(primary_llm, cheap_llm));
-    let app_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+    let app_llm: Arc<dyn steward_core::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Primary,
     ));
-    let app_cheap_llm: Arc<dyn ironclaw::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+    let app_cheap_llm: Arc<dyn steward_core::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Cheap,
     ));
@@ -396,17 +396,17 @@ async fn async_main() -> anyhow::Result<()> {
         emitter: None,
         http_interceptor,
         transcription: config.transcription.create_provider().map(|p| {
-            Arc::new(ironclaw::llm::transcription::TranscriptionMiddleware::new(
+            Arc::new(steward_core::llm::transcription::TranscriptionMiddleware::new(
                 p,
             ))
         }),
         document_extraction: Some(Arc::new(
-            ironclaw::document_extraction::DocumentExtractionMiddleware::new(),
+            steward_core::document_extraction::DocumentExtractionMiddleware::new(),
         )),
         claude_code_config: config.claude_code.clone(),
         builder: components.builder,
         llm_backend: config.llm.backend.clone(),
-        tenant_rates: Arc::new(ironclaw::tenant::TenantRateRegistry::new(
+        tenant_rates: Arc::new(steward_core::tenant::TenantRateRegistry::new(
             config.agent.max_llm_concurrent_per_user.unwrap_or(4),
             config.agent.max_jobs_concurrent_per_user.unwrap_or(3),
         )),

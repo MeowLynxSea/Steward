@@ -69,7 +69,7 @@
     } catch (error) {
       appError = error instanceof Error
         ? error.message
-        : "Failed to connect to IronCowork backend. Is the server running?";
+        : "Failed to connect to Steward backend. Is the server running?";
     } finally {
       appLoading = false;
     }
@@ -186,7 +186,7 @@
   <div class="loading-screen">
     <div class="loading-content">
       <h2>加载中...</h2>
-      <p>正在连接到 IronCowork 后端</p>
+      <p>正在连接到 Steward 后端</p>
     </div>
   </div>
 {:else if appError}

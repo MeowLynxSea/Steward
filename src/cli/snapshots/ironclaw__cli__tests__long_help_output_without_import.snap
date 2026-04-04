@@ -2,12 +2,12 @@
 source: src/cli/mod.rs
 expression: help
 ---
-IronCowork local runtime commands.
+Steward local runtime commands.
 Examples:
-  ironcowork run
-  ironcowork config list
+  steward run
+  steward config list
 
-Usage: ironcowork [OPTIONS] [COMMAND]
+Usage: steward [OPTIONS] [COMMAND]
 
 Commands:
   run         Run the AI agent

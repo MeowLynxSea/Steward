@@ -383,7 +383,7 @@ class SessionsState {
       case "session.approval_needed": {
         const { tool_name, summary } = event.payload as { tool_name: string; summary: string };
         this.status = `Approval needed: ${tool_name}`;
-        void notify("IronCowork needs confirmation", `${tool_name}: ${summary}`);
+        void notify("Steward needs confirmation", `${tool_name}: ${summary}`);
         break;
       }
 

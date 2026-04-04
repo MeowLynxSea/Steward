@@ -7,8 +7,8 @@
 
 use std::sync::Arc;
 
-use ironclaw::db::DatabaseHandles;
-use ironclaw::secrets::{CreateSecretParams, SecretsCrypto, SecretsStore};
+use steward_core::db::DatabaseHandles;
+use steward_core::secrets::{CreateSecretParams, SecretsCrypto, SecretsStore};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,9 +16,9 @@ use ironclaw::secrets::{CreateSecretParams, SecretsCrypto, SecretsStore};
 
 /// Build a libsql DatabaseConfig pointing at a temp file.
 #[cfg(feature = "libsql")]
-fn libsql_config(path: &std::path::Path) -> ironclaw::config::DatabaseConfig {
-    ironclaw::config::DatabaseConfig {
-        backend: ironclaw::config::DatabaseBackend::LibSql,
+fn libsql_config(path: &std::path::Path) -> steward_core::config::DatabaseConfig {
+    steward_core::config::DatabaseConfig {
+        backend: steward_core::config::DatabaseBackend::LibSql,
         url: secrecy::SecretString::from(String::new()),
         pool_size: 1,
         libsql_path: Some(path.to_path_buf()),
@@ -29,7 +29,7 @@ fn libsql_config(path: &std::path::Path) -> ironclaw::config::DatabaseConfig {
 
 /// Build a master-key crypto instance for tests.
 fn test_crypto() -> Arc<SecretsCrypto> {
-    let key = secrecy::SecretString::from(ironclaw::secrets::keychain::generate_master_key_hex());
+    let key = secrecy::SecretString::from(steward_core::secrets::keychain::generate_master_key_hex());
     Arc::new(SecretsCrypto::new(key).expect("test crypto"))
 }
 
@@ -44,7 +44,7 @@ async fn connect_with_handles_returns_db_and_libsql_handle() {
     let db_path = dir.path().join("test.db");
     let config = libsql_config(&db_path);
 
-    let (db, handles) = ironclaw::db::connect_with_handles(&config)
+    let (db, handles) = steward_core::db::connect_with_handles(&config)
         .await
         .expect("connect_with_handles");
 
@@ -70,7 +70,7 @@ async fn connect_from_config_produces_working_db() {
     let config = libsql_config(&db_path);
 
     // connect_from_config delegates to connect_with_handles internally.
-    let db = ironclaw::db::connect_from_config(&config)
+    let db = steward_core::db::connect_from_config(&config)
         .await
         .expect("connect_from_config");
 
@@ -89,12 +89,12 @@ async fn secrets_store_from_handles_round_trips() {
     let db_path = dir.path().join("test.db");
     let config = libsql_config(&db_path);
 
-    let (_db, handles) = ironclaw::db::connect_with_handles(&config)
+    let (_db, handles) = steward_core::db::connect_with_handles(&config)
         .await
         .expect("connect");
 
     let crypto = test_crypto();
-    let store = ironclaw::secrets::create_secrets_store(crypto, &handles)
+    let store = steward_core::secrets::create_secrets_store(crypto, &handles)
         .expect("create_secrets_store should return Some for libsql");
 
     // Round-trip a secret to prove the store works.
@@ -122,7 +122,7 @@ async fn db_create_secrets_store_standalone_round_trips() {
     let config = libsql_config(&db_path);
     let crypto = test_crypto();
 
-    let store = ironclaw::db::create_secrets_store(&config, crypto)
+    let store = steward_core::db::create_secrets_store(&config, crypto)
         .await
         .expect("db::create_secrets_store");
 
@@ -154,14 +154,14 @@ async fn both_secrets_factories_produce_compatible_stores() {
     let crypto = test_crypto();
 
     // Factory 1: connect_with_handles + secrets::create_secrets_store
-    let (_db, handles) = ironclaw::db::connect_with_handles(&config)
+    let (_db, handles) = steward_core::db::connect_with_handles(&config)
         .await
         .expect("connect");
-    let store_a = ironclaw::secrets::create_secrets_store(Arc::clone(&crypto), &handles)
+    let store_a = steward_core::secrets::create_secrets_store(Arc::clone(&crypto), &handles)
         .expect("store from handles");
 
     // Factory 2: db::create_secrets_store (standalone)
-    let store_b = ironclaw::db::create_secrets_store(&config, crypto)
+    let store_b = steward_core::db::create_secrets_store(&config, crypto)
         .await
         .expect("standalone store");
 
@@ -187,11 +187,11 @@ async fn both_secrets_factories_produce_compatible_stores() {
 
 #[tokio::test]
 async fn extension_manager_with_process_manager_constructs() {
-    use ironclaw::extensions::ExtensionManager;
-    use ironclaw::secrets::InMemorySecretsStore;
-    use ironclaw::tools::ToolRegistry;
-    use ironclaw::tools::mcp::McpProcessManager;
-    use ironclaw::tools::mcp::McpSessionManager;
+    use steward_core::extensions::ExtensionManager;
+    use steward_core::secrets::InMemorySecretsStore;
+    use steward_core::tools::ToolRegistry;
+    use steward_core::tools::mcp::McpProcessManager;
+    use steward_core::tools::mcp::McpSessionManager;
 
     let crypto = test_crypto();
     let secrets: Arc<dyn SecretsStore + Send + Sync> = Arc::new(InMemorySecretsStore::new(crypto));

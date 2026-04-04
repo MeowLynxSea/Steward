@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Developer setup script for IronCowork.
+# Developer setup script for Steward.
 #
 # Gets a fresh checkout ready for development without requiring
 # Docker, PostgreSQL, or any external services.
@@ -11,7 +11,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "=== IronCowork Developer Setup ==="
+echo "=== Steward Developer Setup ==="
 echo ""
 
 if ! command -v rustup &>/dev/null; then

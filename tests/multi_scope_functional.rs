@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use ironclaw::db::Database;
-use ironclaw::db::libsql::LibSqlBackend;
-use ironclaw::workspace::Workspace;
+use steward_core::db::Database;
+use steward_core::db::libsql::LibSqlBackend;
+use steward_core::workspace::Workspace;
 
 async fn setup() -> (Arc<dyn Database>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");

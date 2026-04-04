@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="ironcowork.png?v=2" alt="IronCowork" width="200"/>
+  <img src="steward.png?v=2" alt="Steward" width="200"/>
 </p>
 
-<h1 align="center">IronCowork</h1>
+<h1 align="center">Steward</h1>
 
 <p align="center">
   <strong>Desktop-first autonomous AI coworker for local knowledge work</strong>
@@ -34,7 +34,7 @@
 
 ## Positioning
 
-IronCowork is not a GUI wrapper around a coding CLI, and it is not being built as a predefined-workflow product.
+Steward is not a GUI wrapper around a coding CLI, and it is not being built as a predefined-workflow product.
 
 The target experience is closer to a desktop-native autonomous agent for knowledge work:
 
@@ -56,7 +56,7 @@ Saved routines may exist later as accelerators, but they are not the product cen
 
 ## Current Direction
 
-This repository is now aligned around the IronCowork product direction and is finishing packaging and end-user polish.
+This repository is now aligned around the Steward product direction and is finishing packaging and end-user polish.
 
 What stays:
 
@@ -71,7 +71,7 @@ What is being removed or demoted:
 - channel-first interaction surfaces
 - NEAR-account-oriented onboarding
 - PostgreSQL assumptions
-- docs that describe IronCowork as a predefined-workflow runner
+- docs that describe Steward as a predefined-workflow runner
 
 What replaces the old center of gravity:
 
@@ -137,14 +137,14 @@ through the app's onboarding flow and Settings page.
 
 ```env
 DATABASE_BACKEND=libsql
-LIBSQL_PATH=~/.ironcowork/ironcowork.db
+LIBSQL_PATH=~/.steward/steward.db
 ```
 
 No NEAR login or PostgreSQL bootstrap should be required for the target product.
 
 ## Security
 
-IronCowork keeps the original defense-in-depth posture and applies it to desktop automation:
+Steward keeps the original defense-in-depth posture and applies it to desktop automation:
 
 - risky side effects must go through the retained tool/safety boundary
 - Ask mode can suspend execution for approval before mutation

@@ -18,7 +18,7 @@
   </div>
 
   <div class="top-nav-center">
-    <span class="app-name">IronCowork</span>
+    <span class="app-name">Steward</span>
   </div>
 
   <div class="top-nav-right">

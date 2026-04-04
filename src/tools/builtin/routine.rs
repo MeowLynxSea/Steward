@@ -284,7 +284,7 @@ fn routine_request_discovery_schema() -> Value {
             { "kind": "manual" },
             { "kind": "cron", "schedule": "0 0 9 * * MON-FRI", "timezone": "UTC" },
             { "kind": "message_event", "pattern": "deploy\\s+prod", "channel": "slack" },
-            { "kind": "system_event", "source": "github", "event_type": "issue.opened", "filters": { "repository": "nearai/ironclaw" } }
+            { "kind": "system_event", "source": "github", "event_type": "issue.opened", "filters": { "repository": "MeowLynxSea/steward" } }
         ]
     })
 }
@@ -399,7 +399,7 @@ fn routine_create_examples() -> Vec<Value> {
                 "kind": "system_event",
                 "source": "github",
                 "event_type": "issue.opened",
-                "filters": { "repository": "nearai/ironclaw" }
+                "filters": { "repository": "MeowLynxSea/steward" }
             },
             "execution": {
                 "mode": "full_job"
@@ -2072,7 +2072,7 @@ mod tests {
                 "source": "github",
                 "event_type": "issue.opened",
                 "filters": {
-                    "repository": "nearai/ironclaw",
+                    "repository": "MeowLynxSea/steward",
                     "public": true,
                     "issue_number": 42
                 }
@@ -2091,7 +2091,7 @@ mod tests {
                 NormalizedTriggerRequest::SystemEvent { ref source, ref event_type, ref filters }
                 if source == "github"
                     && event_type == "issue.opened"
-                    && filters.get("repository") == Some(&"nearai/ironclaw".to_string())
+                    && filters.get("repository") == Some(&"MeowLynxSea/steward".to_string())
                     && filters.get("public") == Some(&"true".to_string())
                     && filters.get("issue_number") == Some(&"42".to_string())
             ),
@@ -2111,7 +2111,7 @@ mod tests {
                 "filters": {
                     "repository": {
                         "owner": "nearai",
-                        "name": "ironclaw"
+                        "name": "steward"
                     }
                 }
             }

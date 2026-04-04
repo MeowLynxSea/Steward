@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 mod commands;
 
-use ironclaw::desktop_runtime::TauriEventEmitterHandle;
+use steward_core::desktop_runtime::TauriEventEmitterHandle;
 use crate::commands::{
     approve_task, create_session, create_workspace_checkpoint, create_workspace_mount,
     delete_session, delete_task, get_session, get_settings, get_task, get_workbench_capabilities,
@@ -14,9 +14,9 @@ use crate::commands::{
     patch_settings, patch_task_mode, reject_task, resolve_workspace_mount_conflict,
     revert_workspace_mount, search_workspace, send_session_message,
 };
-use ironclaw::ipc::AppState;
-use ironclaw::llm::{OpenAiCodexConfig, OpenAiCodexDeviceCode, OpenAiCodexSessionManager};
-use ironclaw::runtime_events::RuntimeEventEmitter;
+use steward_core::ipc::AppState;
+use steward_core::llm::{OpenAiCodexConfig, OpenAiCodexDeviceCode, OpenAiCodexSessionManager};
+use steward_core::runtime_events::RuntimeEventEmitter;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
@@ -43,7 +43,7 @@ impl TauriEventEmitter {
 }
 
 impl RuntimeEventEmitter for TauriEventEmitter {
-    fn emit_for_user(&self, user_id: &str, event: ironclaw_common::AppEvent) {
+    fn emit_for_user(&self, user_id: &str, event: steward_common::AppEvent) {
         // Map AppEvent type to Tauri event name
         let tauri_event_name = format!("session:{}", event.event_type());
         let payload = serde_json::json!({
@@ -296,7 +296,7 @@ fn main() {
                 Some(Arc::new(emitter) as TauriEventEmitterHandle)
             };
             let app_state: AppState = tauri::async_runtime::block_on(async {
-                ironclaw::desktop_runtime::start_embedded_runtime(tauri_emitter)
+                steward_core::desktop_runtime::start_embedded_runtime(tauri_emitter)
                     .await
                     .map_err(|error| {
                         std::io::Error::other(format!(
@@ -340,5 +340,5 @@ fn main() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("failed to run IronCowork desktop shell");
+        .expect("failed to run Steward desktop shell");
 }

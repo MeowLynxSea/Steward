@@ -4,7 +4,7 @@ expression: help
 ---
 Local-first AI automation runtime
 
-Usage: ironcowork [OPTIONS] [COMMAND]
+Usage: steward [OPTIONS] [COMMAND]
 
 Commands:
   run         Run the AI agent

@@ -4,8 +4,8 @@
 
 #[cfg(feature = "import")]
 mod import_tests {
-    use ironclaw::import::openclaw::reader::{OpenClawConfig, OpenClawMemoryChunk};
-    use ironclaw::import::{ImportError, ImportStats};
+    use steward_core::import::openclaw::reader::{OpenClawConfig, OpenClawMemoryChunk};
+    use steward_core::import::{ImportError, ImportStats};
 
     #[test]
     fn test_import_stats_is_empty() {

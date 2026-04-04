@@ -1,15 +1,15 @@
 # Desktop-First Architecture
 
-> Executable architecture rules for IronCowork as a desktop autonomous agent.
+> Executable architecture rules for Steward as a desktop autonomous agent.
 
 ---
 
-## Scenario: IronCowork Desktop Runtime
+## Scenario: Steward Desktop Runtime
 
 ### 1. Scope / Trigger
 
-- Trigger: any work that changes runtime/module boundaries while converting IronClaw into IronCowork.
-- Trigger: any work that adds or edits `src-tauri/`, `ui/`, `crates/ironcowork-api`, session/run APIs, or workspace/runtime wiring.
+- Trigger: any work that changes runtime/module boundaries while converting Steward into Steward.
+- Trigger: any work that adds or edits `src-tauri/`, `ui/`, `crates/steward-api`, session/run APIs, or workspace/runtime wiring.
 - Trigger: any work that removes old channel, gateway, PostgreSQL, NEAR AI, or predefined-workflow-first assumptions.
 
 ### 2. Signatures
@@ -50,7 +50,7 @@ async fn open_libsql(path: &std::path::Path) -> anyhow::Result<libsql::Database>
 
 | Area | Responsibility |
 |------|----------------|
-| `crates/ironcowork-api` | Axum routes, SSE, shared state, HTTP DTOs |
+| `crates/steward-api` | Axum routes, SSE, shared state, HTTP DTOs |
 | `src-tauri` | Notifications, tray, drag-and-drop, desktop lifecycle |
 | `ui/` | Svelte app over HTTP/SSE only |
 | runtime crates | Agent loop, runs, approvals, tools, workspace, storage |
@@ -75,7 +75,7 @@ async fn open_libsql(path: &std::path::Path) -> anyhow::Result<libsql::Database>
 
 - `ui/` must not depend on Tauri IPC for primary business flows.
 - `src-tauri/` must not own session state, run state, or approval decisions.
-- Business operations must not bypass `ironcowork-api` to talk directly to storage.
+- Business operations must not bypass `steward-api` to talk directly to storage.
 - Risky actions must not bypass the tool/safety layer.
 - New code must not reintroduce PostgreSQL or predefined-workflow-first assumptions.
 

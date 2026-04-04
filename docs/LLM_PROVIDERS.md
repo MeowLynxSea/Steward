@@ -1,6 +1,6 @@
 # LLM Provider Configuration
 
-IronCowork Phase 0 no longer assumes NEAR AI onboarding. Configure the selected
+Steward Phase 0 no longer assumes NEAR AI onboarding. Configure the selected
 provider directly through environment variables or config files. This guide
 covers the most common configurations.
 
@@ -110,7 +110,7 @@ API (`generativelanguage.googleapis.com`).
 ## GitHub Copilot
 
 GitHub Copilot exposes chat endpoint at
-`https://api.githubcopilot.com`. IronCowork uses that endpoint directly through the
+`https://api.githubcopilot.com`. Steward uses that endpoint directly through the
 built-in `github_copilot` provider.
 
 ```env
@@ -125,9 +125,9 @@ If you already signed into Copilot through VS Code or a JetBrains IDE, you can a
 the `oauth_token` stored in `~/.config/github-copilot/apps.json`. If you prefer,
 `LLM_BACKEND=github-copilot` also works as an alias.
 
-Popular models vary by subscription, but `gpt-4o` is a safe default. IronCowork keeps
+Popular models vary by subscription, but `gpt-4o` is a safe default. Steward keeps
 model entry manual for this provider because GitHub Copilot model listing may require
-extra integration headers on some clients. IronCowork automatically injects the standard
+extra integration headers on some clients. Steward automatically injects the standard
 VS Code identity headers (`User-Agent`, `Editor-Version`, `Editor-Plugin-Version`,
 `Copilot-Integration-Id`) and lets you override them with
 `GITHUB_COPILOT_EXTRA_HEADERS`.
@@ -310,7 +310,7 @@ LLM_MODEL=llama-3.2-3b-instruct-q4_K_M
 ## Local Configuration
 
 For OpenAI-compatible providers, set the bootstrap values directly in `.env`,
-`~/.ironcowork/.env`, or your config file:
+`~/.steward/.env`, or your config file:
 
 ```env
 LLM_BACKEND=openai_compatible

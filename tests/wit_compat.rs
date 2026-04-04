@@ -335,12 +335,12 @@ fn wit_version_constants_match_wit_files() {
         .expect("failed to read wit/tool.wit");
     let expected_tool = format!(
         "package near:agent@{};",
-        ironclaw::tools::wasm::WIT_TOOL_VERSION
+        steward_core::tools::wasm::WIT_TOOL_VERSION
     );
 
     assert!(
         tool_wit.contains(&expected_tool),
         "wit/tool.wit version must match WIT_TOOL_VERSION constant ({})",
-        ironclaw::tools::wasm::WIT_TOOL_VERSION
+        steward_core::tools::wasm::WIT_TOOL_VERSION
     );
 }

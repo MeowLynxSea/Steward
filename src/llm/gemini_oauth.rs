@@ -58,7 +58,7 @@ fn oauth_client_secret() -> String {
 }
 
 const OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
-const GOOG_API_CLIENT: &str = concat!("gl-rust/1.0.0 ironclaw/", env!("CARGO_PKG_VERSION"));
+const GOOG_API_CLIENT: &str = concat!("gl-rust/1.0.0 steward/", env!("CARGO_PKG_VERSION"));
 
 const PKCE_CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
 const STATE_CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -1204,7 +1204,7 @@ impl GeminiOauthProvider {
                 headers.insert(
                     "User-Agent",
                     format!(
-                        "GeminiCLI-ironclaw/{}/{} ({}; {}; cli)",
+                        "GeminiCLI-steward/{}/{} ({}; {}; cli)",
                         env!("CARGO_PKG_VERSION"),
                         self.config.model,
                         std::env::consts::OS,
@@ -1786,7 +1786,7 @@ impl GeminiOauthProvider {
         // Budget cap of 8192 prevents runaway thinking loops.
         //
         // NOTE: We do NOT set includeThoughts=true. The original Gemini CLI
-        // sets it because it displays thoughts to the user. IronClaw's reasoning
+        // sets it because it displays thoughts to the user. Steward's reasoning
         // layer (reasoning.rs) strips all <thinking> tags from responses, so
         // including thoughts just adds text that gets stripped, potentially
         // leaving an empty response.

@@ -1,33 +1,33 @@
-//! Bootstrap helpers for IronCowork.
+//! Bootstrap helpers for Steward.
 //!
-//! IronCowork Phase 0 uses libSQL as the default local backend. The bootstrap
+//! Steward Phase 0 uses libSQL as the default local backend. The bootstrap
 //! layer now mainly persists local-first settings such as `LIBSQL_PATH`,
 //! `LLM_BACKEND`, and related credentials before the database is available.
 //!
-//! File: `~/.ironcowork/.env` (standard dotenvy format)
+//! File: `~/.steward/.env` (standard dotenvy format)
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
 
-const IRONCOWORK_BASE_DIR_ENV: &str = "IRONCOWORK_BASE_DIR";
+const STEWARD_BASE_DIR_ENV: &str = "STEWARD_BASE_DIR";
 
-/// Lazily computed IronCowork base directory, cached for the lifetime of the process.
-static IRONCOWORK_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_ironclaw_base_dir);
+/// Lazily computed Steward base directory, cached for the lifetime of the process.
+static STEWARD_BASE_DIR: LazyLock<PathBuf> = LazyLock::new(compute_steward_base_dir);
 
-/// Compute the IronClaw base directory from environment.
+/// Compute the Steward base directory from environment.
 ///
 /// This is the underlying implementation used by both the public
-/// `ironclaw_base_dir()` function (which caches the result) and tests
+/// `steward_base_dir()` function (which caches the result) and tests
 /// (which need to verify different configurations).
-pub fn compute_ironclaw_base_dir() -> PathBuf {
-    std::env::var(IRONCOWORK_BASE_DIR_ENV)
+pub fn compute_steward_base_dir() -> PathBuf {
+    std::env::var(STEWARD_BASE_DIR_ENV)
         .map(PathBuf::from)
         .map(|path| {
             if path.as_os_str().is_empty() {
                 default_base_dir()
             } else if !path.is_absolute() {
                 eprintln!(
-                    "Warning: IRONCOWORK_BASE_DIR is a relative path '{}', resolved against current directory",
+                    "Warning: STEWARD_BASE_DIR is a relative path '{}', resolved against current directory",
                     path.display()
                 );
                 path
@@ -38,64 +38,64 @@ pub fn compute_ironclaw_base_dir() -> PathBuf {
         .unwrap_or_else(|_| default_base_dir())
 }
 
-/// Get the default IronClaw base directory (~/.ironcowork).
+/// Get the default Steward base directory (~/.steward).
 ///
 /// Logs a warning if the home directory cannot be determined and falls back to
 /// the current directory.
 fn default_base_dir() -> PathBuf {
     if let Some(home) = dirs::home_dir() {
-        home.join(".ironcowork")
+        home.join(".steward")
     } else {
         eprintln!("Warning: Could not determine home directory, using current directory");
         std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("/tmp"))
-            .join(".ironcowork")
+            .join(".steward")
     }
 }
 
-/// Get the IronClaw base directory.
+/// Get the Steward base directory.
 ///
-/// Override with `IRONCOWORK_BASE_DIR` environment variable.
-/// Defaults to `~/.ironcowork` (or `./.ironcowork` if home directory cannot be determined).
+/// Override with `STEWARD_BASE_DIR` environment variable.
+/// Defaults to `~/.steward` (or `./.steward` if home directory cannot be determined).
 ///
 /// Thread-safe: the value is computed once and cached in a `LazyLock`.
 ///
 /// # Environment Variable Behavior
-/// - If `IRONCOWORK_BASE_DIR` is set to a non-empty path, that path is used.
-/// - If `IRONCOWORK_BASE_DIR` is set to an empty string, it is treated as unset.
-/// - If `IRONCOWORK_BASE_DIR` contains null bytes, a warning is printed and the default is used.
+/// - If `STEWARD_BASE_DIR` is set to a non-empty path, that path is used.
+/// - If `STEWARD_BASE_DIR` is set to an empty string, it is treated as unset.
+/// - If `STEWARD_BASE_DIR` contains null bytes, a warning is printed and the default is used.
 /// - If the home directory cannot be determined, a warning is printed and the current directory is used.
 ///
 /// # Returns
 /// A `PathBuf` pointing to the base directory. The path is not validated
 /// for existence.
-pub fn ironclaw_base_dir() -> PathBuf {
-    IRONCOWORK_BASE_DIR.clone()
+pub fn steward_base_dir() -> PathBuf {
+    STEWARD_BASE_DIR.clone()
 }
 
-/// Path to the IronClaw-specific `.env` file: `~/.ironcowork/.env`.
-pub fn ironclaw_env_path() -> PathBuf {
-    ironclaw_base_dir().join(".env")
+/// Path to the Steward-specific `.env` file: `~/.steward/.env`.
+pub fn steward_env_path() -> PathBuf {
+    steward_base_dir().join(".env")
 }
 
-/// Load env vars from `~/.ironcowork/.env` (in addition to the standard `.env`).
+/// Load env vars from `~/.steward/.env` (in addition to the standard `.env`).
 ///
 /// Call this **after** `dotenvy::dotenv()` so that the standard `./.env`
-/// takes priority over `~/.ironcowork/.env`. dotenvy never overwrites
+/// takes priority over `~/.steward/.env`. dotenvy never overwrites
 /// existing env vars, so the effective priority is:
 ///
-///   explicit env vars > `./.env` > `~/.ironcowork/.env` > auto-detect
+///   explicit env vars > `./.env` > `~/.steward/.env` > auto-detect
 ///
-/// If `~/.ironcowork/.env` doesn't exist but the legacy `bootstrap.json` does,
+/// If `~/.steward/.env` doesn't exist but the legacy `bootstrap.json` does,
 /// extracts bootstrap values and writes the `.env` file (one-time upgrade
 /// from the old config format).
 ///
 /// After loading the `.env` file, auto-detects the libsql backend: if
-/// `DATABASE_BACKEND` is still unset and `~/.ironcowork/ironcowork.db` exists,
+/// `DATABASE_BACKEND` is still unset and `~/.steward/steward.db` exists,
 /// defaults to `libsql` so cloud instances work out of the box without any
 /// manual configuration.
-pub fn load_ironclaw_env() {
-    let path = ironclaw_env_path();
+pub fn load_steward_env() {
+    let path = steward_env_path();
 
     if !path.exists() {
         // One-time upgrade: extract DATABASE_URL from legacy bootstrap.json
@@ -109,18 +109,18 @@ pub fn load_ironclaw_env() {
     // Auto-detect libsql: if DATABASE_BACKEND is still unset after loading
     // all env files, and the local SQLite DB exists, default to libsql.
     // This avoids the chicken-and-egg problem on cloud instances where no
-    // DATABASE_URL is configured but ironcowork.db is already present.
+    // DATABASE_URL is configured but steward.db is already present.
     if std::env::var("DATABASE_BACKEND").is_err() {
         let default_db = dirs::home_dir()
             .unwrap_or_default()
-            .join(".ironcowork")
-            .join("ironcowork.db");
+            .join(".steward")
+            .join("steward.db");
         if default_db.exists() {
             if tokio::runtime::Handle::try_current().is_ok() {
                 // Tokio runtime is active (multi-threaded); std::env::set_var is UB here.
                 // Fall back to the thread-safe runtime overlay so the value is always set.
                 tracing::warn!(
-                    "load_ironclaw_env called with active Tokio runtime; \
+                    "load_steward_env called with active Tokio runtime; \
                      using runtime env overlay for DATABASE_BACKEND"
                 );
                 crate::config::set_runtime_env("DATABASE_BACKEND", "libsql");
@@ -134,10 +134,10 @@ pub fn load_ironclaw_env() {
 
 /// If `bootstrap.json` exists, pull `database_url` out of it and write `.env`.
 fn migrate_bootstrap_json_to_env(env_path: &std::path::Path) {
-    let ironclaw_dir = env_path
+    let steward_dir = env_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    let bootstrap_path = ironclaw_dir.join("bootstrap.json");
+    let bootstrap_path = steward_dir.join("bootstrap.json");
 
     if !bootstrap_path.exists() {
         return;
@@ -173,17 +173,17 @@ fn migrate_bootstrap_json_to_env(env_path: &std::path::Path) {
     }
 }
 
-/// Write bootstrap vars to `~/.ironcowork/.env`.
+/// Write bootstrap vars to `~/.steward/.env`.
 ///
 /// These settings form the chicken-and-egg layer: they must be available from
-/// the filesystem (env vars) before any database connection. In IronCowork
+/// the filesystem (env vars) before any database connection. In Steward
 /// Phase 0 this is primarily the libSQL path and provider credentials.
 ///
 /// Creates the parent directory if it doesn't exist.
 /// Values are double-quoted so that `#` (common in URL-encoded passwords)
 /// and other shell-special characters are preserved by dotenvy.
 pub fn save_bootstrap_env(vars: &[(&str, &str)]) -> std::io::Result<()> {
-    save_bootstrap_env_to(&ironclaw_env_path(), vars)
+    save_bootstrap_env_to(&steward_env_path(), vars)
 }
 
 /// Write bootstrap vars to an arbitrary path (testable variant).
@@ -206,13 +206,13 @@ pub fn save_bootstrap_env_to(path: &std::path::Path, vars: &[(&str, &str)]) -> s
     Ok(())
 }
 
-/// Update or add multiple variables in `~/.ironcowork/.env`, preserving existing content.
+/// Update or add multiple variables in `~/.steward/.env`, preserving existing content.
 ///
 /// Like `upsert_bootstrap_var` but batched — replaces lines for any key in `vars`
 /// and preserves all other existing lines. Use this instead of `save_bootstrap_env`
 /// when you want to update specific keys without destroying user-added variables.
 pub fn upsert_bootstrap_vars(vars: &[(&str, &str)]) -> std::io::Result<()> {
-    upsert_bootstrap_vars_to(&ironclaw_env_path(), vars)
+    upsert_bootstrap_vars_to(&steward_env_path(), vars)
 }
 
 /// Update or add multiple variables at an arbitrary path (testable variant).
@@ -258,14 +258,14 @@ pub fn upsert_bootstrap_vars_to(
     Ok(())
 }
 
-/// Update or add a single variable in `~/.ironcowork/.env`, preserving existing content.
+/// Update or add a single variable in `~/.steward/.env`, preserving existing content.
 ///
 /// Unlike `save_bootstrap_env` (which overwrites the entire file), this
 /// reads the current `.env`, replaces the line for `key` if it exists,
 /// or appends it otherwise. Use this when writing a single bootstrap var
 /// outside the wizard (which manages the full set via `save_bootstrap_env`).
 pub fn upsert_bootstrap_var(key: &str, value: &str) -> std::io::Result<()> {
-    upsert_bootstrap_var_to(&ironclaw_env_path(), key, value)
+    upsert_bootstrap_var_to(&steward_env_path(), key, value)
 }
 
 /// Update or add a single variable at an arbitrary path (testable variant).
@@ -324,7 +324,7 @@ fn restrict_file_permissions(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write `DATABASE_URL` to `~/.ironcowork/.env`.
+/// Write `DATABASE_URL` to `~/.steward/.env`.
 ///
 /// Convenience wrapper around `save_bootstrap_env` for single-value migration
 /// paths. Prefer `save_bootstrap_env` for new code.
@@ -332,7 +332,7 @@ pub fn save_database_url(url: &str) -> std::io::Result<()> {
     save_bootstrap_env(&[("DATABASE_URL", url)])
 }
 
-/// One-time migration of legacy `~/.ironcowork/settings.json` into the database.
+/// One-time migration of legacy `~/.steward/settings.json` into the database.
 ///
 /// Only runs when a `settings.json` exists on disk AND the DB has no settings
 /// yet. After the wizard writes directly to the DB, this path is only hit by
@@ -343,8 +343,8 @@ pub async fn migrate_disk_to_db(
     store: &dyn crate::db::Database,
     user_id: &str,
 ) -> Result<(), MigrationError> {
-    let ironclaw_dir = ironclaw_base_dir();
-    let legacy_settings_path = ironclaw_dir.join("settings.json");
+    let steward_dir = steward_base_dir();
+    let legacy_settings_path = steward_dir.join("settings.json");
 
     if !legacy_settings_path.exists() {
         tracing::debug!("No legacy settings.json found, skipping disk-to-DB migration");
@@ -377,15 +377,15 @@ pub async fn migrate_disk_to_db(
         tracing::info!("Migrated {} settings to database", db_map.len());
     }
 
-    // 2. Write DATABASE_URL to ~/.ironcowork/.env
+    // 2. Write DATABASE_URL to ~/.steward/.env
     if let Some(ref url) = settings.database_url {
         save_database_url(url)
             .map_err(|e| MigrationError::Io(format!("Failed to write .env: {}", e)))?;
-        tracing::info!("Wrote DATABASE_URL to {}", ironclaw_env_path().display());
+        tracing::info!("Wrote DATABASE_URL to {}", steward_env_path().display());
     }
 
     // 3. Migrate mcp-servers.json if it exists
-    let mcp_path = ironclaw_dir.join("mcp-servers.json");
+    let mcp_path = steward_dir.join("mcp-servers.json");
     if mcp_path.exists() {
         match std::fs::read_to_string(&mcp_path) {
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
@@ -414,7 +414,7 @@ pub async fn migrate_disk_to_db(
     }
 
     // 4. Migrate session.json if it exists
-    let session_path = ironclaw_dir.join("session.json");
+    let session_path = steward_dir.join("session.json");
     if session_path.exists() {
         match std::fs::read_to_string(&session_path) {
             Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
@@ -446,7 +446,7 @@ pub async fn migrate_disk_to_db(
     rename_to_migrated(&legacy_settings_path);
 
     // 6. Clean up old bootstrap.json if it exists (superseded by .env)
-    let old_bootstrap = ironclaw_dir.join("bootstrap.json");
+    let old_bootstrap = steward_dir.join("bootstrap.json");
     if old_bootstrap.exists() {
         rename_to_migrated(&old_bootstrap);
         tracing::info!("Renamed old bootstrap.json to .migrated");
@@ -476,12 +476,12 @@ pub enum MigrationError {
 
 // ── PID Lock ──────────────────────────────────────────────────────────────
 
-/// Path to the PID lock file: `~/.ironcowork/ironcowork.pid`.
+/// Path to the PID lock file: `~/.steward/steward.pid`.
 pub fn pid_lock_path() -> PathBuf {
-    ironclaw_base_dir().join("ironcowork.pid")
+    steward_base_dir().join("steward.pid")
 }
 
-/// A PID-based lock that prevents multiple IronClaw instances from running
+/// A PID-based lock that prevents multiple Steward instances from running
 /// simultaneously.
 ///
 /// Uses `fs4::try_lock_exclusive()` for atomic locking (no TOCTOU race),
@@ -498,7 +498,7 @@ pub struct PidLock {
 /// Errors from PID lock acquisition.
 #[derive(Debug, thiserror::Error)]
 pub enum PidLockError {
-    #[error("Another IronClaw instance is already running (PID {pid})")]
+    #[error("Another Steward instance is already running (PID {pid})")]
     AlreadyRunning { pid: u32 },
     #[error("Failed to acquire PID lock: {0}")]
     Io(#[from] std::io::Error),
@@ -579,14 +579,14 @@ mod tests {
         let env_path = dir.path().join(".env");
 
         // Write in the quoted format that save_database_url uses
-        let url = "postgres://localhost:5432/ironclaw_test";
+        let url = "postgres://localhost:5432/steward_test";
         std::fs::write(&env_path, format!("DATABASE_URL=\"{}\"\n", url)).unwrap();
 
         // Verify the content is a valid dotenv line (quoted)
         let content = std::fs::read_to_string(&env_path).unwrap();
         assert_eq!(
             content,
-            "DATABASE_URL=\"postgres://localhost:5432/ironclaw_test\"\n"
+            "DATABASE_URL=\"postgres://localhost:5432/steward_test\"\n"
         );
 
         // Verify dotenvy can parse it (strips quotes automatically)
@@ -606,7 +606,7 @@ mod tests {
 
         // URLs with # in the password are common (URL-encoded special chars).
         // Without quoting, dotenvy treats # as a comment delimiter.
-        let url = "postgres://user:p%23ss@localhost:5432/ironclaw";
+        let url = "postgres://user:p%23ss@localhost:5432/steward";
         std::fs::write(&env_path, format!("DATABASE_URL=\"{}\"\n", url)).unwrap();
 
         let parsed: Vec<(String, String)> = dotenvy::from_path_iter(&env_path)
@@ -665,23 +665,23 @@ INJECTED="pwned"#;
     }
 
     #[test]
-    fn test_ironclaw_env_path() {
-        // Use compute_ironclaw_base_dir() directly to avoid LazyLock caching,
+    fn test_steward_env_path() {
+        // Use compute_steward_base_dir() directly to avoid LazyLock caching,
         // which can be poisoned by whichever test initializes it first.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: Under lock_env(), no concurrent env access.
-        unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+        unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
 
-        let path = compute_ironclaw_base_dir().join(".env");
+        let path = compute_steward_base_dir().join(".env");
         assert!(
-            path.ends_with(".ironcowork/.env"),
-            "expected path ending with .ironcowork/.env, got: {}",
+            path.ends_with(".steward/.env"),
+            "expected path ending with .steward/.env, got: {}",
             path.display()
         );
 
         if let Some(val) = old_val {
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         }
     }
 
@@ -693,7 +693,7 @@ INJECTED="pwned"#;
 
         // Write a legacy bootstrap.json
         let bootstrap_json = serde_json::json!({
-            "database_url": "postgres://localhost/ironclaw_upgrade",
+            "database_url": "postgres://localhost/steward_upgrade",
             "database_pool_size": 5,
             "secrets_master_key_source": "keychain",
             "onboard_completed": true
@@ -715,7 +715,7 @@ INJECTED="pwned"#;
         let content = std::fs::read_to_string(&env_path).unwrap();
         assert_eq!(
             content,
-            "DATABASE_URL=\"postgres://localhost/ironclaw_upgrade\"\n"
+            "DATABASE_URL=\"postgres://localhost/steward_upgrade\"\n"
         );
 
         // bootstrap.json should be renamed to .migrated
@@ -768,7 +768,7 @@ INJECTED="pwned"#;
 
         let vars = [
             ("DATABASE_BACKEND", "libsql"),
-            ("LIBSQL_PATH", "/home/user/.ironcowork/ironcowork.db"),
+            ("LIBSQL_PATH", "/home/user/.steward/steward.db"),
         ];
 
         // Write manually to the temp path (save_bootstrap_env uses the global path)
@@ -792,7 +792,7 @@ INJECTED="pwned"#;
             parsed[1],
             (
                 "LIBSQL_PATH".to_string(),
-                "/home/user/.ironcowork/ironcowork.db".to_string()
+                "/home/user/.steward/steward.db".to_string()
             )
         );
     }
@@ -854,7 +854,7 @@ INJECTED="pwned"#;
         unsafe { std::env::remove_var("DATABASE_BACKEND") };
 
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("ironcowork.db");
+        let db_path = dir.path().join("steward.db");
 
         // No DB file — auto-detect guard should not trigger.
         assert!(!db_path.exists());
@@ -925,7 +925,7 @@ INJECTED="pwned"#;
         unsafe { std::env::set_var("DATABASE_BACKEND", "postgres") };
 
         let dir = tempdir().unwrap();
-        let db_path = dir.path().join("ironcowork.db");
+        let db_path = dir.path().join("steward.db");
         std::fs::write(&db_path, "").unwrap();
 
         // The guard: only sets libsql if DATABASE_BACKEND is NOT already set.
@@ -1043,102 +1043,102 @@ INJECTED="pwned"#;
     }
 
     #[test]
-    fn test_ironclaw_base_dir_default() {
+    fn test_steward_base_dir_default() {
         // This test must run first (or in isolation) before the LazyLock is initialized.
-        // It verifies that when IRONCOWORK_BASE_DIR is not set, the default path is used.
+        // It verifies that when STEWARD_BASE_DIR is not set, the default path is used.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+        unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
 
         // Force re-evaluation by calling the computation function directly
-        let path = compute_ironclaw_base_dir();
+        let path = compute_steward_base_dir();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        assert_eq!(path, home.join(".ironcowork"));
+        assert_eq!(path, home.join(".steward"));
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         }
     }
 
     #[test]
-    fn test_ironclaw_base_dir_env_override() {
-        // This test verifies that when IRONCOWORK_BASE_DIR is set,
+    fn test_steward_base_dir_env_override() {
+        // This test verifies that when STEWARD_BASE_DIR is set,
         // the custom path is used. Must run before LazyLock is initialized.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/custom/ironclaw/path") };
+        unsafe { std::env::set_var("STEWARD_BASE_DIR", "/custom/steward/path") };
 
         // Force re-evaluation by calling the computation function directly
-        let path = compute_ironclaw_base_dir();
-        assert_eq!(path, std::path::PathBuf::from("/custom/ironclaw/path"));
+        let path = compute_steward_base_dir();
+        assert_eq!(path, std::path::PathBuf::from("/custom/steward/path"));
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+            unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
         }
     }
 
     #[test]
     fn test_compute_base_dir_env_path_join() {
-        // Verifies that ironclaw_env_path correctly joins .env to the base dir.
-        // Uses compute_ironclaw_base_dir directly to avoid LazyLock caching.
+        // Verifies that steward_env_path correctly joins .env to the base dir.
+        // Uses compute_steward_base_dir directly to avoid LazyLock caching.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/my/custom/dir") };
+        unsafe { std::env::set_var("STEWARD_BASE_DIR", "/my/custom/dir") };
 
         // Test the path construction logic directly
-        let base_path = compute_ironclaw_base_dir();
+        let base_path = compute_steward_base_dir();
         let env_path = base_path.join(".env");
         assert_eq!(env_path, std::path::PathBuf::from("/my/custom/dir/.env"));
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+            unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
         }
     }
 
     #[test]
-    fn test_ironclaw_base_dir_empty_env() {
-        // Verifies that empty IRONCOWORK_BASE_DIR falls back to default.
+    fn test_steward_base_dir_empty_env() {
+        // Verifies that empty STEWARD_BASE_DIR falls back to default.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "") };
+        unsafe { std::env::set_var("STEWARD_BASE_DIR", "") };
 
         // Force re-evaluation by calling the computation function directly
-        let path = compute_ironclaw_base_dir();
+        let path = compute_steward_base_dir();
         let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-        assert_eq!(path, home.join(".ironcowork"));
+        assert_eq!(path, home.join(".steward"));
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+            unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
         }
     }
 
     #[test]
-    fn test_ironclaw_base_dir_special_chars() {
+    fn test_steward_base_dir_special_chars() {
         // Verifies that paths with special characters are handled correctly.
         let _guard = lock_env();
-        let old_val = std::env::var("IRONCOWORK_BASE_DIR").ok();
+        let old_val = std::env::var("STEWARD_BASE_DIR").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", "/tmp/test_with-special.chars") };
+        unsafe { std::env::set_var("STEWARD_BASE_DIR", "/tmp/test_with-special.chars") };
 
         // Force re-evaluation by calling the computation function directly
-        let path = compute_ironclaw_base_dir();
+        let path = compute_steward_base_dir();
         assert_eq!(
             path,
             std::path::PathBuf::from("/tmp/test_with-special.chars")
@@ -1146,10 +1146,10 @@ INJECTED="pwned"#;
 
         if let Some(val) = old_val {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::set_var("IRONCOWORK_BASE_DIR", val) };
+            unsafe { std::env::set_var("STEWARD_BASE_DIR", val) };
         } else {
             // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-            unsafe { std::env::remove_var("IRONCOWORK_BASE_DIR") };
+            unsafe { std::env::remove_var("STEWARD_BASE_DIR") };
         }
     }
 
@@ -1158,7 +1158,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_acquire_and_drop() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         // Acquire lock
         let lock = PidLock::acquire_at(pid_path.clone()).unwrap();
@@ -1176,7 +1176,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_rejects_second_acquire() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         // First lock succeeds
         let _lock1 = PidLock::acquire_at(pid_path.clone()).unwrap();
@@ -1195,7 +1195,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_reclaims_after_drop() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         // Acquire and release
         let lock = PidLock::acquire_at(pid_path.clone()).unwrap();
@@ -1209,7 +1209,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_reclaims_stale_file_without_flock() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         // Write a stale PID file manually (no flock held)
         std::fs::write(&pid_path, "4294967294").unwrap();
@@ -1224,7 +1224,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_handles_corrupt_pid_file() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         // Write garbage (no flock held)
         std::fs::write(&pid_path, "not-a-number").unwrap();
@@ -1241,7 +1241,7 @@ INJECTED="pwned"#;
             .path()
             .join("nested")
             .join("deep")
-            .join("ironcowork.pid");
+            .join("steward.pid");
 
         let lock = PidLock::acquire_at(pid_path.clone()).unwrap();
         assert!(pid_path.exists());
@@ -1250,14 +1250,14 @@ INJECTED="pwned"#;
 
     #[test]
     fn test_pid_lock_child_helper_holds_lock() {
-        if std::env::var("IRONCLAW_PID_LOCK_CHILD").ok().as_deref() != Some("1") {
+        if std::env::var("STEWARD_PID_LOCK_CHILD").ok().as_deref() != Some("1") {
             return;
         }
 
         let pid_path = PathBuf::from(
-            std::env::var("IRONCLAW_PID_LOCK_PATH").expect("IRONCLAW_PID_LOCK_PATH missing"),
+            std::env::var("STEWARD_PID_LOCK_PATH").expect("STEWARD_PID_LOCK_PATH missing"),
         );
-        let hold_ms = std::env::var("IRONCLAW_PID_LOCK_HOLD_MS")
+        let hold_ms = std::env::var("STEWARD_PID_LOCK_HOLD_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(3000);
@@ -1269,7 +1269,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_rejects_lock_held_by_other_process() {
         let dir = tempdir().unwrap();
-        let pid_path = dir.path().join("ironcowork.pid");
+        let pid_path = dir.path().join("steward.pid");
 
         let current_exe = std::env::current_exe().unwrap();
         let mut child = Command::new(current_exe)
@@ -1279,9 +1279,9 @@ INJECTED="pwned"#;
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("IRONCLAW_PID_LOCK_CHILD", "1")
-            .env("IRONCLAW_PID_LOCK_PATH", pid_path.display().to_string())
-            .env("IRONCLAW_PID_LOCK_HOLD_MS", "3000")
+            .env("STEWARD_PID_LOCK_CHILD", "1")
+            .env("STEWARD_PID_LOCK_PATH", pid_path.display().to_string())
+            .env("STEWARD_PID_LOCK_HOLD_MS", "3000")
             .spawn()
             .unwrap();
 

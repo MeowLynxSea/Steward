@@ -1,6 +1,6 @@
 //! Build script for registry embedding only.
 //!
-//! IronCowork Phase 0 removes the bundled channel build pipeline. Keep this
+//! Steward Phase 0 removes the bundled channel build pipeline. Keep this
 //! script focused on compile-time catalog embedding so the crate can build
 //! without legacy channel assets.
 

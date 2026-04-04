@@ -1,5 +1,5 @@
 [build]
-target-dir = "/Users/MeowLynxSea/Development/IronCowork/target"
+target-dir = "/Users/MeowLynxSea/Development/Steward/target"
 
 [alias]
 desktop = "tauri dev --config src-tauri/tauri.conf.json"

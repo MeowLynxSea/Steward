@@ -22,7 +22,7 @@ use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::{ChatMessage, ToolCall};
 use crate::tools::redact_params;
-use ironclaw_common::truncate_preview;
+use steward_common::truncate_preview;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 
@@ -597,7 +597,7 @@ impl Agent {
                 }
                 self.emit_sse_event_for_message(
                     message,
-                    ironclaw_common::AppEvent::Status {
+                    steward_common::AppEvent::Status {
                         message: "task.completed".to_string(),
                         thread_id: Some(thread_id.to_string()),
                     },
@@ -622,7 +622,7 @@ impl Agent {
                 }
                 self.emit_sse_event_for_message(
                     message,
-                    ironclaw_common::AppEvent::ApprovalNeeded {
+                    steward_common::AppEvent::ApprovalNeeded {
                         request_id: request_id.to_string(),
                         tool_name: tool_name.clone(),
                         description: description.clone(),
@@ -660,7 +660,7 @@ impl Agent {
                 }
                 self.emit_sse_event_for_message(
                     message,
-                    ironclaw_common::AppEvent::Error {
+                    steward_common::AppEvent::Error {
                         message: e.to_string(),
                         thread_id: Some(thread_id.to_string()),
                     },
@@ -1559,7 +1559,7 @@ impl Agent {
 
                 self.emit_sse_event_for_message(
                     message,
-                    ironclaw_common::AppEvent::ApprovalNeeded {
+                    steward_common::AppEvent::ApprovalNeeded {
                         request_id: request_id.to_string(),
                         tool_name: tool_name.clone(),
                         description: description.clone(),
@@ -1646,7 +1646,7 @@ impl Agent {
                     }
                     self.emit_sse_event_for_message(
                         message,
-                        ironclaw_common::AppEvent::Status {
+                        steward_common::AppEvent::Status {
                             message: "task.completed".to_string(),
                             thread_id: Some(thread_id.to_string()),
                         },
@@ -1671,7 +1671,7 @@ impl Agent {
                     }
                     self.emit_sse_event_for_message(
                         message,
-                        ironclaw_common::AppEvent::ApprovalNeeded {
+                        steward_common::AppEvent::ApprovalNeeded {
                             request_id: request_id.to_string(),
                             tool_name: tool_name.clone(),
                             description: description.clone(),
@@ -1709,7 +1709,7 @@ impl Agent {
                     }
                     self.emit_sse_event_for_message(
                         message,
-                        ironclaw_common::AppEvent::Error {
+                        steward_common::AppEvent::Error {
                             message: e.to_string(),
                             thread_id: Some(thread_id.to_string()),
                         },
@@ -1748,7 +1748,7 @@ impl Agent {
             }
             self.emit_sse_event_for_message(
                 message,
-                ironclaw_common::AppEvent::Status {
+                steward_common::AppEvent::Status {
                     message: "task.rejected".to_string(),
                     thread_id: Some(thread_id.to_string()),
                 },

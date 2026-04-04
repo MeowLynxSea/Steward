@@ -17,25 +17,25 @@ mod tests {
     use secrecy::SecretString;
     use uuid::Uuid;
 
-    use ironclaw::agent::routine::{
+    use steward_core::agent::routine::{
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
     };
-    use ironclaw::agent::routine_engine::RoutineEngine;
-    use ironclaw::agent::{HeartbeatConfig, HeartbeatRunner, Scheduler, SchedulerDeps};
-    use ironclaw::channels::IncomingMessage;
-    use ironclaw::config::{AgentConfig, RoutineConfig, SafetyConfig};
-    use ironclaw::context::{ContextManager, JobContext};
-    use ironclaw::db::{Database, libsql::LibSqlBackend};
-    use ironclaw::extensions::ExtensionManager;
-    use ironclaw::hooks::HookRegistry;
-    use ironclaw::llm::LlmProvider;
-    use ironclaw::safety::SafetyLayer;
-    use ironclaw::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
-    use ironclaw::tools::builtin::routine::RoutineUpdateTool;
-    use ironclaw::tools::mcp::{McpProcessManager, McpSessionManager};
-    use ironclaw::tools::{ApprovalRequirement, Tool, ToolError, ToolOutput, ToolRegistry};
-    use ironclaw::workspace::Workspace;
-    use ironclaw::workspace::hygiene::HygieneConfig;
+    use steward_core::agent::routine_engine::RoutineEngine;
+    use steward_core::agent::{HeartbeatConfig, HeartbeatRunner, Scheduler, SchedulerDeps};
+    use steward_core::channels::IncomingMessage;
+    use steward_core::config::{AgentConfig, RoutineConfig, SafetyConfig};
+    use steward_core::context::{ContextManager, JobContext};
+    use steward_core::db::{Database, libsql::LibSqlBackend};
+    use steward_core::extensions::ExtensionManager;
+    use steward_core::hooks::HookRegistry;
+    use steward_core::llm::LlmProvider;
+    use steward_core::safety::SafetyLayer;
+    use steward_core::secrets::{InMemorySecretsStore, SecretsCrypto, SecretsStore};
+    use steward_core::tools::builtin::routine::RoutineUpdateTool;
+    use steward_core::tools::mcp::{McpProcessManager, McpSessionManager};
+    use steward_core::tools::{ApprovalRequirement, Tool, ToolError, ToolOutput, ToolRegistry};
+    use steward_core::workspace::Workspace;
+    use steward_core::workspace::hygiene::HygieneConfig;
 
     use crate::support::trace_llm::{LlmTrace, TraceLlm, TraceResponse, TraceStep, TraceToolCall};
 
@@ -343,15 +343,15 @@ mod tests {
             SchedulerDeps {
                 tools: registry.clone(),
                 extension_manager: extension_manager.clone(),
-                store: Some(ironclaw::tenant::AdminScope::new(db.clone())),
+                store: Some(steward_core::tenant::AdminScope::new(db.clone())),
                 hooks: Arc::new(HookRegistry::new()),
-                claude_code: ironclaw::config::ClaudeCodeConfig::default(),
+                claude_code: steward_core::config::ClaudeCodeConfig::default(),
             },
         ));
 
         Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db),
+            steward_core::tenant::AdminScope::new(db),
             llm,
             ws,
             notify_tx,
@@ -481,7 +481,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -559,7 +559,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -645,7 +645,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -753,7 +753,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -764,7 +764,7 @@ mod tests {
         ));
 
         let mut filters = std::collections::HashMap::new();
-        filters.insert("repository".to_string(), "nearai/ironclaw".to_string());
+        filters.insert("repository".to_string(), "MeowLynxSea/steward".to_string());
 
         let routine = make_routine(
             "github-issue-opened",
@@ -784,7 +784,7 @@ mod tests {
                 "github",
                 "issue.opened",
                 &serde_json::json!({
-                    "repository": "nearai/ironclaw",
+                    "repository": "MeowLynxSea/steward",
                     "issue_number": 42
                 }),
                 Some("default"),
@@ -808,7 +808,7 @@ mod tests {
             .emit_system_event(
                 "github",
                 "issue.closed",
-                &serde_json::json!({"repository": "nearai/ironclaw"}),
+                &serde_json::json!({"repository": "MeowLynxSea/steward"}),
                 Some("default"),
             )
             .await;
@@ -837,7 +837,7 @@ mod tests {
                 "GitHub",
                 "Issue.Opened",
                 &serde_json::json!({
-                    "repository": "nearai/ironclaw",
+                    "repository": "MeowLynxSea/steward",
                     "issue_number": 99
                 }),
                 Some("default"),
@@ -853,7 +853,7 @@ mod tests {
             .emit_system_event(
                 "github",
                 "issue.opened",
-                &serde_json::json!({"repository": "NearAI/IronClaw"}),
+                &serde_json::json!({"repository": "NearAI/Steward"}),
                 Some("default"),
             )
             .await;
@@ -895,7 +895,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -994,7 +994,7 @@ mod tests {
 
         let result = runner.check_heartbeat().await;
         match result {
-            ironclaw::agent::HeartbeatResult::NeedsAttention(msg) => {
+            steward_core::agent::HeartbeatResult::NeedsAttention(msg) => {
                 assert!(
                     msg.contains("error"),
                     "Expected 'error' in attention message: {msg}"
@@ -1040,7 +1040,7 @@ mod tests {
 
         let result = runner.check_heartbeat().await;
         assert!(
-            matches!(result, ironclaw::agent::HeartbeatResult::Skipped),
+            matches!(result, steward_core::agent::HeartbeatResult::Skipped),
             "Expected Skipped for empty checklist, got: {result:?}"
         );
     }
@@ -1077,7 +1077,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(Arc::clone(&db)),
+            steward_core::tenant::AdminScope::new(Arc::clone(&db)),
             llm,
             ws,
             notify_tx,
@@ -1166,10 +1166,10 @@ mod tests {
 
     #[tokio::test]
     async fn full_job_max_concurrent_blocks_second_fire_while_first_active() {
-        use ironclaw::agent::routine::{
+        use steward_core::agent::routine::{
             NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
         };
-        use ironclaw::error::RoutineError;
+        use steward_core::error::RoutineError;
 
         let (db, _tmp) = create_test_db().await;
         let ws = create_workspace(&db);
@@ -1198,7 +1198,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             RoutineConfig::default(),
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,
@@ -1305,7 +1305,7 @@ mod tests {
 
         let engine = Arc::new(RoutineEngine::new(
             config,
-            ironclaw::tenant::AdminScope::new(db.clone()),
+            steward_core::tenant::AdminScope::new(db.clone()),
             llm,
             ws,
             notify_tx,

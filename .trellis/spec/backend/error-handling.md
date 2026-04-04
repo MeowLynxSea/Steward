@@ -14,9 +14,9 @@ The backend currently uses:
 
 Examples:
 
-- top-level formatting and recovery hints: [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs)
-- API error bodies and status mapping: [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs)
-- runtime warnings around session/task behavior: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/session_manager.rs)
+- top-level formatting and recovery hints: [src/main.rs](/Users/MeowLynxSea/Development/Steward/src/main.rs)
+- API error bodies and status mapping: [src/api.rs](/Users/MeowLynxSea/Development/Steward/src/api.rs)
+- runtime warnings around session/task behavior: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/Steward/src/agent/session_manager.rs)
 
 ---
 

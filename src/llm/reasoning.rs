@@ -1031,7 +1031,7 @@ Example:
         };
 
         format!(
-            r#"You are IronClaw Agent, a secure autonomous assistant.
+            r#"You are Steward Agent, a secure autonomous assistant.
 
 {response_format}
 
@@ -2205,10 +2205,10 @@ That's my plan."#;
 
     #[test]
     fn test_clean_response_thinking_tags_reasoning_properly_tagged() {
-        let input = "<thinking>The user is asking about my name.</thinking>\n\nI'm IronClaw, a secure personal AI assistant.";
+        let input = "<thinking>The user is asking about my name.</thinking>\n\nI'm Steward, a secure personal AI assistant.";
         assert_eq!(
             clean_response(input),
-            "I'm IronClaw, a secure personal AI assistant."
+            "I'm Steward, a secure personal AI assistant."
         );
     }
 

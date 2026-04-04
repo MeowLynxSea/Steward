@@ -5,7 +5,7 @@
 //!
 //! ```text
 //!   ┌─────────────────────┐    ┌──────────────────────────┐
-//!   │  providers.json     │    │ ~/.ironcowork/providers.json│
+//!   │  providers.json     │    │ ~/.steward/providers.json│
 //!   │  (built-in, embed)  │    │ (user overrides/extras)  │
 //!   └────────┬────────────┘    └────────────┬─────────────┘
 //!            │                              │
@@ -190,7 +190,7 @@ pub struct ProviderDefinition {
 /// Registry of known LLM providers.
 ///
 /// Built from compiled-in `providers.json` plus optional user overrides
-/// from `~/.ironcowork/providers.json`.
+/// from `~/.steward/providers.json`.
 pub struct ProviderRegistry {
     providers: Vec<ProviderDefinition>,
     /// Lowercase id/alias → index into `providers`.
@@ -214,7 +214,7 @@ impl ProviderRegistry {
 
     /// Load the default registry: built-in providers + user overrides.
     ///
-    /// User providers from `~/.ironcowork/providers.json` are appended,
+    /// User providers from `~/.steward/providers.json` are appended,
     /// with later entries overriding earlier ones by ID/alias.
     pub fn load() -> Self {
         let builtins: Vec<ProviderDefinition> =
@@ -318,7 +318,7 @@ impl ProviderRegistry {
 }
 
 fn user_providers_path() -> Option<std::path::PathBuf> {
-    Some(crate::bootstrap::ironclaw_base_dir().join("providers.json"))
+    Some(crate::bootstrap::steward_base_dir().join("providers.json"))
 }
 
 #[cfg(test)]

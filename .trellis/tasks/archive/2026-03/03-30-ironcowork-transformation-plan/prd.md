@@ -2,11 +2,11 @@
 
 ## Goal
 
-Transform this repository from the current IronClaw multi-channel assistant into IronCowork: a desktop-first, local-first AI automation product for knowledge workers. The transformation must preserve the Rust agent engine, safety model, MCP/tool infrastructure, and workspace retrieval capabilities while removing product assumptions that tie the system to chat channels, NEAR AI account flows, PostgreSQL, and the existing web gateway.
+Transform this repository from the current Steward multi-channel assistant into IronCowork: a desktop-first, local-first AI automation product for knowledge workers. The transformation must preserve the Rust agent engine, safety model, MCP/tool infrastructure, and workspace retrieval capabilities while removing product assumptions that tie the system to chat channels, NEAR AI account flows, PostgreSQL, and the existing web gateway.
 
 ## What I Already Know
 
-- The current repository is still branded and structured as IronClaw.
+- The current repository is still branded and structured as Steward.
 - The current workspace still contains `channels-src/`, `deploy/`, web gateway code, channel-specific code under `src/channels/`, and PostgreSQL as part of the default feature set.
 - `Cargo.toml` still exposes both `postgres` and `libsql`, with `default = ["postgres", "libsql", "html-to-markdown"]`.
 - The current task system in `.trellis/` is bootstrapped but the backend spec files are still mostly templates.

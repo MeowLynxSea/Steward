@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use ironclaw::db::{Database, libsql::LibSqlBackend};
-use ironclaw::workspace::{MockEmbeddings, SearchConfig, Workspace};
+use steward_core::db::{Database, libsql::LibSqlBackend};
+use steward_core::workspace::{MockEmbeddings, SearchConfig, Workspace};
 
 #[tokio::test]
 async fn libsql_hybrid_search_uses_fts_and_vector_index() {
@@ -22,7 +22,7 @@ async fn libsql_hybrid_search_uses_fts_and_vector_index() {
         .await
         .expect("failed to create vector index");
 
-    let db: Arc<dyn ironclaw::db::Database> = Arc::new(backend);
+    let db: Arc<dyn steward_core::db::Database> = Arc::new(backend);
     let workspace = Workspace::new_with_db("test-libsql", Arc::clone(&db))
         .with_embeddings_uncached(Arc::new(MockEmbeddings::new(64)));
 

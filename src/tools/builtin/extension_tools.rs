@@ -813,7 +813,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             None,
             None,
-            std::env::temp_dir().join("ironclaw-test-tools"),
+            std::env::temp_dir().join("steward-test-tools"),
             None,
             "test".to_string(),
             None,

@@ -924,13 +924,13 @@ impl Agent {
         let model_owned = model.to_string();
         let backend = self.deps.llm_backend.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
-            // 3a. Update the backend-specific model env var in ~/.ironcowork/.env
+            // 3a. Update the backend-specific model env var in ~/.steward/.env
             //     only if the var already exists (don't inject new vars).
             let registry = crate::llm::ProviderRegistry::load();
             let model_env = registry.model_env_var(&backend);
             let env_var_prefix = format!("{}=", model_env);
 
-            let env_path = crate::bootstrap::ironclaw_env_path();
+            let env_path = crate::bootstrap::steward_env_path();
             let env_has_var = std::fs::read_to_string(&env_path)
                 .ok()
                 .is_some_and(|content| {

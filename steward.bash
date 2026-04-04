@@ -1,4 +1,4 @@
-_ironclaw() {
+_steward() {
     local i cur prev opts cmd
     COMPREPLY=()
     if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
@@ -14,388 +14,388 @@ _ironclaw() {
     do
         case "${cmd},${i}" in
             ",$1")
-                cmd="ironclaw"
+                cmd="steward"
                 ;;
-            ironclaw,claude-bridge)
-                cmd="ironclaw__claude__bridge"
+            steward,claude-bridge)
+                cmd="steward__claude__bridge"
                 ;;
-            ironclaw,completion)
-                cmd="ironclaw__completion"
+            steward,completion)
+                cmd="steward__completion"
                 ;;
-            ironclaw,config)
-                cmd="ironclaw__config"
+            steward,config)
+                cmd="steward__config"
                 ;;
-            ironclaw,doctor)
-                cmd="ironclaw__doctor"
+            steward,doctor)
+                cmd="steward__doctor"
                 ;;
-            ironclaw,help)
-                cmd="ironclaw__help"
+            steward,help)
+                cmd="steward__help"
                 ;;
-            ironclaw,mcp)
-                cmd="ironclaw__mcp"
+            steward,mcp)
+                cmd="steward__mcp"
                 ;;
-            ironclaw,memory)
-                cmd="ironclaw__memory"
+            steward,memory)
+                cmd="steward__memory"
                 ;;
-            ironclaw,onboard)
-                cmd="ironclaw__onboard"
+            steward,onboard)
+                cmd="steward__onboard"
                 ;;
-            ironclaw,pairing)
-                cmd="ironclaw__pairing"
+            steward,pairing)
+                cmd="steward__pairing"
                 ;;
-            ironclaw,run)
-                cmd="ironclaw__run"
+            steward,run)
+                cmd="steward__run"
                 ;;
-            ironclaw,service)
-                cmd="ironclaw__service"
+            steward,service)
+                cmd="steward__service"
                 ;;
-            ironclaw,status)
-                cmd="ironclaw__status"
+            steward,status)
+                cmd="steward__status"
                 ;;
-            ironclaw,tool)
-                cmd="ironclaw__tool"
+            steward,tool)
+                cmd="steward__tool"
                 ;;
-            ironclaw,worker)
-                cmd="ironclaw__worker"
+            steward,worker)
+                cmd="steward__worker"
                 ;;
-            ironclaw__config,get)
-                cmd="ironclaw__config__get"
+            steward__config,get)
+                cmd="steward__config__get"
                 ;;
-            ironclaw__config,help)
-                cmd="ironclaw__config__help"
+            steward__config,help)
+                cmd="steward__config__help"
                 ;;
-            ironclaw__config,init)
-                cmd="ironclaw__config__init"
+            steward__config,init)
+                cmd="steward__config__init"
                 ;;
-            ironclaw__config,list)
-                cmd="ironclaw__config__list"
+            steward__config,list)
+                cmd="steward__config__list"
                 ;;
-            ironclaw__config,path)
-                cmd="ironclaw__config__path"
+            steward__config,path)
+                cmd="steward__config__path"
                 ;;
-            ironclaw__config,reset)
-                cmd="ironclaw__config__reset"
+            steward__config,reset)
+                cmd="steward__config__reset"
                 ;;
-            ironclaw__config,set)
-                cmd="ironclaw__config__set"
+            steward__config,set)
+                cmd="steward__config__set"
                 ;;
-            ironclaw__config__help,get)
-                cmd="ironclaw__config__help__get"
+            steward__config__help,get)
+                cmd="steward__config__help__get"
                 ;;
-            ironclaw__config__help,help)
-                cmd="ironclaw__config__help__help"
+            steward__config__help,help)
+                cmd="steward__config__help__help"
                 ;;
-            ironclaw__config__help,init)
-                cmd="ironclaw__config__help__init"
+            steward__config__help,init)
+                cmd="steward__config__help__init"
                 ;;
-            ironclaw__config__help,list)
-                cmd="ironclaw__config__help__list"
+            steward__config__help,list)
+                cmd="steward__config__help__list"
                 ;;
-            ironclaw__config__help,path)
-                cmd="ironclaw__config__help__path"
+            steward__config__help,path)
+                cmd="steward__config__help__path"
                 ;;
-            ironclaw__config__help,reset)
-                cmd="ironclaw__config__help__reset"
+            steward__config__help,reset)
+                cmd="steward__config__help__reset"
                 ;;
-            ironclaw__config__help,set)
-                cmd="ironclaw__config__help__set"
+            steward__config__help,set)
+                cmd="steward__config__help__set"
                 ;;
-            ironclaw__help,claude-bridge)
-                cmd="ironclaw__help__claude__bridge"
+            steward__help,claude-bridge)
+                cmd="steward__help__claude__bridge"
                 ;;
-            ironclaw__help,completion)
-                cmd="ironclaw__help__completion"
+            steward__help,completion)
+                cmd="steward__help__completion"
                 ;;
-            ironclaw__help,config)
-                cmd="ironclaw__help__config"
+            steward__help,config)
+                cmd="steward__help__config"
                 ;;
-            ironclaw__help,doctor)
-                cmd="ironclaw__help__doctor"
+            steward__help,doctor)
+                cmd="steward__help__doctor"
                 ;;
-            ironclaw__help,help)
-                cmd="ironclaw__help__help"
+            steward__help,help)
+                cmd="steward__help__help"
                 ;;
-            ironclaw__help,mcp)
-                cmd="ironclaw__help__mcp"
+            steward__help,mcp)
+                cmd="steward__help__mcp"
                 ;;
-            ironclaw__help,memory)
-                cmd="ironclaw__help__memory"
+            steward__help,memory)
+                cmd="steward__help__memory"
                 ;;
-            ironclaw__help,onboard)
-                cmd="ironclaw__help__onboard"
+            steward__help,onboard)
+                cmd="steward__help__onboard"
                 ;;
-            ironclaw__help,pairing)
-                cmd="ironclaw__help__pairing"
+            steward__help,pairing)
+                cmd="steward__help__pairing"
                 ;;
-            ironclaw__help,run)
-                cmd="ironclaw__help__run"
+            steward__help,run)
+                cmd="steward__help__run"
                 ;;
-            ironclaw__help,service)
-                cmd="ironclaw__help__service"
+            steward__help,service)
+                cmd="steward__help__service"
                 ;;
-            ironclaw__help,status)
-                cmd="ironclaw__help__status"
+            steward__help,status)
+                cmd="steward__help__status"
                 ;;
-            ironclaw__help,tool)
-                cmd="ironclaw__help__tool"
+            steward__help,tool)
+                cmd="steward__help__tool"
                 ;;
-            ironclaw__help,worker)
-                cmd="ironclaw__help__worker"
+            steward__help,worker)
+                cmd="steward__help__worker"
                 ;;
-            ironclaw__help__config,get)
-                cmd="ironclaw__help__config__get"
+            steward__help__config,get)
+                cmd="steward__help__config__get"
                 ;;
-            ironclaw__help__config,init)
-                cmd="ironclaw__help__config__init"
+            steward__help__config,init)
+                cmd="steward__help__config__init"
                 ;;
-            ironclaw__help__config,list)
-                cmd="ironclaw__help__config__list"
+            steward__help__config,list)
+                cmd="steward__help__config__list"
                 ;;
-            ironclaw__help__config,path)
-                cmd="ironclaw__help__config__path"
+            steward__help__config,path)
+                cmd="steward__help__config__path"
                 ;;
-            ironclaw__help__config,reset)
-                cmd="ironclaw__help__config__reset"
+            steward__help__config,reset)
+                cmd="steward__help__config__reset"
                 ;;
-            ironclaw__help__config,set)
-                cmd="ironclaw__help__config__set"
+            steward__help__config,set)
+                cmd="steward__help__config__set"
                 ;;
-            ironclaw__help__mcp,add)
-                cmd="ironclaw__help__mcp__add"
+            steward__help__mcp,add)
+                cmd="steward__help__mcp__add"
                 ;;
-            ironclaw__help__mcp,auth)
-                cmd="ironclaw__help__mcp__auth"
+            steward__help__mcp,auth)
+                cmd="steward__help__mcp__auth"
                 ;;
-            ironclaw__help__mcp,list)
-                cmd="ironclaw__help__mcp__list"
+            steward__help__mcp,list)
+                cmd="steward__help__mcp__list"
                 ;;
-            ironclaw__help__mcp,remove)
-                cmd="ironclaw__help__mcp__remove"
+            steward__help__mcp,remove)
+                cmd="steward__help__mcp__remove"
                 ;;
-            ironclaw__help__mcp,test)
-                cmd="ironclaw__help__mcp__test"
+            steward__help__mcp,test)
+                cmd="steward__help__mcp__test"
                 ;;
-            ironclaw__help__mcp,toggle)
-                cmd="ironclaw__help__mcp__toggle"
+            steward__help__mcp,toggle)
+                cmd="steward__help__mcp__toggle"
                 ;;
-            ironclaw__help__memory,read)
-                cmd="ironclaw__help__memory__read"
+            steward__help__memory,read)
+                cmd="steward__help__memory__read"
                 ;;
-            ironclaw__help__memory,search)
-                cmd="ironclaw__help__memory__search"
+            steward__help__memory,search)
+                cmd="steward__help__memory__search"
                 ;;
-            ironclaw__help__memory,status)
-                cmd="ironclaw__help__memory__status"
+            steward__help__memory,status)
+                cmd="steward__help__memory__status"
                 ;;
-            ironclaw__help__memory,tree)
-                cmd="ironclaw__help__memory__tree"
+            steward__help__memory,tree)
+                cmd="steward__help__memory__tree"
                 ;;
-            ironclaw__help__memory,write)
-                cmd="ironclaw__help__memory__write"
+            steward__help__memory,write)
+                cmd="steward__help__memory__write"
                 ;;
-            ironclaw__help__pairing,approve)
-                cmd="ironclaw__help__pairing__approve"
+            steward__help__pairing,approve)
+                cmd="steward__help__pairing__approve"
                 ;;
-            ironclaw__help__pairing,list)
-                cmd="ironclaw__help__pairing__list"
+            steward__help__pairing,list)
+                cmd="steward__help__pairing__list"
                 ;;
-            ironclaw__help__service,install)
-                cmd="ironclaw__help__service__install"
+            steward__help__service,install)
+                cmd="steward__help__service__install"
                 ;;
-            ironclaw__help__service,start)
-                cmd="ironclaw__help__service__start"
+            steward__help__service,start)
+                cmd="steward__help__service__start"
                 ;;
-            ironclaw__help__service,status)
-                cmd="ironclaw__help__service__status"
+            steward__help__service,status)
+                cmd="steward__help__service__status"
                 ;;
-            ironclaw__help__service,stop)
-                cmd="ironclaw__help__service__stop"
+            steward__help__service,stop)
+                cmd="steward__help__service__stop"
                 ;;
-            ironclaw__help__service,uninstall)
-                cmd="ironclaw__help__service__uninstall"
+            steward__help__service,uninstall)
+                cmd="steward__help__service__uninstall"
                 ;;
-            ironclaw__help__tool,auth)
-                cmd="ironclaw__help__tool__auth"
+            steward__help__tool,auth)
+                cmd="steward__help__tool__auth"
                 ;;
-            ironclaw__help__tool,info)
-                cmd="ironclaw__help__tool__info"
+            steward__help__tool,info)
+                cmd="steward__help__tool__info"
                 ;;
-            ironclaw__help__tool,install)
-                cmd="ironclaw__help__tool__install"
+            steward__help__tool,install)
+                cmd="steward__help__tool__install"
                 ;;
-            ironclaw__help__tool,list)
-                cmd="ironclaw__help__tool__list"
+            steward__help__tool,list)
+                cmd="steward__help__tool__list"
                 ;;
-            ironclaw__help__tool,remove)
-                cmd="ironclaw__help__tool__remove"
+            steward__help__tool,remove)
+                cmd="steward__help__tool__remove"
                 ;;
-            ironclaw__mcp,add)
-                cmd="ironclaw__mcp__add"
+            steward__mcp,add)
+                cmd="steward__mcp__add"
                 ;;
-            ironclaw__mcp,auth)
-                cmd="ironclaw__mcp__auth"
+            steward__mcp,auth)
+                cmd="steward__mcp__auth"
                 ;;
-            ironclaw__mcp,help)
-                cmd="ironclaw__mcp__help"
+            steward__mcp,help)
+                cmd="steward__mcp__help"
                 ;;
-            ironclaw__mcp,list)
-                cmd="ironclaw__mcp__list"
+            steward__mcp,list)
+                cmd="steward__mcp__list"
                 ;;
-            ironclaw__mcp,remove)
-                cmd="ironclaw__mcp__remove"
+            steward__mcp,remove)
+                cmd="steward__mcp__remove"
                 ;;
-            ironclaw__mcp,test)
-                cmd="ironclaw__mcp__test"
+            steward__mcp,test)
+                cmd="steward__mcp__test"
                 ;;
-            ironclaw__mcp,toggle)
-                cmd="ironclaw__mcp__toggle"
+            steward__mcp,toggle)
+                cmd="steward__mcp__toggle"
                 ;;
-            ironclaw__mcp__help,add)
-                cmd="ironclaw__mcp__help__add"
+            steward__mcp__help,add)
+                cmd="steward__mcp__help__add"
                 ;;
-            ironclaw__mcp__help,auth)
-                cmd="ironclaw__mcp__help__auth"
+            steward__mcp__help,auth)
+                cmd="steward__mcp__help__auth"
                 ;;
-            ironclaw__mcp__help,help)
-                cmd="ironclaw__mcp__help__help"
+            steward__mcp__help,help)
+                cmd="steward__mcp__help__help"
                 ;;
-            ironclaw__mcp__help,list)
-                cmd="ironclaw__mcp__help__list"
+            steward__mcp__help,list)
+                cmd="steward__mcp__help__list"
                 ;;
-            ironclaw__mcp__help,remove)
-                cmd="ironclaw__mcp__help__remove"
+            steward__mcp__help,remove)
+                cmd="steward__mcp__help__remove"
                 ;;
-            ironclaw__mcp__help,test)
-                cmd="ironclaw__mcp__help__test"
+            steward__mcp__help,test)
+                cmd="steward__mcp__help__test"
                 ;;
-            ironclaw__mcp__help,toggle)
-                cmd="ironclaw__mcp__help__toggle"
+            steward__mcp__help,toggle)
+                cmd="steward__mcp__help__toggle"
                 ;;
-            ironclaw__memory,help)
-                cmd="ironclaw__memory__help"
+            steward__memory,help)
+                cmd="steward__memory__help"
                 ;;
-            ironclaw__memory,read)
-                cmd="ironclaw__memory__read"
+            steward__memory,read)
+                cmd="steward__memory__read"
                 ;;
-            ironclaw__memory,search)
-                cmd="ironclaw__memory__search"
+            steward__memory,search)
+                cmd="steward__memory__search"
                 ;;
-            ironclaw__memory,status)
-                cmd="ironclaw__memory__status"
+            steward__memory,status)
+                cmd="steward__memory__status"
                 ;;
-            ironclaw__memory,tree)
-                cmd="ironclaw__memory__tree"
+            steward__memory,tree)
+                cmd="steward__memory__tree"
                 ;;
-            ironclaw__memory,write)
-                cmd="ironclaw__memory__write"
+            steward__memory,write)
+                cmd="steward__memory__write"
                 ;;
-            ironclaw__memory__help,help)
-                cmd="ironclaw__memory__help__help"
+            steward__memory__help,help)
+                cmd="steward__memory__help__help"
                 ;;
-            ironclaw__memory__help,read)
-                cmd="ironclaw__memory__help__read"
+            steward__memory__help,read)
+                cmd="steward__memory__help__read"
                 ;;
-            ironclaw__memory__help,search)
-                cmd="ironclaw__memory__help__search"
+            steward__memory__help,search)
+                cmd="steward__memory__help__search"
                 ;;
-            ironclaw__memory__help,status)
-                cmd="ironclaw__memory__help__status"
+            steward__memory__help,status)
+                cmd="steward__memory__help__status"
                 ;;
-            ironclaw__memory__help,tree)
-                cmd="ironclaw__memory__help__tree"
+            steward__memory__help,tree)
+                cmd="steward__memory__help__tree"
                 ;;
-            ironclaw__memory__help,write)
-                cmd="ironclaw__memory__help__write"
+            steward__memory__help,write)
+                cmd="steward__memory__help__write"
                 ;;
-            ironclaw__pairing,approve)
-                cmd="ironclaw__pairing__approve"
+            steward__pairing,approve)
+                cmd="steward__pairing__approve"
                 ;;
-            ironclaw__pairing,help)
-                cmd="ironclaw__pairing__help"
+            steward__pairing,help)
+                cmd="steward__pairing__help"
                 ;;
-            ironclaw__pairing,list)
-                cmd="ironclaw__pairing__list"
+            steward__pairing,list)
+                cmd="steward__pairing__list"
                 ;;
-            ironclaw__pairing__help,approve)
-                cmd="ironclaw__pairing__help__approve"
+            steward__pairing__help,approve)
+                cmd="steward__pairing__help__approve"
                 ;;
-            ironclaw__pairing__help,help)
-                cmd="ironclaw__pairing__help__help"
+            steward__pairing__help,help)
+                cmd="steward__pairing__help__help"
                 ;;
-            ironclaw__pairing__help,list)
-                cmd="ironclaw__pairing__help__list"
+            steward__pairing__help,list)
+                cmd="steward__pairing__help__list"
                 ;;
-            ironclaw__service,help)
-                cmd="ironclaw__service__help"
+            steward__service,help)
+                cmd="steward__service__help"
                 ;;
-            ironclaw__service,install)
-                cmd="ironclaw__service__install"
+            steward__service,install)
+                cmd="steward__service__install"
                 ;;
-            ironclaw__service,start)
-                cmd="ironclaw__service__start"
+            steward__service,start)
+                cmd="steward__service__start"
                 ;;
-            ironclaw__service,status)
-                cmd="ironclaw__service__status"
+            steward__service,status)
+                cmd="steward__service__status"
                 ;;
-            ironclaw__service,stop)
-                cmd="ironclaw__service__stop"
+            steward__service,stop)
+                cmd="steward__service__stop"
                 ;;
-            ironclaw__service,uninstall)
-                cmd="ironclaw__service__uninstall"
+            steward__service,uninstall)
+                cmd="steward__service__uninstall"
                 ;;
-            ironclaw__service__help,help)
-                cmd="ironclaw__service__help__help"
+            steward__service__help,help)
+                cmd="steward__service__help__help"
                 ;;
-            ironclaw__service__help,install)
-                cmd="ironclaw__service__help__install"
+            steward__service__help,install)
+                cmd="steward__service__help__install"
                 ;;
-            ironclaw__service__help,start)
-                cmd="ironclaw__service__help__start"
+            steward__service__help,start)
+                cmd="steward__service__help__start"
                 ;;
-            ironclaw__service__help,status)
-                cmd="ironclaw__service__help__status"
+            steward__service__help,status)
+                cmd="steward__service__help__status"
                 ;;
-            ironclaw__service__help,stop)
-                cmd="ironclaw__service__help__stop"
+            steward__service__help,stop)
+                cmd="steward__service__help__stop"
                 ;;
-            ironclaw__service__help,uninstall)
-                cmd="ironclaw__service__help__uninstall"
+            steward__service__help,uninstall)
+                cmd="steward__service__help__uninstall"
                 ;;
-            ironclaw__tool,auth)
-                cmd="ironclaw__tool__auth"
+            steward__tool,auth)
+                cmd="steward__tool__auth"
                 ;;
-            ironclaw__tool,help)
-                cmd="ironclaw__tool__help"
+            steward__tool,help)
+                cmd="steward__tool__help"
                 ;;
-            ironclaw__tool,info)
-                cmd="ironclaw__tool__info"
+            steward__tool,info)
+                cmd="steward__tool__info"
                 ;;
-            ironclaw__tool,install)
-                cmd="ironclaw__tool__install"
+            steward__tool,install)
+                cmd="steward__tool__install"
                 ;;
-            ironclaw__tool,list)
-                cmd="ironclaw__tool__list"
+            steward__tool,list)
+                cmd="steward__tool__list"
                 ;;
-            ironclaw__tool,remove)
-                cmd="ironclaw__tool__remove"
+            steward__tool,remove)
+                cmd="steward__tool__remove"
                 ;;
-            ironclaw__tool__help,auth)
-                cmd="ironclaw__tool__help__auth"
+            steward__tool__help,auth)
+                cmd="steward__tool__help__auth"
                 ;;
-            ironclaw__tool__help,help)
-                cmd="ironclaw__tool__help__help"
+            steward__tool__help,help)
+                cmd="steward__tool__help__help"
                 ;;
-            ironclaw__tool__help,info)
-                cmd="ironclaw__tool__help__info"
+            steward__tool__help,info)
+                cmd="steward__tool__help__info"
                 ;;
-            ironclaw__tool__help,install)
-                cmd="ironclaw__tool__help__install"
+            steward__tool__help,install)
+                cmd="steward__tool__help__install"
                 ;;
-            ironclaw__tool__help,list)
-                cmd="ironclaw__tool__help__list"
+            steward__tool__help,list)
+                cmd="steward__tool__help__list"
                 ;;
-            ironclaw__tool__help,remove)
-                cmd="ironclaw__tool__help__remove"
+            steward__tool__help,remove)
+                cmd="steward__tool__help__remove"
                 ;;
             *)
                 ;;
@@ -403,7 +403,7 @@ _ironclaw() {
     done
 
     case "${cmd}" in
-        ironclaw)
+        steward)
             opts="-m -c -h -V --cli-only --no-db --message --config --no-onboard --help --version run onboard config tool mcp memory pairing service doctor status completion worker claude-bridge help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 1 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -433,7 +433,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__claude__bridge)
+        steward__claude__bridge)
             opts="-m -c -h --job-id --orchestrator-url --max-turns --model --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -479,7 +479,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__completion)
+        steward__completion)
             opts="-m -c -h --shell --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -513,7 +513,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config)
+        steward__config)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help init list get set reset path help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -543,7 +543,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__get)
+        steward__config__get)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <PATH>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -573,7 +573,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help)
+        steward__config__help)
             opts="init list get set reset path help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -587,7 +587,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__get)
+        steward__config__help__get)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -601,7 +601,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__help)
+        steward__config__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -615,7 +615,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__init)
+        steward__config__help__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -629,7 +629,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__list)
+        steward__config__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -643,7 +643,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__path)
+        steward__config__help__path)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -657,7 +657,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__reset)
+        steward__config__help__reset)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -671,7 +671,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__help__set)
+        steward__config__help__set)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -685,7 +685,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__init)
+        steward__config__init)
             opts="-o -m -c -h --output --force --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -723,7 +723,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__list)
+        steward__config__list)
             opts="-f -m -c -h --filter --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -761,7 +761,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__path)
+        steward__config__path)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -791,7 +791,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__reset)
+        steward__config__reset)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <PATH>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -821,7 +821,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__config__set)
+        steward__config__set)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <PATH> <VALUE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -851,7 +851,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__doctor)
+        steward__doctor)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -881,7 +881,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help)
+        steward__help)
             opts="run onboard config tool mcp memory pairing service doctor status completion worker claude-bridge help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -895,7 +895,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__claude__bridge)
+        steward__help__claude__bridge)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -909,7 +909,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__completion)
+        steward__help__completion)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -923,7 +923,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config)
+        steward__help__config)
             opts="init list get set reset path"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -937,7 +937,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__get)
+        steward__help__config__get)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -951,7 +951,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__init)
+        steward__help__config__init)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -965,7 +965,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__list)
+        steward__help__config__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -979,7 +979,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__path)
+        steward__help__config__path)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -993,7 +993,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__reset)
+        steward__help__config__reset)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1007,7 +1007,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__config__set)
+        steward__help__config__set)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1021,7 +1021,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__doctor)
+        steward__help__doctor)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1035,7 +1035,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__help)
+        steward__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1049,7 +1049,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp)
+        steward__help__mcp)
             opts="add remove list auth test toggle"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1063,7 +1063,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__add)
+        steward__help__mcp__add)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1077,7 +1077,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__auth)
+        steward__help__mcp__auth)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1091,7 +1091,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__list)
+        steward__help__mcp__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1105,7 +1105,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__remove)
+        steward__help__mcp__remove)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1119,7 +1119,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__test)
+        steward__help__mcp__test)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1133,7 +1133,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__mcp__toggle)
+        steward__help__mcp__toggle)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1147,7 +1147,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory)
+        steward__help__memory)
             opts="search read write tree status"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1161,7 +1161,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory__read)
+        steward__help__memory__read)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1175,7 +1175,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory__search)
+        steward__help__memory__search)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1189,7 +1189,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory__status)
+        steward__help__memory__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1203,7 +1203,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory__tree)
+        steward__help__memory__tree)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1217,7 +1217,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__memory__write)
+        steward__help__memory__write)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1231,7 +1231,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__onboard)
+        steward__help__onboard)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1245,7 +1245,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__pairing)
+        steward__help__pairing)
             opts="list approve"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1259,7 +1259,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__pairing__approve)
+        steward__help__pairing__approve)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1273,7 +1273,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__pairing__list)
+        steward__help__pairing__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1287,7 +1287,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__run)
+        steward__help__run)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1301,7 +1301,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service)
+        steward__help__service)
             opts="install start stop status uninstall"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1315,7 +1315,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service__install)
+        steward__help__service__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1329,7 +1329,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service__start)
+        steward__help__service__start)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1343,7 +1343,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service__status)
+        steward__help__service__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1357,7 +1357,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service__stop)
+        steward__help__service__stop)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1371,7 +1371,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__service__uninstall)
+        steward__help__service__uninstall)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1385,7 +1385,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__status)
+        steward__help__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1399,7 +1399,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool)
+        steward__help__tool)
             opts="install list remove info auth"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1413,7 +1413,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool__auth)
+        steward__help__tool__auth)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1427,7 +1427,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool__info)
+        steward__help__tool__info)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1441,7 +1441,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool__install)
+        steward__help__tool__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1455,7 +1455,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool__list)
+        steward__help__tool__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1469,7 +1469,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__tool__remove)
+        steward__help__tool__remove)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1483,7 +1483,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__help__worker)
+        steward__help__worker)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1497,7 +1497,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp)
+        steward__mcp)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help add remove list auth test toggle help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1527,7 +1527,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__add)
+        steward__mcp__add)
             opts="-m -c -h --client-id --auth-url --token-url --scopes --description --cli-only --no-db --message --config --no-onboard --help <NAME> <URL>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1577,7 +1577,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__auth)
+        steward__mcp__auth)
             opts="-u -m -c -h --user --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1615,7 +1615,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help)
+        steward__mcp__help)
             opts="add remove list auth test toggle help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1629,7 +1629,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__add)
+        steward__mcp__help__add)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1643,7 +1643,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__auth)
+        steward__mcp__help__auth)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1657,7 +1657,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__help)
+        steward__mcp__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1671,7 +1671,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__list)
+        steward__mcp__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1685,7 +1685,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__remove)
+        steward__mcp__help__remove)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1699,7 +1699,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__test)
+        steward__mcp__help__test)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1713,7 +1713,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__help__toggle)
+        steward__mcp__help__toggle)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1727,7 +1727,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__list)
+        steward__mcp__list)
             opts="-v -m -c -h --verbose --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1757,7 +1757,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__remove)
+        steward__mcp__remove)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1787,7 +1787,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__test)
+        steward__mcp__test)
             opts="-u -m -c -h --user --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1825,7 +1825,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__mcp__toggle)
+        steward__mcp__toggle)
             opts="-m -c -h --enable --disable --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1855,7 +1855,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory)
+        steward__memory)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help search read write tree status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1885,7 +1885,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help)
+        steward__memory__help)
             opts="search read write tree status help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1899,7 +1899,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__help)
+        steward__memory__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1913,7 +1913,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__read)
+        steward__memory__help__read)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1927,7 +1927,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__search)
+        steward__memory__help__search)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1941,7 +1941,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__status)
+        steward__memory__help__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1955,7 +1955,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__tree)
+        steward__memory__help__tree)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1969,7 +1969,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__help__write)
+        steward__memory__help__write)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -1983,7 +1983,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__read)
+        steward__memory__read)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <PATH>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2013,7 +2013,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__search)
+        steward__memory__search)
             opts="-l -m -c -h --limit --cli-only --no-db --message --config --no-onboard --help <QUERY>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2051,7 +2051,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__status)
+        steward__memory__status)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2081,7 +2081,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__tree)
+        steward__memory__tree)
             opts="-d -m -c -h --depth --cli-only --no-db --message --config --no-onboard --help [PATH]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2119,7 +2119,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__memory__write)
+        steward__memory__write)
             opts="-a -m -c -h --append --cli-only --no-db --message --config --no-onboard --help <PATH> [CONTENT]"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2149,7 +2149,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__onboard)
+        steward__onboard)
             opts="-m -c -h --skip-auth --channels-only --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2179,7 +2179,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing)
+        steward__pairing)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help list approve help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2209,7 +2209,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__approve)
+        steward__pairing__approve)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help <CHANNEL> <CODE>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2239,7 +2239,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__help)
+        steward__pairing__help)
             opts="list approve help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2253,7 +2253,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__help__approve)
+        steward__pairing__help__approve)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2267,7 +2267,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__help__help)
+        steward__pairing__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2281,7 +2281,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__help__list)
+        steward__pairing__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2295,7 +2295,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__pairing__list)
+        steward__pairing__list)
             opts="-m -c -h --json --cli-only --no-db --message --config --no-onboard --help <CHANNEL>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2325,7 +2325,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__run)
+        steward__run)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2355,7 +2355,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service)
+        steward__service)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help install start stop status uninstall help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2385,7 +2385,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help)
+        steward__service__help)
             opts="install start stop status uninstall help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2399,7 +2399,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__help)
+        steward__service__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2413,7 +2413,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__install)
+        steward__service__help__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2427,7 +2427,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__start)
+        steward__service__help__start)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2441,7 +2441,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__status)
+        steward__service__help__status)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2455,7 +2455,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__stop)
+        steward__service__help__stop)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2469,7 +2469,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__help__uninstall)
+        steward__service__help__uninstall)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2483,7 +2483,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__install)
+        steward__service__install)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2513,7 +2513,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__start)
+        steward__service__start)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2543,7 +2543,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__status)
+        steward__service__status)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2573,7 +2573,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__stop)
+        steward__service__stop)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2603,7 +2603,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__service__uninstall)
+        steward__service__uninstall)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2633,7 +2633,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__status)
+        steward__status)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2663,7 +2663,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool)
+        steward__tool)
             opts="-m -c -h --cli-only --no-db --message --config --no-onboard --help install list remove info auth help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2693,7 +2693,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__auth)
+        steward__tool__auth)
             opts="-d -u -m -c -h --dir --user --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2739,7 +2739,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help)
+        steward__tool__help)
             opts="install list remove info auth help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2753,7 +2753,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__auth)
+        steward__tool__help__auth)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2767,7 +2767,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__help)
+        steward__tool__help__help)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2781,7 +2781,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__info)
+        steward__tool__help__info)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2795,7 +2795,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__install)
+        steward__tool__help__install)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2809,7 +2809,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__list)
+        steward__tool__help__list)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2823,7 +2823,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__help__remove)
+        steward__tool__help__remove)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2837,7 +2837,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__info)
+        steward__tool__info)
             opts="-d -m -c -h --dir --cli-only --no-db --message --config --no-onboard --help <NAME_OR_PATH>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2875,7 +2875,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__install)
+        steward__tool__install)
             opts="-n -t -f -m -c -h --name --capabilities --target --release --skip-build --force --cli-only --no-db --message --config --no-onboard --help <PATH>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2925,7 +2925,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__list)
+        steward__tool__list)
             opts="-d -v -m -c -h --dir --verbose --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -2963,7 +2963,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__tool__remove)
+        steward__tool__remove)
             opts="-d -m -c -h --dir --cli-only --no-db --message --config --no-onboard --help <NAME>"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -3001,7 +3001,7 @@ _ironclaw() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
-        ironclaw__worker)
+        steward__worker)
             opts="-m -c -h --job-id --orchestrator-url --max-iterations --cli-only --no-db --message --config --no-onboard --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -3047,7 +3047,7 @@ _ironclaw() {
 }
 
 if [[ "${BASH_VERSINFO[0]}" -eq 4 && "${BASH_VERSINFO[1]}" -ge 4 || "${BASH_VERSINFO[0]}" -gt 4 ]]; then
-    complete -F _ironclaw -o nosort -o bashdefault -o default ironclaw
+    complete -F _steward -o nosort -o bashdefault -o default steward
 else
-    complete -F _ironclaw -o bashdefault -o default ironclaw
+    complete -F _steward -o bashdefault -o default steward
 fi

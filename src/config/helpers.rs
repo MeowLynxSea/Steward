@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn runtime_env_override_is_visible_to_env_or_override() {
         // Use a unique key that won't collide with real env vars.
-        let key = "IRONCLAW_TEST_RUNTIME_OVERRIDE_42";
+        let key = "STEWARD_TEST_RUNTIME_OVERRIDE_42";
 
         // Not set initially
         assert!(env_or_override(key).is_none());
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn runtime_env_override_is_visible_to_optional_env() {
-        let key = "IRONCLAW_TEST_OPTIONAL_ENV_OVERRIDE_42";
+        let key = "STEWARD_TEST_OPTIONAL_ENV_OVERRIDE_42";
 
         assert_eq!(optional_env(key).unwrap(), None);
 
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn real_env_var_takes_priority_over_runtime_override() {
         let _guard = lock_env();
-        let key = "IRONCLAW_TEST_ENV_PRIORITY_42";
+        let key = "STEWARD_TEST_ENV_PRIORITY_42";
 
         // Set runtime override
         set_runtime_env(key, "override_value");

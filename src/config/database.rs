@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use secrecy::{ExposeSecret, SecretString};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::steward_base_dir;
 use crate::config::helpers::{optional_env, parse_optional_env};
 use crate::error::ConfigError;
 
@@ -47,7 +47,7 @@ pub struct DatabaseConfig {
     pub pool_size: usize,
 
     // -- libSQL fields --
-    /// Path to local libSQL database file (default: ~/.ironcowork/ironcowork.db).
+    /// Path to local libSQL database file (default: ~/.steward/steward.db).
     pub libsql_path: Option<PathBuf>,
     /// Turso cloud URL for remote sync (optional).
     pub libsql_url: Option<String>,
@@ -125,9 +125,9 @@ impl DatabaseConfig {
     }
 }
 
-/// Default libSQL database path (~/.ironcowork/ironcowork.db).
+/// Default libSQL database path (~/.steward/steward.db).
 pub fn default_libsql_path() -> PathBuf {
-    ironclaw_base_dir().join("ironcowork.db")
+    steward_base_dir().join("steward.db")
 }
 
 #[cfg(test)]

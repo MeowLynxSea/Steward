@@ -1,6 +1,6 @@
 # Developer Bootstrap
 
-This project is developed as **IronCowork**.
+This project is developed as **Steward**.
 
 ## Prerequisites
 

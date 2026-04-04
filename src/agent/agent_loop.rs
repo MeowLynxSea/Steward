@@ -661,7 +661,7 @@ impl Agent {
     pub(super) fn emit_sse_event_for_message(
         &self,
         message: &IncomingMessage,
-        event: ironclaw_common::AppEvent,
+        event: steward_common::AppEvent,
     ) {
         if let Some(emitter) = self.emitter() {
             emitter.emit_for_user(&message.user_id, event);
@@ -1072,7 +1072,7 @@ impl Agent {
                         if let Some(ref emitter) = repair_emitter {
                             emitter.emit_for_user(
                                 &repair_owner_id,
-                                ironclaw_common::AppEvent::Response {
+                                steward_common::AppEvent::Response {
                                     content: response.content.clone(),
                                     thread_id: String::new(),
                                 },
@@ -1097,7 +1097,7 @@ impl Agent {
                             if let Some(ref emitter) = repair_emitter {
                                 emitter.emit_for_user(
                                     &repair_owner_id,
-                                    ironclaw_common::AppEvent::Response {
+                                    steward_common::AppEvent::Response {
                                         content: response.content.clone(),
                                         thread_id: String::new(),
                                     },
@@ -1195,7 +1195,7 @@ impl Agent {
                                     if let Some(ref emitter) = emitter {
                                         emitter.emit_for_user(
                                             user,
-                                            ironclaw_common::AppEvent::Response {
+                                            steward_common::AppEvent::Response {
                                                 content: response.content.clone(),
                                                 thread_id: response
                                                     .thread_id
@@ -1222,7 +1222,7 @@ impl Agent {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         user,
-                                        ironclaw_common::AppEvent::Response {
+                                        steward_common::AppEvent::Response {
                                             content: response.content.clone(),
                                             thread_id: response.thread_id.clone().unwrap_or_default(),
                                         },
@@ -1346,7 +1346,7 @@ impl Agent {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         &user,
-                                        ironclaw_common::AppEvent::Response {
+                                        steward_common::AppEvent::Response {
                                             content: response.content.clone(),
                                             thread_id: response
                                                 .thread_id
@@ -1383,7 +1383,7 @@ impl Agent {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         &user,
-                                        ironclaw_common::AppEvent::Response {
+                                        steward_common::AppEvent::Response {
                                             content: response.content.clone(),
                                             thread_id: response.thread_id.clone().unwrap_or_default(),
                                         },
@@ -1487,7 +1487,7 @@ impl Agent {
             // Notify the web UI that processing has started
             self.emit_sse_event_for_message(
                 &message,
-                ironclaw_common::AppEvent::Thinking {
+                steward_common::AppEvent::Thinking {
                     message: "正在处理...".to_string(),
                     thread_id: message.thread_id.clone(),
                 },
@@ -1501,7 +1501,7 @@ impl Agent {
                     // so the frontend can commit the completed message.
                     self.emit_sse_event_for_message(
                         &message,
-                        ironclaw_common::AppEvent::Response {
+                        steward_common::AppEvent::Response {
                             content: response.clone(),
                             thread_id: message.thread_id.clone().unwrap_or_default(),
                         },
@@ -1580,7 +1580,7 @@ impl Agent {
                 Err(e) => {
                     self.emit_sse_event_for_message(
                         &message,
-                        ironclaw_common::AppEvent::Error {
+                        steward_common::AppEvent::Error {
                             message: e.to_string(),
                             thread_id: message.thread_id.clone(),
                         },
@@ -2224,15 +2224,15 @@ fn is_stream_chunk_boundary(ch: char) -> bool {
 fn status_update_to_app_event(
     status: &crate::channels::StatusUpdate,
     thread_id: Option<String>,
-) -> Option<ironclaw_common::AppEvent> {
+) -> Option<steward_common::AppEvent> {
     use crate::channels::StatusUpdate;
 
     match status {
-        StatusUpdate::Thinking(message) => Some(ironclaw_common::AppEvent::Thinking {
+        StatusUpdate::Thinking(message) => Some(steward_common::AppEvent::Thinking {
             message: message.clone(),
             thread_id,
         }),
-        StatusUpdate::ToolStarted { name } => Some(ironclaw_common::AppEvent::ToolStarted {
+        StatusUpdate::ToolStarted { name } => Some(steward_common::AppEvent::ToolStarted {
             name: name.clone(),
             thread_id,
         }),
@@ -2241,7 +2241,7 @@ fn status_update_to_app_event(
             success,
             error,
             parameters,
-        } => Some(ironclaw_common::AppEvent::ToolCompleted {
+        } => Some(steward_common::AppEvent::ToolCompleted {
             name: name.clone(),
             success: *success,
             error: error.clone(),
@@ -2249,29 +2249,29 @@ fn status_update_to_app_event(
             thread_id,
         }),
         StatusUpdate::ToolResult { name, preview } => {
-            Some(ironclaw_common::AppEvent::ToolResult {
+            Some(steward_common::AppEvent::ToolResult {
                 name: name.clone(),
                 preview: preview.clone(),
                 thread_id,
             })
         }
-        StatusUpdate::StreamChunk(content) => Some(ironclaw_common::AppEvent::StreamChunk {
+        StatusUpdate::StreamChunk(content) => Some(steward_common::AppEvent::StreamChunk {
             content: content.clone(),
             thread_id,
         }),
-        StatusUpdate::Status(message) => Some(ironclaw_common::AppEvent::Status {
+        StatusUpdate::Status(message) => Some(steward_common::AppEvent::Status {
             message: message.clone(),
             thread_id,
         }),
         StatusUpdate::ImageGenerated { data_url, path } => {
-            Some(ironclaw_common::AppEvent::ImageGenerated {
+            Some(steward_common::AppEvent::ImageGenerated {
                 data_url: data_url.clone(),
                 path: path.clone(),
                 thread_id,
             })
         }
         StatusUpdate::Suggestions { suggestions } => {
-            Some(ironclaw_common::AppEvent::Suggestions {
+            Some(steward_common::AppEvent::Suggestions {
                 suggestions: suggestions.clone(),
                 thread_id,
             })
@@ -2280,7 +2280,7 @@ fn status_update_to_app_event(
             input_tokens,
             output_tokens,
             cost_usd,
-        } => Some(ironclaw_common::AppEvent::TurnCost {
+        } => Some(steward_common::AppEvent::TurnCost {
             input_tokens: *input_tokens,
             output_tokens: *output_tokens,
             cost_usd: cost_usd.clone(),
@@ -2289,11 +2289,11 @@ fn status_update_to_app_event(
         StatusUpdate::ReasoningUpdate {
             narrative,
             decisions,
-        } => Some(ironclaw_common::AppEvent::ReasoningUpdate {
+        } => Some(steward_common::AppEvent::ReasoningUpdate {
             narrative: narrative.clone(),
             decisions: decisions
                 .iter()
-                .map(|d| ironclaw_common::ToolDecisionDto {
+                .map(|d| steward_common::ToolDecisionDto {
                     tool_name: d.tool_name.clone(),
                     rationale: d.rationale.clone(),
                 })
@@ -2306,7 +2306,7 @@ fn status_update_to_app_event(
             description,
             parameters,
             allow_always,
-        } => Some(ironclaw_common::AppEvent::ApprovalNeeded {
+        } => Some(steward_common::AppEvent::ApprovalNeeded {
             request_id: request_id.clone(),
             tool_name: tool_name.clone(),
             description: description.clone(),
@@ -2319,7 +2319,7 @@ fn status_update_to_app_event(
             instructions,
             auth_url,
             setup_url,
-        } => Some(ironclaw_common::AppEvent::AuthRequired {
+        } => Some(steward_common::AppEvent::AuthRequired {
             extension_name: extension_name.clone(),
             instructions: instructions.clone(),
             auth_url: auth_url.clone(),
@@ -2329,7 +2329,7 @@ fn status_update_to_app_event(
             extension_name,
             success,
             message,
-        } => Some(ironclaw_common::AppEvent::AuthCompleted {
+        } => Some(steward_common::AppEvent::AuthCompleted {
             extension_name: extension_name.clone(),
             success: *success,
             message: message.clone(),
@@ -2338,7 +2338,7 @@ fn status_update_to_app_event(
             job_id,
             title,
             browse_url,
-        } => Some(ironclaw_common::AppEvent::JobStarted {
+        } => Some(steward_common::AppEvent::JobStarted {
             job_id: job_id.clone(),
             title: title.clone(),
             browse_url: browse_url.clone(),

@@ -1,6 +1,6 @@
 //! Safety layer for prompt injection defense.
 //!
-//! This module re-exports everything from the `ironclaw_safety` crate,
+//! This module re-exports everything from the `steward_safety` crate,
 //! keeping `crate::safety::*` imports working throughout the codebase.
 
-pub use ironclaw_safety::*;
+pub use steward_safety::*;

@@ -1,13 +1,13 @@
-# Multi-stage Dockerfile for the IronClaw agent (cloud deployment).
+# Multi-stage Dockerfile for the Steward agent (cloud deployment).
 #
 # Uses cargo-chef for dependency caching — only rebuilds deps when
 # Cargo.toml/Cargo.lock change, not on every source edit.
 #
 # Build:
-#   docker build --platform linux/amd64 -t ironclaw:latest .
+#   docker build --platform linux/amd64 -t steward:latest .
 #
 # Run:
-#   docker run --env-file .env -p 3000:3000 ironclaw:latest
+#   docker run --env-file .env -p 3000:3000 steward:latest
 
 # Stage 1: Install cargo-chef
 FROM rust:1.92-slim-bookworm AS chef
@@ -43,7 +43,7 @@ FROM chef AS deps
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
-# Stage 4: Build the actual binary (only recompiles ironclaw source)
+# Stage 4: Build the actual binary (only recompiles steward source)
 FROM deps AS builder
 
 COPY Cargo.toml Cargo.lock ./
@@ -58,7 +58,7 @@ COPY channels-src/ channels-src/
 COPY wit/ wit/
 COPY providers.json providers.json
 
-RUN cargo build --release --bin ironclaw
+RUN cargo build --release --bin steward
 
 # Stage 5: Runtime
 FROM debian:bookworm-slim
@@ -68,15 +68,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/ironclaw /usr/local/bin/ironclaw
+COPY --from=builder /app/target/release/steward /usr/local/bin/steward
 COPY --from=builder /app/migrations /app/migrations
 
 # Non-root user
-RUN useradd -m -u 1000 -s /bin/bash ironclaw
-USER ironclaw
+RUN useradd -m -u 1000 -s /bin/bash steward
+USER steward
 
 EXPOSE 3000
 
-ENV RUST_LOG=ironclaw=info
+ENV RUST_LOG=steward=info
 
-ENTRYPOINT ["ironclaw"]
+ENTRYPOINT ["steward"]

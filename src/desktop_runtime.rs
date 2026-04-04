@@ -62,7 +62,7 @@ pub async fn start_embedded_runtime(
     tauri_emitter: Option<TauriEventEmitterHandle>,
 ) -> anyhow::Result<AppState> {
     let _ = dotenvy::dotenv();
-    crate::bootstrap::load_ironclaw_env();
+    crate::bootstrap::load_steward_env();
 
     let config = Config::from_env().await?;
     let session = create_session_manager(config.llm.session.clone()).await;

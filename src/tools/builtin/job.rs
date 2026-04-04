@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::steward_base_dir;
 use crate::channels::IncomingMessage;
 use crate::context::{ContextManager, JobContext, JobState};
 use crate::db::Database;
@@ -66,7 +66,7 @@ async fn resolve_job_id(input: &str, context_manager: &ContextManager) -> Result
 }
 
 fn projects_base() -> PathBuf {
-    ironclaw_base_dir().join("projects")
+    steward_base_dir().join("projects")
 }
 
 fn canonicalize_or_create(path: &Path) -> Result<PathBuf, ToolError> {
@@ -90,7 +90,7 @@ fn canonicalize_or_create(path: &Path) -> Result<PathBuf, ToolError> {
 /// Resolve the project directory, creating it if needed.
 ///
 /// If no explicit directory is provided, create a managed project directory
-/// under `~/.ironcowork/projects/{job_id}`.
+/// under `~/.steward/projects/{job_id}`.
 ///
 /// If a directory is provided, accept any accessible local path and create it
 /// on demand. Relative paths are resolved against the current process cwd.
@@ -252,7 +252,7 @@ impl Tool for CreateJobTool {
     }
 
     fn description(&self) -> &str {
-        "Create and execute a local job. Jobs run inside the main IronCowork runtime, using either the native worker or the local Claude Code strategy."
+        "Create and execute a local job. Jobs run inside the main Steward runtime, using either the native worker or the local Claude Code strategy."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -270,11 +270,11 @@ impl Tool for CreateJobTool {
                 "mode": {
                     "type": "string",
                     "enum": ["native", "claude_code"],
-                    "description": "Execution strategy. 'native' uses IronCowork's local worker. 'claude_code' runs the local Claude CLI."
+                    "description": "Execution strategy. 'native' uses Steward's local worker. 'claude_code' runs the local Claude CLI."
                 },
                 "project_dir": {
                     "type": "string",
-                    "description": "Optional local working directory for the job. If omitted, IronCowork creates one under ~/.ironcowork/projects/."
+                    "description": "Optional local working directory for the job. If omitted, Steward creates one under ~/.steward/projects/."
                 }
             },
             "required": ["title", "description"]

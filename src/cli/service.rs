@@ -1,4 +1,4 @@
-//! CLI subcommand definitions for `ironcowork service`.
+//! CLI subcommand definitions for `steward service`.
 
 use clap::Subcommand;
 

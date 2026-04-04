@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use ironclaw::db::Database;
-use ironclaw::db::libsql::LibSqlBackend;
-use ironclaw::workspace::Workspace;
-use ironclaw::workspace::layer::{LayerSensitivity, MemoryLayer};
-use ironclaw::workspace::privacy::PatternPrivacyClassifier;
+use steward_core::db::Database;
+use steward_core::db::libsql::LibSqlBackend;
+use steward_core::workspace::Workspace;
+use steward_core::workspace::layer::{LayerSensitivity, MemoryLayer};
+use steward_core::workspace::privacy::PatternPrivacyClassifier;
 
 async fn setup() -> (Arc<dyn Database>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("create temp dir");

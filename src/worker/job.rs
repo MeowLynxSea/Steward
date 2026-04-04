@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use ironclaw_common::{AppEvent, ToolDecisionDto};
+use steward_common::{AppEvent, ToolDecisionDto};
 
 use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction, run_agentic_loop,
@@ -1643,7 +1643,7 @@ fn log_job_event(
     if let Some(sse) = sse {
         let job_id_str = job_id.to_string();
         let event = match event_type {
-            "message" => Some(ironclaw_common::AppEvent::JobMessage {
+            "message" => Some(steward_common::AppEvent::JobMessage {
                 job_id: job_id_str,
                 role: data
                     .get("role")
@@ -1656,7 +1656,7 @@ fn log_job_event(
                     .unwrap_or("")
                     .to_string(),
             }),
-            "status" => Some(ironclaw_common::AppEvent::JobStatus {
+            "status" => Some(steward_common::AppEvent::JobStatus {
                 job_id: job_id_str,
                 message: data
                     .get("message")

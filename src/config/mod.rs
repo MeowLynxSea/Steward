@@ -1,4 +1,4 @@
-//! Configuration for IronCowork.
+//! Configuration for Steward.
 //!
 //! Settings are loaded from env vars, the DB settings table, TOML config,
 //! and built-in defaults. Priority varies by subsystem:
@@ -6,7 +6,7 @@
 //! - **LLM settings** (backend, model, api_key, base_url): DB > env > default
 //! - **Most other settings** (agent, channels, tunnel, …): env > DB > default
 //!
-//! `DATABASE_URL` lives in `~/.ironcowork/.env` (loaded via dotenvy early
+//! `DATABASE_URL` lives in `~/.steward/.env` (loaded via dotenvy early
 //! in startup).
 
 mod agent;
@@ -203,7 +203,7 @@ impl Config {
         toml_path: Option<&std::path::Path>,
     ) -> Result<Self, ConfigError> {
         let _ = dotenvy::dotenv();
-        crate::bootstrap::load_ironclaw_env();
+        crate::bootstrap::load_steward_env();
 
         // Start with TOML config as a base (lowest priority among the two).
         let mut settings = Settings::default();
@@ -229,7 +229,7 @@ impl Config {
     /// and by CLI commands that don't have DB access.
     /// Falls back to legacy `settings.json` on disk if present.
     ///
-    /// Loads both `./.env` (standard, higher priority) and `~/.ironcowork/.env`
+    /// Loads both `./.env` (standard, higher priority) and `~/.steward/.env`
     /// (lower priority) via dotenvy, which never overwrites existing vars.
     pub async fn from_env() -> Result<Self, ConfigError> {
         Self::from_env_with_toml(None).await
@@ -246,7 +246,7 @@ impl Config {
     /// Load and merge a TOML config file into settings.
     ///
     /// If `explicit_path` is `Some`, loads from that path (errors are fatal).
-    /// If `None`, tries the default path `~/.ironcowork/config.toml` (missing
+    /// If `None`, tries the default path `~/.steward/config.toml` (missing
     /// file is silently ignored).
     fn apply_toml_overlay(
         settings: &mut Settings,
@@ -376,7 +376,7 @@ pub(crate) fn load_bootstrap_settings(
     toml_path: Option<&std::path::Path>,
 ) -> Result<Settings, ConfigError> {
     let _ = dotenvy::dotenv();
-    crate::bootstrap::load_ironclaw_env();
+    crate::bootstrap::load_steward_env();
 
     let mut settings = Settings::load();
     Config::apply_toml_overlay(&mut settings, toml_path)?;
@@ -384,7 +384,7 @@ pub(crate) fn load_bootstrap_settings(
 }
 
 pub(crate) fn resolve_owner_id(settings: &Settings) -> Result<String, ConfigError> {
-    let env_owner_id = self::helpers::optional_env("IRONCLAW_OWNER_ID")?;
+    let env_owner_id = self::helpers::optional_env("STEWARD_OWNER_ID")?;
     let settings_owner_id = settings.owner_id.clone();
     let configured_owner_id = env_owner_id.clone().or(settings_owner_id.clone());
 
@@ -401,7 +401,7 @@ pub(crate) fn resolve_owner_id(settings: &Settings) -> Result<String, ConfigErro
     {
         WARNED_EXPLICIT_DEFAULT_OWNER_ID.call_once(|| {
             tracing::warn!(
-                "IRONCLAW_OWNER_ID resolved to the legacy 'default' scope explicitly; durable state will keep legacy owner behavior"
+                "STEWARD_OWNER_ID resolved to the legacy 'default' scope explicitly; durable state will keep legacy owner behavior"
             );
         });
     }

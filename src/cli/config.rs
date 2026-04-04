@@ -13,7 +13,7 @@ use crate::settings::Settings;
 pub enum ConfigCommand {
     /// Generate a default config.toml file
     Init {
-        /// Output path (default: ~/.ironcowork/config.toml)
+        /// Output path (default: ~/.steward/config.toml)
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
 
@@ -240,14 +240,14 @@ fn show_path(has_db: bool) -> anyhow::Result<()> {
     }
     println!(
         "Env config:         {}",
-        crate::bootstrap::ironclaw_env_path().display()
+        crate::bootstrap::steward_env_path().display()
     );
 
     let toml_path = Settings::default_toml_path();
     let toml_status = if toml_path.exists() {
         "found"
     } else {
-        "not found (run `ironcowork config init` to create)"
+        "not found (run `steward config init` to create)"
     };
     println!(
         "TOML config:        {} ({})",
@@ -283,7 +283,7 @@ mod tests {
 
         // Reset to default
         settings.reset("agent.name").unwrap();
-        assert_eq!(settings.agent.name, "ironcowork");
+        assert_eq!(settings.agent.name, "steward");
     }
 
     #[tokio::test]

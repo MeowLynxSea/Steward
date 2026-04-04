@@ -14,9 +14,9 @@ This project is in an architectural migration. Quality means more than "code com
 
 Current concrete examples:
 
-- HTTP contract regression tests: [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/IronCowork/tests/api_http_integration.rs)
-- API boundary code: [src/api.rs](/Users/MeowLynxSea/Development/IronCowork/src/api.rs)
-- runtime boot and wiring: [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs)
+- HTTP contract regression tests: [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/Steward/tests/api_http_integration.rs)
+- API boundary code: [src/api.rs](/Users/MeowLynxSea/Development/Steward/src/api.rs)
+- runtime boot and wiring: [src/main.rs](/Users/MeowLynxSea/Development/Steward/src/main.rs)
 
 ---
 

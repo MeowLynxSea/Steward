@@ -1,4 +1,4 @@
-# IronCowork Post-Phase-1 Execution Roadmap
+# Steward Post-Phase-1 Execution Roadmap
 
 **Date:** 2026-03-31  
 **Status:** Active planning baseline  
@@ -248,7 +248,7 @@ Focus:
 
 ### Exit Criteria
 
-- repository identity consistently reflects IronCowork
+- repository identity consistently reflects Steward
 - developer startup and architecture docs reflect the session-first agent direction
 - user docs explain desktop mode, browser mode, workspace usage, approvals, and safety
 - packaging targets and release metadata are coherent

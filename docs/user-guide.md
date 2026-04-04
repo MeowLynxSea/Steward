@@ -1,8 +1,8 @@
-# IronCowork User Guide
+# Steward User Guide
 
-## What IronCowork Is
+## What Steward Is
 
-IronCowork is a local-first desktop agent for knowledge work.
+Steward is a local-first desktop agent for knowledge work.
 
 The primary model is:
 
@@ -12,7 +12,7 @@ The primary model is:
 - approve risky actions when Ask mode pauses execution
 - use indexed workspace material to ground the agent's work
 
-IronCowork is not intended to be a hosted multi-user service and it does not expose a built-in remote control surface.
+Steward is not intended to be a hosted multi-user service and it does not expose a built-in remote control surface.
 
 ## Runtime Modes
 
@@ -52,13 +52,13 @@ Packaged desktop builds are described in [release-readiness.md](./release-readin
 
 ### 1. Choose an LLM provider
 
-Set provider credentials in `.env`, `config.toml`, or the local runtime env file under `~/.ironcowork/.env`.
+Set provider credentials in `.env`, `config.toml`, or the local runtime env file under `~/.steward/.env`.
 
 Example:
 
 ```env
 DATABASE_BACKEND=libsql
-LIBSQL_PATH=~/.ironcowork/ironcowork.db
+LIBSQL_PATH=~/.steward/steward.db
 LLM_BACKEND=openai_compatible
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=sk-or-...
@@ -69,16 +69,16 @@ Provider-specific details live in [docs/LLM_PROVIDERS.md](./LLM_PROVIDERS.md).
 
 ### 2. Understand local storage
 
-IronCowork stores its local runtime state under `~/.ironcowork/` by default.
+Steward stores its local runtime state under `~/.steward/` by default.
 
 Common paths:
 
-- `~/.ironcowork/ironcowork.db` for the local libSQL database
-- `~/.ironcowork/.env` for bootstrap configuration that must exist before DB startup
-- `~/.ironcowork/config.toml` and `~/.ironcowork/settings.json` for local settings
-- `~/.ironcowork/session.json` or provider-specific auth files for OAuth-backed providers
+- `~/.steward/steward.db` for the local libSQL database
+- `~/.steward/.env` for bootstrap configuration that must exist before DB startup
+- `~/.steward/config.toml` and `~/.steward/settings.json` for local settings
+- `~/.steward/session.json` or provider-specific auth files for OAuth-backed providers
 
-If you need a different root, set `IRONCOWORK_BASE_DIR` before startup.
+If you need a different root, set `STEWARD_BASE_DIR` before startup.
 
 ## Core Product Model
 
@@ -131,7 +131,7 @@ Drag-and-drop indexing is available in desktop mode.
 
 ## Explicit Non-Goals
 
-IronCowork does not treat these as primary product goals:
+Steward does not treat these as primary product goals:
 
 - predefined workflow forms as the main UX
 - mandatory cloud-hosted runtime

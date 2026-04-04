@@ -1,6 +1,6 @@
 //! User settings persistence.
 //!
-//! Stores user preferences in `~/.ironcowork` (JSON/TOML) and, for some values,
+//! Stores user preferences in `~/.steward` (JSON/TOML) and, for some values,
 //! in the database. At runtime, precedence between database values,
 //! environment variables, on-disk config, and built-in defaults is determined
 //! on a per-setting basis by the corresponding resolver.
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::steward_base_dir;
 
 /// A custom LLM provider defined by the user through the web UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +77,7 @@ pub struct Settings {
     #[serde(default, alias = "setup_completed")]
     pub onboard_completed: bool,
 
-    /// Stable owner scope for this IronCowork instance.
+    /// Stable owner scope for this Steward instance.
     ///
     /// This is bootstrap configuration loaded from env / disk / TOML. We do
     /// not persist it in the per-user DB settings table because the DB lookup
@@ -510,7 +510,7 @@ pub struct AgentSettings {
 }
 
 fn default_agent_name() -> String {
-    "ironcowork".to_string()
+    "steward".to_string()
 }
 
 fn default_max_parallel_jobs() -> u32 {
@@ -756,9 +756,9 @@ impl Settings {
         map
     }
 
-    /// Get the default settings file path (~/.ironcowork/settings.json).
+    /// Get the default settings file path (~/.steward/settings.json).
     pub fn default_path() -> std::path::PathBuf {
-        ironclaw_base_dir().join("settings.json")
+        steward_base_dir().join("settings.json")
     }
 
     /// Load settings from disk, returning default if not found.
@@ -774,9 +774,9 @@ impl Settings {
         }
     }
 
-    /// Default TOML config file path (~/.ironcowork/config.toml).
+    /// Default TOML config file path (~/.steward/config.toml).
     pub fn default_toml_path() -> PathBuf {
-        ironclaw_base_dir().join("config.toml")
+        steward_base_dir().join("config.toml")
     }
 
     /// Load settings from a TOML file.
@@ -801,14 +801,14 @@ impl Settings {
             .map_err(|e| format!("failed to serialize settings: {}", e))?;
 
         let content = format!(
-            "# IronCowork configuration file.\n\
+            "# Steward configuration file.\n\
              #\n\
              # Priority varies by subsystem. LLM: DB > env > this file > defaults.\n\
              # Most others: env > DB > this file > defaults.\n\
              # Uncomment and edit values to override defaults.\n\
-             # Run `ironcowork config init` to regenerate this file.\n\
+             # Run `steward config init` to regenerate this file.\n\
              #\n\
-             # Documentation: https://github.com/MeowLynxSea/IronCowork\n\
+             # Documentation: https://github.com/MeowLynxSea/Steward\n\
              \n\
              {raw}"
         );
@@ -1139,7 +1139,7 @@ mod tests {
     fn test_get_setting() {
         let settings = Settings::default();
 
-        assert_eq!(settings.get("agent.name"), Some("ironcowork".to_string()));
+        assert_eq!(settings.get("agent.name"), Some("steward".to_string()));
         assert_eq!(
             settings.get("agent.max_parallel_jobs"),
             Some("5".to_string())
@@ -1168,7 +1168,7 @@ mod tests {
 
         settings.agent.name = "custom".to_string();
         settings.reset("agent.name").unwrap();
-        assert_eq!(settings.agent.name, "ironcowork");
+        assert_eq!(settings.agent.name, "steward");
     }
 
     #[test]
@@ -1444,7 +1444,7 @@ mod tests {
         Settings::default().save_toml(&path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
 
-        assert!(content.starts_with("# IronCowork configuration file."));
+        assert!(content.starts_with("# Steward configuration file."));
         assert!(content.contains("[agent]"));
         assert!(content.contains("[heartbeat]"));
     }
@@ -1487,9 +1487,9 @@ mod tests {
     }
 
     #[test]
-    fn default_toml_path_under_ironclaw() {
+    fn default_toml_path_under_steward() {
         let path = Settings::default_toml_path();
-        assert!(path.to_string_lossy().contains(".ironcowork"));
+        assert!(path.to_string_lossy().contains(".steward"));
         assert!(path.to_string_lossy().ends_with("config.toml"));
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
         // Simulate prior partial run (steps 1-4 completed):
         let prior_run = Settings {
             database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://old-host/ironclaw".to_string()),
+            database_url: Some("postgres://old-host/steward".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             embeddings: EmbeddingsSettings {
@@ -1563,7 +1563,7 @@ mod tests {
         // Step 1 of the new wizard run: user enters a NEW database_url
         let step1_settings = Settings {
             database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://new-host/ironclaw".to_string()),
+            database_url: Some("postgres://new-host/steward".to_string()),
             ..Settings::default()
         };
 
@@ -1577,7 +1577,7 @@ mod tests {
         // Step 1's fresh database_url wins over stale DB value
         assert_eq!(
             current.database_url,
-            Some("postgres://new-host/ironclaw".to_string()),
+            Some("postgres://new-host/steward".to_string()),
             "Step 1 fresh choice must override stale DB value"
         );
 
@@ -1856,7 +1856,7 @@ mod tests {
     // to verify that re-running the wizard (or a subset of steps) doesn't
     // accidentally reset settings from prior runs.
 
-    /// Simulates `ironcowork onboard --provider-only` re-running on a fully
+    /// Simulates `steward onboard --provider-only` re-running on a fully
     /// configured installation. Only provider + model should change; all
     /// other settings (channels, embeddings, heartbeat) must survive.
     #[test]
@@ -1865,7 +1865,7 @@ mod tests {
         let prior = Settings {
             onboard_completed: true,
             database_backend: Some("libsql".to_string()),
-            libsql_path: Some("/home/user/.ironcowork/ironcowork.db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4o".to_string()),
             embeddings: EmbeddingsSettings {
@@ -1919,7 +1919,7 @@ mod tests {
         );
     }
 
-    /// Simulates `ironcowork onboard --channels-only` re-running on a fully
+    /// Simulates `steward onboard --channels-only` re-running on a fully
     /// configured installation. Only channel settings should change;
     /// provider, model, embeddings, heartbeat must survive.
     #[test]
@@ -1977,7 +1977,7 @@ mod tests {
         let prior = Settings {
             onboard_completed: true,
             database_backend: Some("libsql".to_string()),
-            libsql_path: Some("/home/user/.ironcowork/ironcowork.db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4o".to_string()),
             channels: ChannelSettings {
@@ -2005,7 +2005,7 @@ mod tests {
         // 1. auto_setup_database sets DB fields
         let step1 = Settings {
             database_backend: Some("libsql".to_string()),
-            libsql_path: Some("/home/user/.ironcowork/ironcowork.db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
 
@@ -2222,7 +2222,7 @@ mod tests {
         // User picks libsql this time, wizard clears stale postgres settings
         let step1 = Settings {
             database_backend: Some("libsql".to_string()),
-            libsql_path: Some("/home/user/.ironcowork/ironcowork.db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             database_url: None, // explicitly not set for libsql
             ..Default::default()
         };
@@ -2235,7 +2235,7 @@ mod tests {
         assert_eq!(current.database_backend.as_deref(), Some("libsql"));
         assert_eq!(
             current.libsql_path.as_deref(),
-            Some("/home/user/.ironcowork/ironcowork.db")
+            Some("/home/user/.steward/steward.db")
         );
 
         // Prior provider/model should survive (unrelated to DB switch)

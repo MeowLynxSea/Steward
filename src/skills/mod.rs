@@ -1,4 +1,4 @@
-//! OpenClaw SKILL.md-based skills system for IronClaw.
+//! OpenClaw SKILL.md-based skills system for Steward.
 //!
 //! Skills are SKILL.md files (YAML frontmatter + markdown prompt) that extend the
 //! agent's behavior through prompt-level instructions. Unlike code-level tools
@@ -85,7 +85,7 @@ impl std::fmt::Display for SkillTrust {
 pub enum SkillSource {
     /// Workspace skills directory (<workspace>/skills/).
     Workspace(PathBuf),
-    /// User skills directory (~/.ironcowork/skills/).
+    /// User skills directory (~/.steward/skills/).
     User(PathBuf),
     /// Bundled with the application.
     Bundled(PathBuf),

@@ -1,8 +1,8 @@
-# IronCowork Release Readiness
+# Steward Release Readiness
 
 ## Supported Packaging Targets
 
-IronCowork packaging is organized around the Tauri desktop shell.
+Steward packaging is organized around the Tauri desktop shell.
 
 Supported host-to-bundle targets:
 
@@ -16,9 +16,9 @@ Browser mode remains a supported local runtime path, but it is not a desktop bun
 
 Release builds should verify:
 
-- product name is `IronCowork`
-- bundle identifier is `ai.ironcowork.desktop`
-- tray/window title uses `IronCowork`
+- product name is `Steward`
+- bundle identifier is `ai.steward.desktop`
+- tray/window title uses `Steward`
 - `src-tauri/icons/icon.png`, `src-tauri/icons/icon.icns`, and `src-tauri/icons/icon.ico` are real branded assets, not placeholders
 
 ## Build Commands
@@ -68,7 +68,7 @@ cargo tauri build --config src-tauri/tauri.conf.json --bundles msi,nsis
    - Ask approvals pause execution correctly
    - workspace indexing/search still work
    - folder-drop indexing works in desktop mode
-5. Verify the app icon, product name, and bundle identifier are branded as IronCowork.
+5. Verify the app icon, product name, and bundle identifier are branded as Steward.
 6. Confirm docs still match the product:
    - [user-guide.md](./user-guide.md)
    - [LLM_PROVIDERS.md](./LLM_PROVIDERS.md)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Architecture boundary checks for IronCowork.
+# Architecture boundary checks for Steward.
 # Run as: bash scripts/check-boundaries.sh
 # Returns non-zero if hard violations are found.
 

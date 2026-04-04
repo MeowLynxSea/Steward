@@ -5,21 +5,21 @@
 use tauri::State;
 use uuid::Uuid;
 
-use ironclaw::desktop_runtime::AppState;
-use ironclaw::ipc::{
+use steward_core::desktop_runtime::AppState;
+use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
     CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest,
     RejectTaskRequest, ResolveWorkspaceConflictRequest, SendSessionMessageRequest,
     WorkspaceActionRequest, WorkspaceIndexRequest, WorkspaceSearchRequest,
 };
-use ironclaw::settings::Settings;
+use steward_core::settings::Settings;
 
 // =============================================================================
 // Settings (2 commands)
 // =============================================================================
 
-fn build_settings_response(settings: &Settings) -> ironclaw::ipc::SettingsResponse {
-    ironclaw::ipc::SettingsResponse {
+fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsResponse {
+    steward_core::ipc::SettingsResponse {
         llm_backend: settings.llm_backend.clone(),
         selected_model: settings.selected_model.clone(),
         ollama_base_url: settings.ollama_base_url.clone(),
@@ -33,7 +33,7 @@ fn build_settings_response(settings: &Settings) -> ironclaw::ipc::SettingsRespon
 }
 
 #[tauri::command]
-pub async fn get_settings(_state: State<'_, AppState>) -> Result<ironclaw::ipc::SettingsResponse, String> {
+pub async fn get_settings(_state: State<'_, AppState>) -> Result<steward_core::ipc::SettingsResponse, String> {
     let settings = Settings::load_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
@@ -44,7 +44,7 @@ pub async fn get_settings(_state: State<'_, AppState>) -> Result<ironclaw::ipc::
 pub async fn patch_settings(
     _state: State<'_, AppState>,
     payload: PatchSettingsRequest,
-) -> Result<ironclaw::ipc::SettingsResponse, String> {
+) -> Result<steward_core::ipc::SettingsResponse, String> {
     let mut settings = Settings::load_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
@@ -82,7 +82,7 @@ pub async fn patch_settings(
 #[tauri::command]
 pub async fn list_sessions(
     state: State<'_, AppState>,
-) -> Result<ironclaw::ipc::SessionListResponse, String> {
+) -> Result<steward_core::ipc::SessionListResponse, String> {
     let session_manager = &state.agent_session_manager;
     let sessions = session_manager.list_sessions().await;
 
@@ -92,7 +92,7 @@ pub async fn list_sessions(
         let message_count: i64 = sess.threads.values()
             .map(|t| t.turns.len() as i64)
             .sum();
-        summaries.push(ironclaw::ipc::SessionSummaryResponse {
+        summaries.push(steward_core::ipc::SessionSummaryResponse {
             id: sess.id,
             title: "Untitled Session".to_string(),
             message_count,
@@ -103,14 +103,14 @@ pub async fn list_sessions(
         });
     }
 
-    Ok(ironclaw::ipc::SessionListResponse { sessions: summaries })
+    Ok(steward_core::ipc::SessionListResponse { sessions: summaries })
 }
 
 #[tauri::command]
 pub async fn create_session(
     state: State<'_, AppState>,
     payload: Option<CreateSessionRequest>,
-) -> Result<ironclaw::ipc::CreateSessionResponse, String> {
+) -> Result<steward_core::ipc::CreateSessionResponse, String> {
     let session_manager = &state.agent_session_manager;
     let user_id = &state.owner_id;
 
@@ -131,14 +131,14 @@ pub async fn create_session(
     }
 
     let id = session.lock().await.id;
-    Ok(ironclaw::ipc::CreateSessionResponse { id })
+    Ok(steward_core::ipc::CreateSessionResponse { id })
 }
 
 #[tauri::command]
 pub async fn get_session(
     state: State<'_, AppState>,
     id: Uuid,
-) -> Result<ironclaw::ipc::SessionDetailResponse, String> {
+) -> Result<steward_core::ipc::SessionDetailResponse, String> {
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager.get_session_by_id(id).await
@@ -151,12 +151,12 @@ pub async fn get_session(
         .and_then(|tid| sess.threads.get(&tid).cloned())
         .ok_or_else(|| "No threads in session".to_string())?;
 
-    let messages: Vec<ironclaw::ipc::SessionMessageResponse> = thread
+    let messages: Vec<steward_core::ipc::SessionMessageResponse> = thread
         .turns
         .iter()
         .flat_map(|turn| {
             let mut msgs = Vec::new();
-            msgs.push(ironclaw::ipc::SessionMessageResponse {
+            msgs.push(steward_core::ipc::SessionMessageResponse {
                 id: Uuid::new_v4(),
                 role: "user".to_string(),
                 content: turn.user_input.clone(),
@@ -164,7 +164,7 @@ pub async fn get_session(
                 turn_number: turn.turn_number,
             });
             if let Some(response) = &turn.response {
-                msgs.push(ironclaw::ipc::SessionMessageResponse {
+                msgs.push(steward_core::ipc::SessionMessageResponse {
                     id: Uuid::new_v4(),
                     role: "assistant".to_string(),
                     content: response.clone(),
@@ -176,7 +176,7 @@ pub async fn get_session(
         })
         .collect();
 
-    let summary = ironclaw::ipc::SessionSummaryResponse {
+    let summary = steward_core::ipc::SessionSummaryResponse {
         id: sess.id,
         title: "Untitled Session".to_string(),
         message_count: thread.turns.len() as i64,
@@ -191,7 +191,7 @@ pub async fn get_session(
         .get_task(active_thread_id.unwrap_or_default())
         .await;
 
-    Ok(ironclaw::ipc::SessionDetailResponse {
+    Ok(steward_core::ipc::SessionDetailResponse {
         session: summary,
         messages,
         current_task,
@@ -213,7 +213,7 @@ pub async fn send_session_message(
     state: State<'_, AppState>,
     id: Uuid,
     payload: SendSessionMessageRequest,
-) -> Result<ironclaw::ipc::SendSessionMessageResponse, String> {
+) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager
@@ -229,7 +229,7 @@ pub async fn send_session_message(
     let thread = sess.threads.get(&thread_id).ok_or_else(|| "Thread not found".to_string())?;
 
     match thread.state {
-        ironclaw::agent::session::ThreadState::Processing => {
+        steward_core::agent::session::ThreadState::Processing => {
             drop(sess);
             let session = session_manager
                 .get_session_by_id(id)
@@ -238,7 +238,7 @@ pub async fn send_session_message(
             let mut sess = session.lock().await;
             if let Some(thread) = sess.threads.get_mut(&thread_id) {
                 if thread.queue_message(payload.content.clone()) {
-                    Ok(ironclaw::ipc::SendSessionMessageResponse {
+                    Ok(steward_core::ipc::SendSessionMessageResponse {
                         accepted: true,
                         session_id: id,
                         task_id: None,
@@ -251,19 +251,19 @@ pub async fn send_session_message(
                 Err("Thread not found".to_string())
             }
         }
-        ironclaw::agent::session::ThreadState::Idle
-        | ironclaw::agent::session::ThreadState::Interrupted => {
-            Ok(ironclaw::ipc::SendSessionMessageResponse {
+        steward_core::agent::session::ThreadState::Idle
+        | steward_core::agent::session::ThreadState::Interrupted => {
+            Ok(steward_core::ipc::SendSessionMessageResponse {
                 accepted: true,
                 session_id: id,
                 task_id: None,
                 task: None,
             })
         }
-        ironclaw::agent::session::ThreadState::AwaitingApproval => {
+        steward_core::agent::session::ThreadState::AwaitingApproval => {
             Err("Thread is awaiting approval. Use /interrupt to cancel.".to_string())
         }
-        ironclaw::agent::session::ThreadState::Completed => {
+        steward_core::agent::session::ThreadState::Completed => {
             Err("Thread completed. Use /thread new to start a new conversation.".to_string())
         }
     }
@@ -276,16 +276,16 @@ pub async fn send_session_message(
 #[tauri::command]
 pub async fn list_tasks(
     state: State<'_, AppState>,
-) -> Result<ironclaw::ipc::TaskListResponse, String> {
+) -> Result<steward_core::ipc::TaskListResponse, String> {
     let tasks = state.task_runtime.list_tasks().await;
-    Ok(ironclaw::ipc::TaskListResponse { tasks })
+    Ok(steward_core::ipc::TaskListResponse { tasks })
 }
 
 #[tauri::command]
 pub async fn get_task(
     state: State<'_, AppState>,
     id: Uuid,
-) -> Result<ironclaw::ipc::TaskDetailResponse, String> {
+) -> Result<steward_core::ipc::TaskDetailResponse, String> {
     let task = state
         .task_runtime
         .get_task(id)
@@ -298,7 +298,7 @@ pub async fn get_task(
         .await
         .ok_or_else(|| "Task detail not found".to_string())?;
 
-    Ok(ironclaw::ipc::TaskDetailResponse {
+    Ok(steward_core::ipc::TaskDetailResponse {
         task,
         timeline: detail.timeline,
     })
@@ -308,7 +308,7 @@ pub async fn get_task(
 pub async fn delete_task(
     state: State<'_, AppState>,
     id: Uuid,
-) -> Result<ironclaw::ipc::TaskRecord, String> {
+) -> Result<steward_core::ipc::TaskRecord, String> {
     let task = state
         .task_runtime
         .get_task(id)
@@ -328,14 +328,14 @@ pub async fn approve_task(
     state: State<'_, AppState>,
     id: Uuid,
     payload: ApproveTaskRequest,
-) -> Result<ironclaw::ipc::TaskRecord, String> {
+) -> Result<steward_core::ipc::TaskRecord, String> {
     let task = state
         .task_runtime
         .get_task(id)
         .await
         .ok_or_else(|| "Task not found".to_string())?;
 
-    if task.status != ironclaw::task_runtime::TaskStatus::WaitingApproval {
+    if task.status != steward_core::task_runtime::TaskStatus::WaitingApproval {
         return Err(format!(
             "Task is not awaiting approval (current status: {:?})",
             task.status
@@ -350,7 +350,7 @@ pub async fn approve_task(
         }
     }
 
-    let message = ironclaw::channels::IncomingMessage::new(
+    let message = steward_core::channels::IncomingMessage::new(
         &task.route.channel,
         &task.route.user_id,
         "approval",
@@ -378,7 +378,7 @@ pub async fn reject_task(
     state: State<'_, AppState>,
     id: Uuid,
     payload: RejectTaskRequest,
-) -> Result<ironclaw::ipc::TaskRecord, String> {
+) -> Result<steward_core::ipc::TaskRecord, String> {
     let reason = payload.reason.unwrap_or_else(|| "Rejected via IPC".to_string());
     state.task_runtime.mark_rejected(id, reason).await;
 
@@ -396,8 +396,8 @@ pub async fn patch_task_mode(
     state: State<'_, AppState>,
     id: Uuid,
     payload: PatchTaskModeRequest,
-) -> Result<ironclaw::ipc::TaskRecord, String> {
-    use ironclaw::task_runtime::TaskMode;
+) -> Result<steward_core::ipc::TaskRecord, String> {
+    use steward_core::task_runtime::TaskMode;
 
     let mode = match payload.mode.to_lowercase().as_str() {
         "yolo" => TaskMode::Yolo,
@@ -422,7 +422,7 @@ pub async fn patch_task_mode(
 pub async fn index_workspace(
     state: State<'_, AppState>,
     payload: WorkspaceIndexRequest,
-) -> Result<ironclaw::ipc::WorkspaceIndexResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceIndexResponse, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -438,8 +438,8 @@ pub async fn index_workspace(
         Err(e) => ("failed".to_string(), 0, Some(e.to_string())),
     };
 
-    Ok(ironclaw::ipc::WorkspaceIndexResponse {
-        job: ironclaw::ipc::WorkspaceIndexJobResponse {
+    Ok(steward_core::ipc::WorkspaceIndexResponse {
+        job: steward_core::ipc::WorkspaceIndexJobResponse {
             id: job_id,
             path: payload.path,
             import_root: String::new(),
@@ -462,7 +462,7 @@ pub async fn index_workspace(
 pub async fn get_workspace_index_job(
     _state: State<'_, AppState>,
     id: Uuid,
-) -> Result<ironclaw::ipc::WorkspaceIndexJobResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceIndexJobResponse, String> {
     Err(format!(
         "Job tracking by ID not fully implemented. \
          Call index_workspace to trigger indexing and get immediate results. \
@@ -475,7 +475,7 @@ pub async fn get_workspace_index_job(
 pub async fn get_workspace_tree(
     state: State<'_, AppState>,
     path: Option<String>,
-) -> Result<ironclaw::ipc::WorkspaceTreeResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceTreeResponse, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -485,7 +485,7 @@ pub async fn get_workspace_tree(
     let entries = workspace.list_tree(&uri).await
         .map_err(|e| e.to_string())?;
 
-    Ok(ironclaw::ipc::WorkspaceTreeResponse {
+    Ok(steward_core::ipc::WorkspaceTreeResponse {
         path: uri,
         entries,
     })
@@ -495,7 +495,7 @@ pub async fn get_workspace_tree(
 pub async fn search_workspace(
     state: State<'_, AppState>,
     payload: WorkspaceSearchRequest,
-) -> Result<ironclaw::ipc::WorkspaceSearchResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceSearchResponse, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -506,9 +506,9 @@ pub async fn search_workspace(
         .await
         .map_err(|e| e.to_string())?;
 
-    let responses: Vec<ironclaw::ipc::WorkspaceSearchResultResponse> = results
+    let responses: Vec<steward_core::ipc::WorkspaceSearchResultResponse> = results
         .into_iter()
-        .map(|r| ironclaw::ipc::WorkspaceSearchResultResponse {
+        .map(|r| steward_core::ipc::WorkspaceSearchResultResponse {
             document_id: r.document_id,
             document_path: r.document_path,
             chunk_id: r.chunk_id,
@@ -519,7 +519,7 @@ pub async fn search_workspace(
         })
         .collect();
 
-    Ok(ironclaw::ipc::WorkspaceSearchResponse { results: responses })
+    Ok(steward_core::ipc::WorkspaceSearchResponse { results: responses })
 }
 
 // =============================================================================
@@ -529,7 +529,7 @@ pub async fn search_workspace(
 #[tauri::command]
 pub async fn list_workspace_mounts(
     state: State<'_, AppState>,
-) -> Result<ironclaw::ipc::WorkspaceMountListResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceMountListResponse, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -538,14 +538,14 @@ pub async fn list_workspace_mounts(
     let mounts = workspace.list_mounts().await
         .map_err(|e| e.to_string())?;
 
-    Ok(ironclaw::ipc::WorkspaceMountListResponse { mounts })
+    Ok(steward_core::ipc::WorkspaceMountListResponse { mounts })
 }
 
 #[tauri::command]
 pub async fn create_workspace_mount(
     state: State<'_, AppState>,
     payload: CreateWorkspaceMountRequest,
-) -> Result<ironclaw::workspace::WorkspaceMountSummary, String> {
+) -> Result<steward_core::workspace::WorkspaceMountSummary, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -570,7 +570,7 @@ pub async fn create_workspace_mount(
 pub async fn get_workspace_mount(
     state: State<'_, AppState>,
     id: Uuid,
-) -> Result<ironclaw::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -587,7 +587,7 @@ pub async fn get_workspace_mount_diff(
     state: State<'_, AppState>,
     id: Uuid,
     scope_path: Option<String>,
-) -> Result<ironclaw::workspace::WorkspaceMountDiff, String> {
+) -> Result<steward_core::workspace::WorkspaceMountDiff, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -604,7 +604,7 @@ pub async fn create_workspace_checkpoint(
     state: State<'_, AppState>,
     id: Uuid,
     payload: CreateWorkspaceCheckpointRequest,
-) -> Result<ironclaw::workspace::WorkspaceMountCheckpoint, String> {
+) -> Result<steward_core::workspace::WorkspaceMountCheckpoint, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -631,7 +631,7 @@ pub async fn keep_workspace_mount(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceActionRequest,
-) -> Result<ironclaw::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -650,7 +650,7 @@ pub async fn revert_workspace_mount(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceActionRequest,
-) -> Result<ironclaw::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -669,7 +669,7 @@ pub async fn resolve_workspace_mount_conflict(
     state: State<'_, AppState>,
     id: Uuid,
     payload: ResolveWorkspaceConflictRequest,
-) -> Result<ironclaw::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -696,11 +696,11 @@ pub async fn resolve_workspace_mount_conflict(
 #[tauri::command]
 pub async fn get_workbench_capabilities(
     state: State<'_, AppState>,
-) -> Result<ironclaw::ipc::WorkbenchCapabilitiesResponse, String> {
+) -> Result<steward_core::ipc::WorkbenchCapabilitiesResponse, String> {
     let tool_count = state.tools.count();
     let active_tool_names = state.tools.list().await;
 
-    Ok(ironclaw::ipc::WorkbenchCapabilitiesResponse {
+    Ok(steward_core::ipc::WorkbenchCapabilitiesResponse {
         workspace_available: state.workspace.is_some(),
         tool_count,
         dev_loaded_tools: active_tool_names,

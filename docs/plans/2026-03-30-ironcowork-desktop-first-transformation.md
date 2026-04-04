@@ -1,8 +1,8 @@
-# IronCowork Desktop-First Autonomous Agent Transformation
+# Steward Desktop-First Autonomous Agent Transformation
 
 **Date:** 2026-03-30  
 **Status:** Product-direction baseline  
-**Goal:** Turn the IronCowork fork into IronCowork, a desktop-first autonomous agent for local knowledge work.
+**Goal:** Turn the Steward fork into Steward, a desktop-first autonomous agent for local knowledge work.
 
 ---
 
@@ -25,7 +25,7 @@ The corrected target is:
 
 ### Product Repositioning
 
-| Dimension | Legacy / Wrong Direction | Correct IronCowork Direction |
+| Dimension | Legacy / Wrong Direction | Correct Steward Direction |
 |-----------|--------------------------|------------------------------|
 | Primary interaction | Template/task instantiation | Persistent chat session with autonomous execution |
 | Core object | Template | Session |
@@ -37,7 +37,7 @@ The corrected target is:
 
 ### Non-Negotiable Decisions
 
-- IronCowork is not optimized for upstream mergeability.
+- Steward is not optimized for upstream mergeability.
 - The default bind address remains `127.0.0.1`.
 - Tauri is a native shell only, not a second backend.
 - libSQL is the only supported storage backend.
@@ -59,7 +59,7 @@ Useful assets already present in the repo:
 
 Incorrect assumptions still reflected in docs and plans:
 
-- IronCowork described as predefined-workflow-driven
+- Steward described as predefined-workflow-driven
 - recurring automation and special workflows treated as first-class MVP center
 - API contracts written around predefined workflow CRUD
 
@@ -73,7 +73,7 @@ This transformation corrects those assumptions without throwing away the core ru
 
 ```
 +------------------------+      HTTP/SSE      +------------------------+
-|  Svelte UI             | <----------------> |  ironcowork-api        |
+|  Svelte UI             | <----------------> |  steward-api        |
 |  - sessions            |                    |  Axum on 127.0.0.1     |
 |  - runs                |                    |  settings/sessions     |
 |  - approvals           |                    |  runs/workspace        |

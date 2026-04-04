@@ -144,7 +144,7 @@ fn cmd_list(
     let bundle_names = catalog.bundle_names();
     if !bundle_names.is_empty() {
         println!("\nBundles available: {}", bundle_names.join(", "));
-        println!("Use `ironcowork registry info <bundle>` for details.");
+        println!("Use `steward registry info <bundle>` for details.");
     }
 
     Ok(())
@@ -304,7 +304,7 @@ async fn cmd_install(
             && auth.method.as_deref() != Some("none")
         {
             println!(
-                "\nNext step: authenticate with `ironcowork tool auth {}`",
+                "\nNext step: authenticate with `steward tool auth {}`",
                 manifest.name
             );
             if let Some(url) = &auth.setup_url {

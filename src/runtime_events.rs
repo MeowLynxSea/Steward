@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::Stream;
-use ironclaw_common::AppEvent;
+use steward_common::AppEvent;
 use tokio::sync::broadcast;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;

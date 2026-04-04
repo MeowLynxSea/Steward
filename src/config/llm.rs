@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use secrecy::SecretString;
 
-use crate::bootstrap::ironclaw_base_dir;
+use crate::bootstrap::steward_base_dir;
 use crate::config::helpers::{optional_env, parse_optional_env, validate_base_url};
 use crate::error::ConfigError;
 use crate::llm::config::*;
@@ -18,7 +18,7 @@ impl LlmConfig {
             backend: "nearai".to_string(),
             session: SessionConfig {
                 auth_base_url: "http://localhost:0".to_string(),
-                session_path: std::env::temp_dir().join("ironclaw-test-session.json"),
+                session_path: std::env::temp_dir().join("steward-test-session.json"),
             },
             nearai: NearAiConfig {
                 model: "test-model".to_string(),
@@ -217,7 +217,7 @@ impl LlmConfig {
             validate_base_url(&api_base_url, "OPENAI_CODEX_API_URL")?;
             let client_id = optional_env("OPENAI_CODEX_CLIENT_ID")?
                 .unwrap_or_else(|| "app_EMoamEEZ73f0CkXaXp7hrann".to_string());
-            let session_path = ironclaw_base_dir().join("openai_codex_session.json");
+            let session_path = steward_base_dir().join("openai_codex_session.json");
             let token_refresh_margin_secs =
                 parse_optional_env("OPENAI_CODEX_TOKEN_REFRESH_MARGIN_SECS", 300)?;
             Some(OpenAiCodexConfig {
@@ -576,9 +576,9 @@ fn merge_extra_headers(
     merged
 }
 
-/// Get the default session file path (~/.ironcowork/session.json).
+/// Get the default session file path (~/.steward/session.json).
 pub fn default_session_path() -> PathBuf {
-    ironclaw_base_dir().join("session.json")
+    steward_base_dir().join("session.json")
 }
 
 #[cfg(test)]

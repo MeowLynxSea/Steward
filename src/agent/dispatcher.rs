@@ -149,7 +149,7 @@ impl Agent {
                             if let Some(ref emitter) = emitter {
                                 emitter.emit_for_user(
                                     &user_id,
-                                    ironclaw_common::AppEvent::StreamChunk {
+                                    steward_common::AppEvent::StreamChunk {
                                         content,
                                         thread_id: tid.clone(),
                                     },
@@ -160,7 +160,7 @@ impl Agent {
                             if let Some(ref emitter) = emitter {
                                 emitter.emit_for_user(
                                     &user_id,
-                                    ironclaw_common::AppEvent::Thinking {
+                                    steward_common::AppEvent::Thinking {
                                         message: content,
                                         thread_id: tid.clone(),
                                     },

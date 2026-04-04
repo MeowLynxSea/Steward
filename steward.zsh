@@ -1,8 +1,8 @@
-#compdef ironclaw
+#compdef steward
 
 autoload -U is-at-least
 
-_ironclaw() {
+_steward() {
     typeset -A opt_args
     typeset -a _arguments_options
     local ret=1
@@ -26,14 +26,14 @@ _ironclaw() {
 '--help[Print help (see more with '\''--help'\'')]' \
 '-V[Print version]' \
 '--version[Print version]' \
-":: :_ironclaw_commands" \
-"*::: :->ironclaw" \
+":: :_steward_commands" \
+"*::: :->steward" \
 && ret=0
     case $state in
-    (ironclaw)
+    (steward)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-command-$line[1]:"
         case $line[1] in
             (run)
 _arguments "${_arguments_options[@]}" : \
@@ -74,7 +74,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__config_commands" \
+":: :_steward__config_commands" \
 "*::: :->config" \
 && ret=0
 
@@ -82,12 +82,12 @@ _arguments "${_arguments_options[@]}" : \
     (config)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-config-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-config-command-$line[1]:"
         case $line[1] in
             (init)
 _arguments "${_arguments_options[@]}" : \
-'-o+[Output path (default\: ~/.ironclaw/config.toml)]:OUTPUT:_files' \
-'--output=[Output path (default\: ~/.ironclaw/config.toml)]:OUTPUT:_files' \
+'-o+[Output path (default\: ~/.steward/config.toml)]:OUTPUT:_files' \
+'--output=[Output path (default\: ~/.steward/config.toml)]:OUTPUT:_files' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
 '--message=[Single message mode - send one message and exit]:MESSAGE:_default' \
 '-c+[Configuration file path (optional, uses env vars by default)]:CONFIG:_files' \
@@ -173,7 +173,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__config__help_commands" \
+":: :_steward__config__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -181,7 +181,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-config-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-config-help-command-$line[1]:"
         case $line[1] in
             (init)
 _arguments "${_arguments_options[@]}" : \
@@ -230,7 +230,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__tool_commands" \
+":: :_steward__tool_commands" \
 "*::: :->tool" \
 && ret=0
 
@@ -238,15 +238,15 @@ _arguments "${_arguments_options[@]}" : \
     (tool)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-tool-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-tool-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
 '-n+[Tool name (defaults to directory/file name)]:NAME:_default' \
 '--name=[Tool name (defaults to directory/file name)]:NAME:_default' \
 '--capabilities=[Path to capabilities JSON file (auto-detected if not specified)]:CAPABILITIES:_files' \
-'-t+[Target directory for installation (default\: ~/.ironclaw/tools/)]:TARGET:_files' \
-'--target=[Target directory for installation (default\: ~/.ironclaw/tools/)]:TARGET:_files' \
+'-t+[Target directory for installation (default\: ~/.steward/tools/)]:TARGET:_files' \
+'--target=[Target directory for installation (default\: ~/.steward/tools/)]:TARGET:_files' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
 '--message=[Single message mode - send one message and exit]:MESSAGE:_default' \
 '-c+[Configuration file path (optional, uses env vars by default)]:CONFIG:_files' \
@@ -265,8 +265,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (list)
 _arguments "${_arguments_options[@]}" : \
-'-d+[Directory to list tools from (default\: ~/.ironclaw/tools/)]:DIR:_files' \
-'--dir=[Directory to list tools from (default\: ~/.ironclaw/tools/)]:DIR:_files' \
+'-d+[Directory to list tools from (default\: ~/.steward/tools/)]:DIR:_files' \
+'--dir=[Directory to list tools from (default\: ~/.steward/tools/)]:DIR:_files' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
 '--message=[Single message mode - send one message and exit]:MESSAGE:_default' \
 '-c+[Configuration file path (optional, uses env vars by default)]:CONFIG:_files' \
@@ -282,8 +282,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (remove)
 _arguments "${_arguments_options[@]}" : \
-'-d+[Directory to remove tool from (default\: ~/.ironclaw/tools/)]:DIR:_files' \
-'--dir=[Directory to remove tool from (default\: ~/.ironclaw/tools/)]:DIR:_files' \
+'-d+[Directory to remove tool from (default\: ~/.steward/tools/)]:DIR:_files' \
+'--dir=[Directory to remove tool from (default\: ~/.steward/tools/)]:DIR:_files' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
 '--message=[Single message mode - send one message and exit]:MESSAGE:_default' \
 '-c+[Configuration file path (optional, uses env vars by default)]:CONFIG:_files' \
@@ -298,8 +298,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (info)
 _arguments "${_arguments_options[@]}" : \
-'-d+[Directory to look for tool (default\: ~/.ironclaw/tools/)]:DIR:_files' \
-'--dir=[Directory to look for tool (default\: ~/.ironclaw/tools/)]:DIR:_files' \
+'-d+[Directory to look for tool (default\: ~/.steward/tools/)]:DIR:_files' \
+'--dir=[Directory to look for tool (default\: ~/.steward/tools/)]:DIR:_files' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
 '--message=[Single message mode - send one message and exit]:MESSAGE:_default' \
 '-c+[Configuration file path (optional, uses env vars by default)]:CONFIG:_files' \
@@ -314,8 +314,8 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (auth)
 _arguments "${_arguments_options[@]}" : \
-'-d+[Directory to look for tool (default\: ~/.ironclaw/tools/)]:DIR:_files' \
-'--dir=[Directory to look for tool (default\: ~/.ironclaw/tools/)]:DIR:_files' \
+'-d+[Directory to look for tool (default\: ~/.steward/tools/)]:DIR:_files' \
+'--dir=[Directory to look for tool (default\: ~/.steward/tools/)]:DIR:_files' \
 '-u+[User ID for storing the secret (default\: "default")]:USER:_default' \
 '--user=[User ID for storing the secret (default\: "default")]:USER:_default' \
 '-m+[Single message mode - send one message and exit]:MESSAGE:_default' \
@@ -332,7 +332,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__tool__help_commands" \
+":: :_steward__tool__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -340,7 +340,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-tool-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-tool-help-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
@@ -385,7 +385,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__registry_commands" \
+":: :_steward__registry_commands" \
 "*::: :->registry" \
 && ret=0
 
@@ -393,7 +393,7 @@ _arguments "${_arguments_options[@]}" : \
     (registry)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-registry-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-registry-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -463,7 +463,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__registry__help_commands" \
+":: :_steward__registry__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -471,7 +471,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-registry-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-registry-help-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -512,7 +512,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__mcp_commands" \
+":: :_steward__mcp_commands" \
 "*::: :->mcp" \
 && ret=0
 
@@ -520,7 +520,7 @@ _arguments "${_arguments_options[@]}" : \
     (mcp)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-mcp-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-mcp-command-$line[1]:"
         case $line[1] in
             (add)
 _arguments "${_arguments_options[@]}" : \
@@ -621,7 +621,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__mcp__help_commands" \
+":: :_steward__mcp__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -629,7 +629,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-mcp-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-mcp-help-command-$line[1]:"
         case $line[1] in
             (add)
 _arguments "${_arguments_options[@]}" : \
@@ -678,7 +678,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__memory_commands" \
+":: :_steward__memory_commands" \
 "*::: :->memory" \
 && ret=0
 
@@ -686,7 +686,7 @@ _arguments "${_arguments_options[@]}" : \
     (memory)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-memory-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-memory-command-$line[1]:"
         case $line[1] in
             (search)
 _arguments "${_arguments_options[@]}" : \
@@ -766,7 +766,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__memory__help_commands" \
+":: :_steward__memory__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -774,7 +774,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-memory-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-memory-help-command-$line[1]:"
         case $line[1] in
             (search)
 _arguments "${_arguments_options[@]}" : \
@@ -819,7 +819,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__pairing_commands" \
+":: :_steward__pairing_commands" \
 "*::: :->pairing" \
 && ret=0
 
@@ -827,7 +827,7 @@ _arguments "${_arguments_options[@]}" : \
     (pairing)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-pairing-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-pairing-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -861,7 +861,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__pairing__help_commands" \
+":: :_steward__pairing__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -869,7 +869,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-pairing-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-pairing-help-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -902,7 +902,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help (see more with '\''--help'\'')]' \
 '--help[Print help (see more with '\''--help'\'')]' \
-":: :_ironclaw__service_commands" \
+":: :_steward__service_commands" \
 "*::: :->service" \
 && ret=0
 
@@ -910,7 +910,7 @@ _arguments "${_arguments_options[@]}" : \
     (service)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-service-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-service-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
@@ -979,7 +979,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__service__help_commands" \
+":: :_steward__service__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -987,7 +987,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-service-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-service-help-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
@@ -1096,7 +1096,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (help)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help_commands" \
+":: :_steward__help_commands" \
 "*::: :->help" \
 && ret=0
 
@@ -1104,7 +1104,7 @@ _arguments "${_arguments_options[@]}" : \
     (help)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-command-$line[1]:"
         case $line[1] in
             (run)
 _arguments "${_arguments_options[@]}" : \
@@ -1116,7 +1116,7 @@ _arguments "${_arguments_options[@]}" : \
 ;;
 (config)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__config_commands" \
+":: :_steward__help__config_commands" \
 "*::: :->config" \
 && ret=0
 
@@ -1124,7 +1124,7 @@ _arguments "${_arguments_options[@]}" : \
     (config)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-config-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-config-command-$line[1]:"
         case $line[1] in
             (init)
 _arguments "${_arguments_options[@]}" : \
@@ -1156,7 +1156,7 @@ esac
 ;;
 (tool)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__tool_commands" \
+":: :_steward__help__tool_commands" \
 "*::: :->tool" \
 && ret=0
 
@@ -1164,7 +1164,7 @@ _arguments "${_arguments_options[@]}" : \
     (tool)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-tool-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-tool-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
@@ -1192,7 +1192,7 @@ esac
 ;;
 (registry)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__registry_commands" \
+":: :_steward__help__registry_commands" \
 "*::: :->registry" \
 && ret=0
 
@@ -1200,7 +1200,7 @@ _arguments "${_arguments_options[@]}" : \
     (registry)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-registry-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-registry-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -1224,7 +1224,7 @@ esac
 ;;
 (mcp)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__mcp_commands" \
+":: :_steward__help__mcp_commands" \
 "*::: :->mcp" \
 && ret=0
 
@@ -1232,7 +1232,7 @@ _arguments "${_arguments_options[@]}" : \
     (mcp)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-mcp-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-mcp-command-$line[1]:"
         case $line[1] in
             (add)
 _arguments "${_arguments_options[@]}" : \
@@ -1264,7 +1264,7 @@ esac
 ;;
 (memory)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__memory_commands" \
+":: :_steward__help__memory_commands" \
 "*::: :->memory" \
 && ret=0
 
@@ -1272,7 +1272,7 @@ _arguments "${_arguments_options[@]}" : \
     (memory)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-memory-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-memory-command-$line[1]:"
         case $line[1] in
             (search)
 _arguments "${_arguments_options[@]}" : \
@@ -1300,7 +1300,7 @@ esac
 ;;
 (pairing)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__pairing_commands" \
+":: :_steward__help__pairing_commands" \
 "*::: :->pairing" \
 && ret=0
 
@@ -1308,7 +1308,7 @@ _arguments "${_arguments_options[@]}" : \
     (pairing)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-pairing-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-pairing-command-$line[1]:"
         case $line[1] in
             (list)
 _arguments "${_arguments_options[@]}" : \
@@ -1324,7 +1324,7 @@ esac
 ;;
 (service)
 _arguments "${_arguments_options[@]}" : \
-":: :_ironclaw__help__service_commands" \
+":: :_steward__help__service_commands" \
 "*::: :->service" \
 && ret=0
 
@@ -1332,7 +1332,7 @@ _arguments "${_arguments_options[@]}" : \
     (service)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:ironclaw-help-service-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:steward-help-service-command-$line[1]:"
         case $line[1] in
             (install)
 _arguments "${_arguments_options[@]}" : \
@@ -1391,8 +1391,8 @@ esac
 esac
 }
 
-(( $+functions[_ironclaw_commands] )) ||
-_ironclaw_commands() {
+(( $+functions[_steward_commands] )) ||
+_steward_commands() {
     local commands; commands=(
 'run:Run the AI agent' \
 'onboard:Run interactive setup wizard' \
@@ -1410,20 +1410,20 @@ _ironclaw_commands() {
 'claude-bridge:Run as a Claude Code bridge inside a Docker container (internal use). Spawns the \`claude\` CLI and streams output back to the orchestrator' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw commands' commands "$@"
+    _describe -t commands 'steward commands' commands "$@"
 }
-(( $+functions[_ironclaw__claude-bridge_commands] )) ||
-_ironclaw__claude-bridge_commands() {
+(( $+functions[_steward__claude-bridge_commands] )) ||
+_steward__claude-bridge_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw claude-bridge commands' commands "$@"
+    _describe -t commands 'steward claude-bridge commands' commands "$@"
 }
-(( $+functions[_ironclaw__completion_commands] )) ||
-_ironclaw__completion_commands() {
+(( $+functions[_steward__completion_commands] )) ||
+_steward__completion_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw completion commands' commands "$@"
+    _describe -t commands 'steward completion commands' commands "$@"
 }
-(( $+functions[_ironclaw__config_commands] )) ||
-_ironclaw__config_commands() {
+(( $+functions[_steward__config_commands] )) ||
+_steward__config_commands() {
     local commands; commands=(
 'init:Generate a default config.toml file' \
 'list:List all settings and their current values' \
@@ -1433,15 +1433,15 @@ _ironclaw__config_commands() {
 'path:Show the settings storage info' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw config commands' commands "$@"
+    _describe -t commands 'steward config commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__get_commands] )) ||
-_ironclaw__config__get_commands() {
+(( $+functions[_steward__config__get_commands] )) ||
+_steward__config__get_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config get commands' commands "$@"
+    _describe -t commands 'steward config get commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help_commands] )) ||
-_ironclaw__config__help_commands() {
+(( $+functions[_steward__config__help_commands] )) ||
+_steward__config__help_commands() {
     local commands; commands=(
 'init:Generate a default config.toml file' \
 'list:List all settings and their current values' \
@@ -1451,75 +1451,75 @@ _ironclaw__config__help_commands() {
 'path:Show the settings storage info' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw config help commands' commands "$@"
+    _describe -t commands 'steward config help commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__get_commands] )) ||
-_ironclaw__config__help__get_commands() {
+(( $+functions[_steward__config__help__get_commands] )) ||
+_steward__config__help__get_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help get commands' commands "$@"
+    _describe -t commands 'steward config help get commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__help_commands] )) ||
-_ironclaw__config__help__help_commands() {
+(( $+functions[_steward__config__help__help_commands] )) ||
+_steward__config__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help help commands' commands "$@"
+    _describe -t commands 'steward config help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__init_commands] )) ||
-_ironclaw__config__help__init_commands() {
+(( $+functions[_steward__config__help__init_commands] )) ||
+_steward__config__help__init_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help init commands' commands "$@"
+    _describe -t commands 'steward config help init commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__list_commands] )) ||
-_ironclaw__config__help__list_commands() {
+(( $+functions[_steward__config__help__list_commands] )) ||
+_steward__config__help__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help list commands' commands "$@"
+    _describe -t commands 'steward config help list commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__path_commands] )) ||
-_ironclaw__config__help__path_commands() {
+(( $+functions[_steward__config__help__path_commands] )) ||
+_steward__config__help__path_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help path commands' commands "$@"
+    _describe -t commands 'steward config help path commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__reset_commands] )) ||
-_ironclaw__config__help__reset_commands() {
+(( $+functions[_steward__config__help__reset_commands] )) ||
+_steward__config__help__reset_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help reset commands' commands "$@"
+    _describe -t commands 'steward config help reset commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__help__set_commands] )) ||
-_ironclaw__config__help__set_commands() {
+(( $+functions[_steward__config__help__set_commands] )) ||
+_steward__config__help__set_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config help set commands' commands "$@"
+    _describe -t commands 'steward config help set commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__init_commands] )) ||
-_ironclaw__config__init_commands() {
+(( $+functions[_steward__config__init_commands] )) ||
+_steward__config__init_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config init commands' commands "$@"
+    _describe -t commands 'steward config init commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__list_commands] )) ||
-_ironclaw__config__list_commands() {
+(( $+functions[_steward__config__list_commands] )) ||
+_steward__config__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config list commands' commands "$@"
+    _describe -t commands 'steward config list commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__path_commands] )) ||
-_ironclaw__config__path_commands() {
+(( $+functions[_steward__config__path_commands] )) ||
+_steward__config__path_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config path commands' commands "$@"
+    _describe -t commands 'steward config path commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__reset_commands] )) ||
-_ironclaw__config__reset_commands() {
+(( $+functions[_steward__config__reset_commands] )) ||
+_steward__config__reset_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config reset commands' commands "$@"
+    _describe -t commands 'steward config reset commands' commands "$@"
 }
-(( $+functions[_ironclaw__config__set_commands] )) ||
-_ironclaw__config__set_commands() {
+(( $+functions[_steward__config__set_commands] )) ||
+_steward__config__set_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw config set commands' commands "$@"
+    _describe -t commands 'steward config set commands' commands "$@"
 }
-(( $+functions[_ironclaw__doctor_commands] )) ||
-_ironclaw__doctor_commands() {
+(( $+functions[_steward__doctor_commands] )) ||
+_steward__doctor_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw doctor commands' commands "$@"
+    _describe -t commands 'steward doctor commands' commands "$@"
 }
-(( $+functions[_ironclaw__help_commands] )) ||
-_ironclaw__help_commands() {
+(( $+functions[_steward__help_commands] )) ||
+_steward__help_commands() {
     local commands; commands=(
 'run:Run the AI agent' \
 'onboard:Run interactive setup wizard' \
@@ -1537,20 +1537,20 @@ _ironclaw__help_commands() {
 'claude-bridge:Run as a Claude Code bridge inside a Docker container (internal use). Spawns the \`claude\` CLI and streams output back to the orchestrator' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw help commands' commands "$@"
+    _describe -t commands 'steward help commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__claude-bridge_commands] )) ||
-_ironclaw__help__claude-bridge_commands() {
+(( $+functions[_steward__help__claude-bridge_commands] )) ||
+_steward__help__claude-bridge_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help claude-bridge commands' commands "$@"
+    _describe -t commands 'steward help claude-bridge commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__completion_commands] )) ||
-_ironclaw__help__completion_commands() {
+(( $+functions[_steward__help__completion_commands] )) ||
+_steward__help__completion_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help completion commands' commands "$@"
+    _describe -t commands 'steward help completion commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config_commands] )) ||
-_ironclaw__help__config_commands() {
+(( $+functions[_steward__help__config_commands] )) ||
+_steward__help__config_commands() {
     local commands; commands=(
 'init:Generate a default config.toml file' \
 'list:List all settings and their current values' \
@@ -1559,50 +1559,50 @@ _ironclaw__help__config_commands() {
 'reset:Reset a setting to its default value' \
 'path:Show the settings storage info' \
     )
-    _describe -t commands 'ironclaw help config commands' commands "$@"
+    _describe -t commands 'steward help config commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__get_commands] )) ||
-_ironclaw__help__config__get_commands() {
+(( $+functions[_steward__help__config__get_commands] )) ||
+_steward__help__config__get_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config get commands' commands "$@"
+    _describe -t commands 'steward help config get commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__init_commands] )) ||
-_ironclaw__help__config__init_commands() {
+(( $+functions[_steward__help__config__init_commands] )) ||
+_steward__help__config__init_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config init commands' commands "$@"
+    _describe -t commands 'steward help config init commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__list_commands] )) ||
-_ironclaw__help__config__list_commands() {
+(( $+functions[_steward__help__config__list_commands] )) ||
+_steward__help__config__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config list commands' commands "$@"
+    _describe -t commands 'steward help config list commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__path_commands] )) ||
-_ironclaw__help__config__path_commands() {
+(( $+functions[_steward__help__config__path_commands] )) ||
+_steward__help__config__path_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config path commands' commands "$@"
+    _describe -t commands 'steward help config path commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__reset_commands] )) ||
-_ironclaw__help__config__reset_commands() {
+(( $+functions[_steward__help__config__reset_commands] )) ||
+_steward__help__config__reset_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config reset commands' commands "$@"
+    _describe -t commands 'steward help config reset commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__config__set_commands] )) ||
-_ironclaw__help__config__set_commands() {
+(( $+functions[_steward__help__config__set_commands] )) ||
+_steward__help__config__set_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help config set commands' commands "$@"
+    _describe -t commands 'steward help config set commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__doctor_commands] )) ||
-_ironclaw__help__doctor_commands() {
+(( $+functions[_steward__help__doctor_commands] )) ||
+_steward__help__doctor_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help doctor commands' commands "$@"
+    _describe -t commands 'steward help doctor commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__help_commands] )) ||
-_ironclaw__help__help_commands() {
+(( $+functions[_steward__help__help_commands] )) ||
+_steward__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help help commands' commands "$@"
+    _describe -t commands 'steward help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp_commands] )) ||
-_ironclaw__help__mcp_commands() {
+(( $+functions[_steward__help__mcp_commands] )) ||
+_steward__help__mcp_commands() {
     local commands; commands=(
 'add:Add an MCP server' \
 'remove:Remove an MCP server' \
@@ -1611,40 +1611,40 @@ _ironclaw__help__mcp_commands() {
 'test:Test connection to an MCP server' \
 'toggle:Enable or disable an MCP server' \
     )
-    _describe -t commands 'ironclaw help mcp commands' commands "$@"
+    _describe -t commands 'steward help mcp commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__add_commands] )) ||
-_ironclaw__help__mcp__add_commands() {
+(( $+functions[_steward__help__mcp__add_commands] )) ||
+_steward__help__mcp__add_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp add commands' commands "$@"
+    _describe -t commands 'steward help mcp add commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__auth_commands] )) ||
-_ironclaw__help__mcp__auth_commands() {
+(( $+functions[_steward__help__mcp__auth_commands] )) ||
+_steward__help__mcp__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp auth commands' commands "$@"
+    _describe -t commands 'steward help mcp auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__list_commands] )) ||
-_ironclaw__help__mcp__list_commands() {
+(( $+functions[_steward__help__mcp__list_commands] )) ||
+_steward__help__mcp__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp list commands' commands "$@"
+    _describe -t commands 'steward help mcp list commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__remove_commands] )) ||
-_ironclaw__help__mcp__remove_commands() {
+(( $+functions[_steward__help__mcp__remove_commands] )) ||
+_steward__help__mcp__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp remove commands' commands "$@"
+    _describe -t commands 'steward help mcp remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__test_commands] )) ||
-_ironclaw__help__mcp__test_commands() {
+(( $+functions[_steward__help__mcp__test_commands] )) ||
+_steward__help__mcp__test_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp test commands' commands "$@"
+    _describe -t commands 'steward help mcp test commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__mcp__toggle_commands] )) ||
-_ironclaw__help__mcp__toggle_commands() {
+(( $+functions[_steward__help__mcp__toggle_commands] )) ||
+_steward__help__mcp__toggle_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help mcp toggle commands' commands "$@"
+    _describe -t commands 'steward help mcp toggle commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory_commands] )) ||
-_ironclaw__help__memory_commands() {
+(( $+functions[_steward__help__memory_commands] )) ||
+_steward__help__memory_commands() {
     local commands; commands=(
 'search:Search workspace memory (hybrid full-text + semantic)' \
 'read:Read a file from the workspace' \
@@ -1652,93 +1652,93 @@ _ironclaw__help__memory_commands() {
 'tree:Show workspace directory tree' \
 'status:Show workspace status (document count, index health)' \
     )
-    _describe -t commands 'ironclaw help memory commands' commands "$@"
+    _describe -t commands 'steward help memory commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory__read_commands] )) ||
-_ironclaw__help__memory__read_commands() {
+(( $+functions[_steward__help__memory__read_commands] )) ||
+_steward__help__memory__read_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help memory read commands' commands "$@"
+    _describe -t commands 'steward help memory read commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory__search_commands] )) ||
-_ironclaw__help__memory__search_commands() {
+(( $+functions[_steward__help__memory__search_commands] )) ||
+_steward__help__memory__search_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help memory search commands' commands "$@"
+    _describe -t commands 'steward help memory search commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory__status_commands] )) ||
-_ironclaw__help__memory__status_commands() {
+(( $+functions[_steward__help__memory__status_commands] )) ||
+_steward__help__memory__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help memory status commands' commands "$@"
+    _describe -t commands 'steward help memory status commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory__tree_commands] )) ||
-_ironclaw__help__memory__tree_commands() {
+(( $+functions[_steward__help__memory__tree_commands] )) ||
+_steward__help__memory__tree_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help memory tree commands' commands "$@"
+    _describe -t commands 'steward help memory tree commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__memory__write_commands] )) ||
-_ironclaw__help__memory__write_commands() {
+(( $+functions[_steward__help__memory__write_commands] )) ||
+_steward__help__memory__write_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help memory write commands' commands "$@"
+    _describe -t commands 'steward help memory write commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__onboard_commands] )) ||
-_ironclaw__help__onboard_commands() {
+(( $+functions[_steward__help__onboard_commands] )) ||
+_steward__help__onboard_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help onboard commands' commands "$@"
+    _describe -t commands 'steward help onboard commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__pairing_commands] )) ||
-_ironclaw__help__pairing_commands() {
+(( $+functions[_steward__help__pairing_commands] )) ||
+_steward__help__pairing_commands() {
     local commands; commands=(
 'list:List pending pairing requests' \
 'approve:Approve a pairing request by code' \
     )
-    _describe -t commands 'ironclaw help pairing commands' commands "$@"
+    _describe -t commands 'steward help pairing commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__pairing__approve_commands] )) ||
-_ironclaw__help__pairing__approve_commands() {
+(( $+functions[_steward__help__pairing__approve_commands] )) ||
+_steward__help__pairing__approve_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help pairing approve commands' commands "$@"
+    _describe -t commands 'steward help pairing approve commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__pairing__list_commands] )) ||
-_ironclaw__help__pairing__list_commands() {
+(( $+functions[_steward__help__pairing__list_commands] )) ||
+_steward__help__pairing__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help pairing list commands' commands "$@"
+    _describe -t commands 'steward help pairing list commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__registry_commands] )) ||
-_ironclaw__help__registry_commands() {
+(( $+functions[_steward__help__registry_commands] )) ||
+_steward__help__registry_commands() {
     local commands; commands=(
 'list:List available extensions in the registry' \
 'info:Show detailed information about an extension or bundle' \
 'install:Install an extension or bundle from the registry' \
 'install-defaults:Install the default bundle of recommended extensions' \
     )
-    _describe -t commands 'ironclaw help registry commands' commands "$@"
+    _describe -t commands 'steward help registry commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__registry__info_commands] )) ||
-_ironclaw__help__registry__info_commands() {
+(( $+functions[_steward__help__registry__info_commands] )) ||
+_steward__help__registry__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help registry info commands' commands "$@"
+    _describe -t commands 'steward help registry info commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__registry__install_commands] )) ||
-_ironclaw__help__registry__install_commands() {
+(( $+functions[_steward__help__registry__install_commands] )) ||
+_steward__help__registry__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help registry install commands' commands "$@"
+    _describe -t commands 'steward help registry install commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__registry__install-defaults_commands] )) ||
-_ironclaw__help__registry__install-defaults_commands() {
+(( $+functions[_steward__help__registry__install-defaults_commands] )) ||
+_steward__help__registry__install-defaults_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help registry install-defaults commands' commands "$@"
+    _describe -t commands 'steward help registry install-defaults commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__registry__list_commands] )) ||
-_ironclaw__help__registry__list_commands() {
+(( $+functions[_steward__help__registry__list_commands] )) ||
+_steward__help__registry__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help registry list commands' commands "$@"
+    _describe -t commands 'steward help registry list commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__run_commands] )) ||
-_ironclaw__help__run_commands() {
+(( $+functions[_steward__help__run_commands] )) ||
+_steward__help__run_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help run commands' commands "$@"
+    _describe -t commands 'steward help run commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service_commands] )) ||
-_ironclaw__help__service_commands() {
+(( $+functions[_steward__help__service_commands] )) ||
+_steward__help__service_commands() {
     local commands; commands=(
 'install:Install the OS service (launchd on macOS, systemd on Linux)' \
 'start:Start the installed service' \
@@ -1746,40 +1746,40 @@ _ironclaw__help__service_commands() {
 'status:Show service status' \
 'uninstall:Uninstall the OS service and remove the unit file' \
     )
-    _describe -t commands 'ironclaw help service commands' commands "$@"
+    _describe -t commands 'steward help service commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service__install_commands] )) ||
-_ironclaw__help__service__install_commands() {
+(( $+functions[_steward__help__service__install_commands] )) ||
+_steward__help__service__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help service install commands' commands "$@"
+    _describe -t commands 'steward help service install commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service__start_commands] )) ||
-_ironclaw__help__service__start_commands() {
+(( $+functions[_steward__help__service__start_commands] )) ||
+_steward__help__service__start_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help service start commands' commands "$@"
+    _describe -t commands 'steward help service start commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service__status_commands] )) ||
-_ironclaw__help__service__status_commands() {
+(( $+functions[_steward__help__service__status_commands] )) ||
+_steward__help__service__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help service status commands' commands "$@"
+    _describe -t commands 'steward help service status commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service__stop_commands] )) ||
-_ironclaw__help__service__stop_commands() {
+(( $+functions[_steward__help__service__stop_commands] )) ||
+_steward__help__service__stop_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help service stop commands' commands "$@"
+    _describe -t commands 'steward help service stop commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__service__uninstall_commands] )) ||
-_ironclaw__help__service__uninstall_commands() {
+(( $+functions[_steward__help__service__uninstall_commands] )) ||
+_steward__help__service__uninstall_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help service uninstall commands' commands "$@"
+    _describe -t commands 'steward help service uninstall commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__status_commands] )) ||
-_ironclaw__help__status_commands() {
+(( $+functions[_steward__help__status_commands] )) ||
+_steward__help__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help status commands' commands "$@"
+    _describe -t commands 'steward help status commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool_commands] )) ||
-_ironclaw__help__tool_commands() {
+(( $+functions[_steward__help__tool_commands] )) ||
+_steward__help__tool_commands() {
     local commands; commands=(
 'install:Install a WASM tool from source directory or .wasm file' \
 'list:List installed tools' \
@@ -1787,63 +1787,40 @@ _ironclaw__help__tool_commands() {
 'info:Show information about a tool' \
 'auth:Configure authentication for a tool' \
     )
-    _describe -t commands 'ironclaw help tool commands' commands "$@"
+    _describe -t commands 'steward help tool commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool__auth_commands] )) ||
-_ironclaw__help__tool__auth_commands() {
+(( $+functions[_steward__help__tool__auth_commands] )) ||
+_steward__help__tool__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help tool auth commands' commands "$@"
+    _describe -t commands 'steward help tool auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool__info_commands] )) ||
-_ironclaw__help__tool__info_commands() {
+(( $+functions[_steward__help__tool__info_commands] )) ||
+_steward__help__tool__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help tool info commands' commands "$@"
+    _describe -t commands 'steward help tool info commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool__install_commands] )) ||
-_ironclaw__help__tool__install_commands() {
+(( $+functions[_steward__help__tool__install_commands] )) ||
+_steward__help__tool__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help tool install commands' commands "$@"
+    _describe -t commands 'steward help tool install commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool__list_commands] )) ||
-_ironclaw__help__tool__list_commands() {
+(( $+functions[_steward__help__tool__list_commands] )) ||
+_steward__help__tool__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help tool list commands' commands "$@"
+    _describe -t commands 'steward help tool list commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__tool__remove_commands] )) ||
-_ironclaw__help__tool__remove_commands() {
+(( $+functions[_steward__help__tool__remove_commands] )) ||
+_steward__help__tool__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help tool remove commands' commands "$@"
+    _describe -t commands 'steward help tool remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__help__worker_commands] )) ||
-_ironclaw__help__worker_commands() {
+(( $+functions[_steward__help__worker_commands] )) ||
+_steward__help__worker_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw help worker commands' commands "$@"
+    _describe -t commands 'steward help worker commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp_commands] )) ||
-_ironclaw__mcp_commands() {
-    local commands; commands=(
-'add:Add an MCP server' \
-'remove:Remove an MCP server' \
-'list:List configured MCP servers' \
-'auth:Authenticate with an MCP server (OAuth flow)' \
-'test:Test connection to an MCP server' \
-'toggle:Enable or disable an MCP server' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'ironclaw mcp commands' commands "$@"
-}
-(( $+functions[_ironclaw__mcp__add_commands] )) ||
-_ironclaw__mcp__add_commands() {
-    local commands; commands=()
-    _describe -t commands 'ironclaw mcp add commands' commands "$@"
-}
-(( $+functions[_ironclaw__mcp__auth_commands] )) ||
-_ironclaw__mcp__auth_commands() {
-    local commands; commands=()
-    _describe -t commands 'ironclaw mcp auth commands' commands "$@"
-}
-(( $+functions[_ironclaw__mcp__help_commands] )) ||
-_ironclaw__mcp__help_commands() {
+(( $+functions[_steward__mcp_commands] )) ||
+_steward__mcp_commands() {
     local commands; commands=(
 'add:Add an MCP server' \
 'remove:Remove an MCP server' \
@@ -1853,65 +1830,88 @@ _ironclaw__mcp__help_commands() {
 'toggle:Enable or disable an MCP server' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw mcp help commands' commands "$@"
+    _describe -t commands 'steward mcp commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__add_commands] )) ||
-_ironclaw__mcp__help__add_commands() {
+(( $+functions[_steward__mcp__add_commands] )) ||
+_steward__mcp__add_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help add commands' commands "$@"
+    _describe -t commands 'steward mcp add commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__auth_commands] )) ||
-_ironclaw__mcp__help__auth_commands() {
+(( $+functions[_steward__mcp__auth_commands] )) ||
+_steward__mcp__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help auth commands' commands "$@"
+    _describe -t commands 'steward mcp auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__help_commands] )) ||
-_ironclaw__mcp__help__help_commands() {
+(( $+functions[_steward__mcp__help_commands] )) ||
+_steward__mcp__help_commands() {
+    local commands; commands=(
+'add:Add an MCP server' \
+'remove:Remove an MCP server' \
+'list:List configured MCP servers' \
+'auth:Authenticate with an MCP server (OAuth flow)' \
+'test:Test connection to an MCP server' \
+'toggle:Enable or disable an MCP server' \
+'help:Print this message or the help of the given subcommand(s)' \
+    )
+    _describe -t commands 'steward mcp help commands' commands "$@"
+}
+(( $+functions[_steward__mcp__help__add_commands] )) ||
+_steward__mcp__help__add_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help help commands' commands "$@"
+    _describe -t commands 'steward mcp help add commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__list_commands] )) ||
-_ironclaw__mcp__help__list_commands() {
+(( $+functions[_steward__mcp__help__auth_commands] )) ||
+_steward__mcp__help__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help list commands' commands "$@"
+    _describe -t commands 'steward mcp help auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__remove_commands] )) ||
-_ironclaw__mcp__help__remove_commands() {
+(( $+functions[_steward__mcp__help__help_commands] )) ||
+_steward__mcp__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help remove commands' commands "$@"
+    _describe -t commands 'steward mcp help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__test_commands] )) ||
-_ironclaw__mcp__help__test_commands() {
+(( $+functions[_steward__mcp__help__list_commands] )) ||
+_steward__mcp__help__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help test commands' commands "$@"
+    _describe -t commands 'steward mcp help list commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__help__toggle_commands] )) ||
-_ironclaw__mcp__help__toggle_commands() {
+(( $+functions[_steward__mcp__help__remove_commands] )) ||
+_steward__mcp__help__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp help toggle commands' commands "$@"
+    _describe -t commands 'steward mcp help remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__list_commands] )) ||
-_ironclaw__mcp__list_commands() {
+(( $+functions[_steward__mcp__help__test_commands] )) ||
+_steward__mcp__help__test_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp list commands' commands "$@"
+    _describe -t commands 'steward mcp help test commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__remove_commands] )) ||
-_ironclaw__mcp__remove_commands() {
+(( $+functions[_steward__mcp__help__toggle_commands] )) ||
+_steward__mcp__help__toggle_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp remove commands' commands "$@"
+    _describe -t commands 'steward mcp help toggle commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__test_commands] )) ||
-_ironclaw__mcp__test_commands() {
+(( $+functions[_steward__mcp__list_commands] )) ||
+_steward__mcp__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp test commands' commands "$@"
+    _describe -t commands 'steward mcp list commands' commands "$@"
 }
-(( $+functions[_ironclaw__mcp__toggle_commands] )) ||
-_ironclaw__mcp__toggle_commands() {
+(( $+functions[_steward__mcp__remove_commands] )) ||
+_steward__mcp__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw mcp toggle commands' commands "$@"
+    _describe -t commands 'steward mcp remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory_commands] )) ||
-_ironclaw__memory_commands() {
+(( $+functions[_steward__mcp__test_commands] )) ||
+_steward__mcp__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'steward mcp test commands' commands "$@"
+}
+(( $+functions[_steward__mcp__toggle_commands] )) ||
+_steward__mcp__toggle_commands() {
+    local commands; commands=()
+    _describe -t commands 'steward mcp toggle commands' commands "$@"
+}
+(( $+functions[_steward__memory_commands] )) ||
+_steward__memory_commands() {
     local commands; commands=(
 'search:Search workspace memory (hybrid full-text + semantic)' \
 'read:Read a file from the workspace' \
@@ -1920,10 +1920,10 @@ _ironclaw__memory_commands() {
 'status:Show workspace status (document count, index health)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw memory commands' commands "$@"
+    _describe -t commands 'steward memory commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help_commands] )) ||
-_ironclaw__memory__help_commands() {
+(( $+functions[_steward__memory__help_commands] )) ||
+_steward__memory__help_commands() {
     local commands; commands=(
 'search:Search workspace memory (hybrid full-text + semantic)' \
 'read:Read a file from the workspace' \
@@ -1932,113 +1932,113 @@ _ironclaw__memory__help_commands() {
 'status:Show workspace status (document count, index health)' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw memory help commands' commands "$@"
+    _describe -t commands 'steward memory help commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__help_commands] )) ||
-_ironclaw__memory__help__help_commands() {
+(( $+functions[_steward__memory__help__help_commands] )) ||
+_steward__memory__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help help commands' commands "$@"
+    _describe -t commands 'steward memory help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__read_commands] )) ||
-_ironclaw__memory__help__read_commands() {
+(( $+functions[_steward__memory__help__read_commands] )) ||
+_steward__memory__help__read_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help read commands' commands "$@"
+    _describe -t commands 'steward memory help read commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__search_commands] )) ||
-_ironclaw__memory__help__search_commands() {
+(( $+functions[_steward__memory__help__search_commands] )) ||
+_steward__memory__help__search_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help search commands' commands "$@"
+    _describe -t commands 'steward memory help search commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__status_commands] )) ||
-_ironclaw__memory__help__status_commands() {
+(( $+functions[_steward__memory__help__status_commands] )) ||
+_steward__memory__help__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help status commands' commands "$@"
+    _describe -t commands 'steward memory help status commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__tree_commands] )) ||
-_ironclaw__memory__help__tree_commands() {
+(( $+functions[_steward__memory__help__tree_commands] )) ||
+_steward__memory__help__tree_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help tree commands' commands "$@"
+    _describe -t commands 'steward memory help tree commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__help__write_commands] )) ||
-_ironclaw__memory__help__write_commands() {
+(( $+functions[_steward__memory__help__write_commands] )) ||
+_steward__memory__help__write_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory help write commands' commands "$@"
+    _describe -t commands 'steward memory help write commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__read_commands] )) ||
-_ironclaw__memory__read_commands() {
+(( $+functions[_steward__memory__read_commands] )) ||
+_steward__memory__read_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory read commands' commands "$@"
+    _describe -t commands 'steward memory read commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__search_commands] )) ||
-_ironclaw__memory__search_commands() {
+(( $+functions[_steward__memory__search_commands] )) ||
+_steward__memory__search_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory search commands' commands "$@"
+    _describe -t commands 'steward memory search commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__status_commands] )) ||
-_ironclaw__memory__status_commands() {
+(( $+functions[_steward__memory__status_commands] )) ||
+_steward__memory__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory status commands' commands "$@"
+    _describe -t commands 'steward memory status commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__tree_commands] )) ||
-_ironclaw__memory__tree_commands() {
+(( $+functions[_steward__memory__tree_commands] )) ||
+_steward__memory__tree_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory tree commands' commands "$@"
+    _describe -t commands 'steward memory tree commands' commands "$@"
 }
-(( $+functions[_ironclaw__memory__write_commands] )) ||
-_ironclaw__memory__write_commands() {
+(( $+functions[_steward__memory__write_commands] )) ||
+_steward__memory__write_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw memory write commands' commands "$@"
+    _describe -t commands 'steward memory write commands' commands "$@"
 }
-(( $+functions[_ironclaw__onboard_commands] )) ||
-_ironclaw__onboard_commands() {
+(( $+functions[_steward__onboard_commands] )) ||
+_steward__onboard_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw onboard commands' commands "$@"
+    _describe -t commands 'steward onboard commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing_commands] )) ||
-_ironclaw__pairing_commands() {
+(( $+functions[_steward__pairing_commands] )) ||
+_steward__pairing_commands() {
     local commands; commands=(
 'list:List pending pairing requests' \
 'approve:Approve a pairing request by code' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw pairing commands' commands "$@"
+    _describe -t commands 'steward pairing commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__approve_commands] )) ||
-_ironclaw__pairing__approve_commands() {
+(( $+functions[_steward__pairing__approve_commands] )) ||
+_steward__pairing__approve_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw pairing approve commands' commands "$@"
+    _describe -t commands 'steward pairing approve commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__help_commands] )) ||
-_ironclaw__pairing__help_commands() {
+(( $+functions[_steward__pairing__help_commands] )) ||
+_steward__pairing__help_commands() {
     local commands; commands=(
 'list:List pending pairing requests' \
 'approve:Approve a pairing request by code' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw pairing help commands' commands "$@"
+    _describe -t commands 'steward pairing help commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__help__approve_commands] )) ||
-_ironclaw__pairing__help__approve_commands() {
+(( $+functions[_steward__pairing__help__approve_commands] )) ||
+_steward__pairing__help__approve_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw pairing help approve commands' commands "$@"
+    _describe -t commands 'steward pairing help approve commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__help__help_commands] )) ||
-_ironclaw__pairing__help__help_commands() {
+(( $+functions[_steward__pairing__help__help_commands] )) ||
+_steward__pairing__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw pairing help help commands' commands "$@"
+    _describe -t commands 'steward pairing help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__help__list_commands] )) ||
-_ironclaw__pairing__help__list_commands() {
+(( $+functions[_steward__pairing__help__list_commands] )) ||
+_steward__pairing__help__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw pairing help list commands' commands "$@"
+    _describe -t commands 'steward pairing help list commands' commands "$@"
 }
-(( $+functions[_ironclaw__pairing__list_commands] )) ||
-_ironclaw__pairing__list_commands() {
+(( $+functions[_steward__pairing__list_commands] )) ||
+_steward__pairing__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw pairing list commands' commands "$@"
+    _describe -t commands 'steward pairing list commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry_commands] )) ||
-_ironclaw__registry_commands() {
+(( $+functions[_steward__registry_commands] )) ||
+_steward__registry_commands() {
     local commands; commands=(
 'list:List available extensions in the registry' \
 'info:Show detailed information about an extension or bundle' \
@@ -2046,10 +2046,10 @@ _ironclaw__registry_commands() {
 'install-defaults:Install the default bundle of recommended extensions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw registry commands' commands "$@"
+    _describe -t commands 'steward registry commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help_commands] )) ||
-_ironclaw__registry__help_commands() {
+(( $+functions[_steward__registry__help_commands] )) ||
+_steward__registry__help_commands() {
     local commands; commands=(
 'list:List available extensions in the registry' \
 'info:Show detailed information about an extension or bundle' \
@@ -2057,60 +2057,60 @@ _ironclaw__registry__help_commands() {
 'install-defaults:Install the default bundle of recommended extensions' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw registry help commands' commands "$@"
+    _describe -t commands 'steward registry help commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help__help_commands] )) ||
-_ironclaw__registry__help__help_commands() {
+(( $+functions[_steward__registry__help__help_commands] )) ||
+_steward__registry__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry help help commands' commands "$@"
+    _describe -t commands 'steward registry help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help__info_commands] )) ||
-_ironclaw__registry__help__info_commands() {
+(( $+functions[_steward__registry__help__info_commands] )) ||
+_steward__registry__help__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry help info commands' commands "$@"
+    _describe -t commands 'steward registry help info commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help__install_commands] )) ||
-_ironclaw__registry__help__install_commands() {
+(( $+functions[_steward__registry__help__install_commands] )) ||
+_steward__registry__help__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry help install commands' commands "$@"
+    _describe -t commands 'steward registry help install commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help__install-defaults_commands] )) ||
-_ironclaw__registry__help__install-defaults_commands() {
+(( $+functions[_steward__registry__help__install-defaults_commands] )) ||
+_steward__registry__help__install-defaults_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry help install-defaults commands' commands "$@"
+    _describe -t commands 'steward registry help install-defaults commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__help__list_commands] )) ||
-_ironclaw__registry__help__list_commands() {
+(( $+functions[_steward__registry__help__list_commands] )) ||
+_steward__registry__help__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry help list commands' commands "$@"
+    _describe -t commands 'steward registry help list commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__info_commands] )) ||
-_ironclaw__registry__info_commands() {
+(( $+functions[_steward__registry__info_commands] )) ||
+_steward__registry__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry info commands' commands "$@"
+    _describe -t commands 'steward registry info commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__install_commands] )) ||
-_ironclaw__registry__install_commands() {
+(( $+functions[_steward__registry__install_commands] )) ||
+_steward__registry__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry install commands' commands "$@"
+    _describe -t commands 'steward registry install commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__install-defaults_commands] )) ||
-_ironclaw__registry__install-defaults_commands() {
+(( $+functions[_steward__registry__install-defaults_commands] )) ||
+_steward__registry__install-defaults_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry install-defaults commands' commands "$@"
+    _describe -t commands 'steward registry install-defaults commands' commands "$@"
 }
-(( $+functions[_ironclaw__registry__list_commands] )) ||
-_ironclaw__registry__list_commands() {
+(( $+functions[_steward__registry__list_commands] )) ||
+_steward__registry__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw registry list commands' commands "$@"
+    _describe -t commands 'steward registry list commands' commands "$@"
 }
-(( $+functions[_ironclaw__run_commands] )) ||
-_ironclaw__run_commands() {
+(( $+functions[_steward__run_commands] )) ||
+_steward__run_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw run commands' commands "$@"
+    _describe -t commands 'steward run commands' commands "$@"
 }
-(( $+functions[_ironclaw__service_commands] )) ||
-_ironclaw__service_commands() {
+(( $+functions[_steward__service_commands] )) ||
+_steward__service_commands() {
     local commands; commands=(
 'install:Install the OS service (launchd on macOS, systemd on Linux)' \
 'start:Start the installed service' \
@@ -2119,10 +2119,10 @@ _ironclaw__service_commands() {
 'uninstall:Uninstall the OS service and remove the unit file' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw service commands' commands "$@"
+    _describe -t commands 'steward service commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help_commands] )) ||
-_ironclaw__service__help_commands() {
+(( $+functions[_steward__service__help_commands] )) ||
+_steward__service__help_commands() {
     local commands; commands=(
 'install:Install the OS service (launchd on macOS, systemd on Linux)' \
 'start:Start the installed service' \
@@ -2131,70 +2131,70 @@ _ironclaw__service__help_commands() {
 'uninstall:Uninstall the OS service and remove the unit file' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw service help commands' commands "$@"
+    _describe -t commands 'steward service help commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__help_commands] )) ||
-_ironclaw__service__help__help_commands() {
+(( $+functions[_steward__service__help__help_commands] )) ||
+_steward__service__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help help commands' commands "$@"
+    _describe -t commands 'steward service help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__install_commands] )) ||
-_ironclaw__service__help__install_commands() {
+(( $+functions[_steward__service__help__install_commands] )) ||
+_steward__service__help__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help install commands' commands "$@"
+    _describe -t commands 'steward service help install commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__start_commands] )) ||
-_ironclaw__service__help__start_commands() {
+(( $+functions[_steward__service__help__start_commands] )) ||
+_steward__service__help__start_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help start commands' commands "$@"
+    _describe -t commands 'steward service help start commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__status_commands] )) ||
-_ironclaw__service__help__status_commands() {
+(( $+functions[_steward__service__help__status_commands] )) ||
+_steward__service__help__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help status commands' commands "$@"
+    _describe -t commands 'steward service help status commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__stop_commands] )) ||
-_ironclaw__service__help__stop_commands() {
+(( $+functions[_steward__service__help__stop_commands] )) ||
+_steward__service__help__stop_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help stop commands' commands "$@"
+    _describe -t commands 'steward service help stop commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__help__uninstall_commands] )) ||
-_ironclaw__service__help__uninstall_commands() {
+(( $+functions[_steward__service__help__uninstall_commands] )) ||
+_steward__service__help__uninstall_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service help uninstall commands' commands "$@"
+    _describe -t commands 'steward service help uninstall commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__install_commands] )) ||
-_ironclaw__service__install_commands() {
+(( $+functions[_steward__service__install_commands] )) ||
+_steward__service__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service install commands' commands "$@"
+    _describe -t commands 'steward service install commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__start_commands] )) ||
-_ironclaw__service__start_commands() {
+(( $+functions[_steward__service__start_commands] )) ||
+_steward__service__start_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service start commands' commands "$@"
+    _describe -t commands 'steward service start commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__status_commands] )) ||
-_ironclaw__service__status_commands() {
+(( $+functions[_steward__service__status_commands] )) ||
+_steward__service__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service status commands' commands "$@"
+    _describe -t commands 'steward service status commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__stop_commands] )) ||
-_ironclaw__service__stop_commands() {
+(( $+functions[_steward__service__stop_commands] )) ||
+_steward__service__stop_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service stop commands' commands "$@"
+    _describe -t commands 'steward service stop commands' commands "$@"
 }
-(( $+functions[_ironclaw__service__uninstall_commands] )) ||
-_ironclaw__service__uninstall_commands() {
+(( $+functions[_steward__service__uninstall_commands] )) ||
+_steward__service__uninstall_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw service uninstall commands' commands "$@"
+    _describe -t commands 'steward service uninstall commands' commands "$@"
 }
-(( $+functions[_ironclaw__status_commands] )) ||
-_ironclaw__status_commands() {
+(( $+functions[_steward__status_commands] )) ||
+_steward__status_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw status commands' commands "$@"
+    _describe -t commands 'steward status commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool_commands] )) ||
-_ironclaw__tool_commands() {
+(( $+functions[_steward__tool_commands] )) ||
+_steward__tool_commands() {
     local commands; commands=(
 'install:Install a WASM tool from source directory or .wasm file' \
 'list:List installed tools' \
@@ -2203,15 +2203,15 @@ _ironclaw__tool_commands() {
 'auth:Configure authentication for a tool' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw tool commands' commands "$@"
+    _describe -t commands 'steward tool commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__auth_commands] )) ||
-_ironclaw__tool__auth_commands() {
+(( $+functions[_steward__tool__auth_commands] )) ||
+_steward__tool__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool auth commands' commands "$@"
+    _describe -t commands 'steward tool auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help_commands] )) ||
-_ironclaw__tool__help_commands() {
+(( $+functions[_steward__tool__help_commands] )) ||
+_steward__tool__help_commands() {
     local commands; commands=(
 'install:Install a WASM tool from source directory or .wasm file' \
 'list:List installed tools' \
@@ -2220,66 +2220,66 @@ _ironclaw__tool__help_commands() {
 'auth:Configure authentication for a tool' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
-    _describe -t commands 'ironclaw tool help commands' commands "$@"
+    _describe -t commands 'steward tool help commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__auth_commands] )) ||
-_ironclaw__tool__help__auth_commands() {
+(( $+functions[_steward__tool__help__auth_commands] )) ||
+_steward__tool__help__auth_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help auth commands' commands "$@"
+    _describe -t commands 'steward tool help auth commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__help_commands] )) ||
-_ironclaw__tool__help__help_commands() {
+(( $+functions[_steward__tool__help__help_commands] )) ||
+_steward__tool__help__help_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help help commands' commands "$@"
+    _describe -t commands 'steward tool help help commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__info_commands] )) ||
-_ironclaw__tool__help__info_commands() {
+(( $+functions[_steward__tool__help__info_commands] )) ||
+_steward__tool__help__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help info commands' commands "$@"
+    _describe -t commands 'steward tool help info commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__install_commands] )) ||
-_ironclaw__tool__help__install_commands() {
+(( $+functions[_steward__tool__help__install_commands] )) ||
+_steward__tool__help__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help install commands' commands "$@"
+    _describe -t commands 'steward tool help install commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__list_commands] )) ||
-_ironclaw__tool__help__list_commands() {
+(( $+functions[_steward__tool__help__list_commands] )) ||
+_steward__tool__help__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help list commands' commands "$@"
+    _describe -t commands 'steward tool help list commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__help__remove_commands] )) ||
-_ironclaw__tool__help__remove_commands() {
+(( $+functions[_steward__tool__help__remove_commands] )) ||
+_steward__tool__help__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool help remove commands' commands "$@"
+    _describe -t commands 'steward tool help remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__info_commands] )) ||
-_ironclaw__tool__info_commands() {
+(( $+functions[_steward__tool__info_commands] )) ||
+_steward__tool__info_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool info commands' commands "$@"
+    _describe -t commands 'steward tool info commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__install_commands] )) ||
-_ironclaw__tool__install_commands() {
+(( $+functions[_steward__tool__install_commands] )) ||
+_steward__tool__install_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool install commands' commands "$@"
+    _describe -t commands 'steward tool install commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__list_commands] )) ||
-_ironclaw__tool__list_commands() {
+(( $+functions[_steward__tool__list_commands] )) ||
+_steward__tool__list_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool list commands' commands "$@"
+    _describe -t commands 'steward tool list commands' commands "$@"
 }
-(( $+functions[_ironclaw__tool__remove_commands] )) ||
-_ironclaw__tool__remove_commands() {
+(( $+functions[_steward__tool__remove_commands] )) ||
+_steward__tool__remove_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw tool remove commands' commands "$@"
+    _describe -t commands 'steward tool remove commands' commands "$@"
 }
-(( $+functions[_ironclaw__worker_commands] )) ||
-_ironclaw__worker_commands() {
+(( $+functions[_steward__worker_commands] )) ||
+_steward__worker_commands() {
     local commands; commands=()
-    _describe -t commands 'ironclaw worker commands' commands "$@"
+    _describe -t commands 'steward worker commands' commands "$@"
 }
 
-if [ "$funcstack[1]" = "_ironclaw" ]; then
-    _ironclaw "$@"
+if [ "$funcstack[1]" = "_steward" ]; then
+    _steward "$@"
 else
-    (( $+functions[compdef] )) && compdef _ironclaw ironclaw
+    (( $+functions[compdef] )) && compdef _steward steward
 fi
