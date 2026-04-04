@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "ai.steward.desktop",
   "build": {
-    "beforeDevCommand": "npm --prefix ../ui run build",
-    "beforeBuildCommand": "npm --prefix ../ui run build",
-    "frontendDist": "../static"
+    "beforeDevCommand": "npm --prefix ui run build",
+    "beforeBuildCommand": "npm --prefix ui run build",
+    "frontendDist": "static"
   },
   "app": {
     "macOSPrivateApi": true,

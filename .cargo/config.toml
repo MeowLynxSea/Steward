@@ -1,6 +1,5 @@
 [build]
-target-dir = "/Users/MeowLynxSea/Development/Steward/target"
 
 [alias]
-desktop = "tauri dev --config src-tauri/tauri.conf.json"
-desktop-build = "tauri build --config src-tauri/tauri.conf.json"
+desktop = "run -p steward"
+desktop-build = "build -p steward"

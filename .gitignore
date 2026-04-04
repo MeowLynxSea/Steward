@@ -43,3 +43,5 @@ __pycache__/
 *.pyd
 
 /static/
+
+/node-compile-cache/

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src-tauri", "crates/steward_common", "crates/steward_safety"]
+members = [".", "crates/steward_common", "crates/steward_safety"]
 exclude = [
     "tools-src/github",
     "tools-src/gmail",
@@ -14,6 +14,9 @@ exclude = [
     "crates/steward_safety/fuzz",
 ]
 
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
 [package]
 name = "steward"
 version = "0.22.0"
@@ -26,6 +29,10 @@ license = "MIT OR Apache-2.0"
 [lib]
 name = "steward_core"
 path = "src/lib.rs"
+
+[[bin]]
+name = "steward"
+path = "src/main.rs"
 
 
 [dependencies]
@@ -167,9 +174,15 @@ hex = "0.4.3"
 # OpenClaw import (feature gated)
 json5 = { version = "0.4", optional = true }
 
+# Desktop (Tauri)
+tauri = { version = "2.0.0", features = ["macos-private-api", "tray-icon"] }
+tauri-plugin-notification = "2.0.0"
+
 # macOS keychain
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+objc2-app-kit = { version = "0.3.2", features = ["NSColor", "NSView", "NSWindow"] }
+objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 
 # PTY allocation for Claude CLI stdout buffering fix (Unix only)
 [target.'cfg(unix)'.dependencies]

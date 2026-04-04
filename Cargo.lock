@@ -7636,6 +7636,8 @@ dependencies = [
  "libsql",
  "lru",
  "mime_guess",
+ "objc2-app-kit",
+ "objc2-quartz-core",
  "open",
  "pdf-extract",
  "pretty_assertions",
@@ -7660,6 +7662,9 @@ dependencies = [
  "steward_safety",
  "subtle",
  "tar",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-notification",
  "tempfile",
  "termimad",
  "thiserror 2.0.18",
@@ -7681,26 +7686,6 @@ dependencies = [
  "wasmtime-wasi",
  "zbus 4.4.0",
  "zip",
-]
-
-[[package]]
-name = "steward-tauri"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "objc2-app-kit",
- "objc2-quartz-core",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "steward",
- "steward_common",
- "tauri",
- "tauri-build",
- "tauri-plugin-notification",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
