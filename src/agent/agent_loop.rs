@@ -1126,7 +1126,7 @@ impl Agent {
             interval.tick().await; // Skip immediate first tick
             loop {
                 interval.tick().await;
-                session_mgr.prune_stale_threads(session_idle_timeout).await;
+                session_mgr.prune_stale_sessions(session_idle_timeout).await;
             }
         });
 
@@ -1430,9 +1430,9 @@ impl Agent {
         // The greeting was already persisted to DB before start_all(), so
         // clients that connect after this point will see it via history.
         if let Some(id) = bootstrap_thread_id {
-            // Use get_session (not resolve_thread) to avoid creating
+            // Use get_or_create_session (not resolve_thread) to avoid creating
             // an orphan thread. Then insert the DB-sourced thread directly.
-            let session = self.session_manager.get_session().await;
+            let session = self.session_manager.get_or_create_session("default").await;
             {
                 use crate::agent::session::Thread;
                 let mut sess = session.lock().await;
@@ -1441,7 +1441,7 @@ impl Agent {
                 sess.threads.entry(id).or_insert(thread);
             }
             self.session_manager
-                .register_thread(id, session)
+                .register_thread("default", "gateway", id, session)
                 .await;
 
             let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
@@ -1773,7 +1773,7 @@ impl Agent {
         let (session, thread_id) = if let Some(target_thread_id) = approval_thread_uuid {
             let session = self
                 .session_manager
-                .get_session()
+                .get_or_create_session(&message.user_id)
                 .await;
             let mut sess = session.lock().await;
             if sess.threads.contains_key(&target_thread_id) {
@@ -1781,13 +1781,20 @@ impl Agent {
                 sess.last_active_at = chrono::Utc::now();
                 drop(sess);
                 self.session_manager
-                    .register_thread(target_thread_id, Arc::clone(&session))
+                    .register_thread(
+                        &message.user_id,
+                        &message.channel,
+                        target_thread_id,
+                        Arc::clone(&session),
+                    )
                     .await;
                 (session, target_thread_id)
             } else {
                 drop(sess);
                 self.session_manager
                     .resolve_thread_with_parsed_uuid(
+                        &message.user_id,
+                        &message.channel,
                         message.conversation_scope(),
                         approval_thread_uuid,
                     )
@@ -1795,7 +1802,11 @@ impl Agent {
             }
         } else {
             self.session_manager
-                .resolve_thread(message.conversation_scope())
+                .resolve_thread(
+                    &message.user_id,
+                    &message.channel,
+                    message.conversation_scope(),
+                )
                 .await
         };
         tracing::debug!(
