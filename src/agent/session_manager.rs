@@ -26,7 +26,8 @@ struct ThreadKey {
 
 /// Manages sessions, threads, and undo state for all users.
 pub struct SessionManager {
-    sessions: RwLock<HashMap<String, Arc<Mutex<Session>>>>,
+    /// Sessions keyed by user_id. Each user can have multiple sessions (Vec).
+    sessions: RwLock<HashMap<String, Vec<Arc<Mutex<Session>>>>>,
     thread_map: RwLock<HashMap<ThreadKey, Uuid>>,
     undo_managers: RwLock<HashMap<Uuid, Arc<Mutex<UndoManager>>>>,
     hooks: Option<Arc<HookRegistry>>,
@@ -43,6 +44,40 @@ impl SessionManager {
         }
     }
 
+    /// Create a brand-new session for a user (always creates a new session, not cached).
+    pub async fn create_new_session(&self, user_id: &str) -> Arc<Mutex<Session>> {
+        let new_session = Session::new(user_id);
+        let session_id = new_session.id.to_string();
+        let session = Arc::new(Mutex::new(new_session));
+
+        {
+            let mut sessions = self.sessions.write().await;
+            sessions
+                .entry(user_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(&session));
+        }
+
+        // Fire OnSessionStart hook (fire-and-forget)
+        if let Some(ref hooks) = self.hooks {
+            let hooks = hooks.clone();
+            let uid = user_id.to_string();
+            let sid = session_id;
+            tokio::spawn(async move {
+                use crate::hooks::HookEvent;
+                let event = HookEvent::SessionStart {
+                    user_id: uid,
+                    session_id: sid,
+                };
+                if let Err(e) = hooks.run(&event).await {
+                    tracing::warn!("OnSessionStart hook error: {}", e);
+                }
+            });
+        }
+
+        session
+    }
+
     /// Attach a hook registry for session lifecycle events.
     pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
@@ -50,26 +85,35 @@ impl SessionManager {
     }
 
     /// Get or create a session for a user.
+    /// Returns the first existing session for the user, or creates one if none exist.
+    /// (Used by HTTP API which expects single-session-per-user behavior.)
     pub async fn get_or_create_session(&self, user_id: &str) -> Arc<Mutex<Session>> {
         // Fast path: check if session exists
         {
             let sessions = self.sessions.read().await;
-            if let Some(session) = sessions.get(user_id) {
-                return Arc::clone(session);
+            if let Some(sessions_list) = sessions.get(user_id) {
+                if let Some(session) = sessions_list.first() {
+                    return Arc::clone(session);
+                }
             }
         }
 
         // Slow path: create new session
         let mut sessions = self.sessions.write().await;
         // Double-check after acquiring write lock
-        if let Some(session) = sessions.get(user_id) {
-            return Arc::clone(session);
+        if let Some(sessions_list) = sessions.get(user_id) {
+            if let Some(session) = sessions_list.first() {
+                return Arc::clone(session);
+            }
         }
 
         let new_session = Session::new(user_id);
         let session_id = new_session.id.to_string();
         let session = Arc::new(Mutex::new(new_session));
-        sessions.insert(user_id.to_string(), Arc::clone(&session));
+        sessions
+            .entry(user_id.to_string())
+            .or_insert_with(Vec::new)
+            .push(Arc::clone(&session));
 
         if sessions.len() >= SESSION_COUNT_WARNING_THRESHOLD && sessions.len() % 100 == 0 {
             tracing::warn!(
@@ -295,7 +339,10 @@ impl SessionManager {
         // Ensure the session is tracked
         {
             let mut sessions = self.sessions.write().await;
-            sessions.entry(user_id.to_string()).or_insert(session);
+            sessions
+                .entry(user_id.to_string())
+                .or_insert_with(Vec::new)
+                .push(session);
         }
     }
 
@@ -324,14 +371,19 @@ impl SessionManager {
     /// Remove sessions that have been idle for longer than the given duration.
     ///
     /// Returns the number of sessions pruned.
-    /// List all sessions with their user IDs.
+    /// List all sessions with their user IDs (flattens Vec per user).
     ///
     /// Returns a vector of (user_id, session) pairs.
     pub async fn list_sessions(&self) -> Vec<(String, Arc<Mutex<Session>>)> {
         let sessions = self.sessions.read().await;
         sessions
             .iter()
-            .map(|(user_id, session)| (user_id.clone(), Arc::clone(session)))
+            .flat_map(|(user_id, sessions_list)| {
+                sessions_list
+                    .iter()
+                    .map(|session| (user_id.clone(), Arc::clone(session)))
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -342,6 +394,7 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         sessions
             .values()
+            .flat_map(|sessions_list| sessions_list.iter())
             .find(|s| s.try_lock().map(|lock| lock.id == session_id).unwrap_or(false))
             .cloned()
     }
@@ -359,23 +412,17 @@ impl SessionManager {
     /// Returns true if a session was deleted, false if no session existed.
     pub async fn delete_session_by_id(&self, session_id: Uuid) -> bool {
         let mut sessions = self.sessions.write().await;
-        // Find the session with the given UUID
-        let user_id_to_remove = {
-            let mut found = None;
-            for (uid, session) in sessions.iter() {
-                if session.try_lock().map(|s| s.id == session_id).unwrap_or(false) {
-                    found = Some(uid.clone());
-                    break;
-                }
+        // Find and remove the session with the given UUID
+        for (_, sessions_list) in sessions.iter_mut() {
+            if let Some(pos) = sessions_list
+                .iter()
+                .position(|s| s.try_lock().map(|lock| lock.id == session_id).unwrap_or(false))
+            {
+                sessions_list.remove(pos);
+                return true;
             }
-            found
-        };
-        if let Some(uid) = user_id_to_remove {
-            sessions.remove(&uid);
-            true
-        } else {
-            false
         }
+        false
     }
 
     pub async fn prune_stale_sessions(&self, max_idle: std::time::Duration) -> usize {
@@ -386,36 +433,42 @@ impl SessionManager {
             let sessions = self.sessions.read().await;
             sessions
                 .iter()
-                .filter_map(|(user_id, session)| {
-                    // Try to lock; skip if contended (someone is actively using it)
-                    let sess = session.try_lock().ok()?;
-                    if sess.last_active_at < cutoff {
-                        Some((user_id.clone(), sess.id.to_string()))
-                    } else {
-                        None
-                    }
+                .flat_map(|(user_id, sessions_list)| {
+                    sessions_list
+                        .iter()
+                        .filter_map(|session| {
+                            let sess = session.try_lock().ok()?;
+                            if sess.last_active_at < cutoff {
+                                Some((user_id.clone(), sess.id.to_string()))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
                 })
                 .collect()
         };
+
+        if stale_sessions.is_empty() {
+            return 0;
+        }
 
         let stale_users: Vec<String> = stale_sessions
             .iter()
             .map(|(user_id, _)| user_id.clone())
             .collect();
 
-        if stale_users.is_empty() {
-            return 0;
-        }
-
         // Collect thread IDs from stale sessions for cleanup
         let mut stale_thread_ids: Vec<Uuid> = Vec::new();
         {
             let sessions = self.sessions.read().await;
-            for user_id in &stale_users {
-                if let Some(session) = sessions.get(user_id)
-                    && let Ok(sess) = session.try_lock()
-                {
-                    stale_thread_ids.extend(sess.threads.keys());
+            for (user_id, sessions_list) in sessions.iter() {
+                if stale_users.contains(user_id) {
+                    for session in sessions_list {
+                        if let Ok(sess) = session.try_lock() {
+                            stale_thread_ids.extend(sess.threads.keys());
+                        }
+                    }
                 }
             }
         }
@@ -439,14 +492,26 @@ impl SessionManager {
             }
         }
 
-        // Remove sessions
+        // Remove individual stale sessions from their Vec
         let count = {
             let mut sessions = self.sessions.write().await;
-            let before = sessions.len();
-            for user_id in &stale_users {
-                sessions.remove(user_id);
+            let mut removed = 0;
+            for (user_id, session_id) in &stale_sessions {
+                if let Some(sessions_list) = sessions.get_mut(user_id) {
+                    let before = sessions_list.len();
+                    sessions_list.retain(|s| {
+                        s.try_lock()
+                            .map(|lock| lock.id.to_string() != *session_id)
+                            .unwrap_or(false)
+                    });
+                    removed += before - sessions_list.len();
+                    // Remove user entry if no sessions left
+                    if sessions_list.is_empty() {
+                        sessions.remove(user_id);
+                    }
+                }
             }
-            before - sessions.len()
+            removed
         };
 
         // Clean up thread mappings that point to stale sessions
@@ -1096,7 +1161,7 @@ mod tests {
         }
         {
             let mut sessions = manager.sessions.write().await;
-            sessions.insert("user-direct".to_string(), Arc::clone(&session));
+            sessions.insert("user-direct".to_string(), vec![Arc::clone(&session)]);
         }
 
         // resolve_thread should find the existing thread by UUID

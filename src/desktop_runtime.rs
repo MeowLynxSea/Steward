@@ -34,6 +34,9 @@ pub struct AppState {
     pub task_runtime: Arc<TaskRuntime>,
     pub tools: Arc<crate::tools::ToolRegistry>,
     pub mcp_session_manager: Arc<McpSessionManager>,
+    /// Sender to inject messages into the agent's message stream.
+    /// Used by Tauri IPC commands to trigger agent processing.
+    pub message_inject_tx: tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>,
 }
 
 impl AppState {
@@ -45,6 +48,7 @@ impl AppState {
         task_runtime: Arc<TaskRuntime>,
         tools: Arc<crate::tools::ToolRegistry>,
         mcp_session_manager: Arc<McpSessionManager>,
+        message_inject_tx: tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>,
     ) -> Self {
         Self {
             owner_id,
@@ -54,6 +58,7 @@ impl AppState {
             task_runtime,
             tools,
             mcp_session_manager,
+            message_inject_tx,
         }
     }
 }
@@ -199,5 +204,6 @@ pub async fn start_embedded_runtime(
         app_state_task_runtime,
         app_state_tools,
         app_state_mcp,
+        inject_tx.clone(),
     ))
 }

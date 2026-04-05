@@ -5,6 +5,7 @@
 use tauri::State;
 use uuid::Uuid;
 
+use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
@@ -115,7 +116,7 @@ pub async fn create_session(
     let session_manager = &state.agent_session_manager;
     let user_id = &state.owner_id;
 
-    let session = session_manager.get_or_create_session(user_id).await;
+    let session = session_manager.create_new_session(user_id).await;
 
     if let Some(req) = payload {
         if let Some(title) = req.title {
@@ -145,12 +146,29 @@ pub async fn get_session(
     let session = session_manager.get_session_by_id(id).await
         .ok_or_else(|| "Session not found".to_string())?;
 
-    let sess = session.lock().await;
+    // Get or create a thread if none exists
+    let thread_id = {
+        let mut sess = session.lock().await;
+        let thread_id = sess
+            .active_thread
+            .or_else(|| sess.threads.keys().copied().next());
 
-    let active_thread_id = sess.active_thread.or_else(|| sess.threads.keys().copied().next());
-    let thread = active_thread_id
-        .and_then(|tid| sess.threads.get(&tid).cloned())
-        .ok_or_else(|| "No threads in session".to_string())?;
+        match thread_id {
+            Some(tid) => tid,
+            None => {
+                // Create a new thread if none exists
+                let new_thread = sess.create_thread();
+                tracing::debug!("Created new thread {} for session", new_thread.id);
+                new_thread.id
+            }
+        }
+    };
+
+    let sess = session.lock().await;
+    let thread = sess
+        .threads
+        .get(&thread_id)
+        .ok_or_else(|| "Thread not found".to_string())?;
 
     let messages: Vec<steward_core::ipc::SessionMessageResponse> = thread
         .turns
@@ -189,7 +207,7 @@ pub async fn get_session(
 
     let current_task = state
         .task_runtime
-        .get_task(active_thread_id.unwrap_or_default())
+        .get_task(thread_id)
         .await;
 
     Ok(steward_core::ipc::SessionDetailResponse {
@@ -222,11 +240,25 @@ pub async fn send_session_message(
         .await
         .ok_or_else(|| "Session not found".to_string())?;
 
+    // Get or create a thread if none exists
+    let thread_id = {
+        let mut sess = session.lock().await;
+        let thread_id = sess
+            .active_thread
+            .or_else(|| sess.threads.keys().copied().next());
+
+        match thread_id {
+            Some(tid) => tid,
+            None => {
+                // Create a new thread if none exists
+                let new_thread = sess.create_thread();
+                tracing::debug!("Created new thread {} for session", new_thread.id);
+                new_thread.id
+            }
+        }
+    };
+
     let sess = session.lock().await;
-
-    let active_thread_id = sess.active_thread.or_else(|| sess.threads.keys().copied().next());
-    let thread_id = active_thread_id.ok_or_else(|| "No threads in session".to_string())?;
-
     let thread = sess.threads.get(&thread_id).ok_or_else(|| "Thread not found".to_string())?;
 
     match thread.state {
@@ -254,6 +286,26 @@ pub async fn send_session_message(
         }
         steward_core::agent::session::ThreadState::Idle
         | steward_core::agent::session::ThreadState::Interrupted => {
+            // Queue the message and inject into the agent stream to trigger processing
+            let mut sess = session.lock().await;
+            if let Some(thread) = sess.threads.get_mut(&thread_id) {
+                if !thread.queue_message(payload.content.clone()) {
+                    return Err("Message queue full".to_string());
+                }
+            } else {
+                return Err("Thread not found".to_string());
+            }
+            drop(sess); // Release lock before injecting
+
+            // Inject a message into the agent's stream to trigger processing
+            let msg = IncomingMessage::new("api", state.owner_id.clone(), payload.content)
+                .with_thread(thread_id.to_string());
+            state
+                .message_inject_tx
+                .send(msg)
+                .await
+                .map_err(|e| format!("Failed to inject message: {}", e))?;
+
             Ok(steward_core::ipc::SendSessionMessageResponse {
                 accepted: true,
                 session_id: id,
