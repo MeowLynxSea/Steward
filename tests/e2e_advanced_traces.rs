@@ -736,7 +736,7 @@ mod advanced {
         {
             let session = rig
                 .session_manager()
-                .get_or_create_session("test-user")
+                .get_session()
                 .await;
             let mut sess = session.lock().await;
             // Find the active thread and queue a message.
@@ -776,7 +776,7 @@ mod advanced {
         {
             let session = rig
                 .session_manager()
-                .get_or_create_session("test-user")
+                .get_session()
                 .await;
             let sess = session.lock().await;
             let thread = sess

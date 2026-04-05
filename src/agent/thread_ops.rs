@@ -56,7 +56,7 @@ impl Agent {
         // Check if already in memory
         let session = self
             .session_manager
-            .get_or_create_session(&message.user_id)
+            .get_session()
             .await;
         {
             let sess = session.lock().await;
@@ -156,12 +156,7 @@ impl Agent {
         }
 
         self.session_manager
-            .register_thread(
-                &message.user_id,
-                &message.channel,
-                thread_uuid,
-                Arc::clone(&session),
-            )
+            .register_thread(thread_uuid, Arc::clone(&session))
             .await;
 
         tracing::debug!(
@@ -1931,11 +1926,11 @@ impl Agent {
 
     pub(super) async fn process_new_thread(
         &self,
-        message: &IncomingMessage,
+        _message: &IncomingMessage,
     ) -> Result<SubmissionResult, Error> {
         let session = self
             .session_manager
-            .get_or_create_session(&message.user_id)
+            .get_session()
             .await;
         let mut sess = session.lock().await;
         let thread = sess.create_thread();
@@ -1948,12 +1943,12 @@ impl Agent {
 
     pub(super) async fn process_switch_thread(
         &self,
-        message: &IncomingMessage,
+        _message: &IncomingMessage,
         target_thread_id: Uuid,
     ) -> Result<SubmissionResult, Error> {
         let session = self
             .session_manager
-            .get_or_create_session(&message.user_id)
+            .get_session()
             .await;
         let mut sess = session.lock().await;
 

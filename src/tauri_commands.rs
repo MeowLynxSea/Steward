@@ -85,24 +85,23 @@ pub async fn list_sessions(
     state: State<'_, AppState>,
 ) -> Result<steward_core::ipc::SessionListResponse, String> {
     let session_manager = &state.agent_session_manager;
-    let sessions = session_manager.list_sessions().await;
 
-    let mut summaries = Vec::new();
-    for (_, session) in sessions {
-        let sess = session.lock().await;
-        let message_count: i64 = sess.threads.values()
-            .map(|t| t.turns.len() as i64)
-            .sum();
-        summaries.push(steward_core::ipc::SessionSummaryResponse {
-            id: sess.id,
-            title: "Untitled Session".to_string(),
-            message_count,
-            started_at: sess.created_at,
-            last_activity: sess.last_active_at,
-            thread_type: None,
-            channel: "desktop".to_string(),
-        });
-    }
+    // Single-user desktop: always return the one session
+    let session = session_manager.get_session().await;
+    let sess = session.lock().await;
+    let message_count: i64 = sess.threads.values()
+        .map(|t| t.turns.len() as i64)
+        .sum();
+
+    let summaries = vec![steward_core::ipc::SessionSummaryResponse {
+        id: sess.id,
+        title: "Untitled Session".to_string(),
+        message_count,
+        started_at: sess.created_at,
+        last_activity: sess.last_active_at,
+        thread_type: None,
+        channel: "desktop".to_string(),
+    }];
 
     Ok(steward_core::ipc::SessionListResponse { sessions: summaries })
 }
@@ -113,9 +112,8 @@ pub async fn create_session(
     payload: Option<CreateSessionRequest>,
 ) -> Result<steward_core::ipc::CreateSessionResponse, String> {
     let session_manager = &state.agent_session_manager;
-    let user_id = &state.owner_id;
 
-    let session = session_manager.get_or_create_session(user_id).await;
+    let session = session_manager.get_session().await;
 
     if let Some(req) = payload {
         if let Some(title) = req.title {
@@ -138,12 +136,12 @@ pub async fn create_session(
 #[tauri::command]
 pub async fn get_session(
     state: State<'_, AppState>,
-    id: Uuid,
+    _id: Uuid,
 ) -> Result<steward_core::ipc::SessionDetailResponse, String> {
     let session_manager = &state.agent_session_manager;
 
-    let session = session_manager.get_session_by_id(id).await
-        .ok_or_else(|| "Session not found".to_string())?;
+    // Single-user desktop: ignore id, return the single session
+    let session = session_manager.get_session().await;
 
     let sess = session.lock().await;
 
@@ -201,12 +199,11 @@ pub async fn get_session(
 
 #[tauri::command]
 pub async fn delete_session(
-    state: State<'_, AppState>,
-    id: Uuid,
+    _state: State<'_, AppState>,
+    _id: Uuid,
 ) -> Result<serde_json::Value, String> {
-    let session_manager = &state.agent_session_manager;
-    let deleted = session_manager.delete_session_by_id(id).await;
-    Ok(serde_json::json!({ "deleted": deleted }))
+    // Single-user desktop: cannot delete the only session
+    Ok(serde_json::json!({ "deleted": false }))
 }
 
 #[tauri::command]
@@ -218,9 +215,8 @@ pub async fn send_session_message(
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager
-        .get_session_by_id(id)
-        .await
-        .ok_or_else(|| "Session not found".to_string())?;
+        .get_session()
+        .await;
 
     let sess = session.lock().await;
 
@@ -232,10 +228,7 @@ pub async fn send_session_message(
     match thread.state {
         steward_core::agent::session::ThreadState::Processing => {
             drop(sess);
-            let session = session_manager
-                .get_session_by_id(id)
-                .await
-                .ok_or_else(|| "Session not found".to_string())?;
+            // Re-acquire lock on the same session
             let mut sess = session.lock().await;
             if let Some(thread) = sess.threads.get_mut(&thread_id) {
                 if thread.queue_message(payload.content.clone()) {

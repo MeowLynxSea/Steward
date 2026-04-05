@@ -950,7 +950,7 @@ mod tests {
         hooks.register(Arc::new(SessionStartHook { tx })).await;
 
         let manager = AgentSessionManager::new().with_hooks(Arc::clone(&hooks));
-        manager.get_or_create_session("user-123").await;
+        manager.get_session().await;
 
         let (user_id, session_id) =
             tokio::time::timeout(std::time::Duration::from_secs(1), rx.recv())
@@ -958,7 +958,7 @@ mod tests {
                 .expect("session start hook should fire")
                 .expect("session start payload should be present");
 
-        assert_eq!(user_id, "user-123");
+        assert_eq!(user_id, "default");
         assert!(!session_id.is_empty());
     }
 }
