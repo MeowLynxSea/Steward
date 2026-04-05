@@ -25,7 +25,7 @@ export const apiClient = {
   },
 
   patchSettings(payload: PatchSettingsRequest) {
-    return invoke<SettingsResponse>("patch_settings", { request: payload });
+    return invoke<SettingsResponse>("patch_settings", { payload });
   },
 
   // -- Sessions --

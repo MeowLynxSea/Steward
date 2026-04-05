@@ -45,3 +45,5 @@ __pycache__/
 /static/
 
 /node-compile-cache/
+
+.DS_Store

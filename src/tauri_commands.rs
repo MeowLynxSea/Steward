@@ -26,7 +26,7 @@ fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsRe
         openai_compatible_base_url: settings.openai_compatible_base_url.clone(),
         llm_custom_providers: settings.llm_custom_providers.clone(),
         llm_builtin_overrides: settings.llm_builtin_overrides.clone(),
-        llm_ready: true,
+        llm_ready: settings.llm_backend.is_some(),
         llm_onboarding_required: !settings.onboard_completed,
         llm_readiness_error: None,
     }
@@ -51,6 +51,7 @@ pub async fn patch_settings(
 
     if let Some(llm_backend) = payload.llm_backend {
         settings.llm_backend = Some(llm_backend);
+        settings.onboard_completed = true;
     }
     if let Some(selected_model) = payload.selected_model {
         settings.selected_model = Some(selected_model);
