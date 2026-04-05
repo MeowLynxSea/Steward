@@ -139,6 +139,7 @@ pub async fn run_agentic_loop(
     reason_ctx: &mut ReasoningContext,
     config: &AgenticLoopConfig,
 ) -> Result<LoopOutcome, Error> {
+    tracing::info!("AGENTIC_LOOP: starting");
     let mut consecutive_tool_intent_nudges: u32 = 0;
     // Accumulates across all iterations (not reset by text responses) so
     // non-consecutive truncations still escalate to force_text.
@@ -160,6 +161,7 @@ pub async fn run_agentic_loop(
         }
 
         // Call LLM
+        tracing::info!("AGENTIC_LOOP: calling LLM");
         let output = delegate.call_llm(reasoning, reason_ctx, iteration).await?;
 
         match &output.result {

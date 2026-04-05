@@ -117,7 +117,6 @@ pub async fn create_session(
     let user_id = &state.owner_id;
 
     let session = session_manager.create_new_session(user_id).await;
-    let id = session.lock().await.id;
 
     if let Some(req) = payload {
         if let Some(title) = req.title {
@@ -234,24 +233,31 @@ pub async fn send_session_message(
     id: Uuid,
     payload: SendSessionMessageRequest,
 ) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
+    tracing::info!(session_id = %id, content_len = payload.content.len(), "==> send_session_message CALLED");
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager
         .get_session_by_id(id)
         .await
         .ok_or_else(|| "Session not found".to_string())?;
+    tracing::info!(session_id = %id, "Got session, acquiring lock...");
 
     // Get or create a thread if none exists
     let thread_id = {
-        let mut sess = session.lock().await;
-        let thread_id = sess
+        let lock_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+        if lock_result.is_err() {
+            tracing::error!("FIRST session.lock() TIMEOUT - session_id={}", id);
+            return Err("Session lock timeout".to_string());
+        }
+        let mut sess = lock_result.unwrap();
+        tracing::info!("FIRST session lock acquired");
+        let tid = sess
             .active_thread
             .or_else(|| sess.threads.keys().copied().next());
 
-        match thread_id {
-            Some(tid) => tid,
+        match tid {
+            Some(id) => id,
             None => {
-                // Create a new thread if none exists
                 let new_thread = sess.create_thread();
                 tracing::debug!("Created new thread {} for session", new_thread.id);
                 new_thread.id
@@ -259,9 +265,16 @@ pub async fn send_session_message(
         }
     };
 
-    let sess = session.lock().await;
+    let sess_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+    if sess_result.is_err() {
+        tracing::error!("SECOND session.lock() TIMEOUT - thread_id={}", thread_id);
+        return Err("Session lock timeout".to_string());
+    }
+    let sess = sess_result.unwrap();
     let thread = sess.threads.get(&thread_id).ok_or_else(|| "Thread not found".to_string())?;
+    tracing::info!(thread_id = %thread_id, state = ?thread.state, "Thread state checked, matching...");
 
+    tracing::info!(thread_id = %thread_id, "About to match thread state");
     match thread.state {
         steward_core::agent::session::ThreadState::Processing => {
             drop(sess);
@@ -287,8 +300,17 @@ pub async fn send_session_message(
         }
         steward_core::agent::session::ThreadState::Idle
         | steward_core::agent::session::ThreadState::Interrupted => {
+            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, dropping outer sess");
+            drop(sess); // Drop the guard from line 273 before re-acquiring
+            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, about to acquire lock");
             // Queue the message and inject into the agent stream to trigger processing
-            let mut sess = session.lock().await;
+            let lock_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+            if lock_result.is_err() {
+                tracing::error!(thread_id = %thread_id, "SESSION LOCK TIMEOUT after 5s - possible deadlock");
+                return Err("Session lock timeout - possible deadlock".to_string());
+            }
+            let mut sess = lock_result.unwrap();
+            tracing::info!(thread_id = %thread_id, "Lock acquired, queuing message");
             if let Some(thread) = sess.threads.get_mut(&thread_id) {
                 if !thread.queue_message(payload.content.clone()) {
                     return Err("Message queue full".to_string());
@@ -301,12 +323,15 @@ pub async fn send_session_message(
             // Inject a message into the agent's stream to trigger processing
             let msg = IncomingMessage::new("api", state.owner_id.clone(), payload.content)
                 .with_thread(thread_id.to_string());
+            tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
             state
                 .message_inject_tx
                 .send(msg)
                 .await
                 .map_err(|e| format!("Failed to inject message: {}", e))?;
+            tracing::info!(thread_id = %thread_id, "Message injected successfully");
 
+            tracing::info!(thread_id = %thread_id, "==> send_session_message RETURNING OK");
             Ok(steward_core::ipc::SendSessionMessageResponse {
                 accepted: true,
                 session_id: id,

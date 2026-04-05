@@ -110,6 +110,9 @@ class SessionsState {
   async sendMessage(content: string) {
     if (!content.trim() || !this.activeId || !this.active) return;
 
+    // Clear any previous error when sending a new message
+    this.error = null;
+
     const optimistic: SessionMessage = {
       id: crypto.randomUUID(),
       role: "user",

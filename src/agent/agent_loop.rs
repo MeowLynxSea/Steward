@@ -664,7 +664,10 @@ impl Agent {
         event: steward_common::AppEvent,
     ) {
         if let Some(emitter) = self.emitter() {
+            tracing::info!(message_id = %message.id, event_type = %event.event_type(), "EMITTER: emitting event");
             emitter.emit_for_user(&message.user_id, event);
+        } else {
+            tracing::info!(message_id = %message.id, "EMITTER: no emitter available, event dropped");
         }
     }
 
@@ -1450,7 +1453,7 @@ impl Agent {
         }
 
         // Main message loop
-        tracing::debug!("Agent {} ready and listening", self.config.name);
+        tracing::info!("Agent {} ready and listening", self.config.name);
 
         loop {
             let message = tokio::select! {
@@ -1461,7 +1464,10 @@ impl Agent {
                 }
                 msg = message_stream.next() => {
                     match msg {
-                        Some(m) => m,
+                        Some(m) => {
+                            tracing::info!(message_id = %m.id, channel = %m.channel, "MAINLOOP: Received message from stream");
+                            m
+                        }
                         None => {
                             tracing::debug!("All channel streams ended, shutting down...");
                             break;
@@ -1492,6 +1498,7 @@ impl Agent {
                     thread_id: message.thread_id.clone(),
                 },
             );
+            tracing::info!(message_id = %message.id, "MAINLOOP: Thinking event sent via emitter");
 
             match self.handle_message(&message).await {
                 Ok(Some(response)) if !response.is_empty() => {
@@ -1688,12 +1695,12 @@ impl Agent {
 
     async fn handle_message(&self, message: &IncomingMessage) -> Result<Option<String>, Error> {
         // Log sensitive details at debug level for troubleshooting
-        tracing::debug!(
+        tracing::info!(
             message_id = %message.id,
             user_id = %message.user_id,
             channel = %message.channel,
             thread_id = ?message.thread_id,
-            "Message details"
+            "==> handle_message START"
         );
 
         // Internal messages (e.g. job-monitor notifications) are already

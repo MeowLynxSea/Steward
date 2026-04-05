@@ -181,11 +181,12 @@ impl Agent {
         thread_id: Uuid,
         content: &str,
     ) -> Result<SubmissionResult, Error> {
-        tracing::debug!(
+        tracing::info!(
             message_id = %message.id,
             thread_id = %thread_id,
             content_len = content.len(),
-            "Processing user input"
+            content_preview = %content.chars().take(50).collect::<String>(),
+            "==> process_user_input START"
         );
 
         if let Some(task_runtime) = self.task_runtime() {

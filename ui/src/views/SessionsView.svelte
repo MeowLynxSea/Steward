@@ -196,6 +196,14 @@
           {/if}
         </div>
 
+        {#if sessionsStore.error}
+          <div class="error-banner">
+            <span class="error-icon">⚠</span>
+            <span class="error-message">{sessionsStore.error}</span>
+            <button class="error-dismiss" onclick={() => sessionsStore.error = null}>✕</button>
+          </div>
+        {/if}
+
         {#if sessionTask?.pending_approval}
           <TaskApprovalCard
             task={sessionTask}
@@ -306,3 +314,42 @@
     </aside>
   </section>
 {/if}
+
+<style>
+  .error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 12px 16px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
+    font-size: 13px;
+  }
+
+  .error-icon {
+    font-size: 16px;
+  }
+
+  .error-message {
+    flex: 1;
+    font-family: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .error-dismiss {
+    background: transparent;
+    border: none;
+    color: var(--accent-danger-text);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 6px;
+    opacity: 0.7;
+  }
+
+  .error-dismiss:hover {
+    opacity: 1;
+  }
+</style>

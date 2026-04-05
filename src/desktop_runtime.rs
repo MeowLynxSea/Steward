@@ -190,7 +190,9 @@ pub async fn start_embedded_runtime(
     *scheduler_slot.write().await = Some(agent.scheduler());
     agent.set_routine_engine_slot(Arc::clone(&routine_engine_slot));
 
+    tracing::info!("Starting embedded agent runtime...");
     tokio::spawn(async move {
+        tracing::info!("Embedded agent task started");
         if let Err(error) = agent.run().await {
             tracing::error!(%error, "embedded agent exited");
         }

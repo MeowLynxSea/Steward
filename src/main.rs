@@ -5,6 +5,7 @@ mod tauri_commands;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
 use steward_core::desktop_runtime::{AppState, TauriEventEmitterHandle};
 use steward_core::runtime_events::RuntimeEventEmitter;
 use tauri::menu::{Menu, MenuItem};
@@ -33,13 +34,167 @@ impl TauriEventEmitter {
 }
 
 impl RuntimeEventEmitter for TauriEventEmitter {
-    fn emit_for_user(&self, user_id: &str, event: steward_common::AppEvent) {
+    fn emit_for_user(&self, _user_id: &str, event: steward_common::AppEvent) {
         let tauri_event_name = format!("session:{}", event.event_type());
-        let payload = serde_json::json!({
-            "user_id": user_id,
-            "event": event,
+
+        // Extract thread_id and payload data from AppEvent to match frontend StreamEnvelope format
+        let thread_id: Option<String> = match &event {
+            steward_common::AppEvent::Response { thread_id, .. } => Some(thread_id.clone()),
+            steward_common::AppEvent::Thinking { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ToolStarted { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ToolCompleted { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ToolResult { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::StreamChunk { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::Status { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ApprovalNeeded { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::Error { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ImageGenerated { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::Suggestions { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::TurnCost { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ReasoningUpdate { thread_id, .. } => thread_id.clone(),
+            _ => None,
+        };
+
+        let payload_data = match &event {
+            steward_common::AppEvent::Response { content, .. } => {
+                serde_json::json!({ "content": content })
+            }
+            steward_common::AppEvent::Thinking { message, .. } => {
+                serde_json::json!({ "message": message })
+            }
+            steward_common::AppEvent::ToolStarted { name, .. } => {
+                serde_json::json!({ "name": name })
+            }
+            steward_common::AppEvent::ToolCompleted {
+                name,
+                success,
+                error,
+                parameters,
+                ..
+            } => {
+                serde_json::json!({
+                    "name": name,
+                    "success": success,
+                    "error": error,
+                    "parameters": parameters
+                })
+            }
+            steward_common::AppEvent::ToolResult { name, preview, .. } => {
+                serde_json::json!({ "name": name, "preview": preview })
+            }
+            steward_common::AppEvent::StreamChunk { content, .. } => {
+                serde_json::json!({ "content": content })
+            }
+            steward_common::AppEvent::Status { message, .. } => {
+                serde_json::json!({ "message": message })
+            }
+            steward_common::AppEvent::JobStarted { job_id, title, browse_url } => {
+                serde_json::json!({ "job_id": job_id, "title": title, "browse_url": browse_url })
+            }
+            steward_common::AppEvent::ApprovalNeeded {
+                request_id,
+                tool_name,
+                description,
+                parameters,
+                allow_always,
+                ..
+            } => {
+                serde_json::json!({
+                    "request_id": request_id,
+                    "tool_name": tool_name,
+                    "description": description,
+                    "parameters": parameters,
+                    "allow_always": allow_always
+                })
+            }
+            steward_common::AppEvent::AuthRequired {
+                extension_name,
+                instructions,
+                auth_url,
+                setup_url,
+            } => {
+                serde_json::json!({
+                    "extension_name": extension_name,
+                    "instructions": instructions,
+                    "auth_url": auth_url,
+                    "setup_url": setup_url
+                })
+            }
+            steward_common::AppEvent::AuthCompleted {
+                extension_name,
+                success,
+                message,
+            } => {
+                serde_json::json!({
+                    "extension_name": extension_name,
+                    "success": success,
+                    "message": message
+                })
+            }
+            steward_common::AppEvent::Error { message, .. } => {
+                serde_json::json!({ "message": message })
+            }
+            steward_common::AppEvent::Heartbeat => {
+                serde_json::json!({})
+            }
+            steward_common::AppEvent::JobMessage { job_id, role, content } => {
+                serde_json::json!({ "job_id": job_id, "role": role, "content": content })
+            }
+            steward_common::AppEvent::JobToolUse { job_id, tool_name, input } => {
+                serde_json::json!({ "job_id": job_id, "tool_name": tool_name, "input": input })
+            }
+            steward_common::AppEvent::JobToolResult { job_id, tool_name, output } => {
+                serde_json::json!({ "job_id": job_id, "tool_name": tool_name, "output": output })
+            }
+            steward_common::AppEvent::JobStatus { job_id, message } => {
+                serde_json::json!({ "job_id": job_id, "message": message })
+            }
+            steward_common::AppEvent::JobResult { job_id, status, session_id, fallback_deliverable } => {
+                serde_json::json!({
+                    "job_id": job_id,
+                    "status": status,
+                    "session_id": session_id,
+                    "fallback_deliverable": fallback_deliverable
+                })
+            }
+            steward_common::AppEvent::ImageGenerated { data_url, path, .. } => {
+                serde_json::json!({ "data_url": data_url, "path": path })
+            }
+            steward_common::AppEvent::Suggestions { suggestions, .. } => {
+                serde_json::json!({ "suggestions": suggestions })
+            }
+            steward_common::AppEvent::TurnCost { input_tokens, output_tokens, cost_usd, .. } => {
+                serde_json::json!({
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cost_usd": cost_usd
+                })
+            }
+            steward_common::AppEvent::ExtensionStatus { extension_name, status, message } => {
+                serde_json::json!({
+                    "extension_name": extension_name,
+                    "status": status,
+                    "message": message
+                })
+            }
+            steward_common::AppEvent::ReasoningUpdate { narrative, decisions, .. } => {
+                serde_json::json!({ "narrative": narrative, "decisions": decisions })
+            }
+            steward_common::AppEvent::JobReasoning { job_id, narrative, decisions } => {
+                serde_json::json!({ "job_id": job_id, "narrative": narrative, "decisions": decisions })
+            }
+        };
+
+        // Format to match frontend StreamEnvelope: { event, thread_id, payload, sequence, timestamp }
+        let stream_envelope = serde_json::json!({
+            "event": format!("session.{}", event.event_type()),
+            "thread_id": thread_id.unwrap_or_default(),
+            "payload": payload_data,
+            "sequence": 0,
+            "timestamp": Utc::now().to_rfc3339()
         });
-        if let Err(e) = self.app.emit(&tauri_event_name, payload) {
+
+        if let Err(e) = self.app.emit(&tauri_event_name, stream_envelope) {
             tracing::warn!("Failed to emit Tauri event {}: {}", tauri_event_name, e);
         }
     }

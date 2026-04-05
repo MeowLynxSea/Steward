@@ -958,7 +958,8 @@ mod tests {
                 .expect("session start hook should fire")
                 .expect("session start payload should be present");
 
-        assert_eq!(user_id, "user-123");
+        // Single-user mode: always uses "default" regardless of input
+        assert_eq!(user_id, "default");
         assert!(!session_id.is_empty());
     }
 }
