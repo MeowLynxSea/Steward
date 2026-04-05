@@ -49,8 +49,10 @@ export const apiClient = {
   sendSessionMessage(id: string, content: string, mode?: "ask" | "yolo") {
     return invoke<SendSessionMessageResponse>("send_session_message", {
       id,
-      content,
-      mode: mode ?? null
+      payload: {
+        content,
+        mode: mode ?? null
+      }
     });
   },
 

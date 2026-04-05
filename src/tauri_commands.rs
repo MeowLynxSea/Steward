@@ -117,6 +117,7 @@ pub async fn create_session(
     let user_id = &state.owner_id;
 
     let session = session_manager.create_new_session(user_id).await;
+    let id = session.lock().await.id;
 
     if let Some(req) = payload {
         if let Some(title) = req.title {
