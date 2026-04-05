@@ -86,7 +86,7 @@ pub async fn list_sessions(
     state: State<'_, AppState>,
 ) -> Result<steward_core::ipc::SessionListResponse, String> {
     let session_manager = &state.agent_session_manager;
-    let sessions = session_manager.list_sessions().await;
+    let sessions = session_manager.list_sessions(&state.owner_id).await;
 
     let mut summaries = Vec::new();
     for (_, session) in sessions {
@@ -143,7 +143,7 @@ pub async fn get_session(
 ) -> Result<steward_core::ipc::SessionDetailResponse, String> {
     let session_manager = &state.agent_session_manager;
 
-    let session = session_manager.get_session_by_id(id).await
+    let session = session_manager.get_session_by_id(&state.owner_id, id).await
         .ok_or_else(|| "Session not found".to_string())?;
 
     // Get or create a thread if none exists
@@ -223,7 +223,7 @@ pub async fn delete_session(
     id: Uuid,
 ) -> Result<serde_json::Value, String> {
     let session_manager = &state.agent_session_manager;
-    let deleted = session_manager.delete_session_by_id(id).await;
+    let deleted = session_manager.delete_session_by_id(&state.owner_id, id).await;
     Ok(serde_json::json!({ "deleted": deleted }))
 }
 
@@ -237,7 +237,7 @@ pub async fn send_session_message(
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager
-        .get_session_by_id(id)
+        .get_session_by_id(&state.owner_id, id)
         .await
         .ok_or_else(|| "Session not found".to_string())?;
     tracing::info!(session_id = %id, "Got session, acquiring lock...");
@@ -279,7 +279,7 @@ pub async fn send_session_message(
         steward_core::agent::session::ThreadState::Processing => {
             drop(sess);
             let session = session_manager
-                .get_session_by_id(id)
+                .get_session_by_id(&state.owner_id, id)
                 .await
                 .ok_or_else(|| "Session not found".to_string())?;
             let mut sess = session.lock().await;
