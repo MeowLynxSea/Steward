@@ -128,9 +128,7 @@ fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
     if parameters.is_null() {
         None
     } else {
-        Some(
-            serde_json::to_string_pretty(parameters).unwrap_or_else(|_| parameters.to_string()),
-        )
+        Some(serde_json::to_string_pretty(parameters).unwrap_or_else(|_| parameters.to_string()))
     }
 }
 
@@ -163,7 +161,9 @@ fn build_thread_messages(
             });
             for tool_call in &turn.tool_calls {
                 let result_preview = tool_call.result.as_ref().map(|result| match result {
-                    serde_json::Value::String(value) => steward_common::truncate_preview(value, 500),
+                    serde_json::Value::String(value) => {
+                        steward_common::truncate_preview(value, 500)
+                    }
                     other => steward_common::truncate_preview(&other.to_string(), 500),
                 });
                 msgs.push(steward_core::ipc::ThreadMessageResponse {

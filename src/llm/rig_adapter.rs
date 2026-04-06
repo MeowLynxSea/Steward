@@ -5,9 +5,10 @@
 
 use crate::llm::config::CacheRetention;
 use async_trait::async_trait;
+use futures::StreamExt;
 use rig::OneOrMany;
 use rig::completion::{
-    AssistantContent, CompletionModel, CompletionRequest as RigRequest,
+    AssistantContent, CompletionModel, CompletionRequest as RigRequest, GetTokenUsage,
     ToolDefinition as RigToolDefinition, Usage as RigUsage,
 };
 use rig::message::{
@@ -15,6 +16,7 @@ use rig::message::{
     ToolChoice as RigToolChoice, ToolFunction, ToolResult as RigToolResult, ToolResultContent,
     UserContent,
 };
+use rig::streaming::StreamedAssistantContent;
 use rust_decimal::Decimal;
 use rust_decimal_macros::dec;
 use serde::Serialize;
@@ -635,6 +637,66 @@ fn inject_model_override(rig_req: &mut RigRequest, model_override: Option<&str>)
     }
 }
 
+async fn consume_streaming_tool_response<R>(
+    provider: &str,
+    mut stream: rig::streaming::StreamingCompletionResponse<R>,
+    stream_tx: tokio::sync::mpsc::UnboundedSender<crate::llm::StreamDelta>,
+) -> Result<ToolCompletionResponse, LlmError>
+where
+    R: Clone + Unpin + GetTokenUsage + Serialize,
+{
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| LlmError::RequestFailed {
+            provider: provider.to_string(),
+            reason: error.to_string(),
+        })?;
+
+        match chunk {
+            StreamedAssistantContent::Text(text) => {
+                if !text.text.is_empty() {
+                    let _ = stream_tx.send(crate::llm::StreamDelta::TextDelta(text.text));
+                }
+            }
+            StreamedAssistantContent::Reasoning(reasoning) => {
+                let content = reasoning.reasoning.join("");
+                if !content.is_empty() {
+                    let _ = stream_tx.send(crate::llm::StreamDelta::ThinkingDelta(content));
+                }
+            }
+            StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                if !reasoning.is_empty() {
+                    let _ = stream_tx.send(crate::llm::StreamDelta::ThinkingDelta(reasoning));
+                }
+            }
+            StreamedAssistantContent::ToolCall { .. }
+            | StreamedAssistantContent::ToolCallDelta { .. }
+            | StreamedAssistantContent::Final(_) => {}
+        }
+    }
+
+    let usage = stream
+        .response
+        .as_ref()
+        .and_then(|response| response.token_usage())
+        .unwrap_or_else(RigUsage::new);
+    let cache_creation_input_tokens = stream
+        .response
+        .as_ref()
+        .map(extract_cache_creation)
+        .unwrap_or(0);
+    let (text, tool_calls, finish) = extract_response(&stream.choice, &usage);
+
+    Ok(ToolCompletionResponse {
+        content: text,
+        tool_calls,
+        input_tokens: saturate_u32(usage.input_tokens),
+        output_tokens: saturate_u32(usage.output_tokens),
+        finish_reason: finish,
+        cache_read_input_tokens: saturate_u32(usage.cached_input_tokens),
+        cache_creation_input_tokens,
+    })
+}
+
 #[async_trait]
 impl<M> LlmProvider for RigAdapter<M>
 where
@@ -727,6 +789,7 @@ where
         mut request: ToolCompletionRequest,
     ) -> Result<ToolCompletionResponse, LlmError> {
         let model_override = request.model.take();
+        let stream_tx = request.stream_tx.take();
 
         self.strip_unsupported_tool_params(&mut request);
 
@@ -750,6 +813,48 @@ where
         )?;
 
         inject_model_override(&mut rig_req, model_override.as_deref());
+
+        if let Some(stream_tx) = stream_tx {
+            match self.model.stream(rig_req.clone()).await {
+                Ok(stream) => {
+                    let mut response =
+                        consume_streaming_tool_response(&self.model_name, stream, stream_tx)
+                            .await?;
+
+                    // Normalize tool call names: some proxies prepend "proxy_" prefixes.
+                    for tc in &mut response.tool_calls {
+                        let normalized = normalize_tool_name(&tc.name, &known_tool_names);
+                        if normalized != tc.name {
+                            tracing::debug!(
+                                original = %tc.name,
+                                normalized = %normalized,
+                                "Normalized tool call name from provider",
+                            );
+                            tc.name = normalized;
+                        }
+                    }
+
+                    if response.cache_read_input_tokens > 0 {
+                        tracing::debug!(
+                            model = %self.model_name,
+                            input = response.input_tokens,
+                            output = response.output_tokens,
+                            cache_read = response.cache_read_input_tokens,
+                            "prompt cache hit",
+                        );
+                    }
+
+                    return Ok(response);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        model = %self.model_name,
+                        error = %error,
+                        "Streaming completion failed, falling back to blocking completion",
+                    );
+                }
+            }
+        }
 
         let response =
             self.model
@@ -840,6 +945,33 @@ fn normalize_tool_name(name: &str, known_tools: &HashSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct FakeStreamingUsage {
+        input_tokens: u64,
+        output_tokens: u64,
+        total_tokens: u64,
+        cached_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+    }
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct FakeStreamingRawResponse {
+        usage: FakeStreamingUsage,
+    }
+
+    impl GetTokenUsage for FakeStreamingRawResponse {
+        fn token_usage(&self) -> Option<RigUsage> {
+            Some(RigUsage {
+                input_tokens: self.usage.input_tokens,
+                output_tokens: self.usage.output_tokens,
+                total_tokens: self.usage.total_tokens,
+                cached_input_tokens: self.usage.cached_input_tokens,
+            })
+        }
+    }
 
     #[test]
     fn test_round_f32_to_f64_no_precision_artifacts() {
@@ -1591,6 +1723,74 @@ mod tests {
             id_a, id_b,
             "different raw IDs should produce different hashed IDs"
         );
+    }
+
+    #[tokio::test]
+    async fn test_consume_streaming_tool_response_forwards_chunks_and_collects_final_output() {
+        let raw = FakeStreamingRawResponse {
+            usage: FakeStreamingUsage {
+                input_tokens: 21,
+                output_tokens: 8,
+                total_tokens: 29,
+                cached_input_tokens: 5,
+                cache_creation_input_tokens: 3,
+            },
+        };
+        let stream = futures::stream::iter(vec![
+            Ok(RawStreamingChoice::Message("Hel".to_string())),
+            Ok(RawStreamingChoice::Message("lo".to_string())),
+            Ok(RawStreamingChoice::ReasoningDelta {
+                id: None,
+                reasoning: "thinking".to_string(),
+            }),
+            Ok(RawStreamingChoice::ToolCall(
+                RawStreamingToolCall::new(
+                    "call12345".to_string(),
+                    "search".to_string(),
+                    serde_json::json!({ "q": "rust" }),
+                )
+                .with_call_id("call12345".to_string()),
+            )),
+            Ok(RawStreamingChoice::FinalResponse(raw.clone())),
+        ]);
+        let streaming = StreamingCompletionResponse::stream(Box::pin(stream));
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let response = consume_streaming_tool_response("test-provider", streaming, tx)
+            .await
+            .expect("streaming response should succeed");
+
+        let mut deltas = Vec::new();
+        while let Ok(delta) = rx.try_recv() {
+            deltas.push(delta);
+        }
+
+        assert_eq!(deltas.len(), 3);
+        match &deltas[0] {
+            crate::llm::StreamDelta::TextDelta(text) => assert_eq!(text, "Hel"),
+            other => panic!("expected first delta to be text, got {other:?}"),
+        }
+        match &deltas[1] {
+            crate::llm::StreamDelta::TextDelta(text) => assert_eq!(text, "lo"),
+            other => panic!("expected second delta to be text, got {other:?}"),
+        }
+        match &deltas[2] {
+            crate::llm::StreamDelta::ThinkingDelta(text) => assert_eq!(text, "thinking"),
+            other => panic!("expected third delta to be thinking, got {other:?}"),
+        }
+        assert_eq!(response.content, Some("Hello".to_string()));
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_calls[0].id, "call12345");
+        assert_eq!(response.tool_calls[0].name, "search");
+        assert_eq!(
+            response.tool_calls[0].arguments,
+            serde_json::json!({ "q": "rust" })
+        );
+        assert_eq!(response.input_tokens, 21);
+        assert_eq!(response.output_tokens, 8);
+        assert_eq!(response.cache_read_input_tokens, 5);
+        assert_eq!(response.cache_creation_input_tokens, 3);
+        assert_eq!(response.finish_reason, FinishReason::ToolUse);
     }
 
     fn make_rig_request(additional_params: Option<serde_json::Value>) -> RigRequest {

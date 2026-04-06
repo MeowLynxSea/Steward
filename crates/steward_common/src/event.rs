@@ -47,12 +47,14 @@ pub enum AppEvent {
     #[serde(rename = "tool_started")]
     ToolStarted {
         name: String,
+        tool_call_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
     #[serde(rename = "tool_completed")]
     ToolCompleted {
         name: String,
+        tool_call_id: String,
         success: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
@@ -64,6 +66,7 @@ pub enum AppEvent {
     #[serde(rename = "tool_result")]
     ToolResult {
         name: String,
+        tool_call_id: String,
         preview: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,

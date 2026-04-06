@@ -60,9 +60,11 @@ export function createEventStream(
   // Subscribe to all known event types.
   for (const type of STREAM_EVENT_TYPES) {
     listen(type, (event) => handlePayload(event.payload)).then((unlisten) => {
-      if (!closed) {
-        unlisteners.push(unlisten);
+      if (closed) {
+        unlisten();
+        return;
       }
+      unlisteners.push(unlisten);
     });
   }
 

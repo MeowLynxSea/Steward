@@ -1808,7 +1808,8 @@ impl Agent {
         // Hydrate thread from DB if it's a historical thread not in memory
         if let Some(external_thread_id) = message.conversation_scope() {
             let external_thread_uuid = Uuid::parse_str(external_thread_id).ok();
-            let thread_loaded_in_preferred_session = if let Some(session_id) = preferred_session_id {
+            let thread_loaded_in_preferred_session = if let Some(session_id) = preferred_session_id
+            {
                 if let Some(session) = self
                     .session_manager
                     .get_session_by_id(&message.user_id, session_id)
@@ -2360,24 +2361,28 @@ fn status_update_to_app_event(
             message: message.clone(),
             thread_id,
         }),
-        StatusUpdate::ToolStarted { name } => Some(steward_common::AppEvent::ToolStarted {
+        StatusUpdate::ToolStarted { name, tool_call_id } => Some(steward_common::AppEvent::ToolStarted {
             name: name.clone(),
+            tool_call_id: tool_call_id.clone(),
             thread_id,
         }),
         StatusUpdate::ToolCompleted {
             name,
+            tool_call_id,
             success,
             error,
             parameters,
         } => Some(steward_common::AppEvent::ToolCompleted {
             name: name.clone(),
+            tool_call_id: tool_call_id.clone(),
             success: *success,
             error: error.clone(),
             parameters: parameters.clone(),
             thread_id,
         }),
-        StatusUpdate::ToolResult { name, preview } => Some(steward_common::AppEvent::ToolResult {
+        StatusUpdate::ToolResult { name, tool_call_id, preview } => Some(steward_common::AppEvent::ToolResult {
             name: name.clone(),
+            tool_call_id: tool_call_id.clone(),
             preview: preview.clone(),
             thread_id,
         }),

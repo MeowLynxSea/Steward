@@ -57,7 +57,7 @@ export interface SessionSummary {
 
 export interface ThreadMessage {
   id: string;
-  kind: "message" | "tool_call";
+  kind: "message" | "tool_call" | "thinking";
   role: string | null;
   content: string | null;
   created_at: string;
@@ -286,6 +286,8 @@ export interface TurnCostInfo {
 export interface StreamingState {
   /** Accumulated text from stream_chunk events, displayed with typewriter effect */
   streamingContent: string;
+  /** Live assistant message being progressively revealed */
+  assistantMessageId: string | null;
   /** Whether the agent is currently "thinking" */
   thinking: boolean;
   /** The thinking message text */

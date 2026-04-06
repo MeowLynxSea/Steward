@@ -15,12 +15,12 @@ use crate::agent::dispatcher::{
     AgenticLoopResult, check_auth_required, execute_chat_tool_standalone, parse_auth_result,
     preflight_rejection_tool_message,
 };
-use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState};
+use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState, Turn};
 use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
-use crate::llm::{ChatMessage, ToolCall};
+use crate::llm::{ChatMessage, CompletionRequest, ToolCall};
 use crate::tools::redact_params;
 use steward_common::truncate_preview;
 
@@ -30,6 +30,42 @@ fn requires_preexisting_uuid_thread(channel: &str) -> bool {
     // Desktop-driven threads send runtime-issued conversation UUIDs.
     // Unknown UUIDs should be rejected instead of silently creating a new thread.
     matches!(channel, "desktop" | "test")
+}
+
+fn parse_follow_up_suggestions(text: &str) -> Vec<String> {
+    fn parse_array(raw: &str) -> Option<Vec<String>> {
+        serde_json::from_str::<Vec<String>>(raw).ok()
+    }
+
+    let trimmed = text.trim();
+    let normalized = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim()
+        .strip_suffix("```")
+        .unwrap_or_else(|| {
+            trimmed
+                .strip_prefix("```json")
+                .or_else(|| trimmed.strip_prefix("```"))
+                .unwrap_or(trimmed)
+                .trim()
+        })
+        .trim();
+
+    let parsed = parse_array(normalized).or_else(|| {
+        let start = normalized.find('[')?;
+        let end = normalized.rfind(']')?;
+        parse_array(&normalized[start..=end])
+    });
+
+    parsed
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= 80)
+        .take(3)
+        .collect()
 }
 
 impl Agent {
@@ -459,14 +495,6 @@ impl Agent {
         );
 
         // Send thinking status
-        let _ = self
-            .channels
-            .send_status(
-                &message.channel,
-                StatusUpdate::Thinking("Processing...".into()),
-                &message.metadata,
-            )
-            .await;
 
         // Run the agentic tool execution loop
         let result = self
@@ -495,9 +523,7 @@ impl Agent {
         // Complete, fail, or request approval
         match result {
             Ok(AgenticLoopResult::Response(response)) => {
-                // Extract <suggestions> from response text before user sees it
-                let (response, suggestions) =
-                    crate::agent::dispatcher::extract_suggestions(&response);
+                let response = crate::agent::dispatcher::strip_suggestions(&response);
 
                 // Hook: TransformResponse — allow hooks to modify or reject the final response
                 let response = {
@@ -522,6 +548,7 @@ impl Agent {
                 let response = crate::agent::dispatcher::sanitize_user_visible_response(&response);
 
                 thread.complete_turn(&response);
+                let recent_turns: Vec<Turn> = thread.turns.iter().rev().take(4).cloned().collect();
                 let (turn_number, tool_calls, narrative) = thread
                     .turns
                     .last()
@@ -553,6 +580,8 @@ impl Agent {
                     &response,
                 )
                 .await;
+
+                let suggestions = self.generate_follow_up_suggestions(&recent_turns).await;
 
                 // Send suggestions after response (best-effort, rendered by the desktop UI)
                 if !suggestions.is_empty() {
@@ -767,6 +796,54 @@ impl Agent {
             .await
         {
             tracing::warn!("Failed to persist assistant message: {}", e);
+        }
+    }
+
+    async fn generate_follow_up_suggestions(&self, recent_turns: &[Turn]) -> Vec<String> {
+        if recent_turns.is_empty() {
+            return Vec::new();
+        }
+
+        let transcript = recent_turns
+            .iter()
+            .rev()
+            .map(|turn| {
+                let mut block = format!("User: {}", truncate_preview(&turn.user_input, 500));
+                if let Some(response) = turn.response.as_ref() {
+                    block.push_str(&format!(
+                        "\nAssistant: {}",
+                        truncate_preview(response, 700)
+                    ));
+                }
+                block
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+
+        let request = CompletionRequest::new(vec![
+            ChatMessage::system(
+                "Generate 0-3 short follow-up suggestions for the user.\n\
+                 Return JSON only: an array of strings.\n\
+                 Each suggestion must be a direct command the user could send next.\n\
+                 Do not repeat the assistant's answer.\n\
+                 Do not ask meta questions.\n\
+                 Keep each suggestion under 80 characters.\n\
+                 If nothing useful fits, return [].",
+            ),
+            ChatMessage::user(format!(
+                "Recent conversation:\n\n{}\n\nReturn only the JSON array.",
+                transcript
+            )),
+        ])
+        .with_max_tokens(120)
+        .with_temperature(0.2);
+
+        match self.cheap_llm().complete(request).await {
+            Ok(response) => parse_follow_up_suggestions(&response.content),
+            Err(error) => {
+                tracing::debug!(error = %error, "Failed to generate follow-up suggestions");
+                Vec::new()
+            }
         }
     }
 
@@ -1127,6 +1204,7 @@ impl Agent {
                     &message.channel,
                     StatusUpdate::ToolStarted {
                         name: pending.tool_name.clone(),
+                        tool_call_id: pending.tool_call_id.clone(),
                     },
                     &message.metadata,
                 )
@@ -1159,6 +1237,7 @@ impl Agent {
                     &message.channel,
                     StatusUpdate::tool_completed(
                         pending.tool_name.clone(),
+                        pending.tool_call_id.clone(),
                         &tool_result,
                         &pending.display_parameters,
                         tool_ref.as_deref(),
@@ -1176,6 +1255,7 @@ impl Agent {
                         &message.channel,
                         StatusUpdate::ToolResult {
                             name: pending.tool_name.clone(),
+                            tool_call_id: pending.tool_call_id.clone(),
                             preview: output.clone(),
                         },
                         &message.metadata,
@@ -1241,17 +1321,6 @@ impl Agent {
             // every tool_use ID gets a matching tool_result before the next
             // LLM call.
             if !deferred_tool_calls.is_empty() {
-                let _ = self
-                    .channels
-                    .send_status(
-                        &message.channel,
-                        StatusUpdate::Thinking(format!(
-                            "Executing {} deferred tool(s)...",
-                            deferred_tool_calls.len()
-                        )),
-                        &message.metadata,
-                    )
-                    .await;
             }
 
             // === Phase 1: Preflight (sequential) ===
@@ -1319,6 +1388,7 @@ impl Agent {
                             &message.channel,
                             StatusUpdate::ToolStarted {
                                 name: tc.name.clone(),
+                                tool_call_id: tc.id.clone(),
                             },
                             &message.metadata,
                         )
@@ -1335,6 +1405,7 @@ impl Agent {
                             &message.channel,
                             StatusUpdate::tool_completed(
                                 tc.name.clone(),
+                                tc.id.clone(),
                                 &result,
                                 &tc.arguments,
                                 deferred_tool.as_deref(),
@@ -1366,6 +1437,7 @@ impl Agent {
                                 &channel,
                                 StatusUpdate::ToolStarted {
                                     name: tc.name.clone(),
+                                    tool_call_id: tc.id.clone(),
                                 },
                                 &metadata,
                             )
@@ -1386,6 +1458,7 @@ impl Agent {
                                 &channel,
                                 StatusUpdate::tool_completed(
                                     tc.name.clone(),
+                                    tc.id.clone(),
                                     &result,
                                     &tc.arguments,
                                     par_tool.as_deref(),
@@ -1449,6 +1522,7 @@ impl Agent {
                             &message.channel,
                             StatusUpdate::ToolResult {
                                 name: tc.name.clone(),
+                                tool_call_id: tc.id.clone(),
                                 preview: output.clone(),
                             },
                             &message.metadata,
@@ -1599,9 +1673,9 @@ impl Agent {
 
             match result {
                 Ok(AgenticLoopResult::Response(response)) => {
-                    let (response, suggestions) =
-                        crate::agent::dispatcher::extract_suggestions(&response);
+                    let response = crate::agent::dispatcher::strip_suggestions(&response);
                     thread.complete_turn(&response);
+                    let recent_turns: Vec<Turn> = thread.turns.iter().rev().take(4).cloned().collect();
                     let (turn_number, tool_calls, narrative) = thread
                         .turns
                         .last()
@@ -1624,6 +1698,7 @@ impl Agent {
                         &response,
                     )
                     .await;
+                    let suggestions = self.generate_follow_up_suggestions(&recent_turns).await;
                     let _ = self
                         .channels
                         .send_status(

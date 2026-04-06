@@ -190,7 +190,7 @@
             {#each sessionsStore.active.thread_messages as message}
               <article class={`message-bubble ${message.role === "user" ? "user" : "assistant"}`}>
                 <header>
-                  <strong>{message.kind === "tool_call" ? "tool" : message.role}</strong>
+                  <strong>{message.kind === "tool_call" ? "tool" : message.kind === "thinking" ? "thinking" : message.role}</strong>
                   <span>{formatDateTime(message.created_at)}</span>
                 </header>
                 {#if message.kind === "tool_call" && message.tool_call}

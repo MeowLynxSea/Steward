@@ -280,7 +280,7 @@ pub enum StatusUpdate {
     /// Agent is thinking/processing.
     Thinking(String),
     /// Tool execution started.
-    ToolStarted { name: String },
+    ToolStarted { name: String, tool_call_id: String },
     /// Tool execution completed.
     ///
     /// Use [`StatusUpdate::tool_completed`] to construct this variant — it
@@ -288,6 +288,7 @@ pub enum StatusUpdate {
     /// in one place.
     ToolCompleted {
         name: String,
+        tool_call_id: String,
         success: bool,
         /// Error message when success is false.
         error: Option<String>,
@@ -297,7 +298,11 @@ pub enum StatusUpdate {
         parameters: Option<String>,
     },
     /// Brief preview of tool execution output.
-    ToolResult { name: String, preview: String },
+    ToolResult {
+        name: String,
+        tool_call_id: String,
+        preview: String,
+    },
     /// Streaming text chunk.
     StreamChunk(String),
     /// General status message.
@@ -369,6 +374,7 @@ impl StatusUpdate {
     /// borrow lifetime of the sensitive slice.
     pub fn tool_completed(
         name: String,
+        tool_call_id: String,
         result: &Result<String, crate::error::Error>,
         params: &serde_json::Value,
         tool: Option<&dyn crate::tools::Tool>,
@@ -377,6 +383,7 @@ impl StatusUpdate {
         let sensitive = tool.map(|t| t.sensitive_params()).unwrap_or(&[]);
         Self::ToolCompleted {
             name,
+            tool_call_id,
             success,
             error: result.as_ref().err().map(|e| e.to_string()),
             parameters: if !success {
@@ -534,6 +541,7 @@ mod tests {
 
         let status = StatusUpdate::tool_completed(
             "secret_save".into(),
+            "call_1".into(),
             &err,
             &params,
             Some(&tool as &dyn crate::tools::Tool),
@@ -577,7 +585,8 @@ mod tests {
         let params = serde_json::json!({"name": "key", "value": "secret"});
         let ok: Result<String, crate::error::Error> = Ok("done".into());
 
-        let status = StatusUpdate::tool_completed("secret_save".into(), &ok, &params, None);
+        let status =
+            StatusUpdate::tool_completed("secret_save".into(), "call_1".into(), &ok, &params, None);
 
         if let StatusUpdate::ToolCompleted {
             success,
@@ -604,7 +613,8 @@ mod tests {
             }
             .into());
 
-        let status = StatusUpdate::tool_completed("shell".into(), &err, &params, None);
+        let status =
+            StatusUpdate::tool_completed("shell".into(), "call_1".into(), &err, &params, None);
 
         if let StatusUpdate::ToolCompleted { parameters, .. } = &status {
             let param_str = parameters.as_ref().expect("should have parameters");

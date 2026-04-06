@@ -15,6 +15,7 @@ import type {
 function emptyStreamingState(): StreamingState {
   return {
     streamingContent: "",
+    assistantMessageId: null,
     thinking: false,
     thinkingMessage: "",
     toolCalls: [],
@@ -43,7 +44,9 @@ class SessionsState {
   #streamHandle: StreamHandle | null = null;
   #pollTimer: ReturnType<typeof setTimeout> | null = null;
   #streamingAssistantId: string | null = null;
+  #streamingThinkingId: string | null = null;
   #liveTurnNumber: number | null = null;
+  #seenEventKeys = new Set<string>();
 
   async fetchList() {
     this.listLoading = true;
@@ -67,7 +70,9 @@ class SessionsState {
     this.error = null;
     this.streaming = emptyStreamingState();
     this.#streamingAssistantId = null;
+    this.#streamingThinkingId = null;
     this.#liveTurnNumber = null;
+    this.#seenEventKeys.clear();
     try {
       this.active = await apiClient.getSession(id);
       this.#liveTurnNumber = this.#inferLiveTurnNumber();
@@ -129,6 +134,7 @@ class SessionsState {
     };
     this.#liveTurnNumber = optimistic.turn_number;
     this.#streamingAssistantId = null;
+    this.#streamingThinkingId = null;
     this.active = {
       ...this.active,
       thread_messages: [...this.active.thread_messages, optimistic]
@@ -137,9 +143,7 @@ class SessionsState {
     // Reset streaming state for new message — immediately show thinking
     this.streaming = {
       ...emptyStreamingState(),
-      isStreaming: true,
-      thinking: true,
-      thinkingMessage: "正在处理..."
+      isStreaming: true
     };
 
     try {
@@ -176,7 +180,9 @@ class SessionsState {
   disconnect() {
     this.#stopPollFallback();
     this.#streamingAssistantId = null;
+    this.#streamingThinkingId = null;
     this.#liveTurnNumber = null;
+    this.#seenEventKeys.clear();
     if (this.#streamHandle) {
       this.#streamHandle.close();
       this.#streamHandle = null;
@@ -246,16 +252,30 @@ class SessionsState {
   #handleEvent(event: StreamEnvelope) {
     if (!this.active || !this.#eventMatchesActiveThread(event)) return;
 
+    const eventKey = `${event.thread_id}:${event.sequence}:${event.event}`;
+    if (this.#seenEventKeys.has(eventKey)) {
+      return;
+    }
+    this.#seenEventKeys.add(eventKey);
+    if (this.#seenEventKeys.size > 2048) {
+      const oldest = this.#seenEventKeys.values().next().value;
+      if (oldest) {
+        this.#seenEventKeys.delete(oldest);
+      }
+    }
+
     switch (event.event) {
       case "session.stream_chunk": {
         const { content } = event.payload as { content: string };
+        this.#streamingThinkingId = null;
         this.#appendAssistantChunk(content);
         this.streaming = {
           ...this.streaming,
           streamingContent: this.streaming.streamingContent + content,
+          assistantMessageId: this.streaming.assistantMessageId ?? this.#streamingAssistantId,
           isStreaming: true,
           thinking: false,
-          thinkingMessage: ""
+          thinkingMessage: this.streaming.thinkingMessage
         };
         break;
       }
@@ -263,13 +283,14 @@ class SessionsState {
       case "session.response": {
         const { content } = event.payload as { content: string };
         this.#stopPollFallback();
+        this.#streamingThinkingId = null;
         this.#finalizeAssistantMessage(content);
         this.streaming = {
           ...this.streaming,
           streamingContent: "",
           isStreaming: false,
           thinking: false,
-          thinkingMessage: ""
+          thinkingMessage: this.streaming.thinkingMessage
         };
         this.#liveTurnNumber = null;
         break;
@@ -277,6 +298,7 @@ class SessionsState {
 
       case "session.thinking": {
         const { message } = event.payload as { message: string };
+        this.#appendThinkingMessage(message);
         this.streaming = {
           ...this.streaming,
           thinking: true,
@@ -287,10 +309,11 @@ class SessionsState {
       }
 
       case "session.tool_started": {
-        const { name } = event.payload as { name: string };
+        const { name, tool_call_id } = event.payload as { name: string; tool_call_id?: string };
         this.#streamingAssistantId = null;
+        this.#streamingThinkingId = null;
         const newTool: ActiveToolCall = {
-          id: crypto.randomUUID(),
+          id: tool_call_id ?? crypto.randomUUID(),
           name,
           status: "running",
           startedAt: new Date().toISOString(),
@@ -306,54 +329,43 @@ class SessionsState {
           toolCalls: [...this.streaming.toolCalls, newTool],
           isStreaming: true,
           thinking: false,
-          thinkingMessage: ""
+          thinkingMessage: this.streaming.thinkingMessage
         };
         break;
       }
 
       case "session.tool_completed": {
-        const { name, success, error, parameters } = event.payload as {
+        const { name, tool_call_id, success, error, parameters } = event.payload as {
           name: string;
+          tool_call_id?: string;
           success: boolean;
           error?: string;
           parameters?: string;
         };
         const updatedCalls = [...this.streaming.toolCalls];
-        // Find the last running instance of this tool
-        for (let i = updatedCalls.length - 1; i >= 0; i--) {
-          if (updatedCalls[i].name === name && updatedCalls[i].status === "running") {
-            updatedCalls[i] = {
-              ...updatedCalls[i],
-              status: success ? "completed" : "failed",
-              completedAt: new Date().toISOString(),
-              error: error ?? null,
-              parameters: parameters ?? null
-            };
-            break;
-          }
-        }
-        this.#updateLatestToolCall(name, (tool) => ({
+        const nextTool = (tool: ActiveToolCall) => ({
           ...tool,
           status: success ? "completed" : "failed",
           completedAt: new Date().toISOString(),
           error: error ?? null,
           parameters: parameters ?? null
-        }));
+        });
+        this.#updateStreamingToolCall(updatedCalls, tool_call_id, name, nextTool);
+        this.#updateLatestToolCall(tool_call_id, name, nextTool);
         this.streaming = { ...this.streaming, toolCalls: updatedCalls };
         break;
       }
 
       case "session.tool_result": {
-        const { name, preview } = event.payload as { name: string; preview: string };
+        const { name, tool_call_id, preview } = event.payload as {
+          name: string;
+          tool_call_id?: string;
+          preview: string;
+        };
         const updatedCalls = [...this.streaming.toolCalls];
-        // Attach preview to the most recent instance of this tool
-        for (let i = updatedCalls.length - 1; i >= 0; i--) {
-          if (updatedCalls[i].name === name) {
-            updatedCalls[i] = { ...updatedCalls[i], resultPreview: preview };
-            break;
-          }
-        }
-        this.#updateLatestToolCall(name, (tool) => ({ ...tool, resultPreview: preview }));
+        const nextTool = (tool: ActiveToolCall) => ({ ...tool, resultPreview: preview });
+        this.#updateStreamingToolCall(updatedCalls, tool_call_id, name, nextTool);
+        this.#updateLatestToolCall(tool_call_id, name, nextTool);
         this.streaming = { ...this.streaming, toolCalls: updatedCalls };
         break;
       }
@@ -422,10 +434,6 @@ class SessionsState {
       case "session.status": {
         const { message } = event.payload as { message: string };
         this.status = message;
-        if (message === "task.completed") {
-          this.#streamingAssistantId = null;
-          this.#liveTurnNumber = null;
-        }
         break;
       }
     }
@@ -480,6 +488,33 @@ class SessionsState {
     };
   }
 
+  #appendThinkingMessage(content: string) {
+    if (!this.active || !content.trim()) return;
+    const now = new Date().toISOString();
+    const normalized = content.trim();
+    const turnNumber = this.#ensureLiveTurnNumber();
+
+    if (!this.#streamingThinkingId) {
+      const id = crypto.randomUUID();
+      this.#streamingThinkingId = id;
+      this.#appendMessage({
+        id,
+        kind: "thinking",
+        role: null,
+        content: normalized,
+        created_at: now,
+        turn_number: turnNumber,
+        tool_call: null
+      });
+      return;
+    }
+
+    this.#updateMessage(this.#streamingThinkingId, (message) => ({
+      ...message,
+      content: normalized
+    }));
+  }
+
   #updateMessage(id: string, mutate: (message: ThreadMessage) => ThreadMessage) {
     if (!this.active) return;
     this.active = {
@@ -497,6 +532,10 @@ class SessionsState {
     if (!this.#streamingAssistantId) {
       const id = crypto.randomUUID();
       this.#streamingAssistantId = id;
+      this.streaming = {
+        ...this.streaming,
+        assistantMessageId: id
+      };
       this.#appendMessage({
         id,
         kind: "message",
@@ -518,21 +557,59 @@ class SessionsState {
   #finalizeAssistantMessage(content: string) {
     if (!this.active) return;
     const finalContent = this.streaming.streamingContent || content;
+    const turnNumber = this.#ensureLiveTurnNumber();
+    const assistantMessagesForTurn = this.active.thread_messages.filter(
+      (message) =>
+        message.kind === "message" &&
+        message.role === "assistant" &&
+        message.turn_number === turnNumber
+    );
+    const lastAssistantMessage = assistantMessagesForTurn.at(-1) ?? null;
+    const hadStreamedChunks = this.streaming.streamingContent.trim().length > 0;
+
     if (this.#streamingAssistantId) {
-      this.#updateMessage(this.#streamingAssistantId, (message) => ({
-        ...message,
-        content: finalContent || message.content
-      }));
+      this.streaming = {
+        ...this.streaming,
+        assistantMessageId: this.#streamingAssistantId
+      };
+
+      if (!hadStreamedChunks && finalContent) {
+        this.#updateMessage(this.#streamingAssistantId, (message) => ({
+          ...message,
+          content: finalContent || message.content
+        }));
+      }
     } else if (finalContent) {
-      this.#appendMessage({
-        id: crypto.randomUUID(),
-        kind: "message",
-        role: "assistant",
-        content: finalContent,
-        created_at: new Date().toISOString(),
-        turn_number: this.#ensureLiveTurnNumber(),
-        tool_call: null
-      });
+      if (hadStreamedChunks && lastAssistantMessage) {
+        this.streaming = {
+          ...this.streaming,
+          assistantMessageId: lastAssistantMessage.id
+        };
+      } else if (lastAssistantMessage) {
+        this.streaming = {
+          ...this.streaming,
+          assistantMessageId: lastAssistantMessage.id
+        };
+        this.#updateMessage(lastAssistantMessage.id, (message) => ({
+          ...message,
+          content: finalContent || message.content
+        }));
+      } else {
+        const id = crypto.randomUUID();
+        this.streaming = {
+          ...this.streaming,
+          assistantMessageId: id
+        };
+        this.#appendMessage({
+          id,
+          kind: "message",
+          role: "assistant",
+          content: finalContent,
+          created_at: new Date().toISOString(),
+          turn_number: turnNumber,
+          tool_call: null
+        });
+      }
     }
     this.#streamingAssistantId = null;
   }
@@ -549,13 +626,36 @@ class SessionsState {
     });
   }
 
-  #updateLatestToolCall(name: string, mutate: (tool: ActiveToolCall) => ActiveToolCall) {
+  #updateStreamingToolCall(
+    tools: ActiveToolCall[],
+    toolCallId: string | undefined,
+    name: string,
+    mutate: (tool: ActiveToolCall) => ActiveToolCall
+  ) {
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const tool = tools[i];
+      if (toolCallId ? tool.id === toolCallId : tool.name === name) {
+        tools[i] = mutate(tool);
+        return;
+      }
+    }
+  }
+
+  #updateLatestToolCall(
+    toolCallId: string | undefined,
+    name: string,
+    mutate: (tool: ActiveToolCall) => ActiveToolCall
+  ) {
     if (!this.active) return;
     const messages = [...this.active.thread_messages];
     let fallbackIndex = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       const entry = messages[i];
-      if (entry.kind === "tool_call" && entry.tool_call?.name === name) {
+      if (
+        entry.kind === "tool_call" &&
+        entry.tool_call?.name === name &&
+        (!toolCallId || entry.id === toolCallId)
+      ) {
         if (entry.tool_call.status === "running") {
           messages[i] = {
             ...entry,
@@ -566,6 +666,20 @@ class SessionsState {
         }
         if (fallbackIndex === -1) {
           fallbackIndex = i;
+        }
+      }
+    }
+
+    if (!toolCallId) {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const entry = messages[i];
+        if (entry.kind === "tool_call" && entry.tool_call?.name === name) {
+          messages[i] = {
+            ...entry,
+            tool_call: mutate(entry.tool_call as ActiveToolCall)
+          };
+          this.active = { ...this.active, thread_messages: messages };
+          return;
         }
       }
     }

@@ -67,11 +67,12 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Thinking { message, .. } => {
                 serde_json::json!({ "message": message })
             }
-            steward_common::AppEvent::ToolStarted { name, .. } => {
-                serde_json::json!({ "name": name })
+            steward_common::AppEvent::ToolStarted { name, tool_call_id, .. } => {
+                serde_json::json!({ "name": name, "tool_call_id": tool_call_id })
             }
             steward_common::AppEvent::ToolCompleted {
                 name,
+                tool_call_id,
                 success,
                 error,
                 parameters,
@@ -79,13 +80,14 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             } => {
                 serde_json::json!({
                     "name": name,
+                    "tool_call_id": tool_call_id,
                     "success": success,
                     "error": error,
                     "parameters": parameters
                 })
             }
-            steward_common::AppEvent::ToolResult { name, preview, .. } => {
-                serde_json::json!({ "name": name, "preview": preview })
+            steward_common::AppEvent::ToolResult { name, tool_call_id, preview, .. } => {
+                serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "preview": preview })
             }
             steward_common::AppEvent::StreamChunk { content, .. } => {
                 serde_json::json!({ "content": content })

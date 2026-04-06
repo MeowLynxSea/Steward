@@ -382,15 +382,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             );
         }
 
-        let _ = self
-            .agent
-            .send_channel_status(
-                &self.message.channel,
-                StatusUpdate::Thinking(format!("Thinking (step {iteration})...")),
-                &self.message.metadata,
-            )
-            .await;
-
         None
     }
 
@@ -557,15 +548,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             ));
 
         // Execute tools and add results to context
-        let _ = self
-            .agent
-            .send_channel_status(
-                &self.message.channel,
-                StatusUpdate::Thinking(contextual_tool_message(&tool_calls)),
-                &self.message.metadata,
-            )
-            .await;
-
         // Build per-tool decisions for the reasoning update.
         // Sanitize each rationale through SafetyLayer (parity with JobDelegate).
         let decisions: Vec<crate::channels::ToolDecision> = tool_calls
@@ -757,13 +739,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             for (pf_idx, tc) in &runnable {
                 let _ = self
                     .agent
-                    .send_channel_status(
-                        &self.message.channel,
-                        StatusUpdate::ToolStarted {
-                            name: tc.name.clone(),
-                        },
-                        &self.message.metadata,
-                    )
+                        .send_channel_status(
+                            &self.message.channel,
+                            StatusUpdate::ToolStarted {
+                                name: tc.name.clone(),
+                                tool_call_id: tc.id.clone(),
+                            },
+                            &self.message.metadata,
+                        )
                     .await;
 
                 let result = self
@@ -774,13 +757,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 let disp_tool = self.agent.tools().get(&tc.name).await;
                 let _ = self
                     .agent
-                    .send_channel_status(
-                        &self.message.channel,
-                        StatusUpdate::tool_completed(
-                            tc.name.clone(),
-                            &result,
-                            &tc.arguments,
-                            disp_tool.as_deref(),
+                        .send_channel_status(
+                            &self.message.channel,
+                            StatusUpdate::tool_completed(
+                                tc.name.clone(),
+                                tc.id.clone(),
+                                &result,
+                                &tc.arguments,
+                                disp_tool.as_deref(),
                         ),
                         &self.message.metadata,
                     )
@@ -803,13 +787,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
                 join_set.spawn(async move {
                     let _ = channels
-                        .send_status(
-                            &channel,
-                            StatusUpdate::ToolStarted {
-                                name: tc.name.clone(),
-                            },
-                            &metadata,
-                        )
+                            .send_status(
+                                &channel,
+                                StatusUpdate::ToolStarted {
+                                    name: tc.name.clone(),
+                                    tool_call_id: tc.id.clone(),
+                                },
+                                &metadata,
+                            )
                         .await;
 
                     let result = execute_chat_tool_standalone(
@@ -823,13 +808,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
                     let par_tool = tools.get(&tc.name).await;
                     let _ = channels
-                        .send_status(
-                            &channel,
-                            StatusUpdate::tool_completed(
-                                tc.name.clone(),
-                                &result,
-                                &tc.arguments,
-                                par_tool.as_deref(),
+                            .send_status(
+                                &channel,
+                                StatusUpdate::tool_completed(
+                                    tc.name.clone(),
+                                    tc.id.clone(),
+                                    &result,
+                                    &tc.arguments,
+                                    par_tool.as_deref(),
                             ),
                             &metadata,
                         )
@@ -951,6 +937,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                                 &self.message.channel,
                                 StatusUpdate::ToolResult {
                                     name: tc.name.clone(),
+                                    tool_call_id: tc.id.clone(),
                                     preview: output.clone(),
                                 },
                                 &self.message.metadata,
@@ -1139,30 +1126,6 @@ pub(super) fn preflight_rejection_tool_message(
 ) -> (String, ChatMessage) {
     let result: Result<String, &str> = Err(error_msg);
     crate::tools::execute::process_tool_result(safety, tool_name, tool_call_id, &result)
-}
-
-/// Build a contextual thinking message based on tool names.
-///
-/// Instead of a generic "Executing 2 tool(s)..." this returns messages like
-/// "Running command..." or "Fetching page..." for single-tool calls, falling
-/// back to "Executing N tool(s)..." for multi-tool calls.
-fn contextual_tool_message(tool_calls: &[crate::llm::ToolCall]) -> String {
-    if tool_calls.len() == 1 {
-        match tool_calls[0].name.as_str() {
-            "shell" => "Running command...".into(),
-            "web_fetch" => "Fetching page...".into(),
-            "memory_search" => "Searching memory...".into(),
-            "memory_write" => "Writing to memory...".into(),
-            "memory_read" => "Reading memory...".into(),
-            "http_request" => "Making HTTP request...".into(),
-            "file_read" => "Reading file...".into(),
-            "file_write" => "Writing file...".into(),
-            "json_transform" => "Transforming data...".into(),
-            name => format!("Running {name}..."),
-        }
-    } else {
-        format!("Executing {} tool(s)...", tool_calls.len())
-    }
 }
 
 /// Compact messages for retry after a context-length-exceeded error.

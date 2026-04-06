@@ -3767,7 +3767,7 @@ fn status_to_wit(
             message: msg.clone(),
             metadata_json,
         },
-        StatusUpdate::ToolStarted { name } => wit_channel::StatusUpdate {
+        StatusUpdate::ToolStarted { name, .. } => wit_channel::StatusUpdate {
             status: wit_channel::StatusType::ToolStarted,
             message: format!("Tool started: {}", name),
             metadata_json,
@@ -3781,7 +3781,7 @@ fn status_to_wit(
             ),
             metadata_json,
         },
-        StatusUpdate::ToolResult { name, preview } => wit_channel::StatusUpdate {
+        StatusUpdate::ToolResult { name, preview, .. } => wit_channel::StatusUpdate {
             status: wit_channel::StatusType::ToolResult,
             message: format!(
                 "Tool result: {}\n{}",
@@ -4769,6 +4769,7 @@ mod tests {
             .send_status(
                 crate::channels::StatusUpdate::ToolStarted {
                     name: "http_request".into(),
+                    tool_call_id: "call_1".into(),
                 },
                 &metadata,
             )
@@ -5084,6 +5085,7 @@ mod tests {
         let wit = status_to_wit(
             &crate::channels::StatusUpdate::ToolStarted {
                 name: "http_request".to_string(),
+                tool_call_id: "call_1".to_string(),
             },
             &metadata,
         )
@@ -5104,6 +5106,7 @@ mod tests {
         let wit = status_to_wit(
             &crate::channels::StatusUpdate::ToolCompleted {
                 name: "http_request".to_string(),
+                tool_call_id: "call_1".to_string(),
                 success: true,
                 error: None,
                 parameters: None,
@@ -5127,6 +5130,7 @@ mod tests {
         let wit = status_to_wit(
             &crate::channels::StatusUpdate::ToolCompleted {
                 name: "http_request".to_string(),
+                tool_call_id: "call_1".to_string(),
                 success: false,
                 error: Some("connection refused".to_string()),
                 parameters: None,
@@ -5150,6 +5154,7 @@ mod tests {
         let wit = status_to_wit(
             &crate::channels::StatusUpdate::ToolResult {
                 name: "http_request".to_string(),
+                tool_call_id: "call_1".to_string(),
                 preview: "{".to_string() + "\"temperature\": 22}",
             },
             &metadata,
@@ -5172,6 +5177,7 @@ mod tests {
         let wit = status_to_wit(
             &crate::channels::StatusUpdate::ToolResult {
                 name: "big_tool".to_string(),
+                tool_call_id: "call_1".to_string(),
                 preview: long_preview,
             },
             &metadata,

@@ -20,13 +20,14 @@
   } from "lucide-svelte";
   import type {
     SessionDetail,
+    ThreadMessage,
     StreamingState,
     TaskRecord,
     TimelineToolCall
   } from "../lib/types";
   import { renderMarkdown } from "../lib/markdown";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
-  import { tick } from "svelte";
+  import { onDestroy } from "svelte";
 
   interface Props {
     session: SessionDetail | null;
@@ -42,6 +43,11 @@
     onRejectTask: (task: TaskRecord, reason: string) => void;
     onSelectModel?: (model: string) => void;
   }
+
+  type DisplayEntry =
+    | { kind: "message"; message: ThreadMessage }
+    | { kind: "tool_group"; id: string; messages: ThreadMessage[] }
+    | { kind: "thinking_group"; id: string; messages: ThreadMessage[] };
 
   let {
     session,
@@ -65,10 +71,95 @@
   let showModelDropdown = $state(false);
   let darkMode = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
+  let expandedThinkingGroups = $state<Set<string>>(new Set());
+  let reasoningExpanded = $state(false);
+  let imagesExpanded = $state(false);
+  let animatedAssistantId = $state<string | null>(null);
+  let animatedAssistantText = $state("");
+  let typingTimer: ReturnType<typeof setTimeout> | null = null;
 
   const hasMessages = $derived(session && session.thread_messages.length > 0);
-  const hasStreamingContent = $derived(streaming.streamingContent.length > 0 || streaming.thinking);
+  const hasStreamingContent = $derived(
+    streaming.images.length > 0
+  );
   const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
+  const displayEntries = $derived.by<DisplayEntry[]>(() => {
+    const messages = session?.thread_messages ?? [];
+    const entries: DisplayEntry[] = [];
+    let toolBuffer: ThreadMessage[] = [];
+    let thinkingBuffer: ThreadMessage[] = [];
+
+    const flushTools = () => {
+      if (toolBuffer.length === 0) {
+        return;
+      }
+      entries.push({
+        kind: "tool_group",
+        id: `tool-group-${toolBuffer[0].id}`,
+        messages: toolBuffer
+      });
+      toolBuffer = [];
+    };
+
+    const flushThinking = () => {
+      if (thinkingBuffer.length === 0) {
+        return;
+      }
+      entries.push({
+        kind: "thinking_group",
+        id: `thinking-group-${thinkingBuffer[0].id}`,
+        messages: thinkingBuffer
+      });
+      thinkingBuffer = [];
+    };
+
+    for (const message of messages) {
+      if (message.kind === "thinking") {
+        flushTools();
+        const currentTurn = thinkingBuffer[0]?.turn_number;
+        if (thinkingBuffer.length === 0 || currentTurn === message.turn_number) {
+          thinkingBuffer.push(message);
+        } else {
+          flushThinking();
+          thinkingBuffer.push(message);
+        }
+        continue;
+      }
+
+      if (message.kind === "tool_call" && message.tool_call) {
+        flushThinking();
+        const currentTurn = toolBuffer[0]?.turn_number;
+        if (toolBuffer.length === 0 || currentTurn === message.turn_number) {
+          toolBuffer.push(message);
+        } else {
+          flushTools();
+          toolBuffer.push(message);
+        }
+        continue;
+      }
+
+      flushTools();
+      flushThinking();
+      entries.push({ kind: "message", message });
+    }
+
+    flushTools();
+    flushThinking();
+    return entries;
+  });
+  const reasoningSummary = $derived(buildCompactSummary(streaming.reasoning ?? "", 110));
+  const imageSummary = $derived(streaming.images.length > 0 ? `已生成 ${streaming.images.length} 张图片` : "");
+  const activeStreamingAssistant = $derived.by(() => {
+    const assistantId = streaming.assistantMessageId;
+    if (!assistantId || !session) {
+      return null;
+    }
+    return (
+      session.thread_messages.find(
+        (message) => message.id === assistantId && message.kind === "message" && message.role === "assistant"
+      ) ?? null
+    );
+  });
 
   function scrollToBottom() {
     if (messageListRef) {
@@ -95,6 +186,24 @@
       next.add(id);
     }
     expandedToolCalls = next;
+  }
+
+  function toggleThinkingGroupExpand(id: string) {
+    const next = new Set(expandedThinkingGroups);
+    if (next.has(id)) {
+      next.delete(id);
+    } else {
+      next.add(id);
+    }
+    expandedThinkingGroups = next;
+  }
+
+  function toggleReasoningExpand() {
+    reasoningExpanded = !reasoningExpanded;
+  }
+
+  function toggleImagesExpand() {
+    imagesExpanded = !imagesExpanded;
   }
 
   function toolCallDuration(tool: TimelineToolCall, createdAt?: string): string {
@@ -158,6 +267,147 @@
       showModelDropdown = false;
     }
   }
+
+  function normalizeThinkingTranscript(value: string) {
+    if (!value) {
+      return "";
+    }
+
+    return value
+      .replace(/(?:^|[\s\n])(?:正在处理|处理中)(?:\s*(?:\.{3}|…))?/giu, " ")
+      .replace(/(?:^|[\s\n])processing(?:\s*(?:\.{3}|…))?/giu, " ")
+      .replace(/(?:^|[\s\n])thinking(?:\s*\(step\s*\d+\))?(?:\s*(?:\.{3}|…))?/giu, " ")
+      .replace(/(?:^|[\s\n])step\s*\d+(?:\s*(?:\.{3}|…))?/giu, " ")
+      .replace(/[ \t]+\n/gu, "\n")
+      .replace(/\n{3,}/gu, "\n\n")
+      .replace(/[ \t]{2,}/gu, " ")
+      .trim();
+  }
+
+  function buildCompactSummary(value: string, limit = 88) {
+    const compact = value.replace(/\s+/gu, " ").trim();
+    if (!compact) {
+      return "";
+    }
+    if (compact.length <= limit) {
+      return compact;
+    }
+    return `${compact.slice(0, limit).trim()}...`;
+  }
+
+  function buildThinkingSummary(segments: string[], isThinking: boolean) {
+    if (segments.length === 0) {
+      return isThinking ? "思考中..." : "";
+    }
+    const first = buildCompactSummary(segments[0], 84);
+    if (segments.length === 1) {
+      return first;
+    }
+    return `${first} · ${segments.length} 段`;
+  }
+
+  function toolCallSummary(tool: TimelineToolCall) {
+    if (tool.error) {
+      return buildCompactSummary(tool.error, 96) || "执行失败";
+    }
+    if (tool.resultPreview) {
+      return buildCompactSummary(tool.resultPreview, 96);
+    }
+    if (tool.rationale) {
+      return buildCompactSummary(tool.rationale, 96);
+    }
+    if (tool.parameters) {
+      return buildCompactSummary(tool.parameters, 96);
+    }
+    if (tool.status === "running") {
+      return "执行中...";
+    }
+    if (tool.status === "completed") {
+      return "已完成";
+    }
+    return "已结束";
+  }
+
+  function toolGroupSummary(messages: ThreadMessage[]) {
+    if (messages.length === 0) {
+      return "";
+    }
+    const runningCount = messages.filter((message) => message.tool_call?.status === "running").length;
+    const failedCount = messages.filter((message) => message.tool_call?.status === "failed").length;
+    if (runningCount > 0) {
+      return `${messages.length} 个工具调用 · ${runningCount} 个进行中`;
+    }
+    if (failedCount > 0) {
+      return `${messages.length} 个工具调用 · ${failedCount} 个失败`;
+    }
+    return `${messages.length} 个工具调用`;
+  }
+
+  function stopTypingTimer() {
+    if (typingTimer !== null) {
+      clearTimeout(typingTimer);
+      typingTimer = null;
+    }
+  }
+
+  function displayedAssistantContent(message: ThreadMessage) {
+    if (message.id === animatedAssistantId) {
+      return animatedAssistantText;
+    }
+    return message.content ?? "";
+  }
+
+  function showTypingCursor(message: ThreadMessage) {
+    if (message.id !== animatedAssistantId) {
+      return false;
+    }
+    const targetText = activeStreamingAssistant?.id === message.id
+      ? (activeStreamingAssistant.content ?? "")
+      : (message.content ?? "");
+    return streaming.isStreaming || animatedAssistantText.length < targetText.length;
+  }
+
+  $effect(() => {
+    const targetId = activeStreamingAssistant?.id ?? null;
+    const targetText = activeStreamingAssistant?.content ?? "";
+
+    if (targetId !== animatedAssistantId) {
+      stopTypingTimer();
+      animatedAssistantId = targetId;
+      animatedAssistantText = "";
+    }
+
+    if (!targetId) {
+      animatedAssistantText = "";
+      return;
+    }
+
+    if (animatedAssistantText.length > targetText.length) {
+      animatedAssistantText = targetText;
+      return;
+    }
+
+    if (animatedAssistantText.length === targetText.length) {
+      stopTypingTimer();
+      return;
+    }
+
+    stopTypingTimer();
+    const remaining = targetText.length - animatedAssistantText.length;
+    const stepSize = Math.max(1, Math.min(12, Math.ceil(remaining / 18)));
+    typingTimer = setTimeout(() => {
+      if (animatedAssistantId !== targetId) {
+        return;
+      }
+      animatedAssistantText = targetText.slice(0, animatedAssistantText.length + stepSize);
+    }, 14);
+
+    return () => stopTypingTimer();
+  });
+
+  onDestroy(() => {
+    stopTypingTimer();
+  });
 </script>
 
 <svelte:window onclick={handleGlobalClick} />
@@ -231,126 +481,178 @@
     </div>
   {:else}
     <div class="message-list" bind:this={messageListRef}>
-      {#each session?.thread_messages ?? [] as message, idx}
-        <div class="message {message.role ?? message.kind} fade-in" style="animation-delay: {Math.min(idx * 30, 300)}ms">
-          {#if message.kind === "tool_call" && message.tool_call}
+      {#each displayEntries as entry, idx (entry.kind === "message" ? entry.message.id : entry.id)}
+        <div
+          class="message {(entry.kind === 'tool_group' || entry.kind === 'thinking_group') ? 'assistant' : (entry.message.role ?? entry.message.kind)} fade-in"
+          style="animation-delay: {Math.min(idx * 30, 300)}ms"
+        >
+          {#if entry.kind === "tool_group"}
             <div class="assistant-text">
               <div class="tool-calls-container inline-tool-call">
-                <div class="tool-call-card {message.tool_call.status}" class:expanded={expandedToolCalls.has(message.id)}>
-                  <button class="tool-call-header" onclick={() => toggleToolCallExpand(message.id)}>
-                    <div class="tool-call-left">
-                      {#if message.tool_call.status === "running"}
-                        <div class="tool-spinner">
-                          <Loader size={14} strokeWidth={2} />
+                <div class="tool-call-card tool-group-card">
+                  <div class="tool-group-summary">{toolGroupSummary(entry.messages)}</div>
+                  {#each entry.messages as message, groupIndex}
+                    <div class="tool-group-row">
+                      <button class="tool-call-header tool-group-row-header" onclick={() => toggleToolCallExpand(message.id)}>
+                        <div class="tool-call-left">
+                          {#if message.tool_call?.status === "running"}
+                            <div class="tool-spinner">
+                              <Loader size={14} strokeWidth={2} />
+                            </div>
+                          {:else if message.tool_call?.status === "completed"}
+                            <div class="tool-icon success">
+                              <CheckCircle2 size={14} strokeWidth={2} />
+                            </div>
+                          {:else}
+                            <div class="tool-icon error">
+                              <AlertCircle size={14} strokeWidth={2} />
+                            </div>
+                          {/if}
+                          <div class="tool-call-copy">
+                            <div class="tool-call-title-row">
+                              <span class="tool-name">{message.tool_call?.name}</span>
+                              <span class="tool-duration">{toolCallDuration(message.tool_call as TimelineToolCall, message.created_at)}</span>
+                            </div>
+                            <div class="tool-summary">{toolCallSummary(message.tool_call as TimelineToolCall)}</div>
+                          </div>
                         </div>
-                      {:else if message.tool_call.status === "completed"}
-                        <div class="tool-icon success">
-                          <CheckCircle2 size={14} strokeWidth={2} />
+                        <div class="tool-call-right">
+                          <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
                         </div>
-                      {:else}
-                        <div class="tool-icon error">
-                          <AlertCircle size={14} strokeWidth={2} />
+                      </button>
+                      {#if expandedToolCalls.has(message.id)}
+                        <div class="tool-call-body slide-down">
+                          {#if message.tool_call?.rationale}
+                            <div class="tool-detail">
+                              <span class="tool-detail-label">原因</span>
+                              <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
+                            </div>
+                          {/if}
+                          {#if message.tool_call?.parameters}
+                            <div class="tool-detail">
+                              <span class="tool-detail-label">参数</span>
+                              <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
+                            </div>
+                          {/if}
+                          {#if message.tool_call?.resultPreview}
+                            <div class="tool-detail">
+                              <span class="tool-detail-label">结果</span>
+                              <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
+                            </div>
+                          {/if}
+                          {#if message.tool_call?.error}
+                            <div class="tool-detail error-detail">
+                              <span class="tool-detail-label">错误</span>
+                              <pre class="tool-detail-content">{message.tool_call.error}</pre>
+                            </div>
+                          {/if}
                         </div>
                       {/if}
-                      <span class="tool-name">{message.tool_call.name}</span>
-                      <span class="tool-duration">{toolCallDuration(message.tool_call, message.created_at)}</span>
+                    </div>
+                    {#if groupIndex < entry.messages.length - 1}
+                      <div class="tool-group-divider"></div>
+                    {/if}
+                  {/each}
+                </div>
+              </div>
+            </div>
+          {:else if entry.kind === "thinking_group"}
+            <div class="assistant-text">
+              <div class="tool-calls-container inline-tool-call">
+                <div class="tool-call-card thinking-card" class:expanded={expandedThinkingGroups.has(entry.id)}>
+                  <button class="tool-call-header" onclick={() => toggleThinkingGroupExpand(entry.id)}>
+                    <div class="tool-call-left">
+                      <div class="tool-icon thinking">
+                        <Brain size={14} strokeWidth={2} />
+                      </div>
+                      <div class="tool-call-copy">
+                        <div class="tool-call-title-row">
+                          <span class="tool-name">思考过程</span>
+                        </div>
+                        <div class="tool-summary">
+                          {buildThinkingSummary(
+                            entry.messages
+                              .map((message) => normalizeThinkingTranscript(message.content ?? ""))
+                              .filter((segment) => segment.length > 0),
+                            false
+                          )}
+                        </div>
+                      </div>
                     </div>
                     <div class="tool-call-right">
                       <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
                     </div>
                   </button>
-                  {#if expandedToolCalls.has(message.id)}
-                    <div class="tool-call-body slide-down">
-                      {#if message.tool_call.rationale}
-                        <div class="tool-detail">
-                          <span class="tool-detail-label">原因</span>
-                          <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
-                        </div>
-                      {/if}
-                      {#if message.tool_call.parameters}
-                        <div class="tool-detail">
-                          <span class="tool-detail-label">参数</span>
-                          <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
-                        </div>
-                      {/if}
-                      {#if message.tool_call.resultPreview}
-                        <div class="tool-detail">
-                          <span class="tool-detail-label">结果</span>
-                          <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
-                        </div>
-                      {/if}
-                      {#if message.tool_call.error}
-                        <div class="tool-detail error-detail">
-                          <span class="tool-detail-label">错误</span>
-                          <pre class="tool-detail-content">{message.tool_call.error}</pre>
-                        </div>
-                      {/if}
+                  {#if expandedThinkingGroups.has(entry.id)}
+                    <div class="tool-call-body slide-down auxiliary-card-body">
+                      {#each entry.messages as message}
+                        {#if normalizeThinkingTranscript(message.content ?? "")}
+                          <div class="thinking-segment">
+                            <div class="thinking-text">{normalizeThinkingTranscript(message.content ?? "")}</div>
+                          </div>
+                        {/if}
+                      {/each}
                     </div>
                   {/if}
                 </div>
               </div>
             </div>
-          {:else if message.role === "user"}
+          {:else if entry.message.role === "user"}
             <div class="user-bubble">
-              {message.content ?? ""}
+              {entry.message.content ?? ""}
             </div>
           {:else}
             <div class="assistant-text">
-              <div class="assistant-content markdown-body">{@html renderMarkdown(message.content ?? "")}</div>
+              <div class="assistant-content markdown-body" class:streaming-text={showTypingCursor(entry.message)}>
+                {@html renderMarkdown(displayedAssistantContent(entry.message))}
+                {#if showTypingCursor(entry.message)}
+                  <span class="typing-cursor"></span>
+                {/if}
+              </div>
             </div>
           {/if}
         </div>
       {/each}
 
       <!-- Live streaming area -->
-      {#if hasStreamingContent || streaming.isStreaming}
+      {#if hasStreamingContent}
         <div class="message assistant streaming-message fade-in">
           <div class="assistant-text">
-            <!-- Thinking indicator -->
-            {#if streaming.thinking}
-              <div class="thinking-indicator">
-                <div class="thinking-dots">
-                  <span class="dot"></span>
-                  <span class="dot"></span>
-                  <span class="dot"></span>
-                </div>
-                <span class="thinking-label">{streaming.thinkingMessage || "思考中..."}</span>
-              </div>
-            {/if}
-
-            <!-- Reasoning update -->
-            {#if streaming.reasoning}
-              <div class="reasoning-block">
-                <div class="reasoning-header">
-                  <Brain size={14} strokeWidth={2} />
-                  <span>推理过程</span>
-                </div>
-                <p class="reasoning-text">{streaming.reasoning}</p>
-                {#if streaming.reasoningDecisions.length > 0}
-                  <div class="reasoning-decisions">
-                    {#each streaming.reasoningDecisions as decision}
-                      <div class="decision-chip">
-                        <Wrench size={12} strokeWidth={2} />
-                        <span class="decision-tool">{decision.tool_name}</span>
-                        <span class="decision-rationale">{decision.rationale}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-            {/if}
-
             <!-- Generated images -->
             {#if streaming.images.length > 0}
-              <div class="image-gallery">
-                {#each streaming.images as img}
-                  <div class="generated-image">
-                    <img src={img.dataUrl} alt={img.path ?? "Generated image"} />
-                    {#if img.path}
-                      <span class="image-path">{img.path}</span>
-                    {/if}
-                  </div>
-                {/each}
+              <div class="tool-calls-container inline-tool-call">
+                <div class="tool-call-card image-card" class:expanded={imagesExpanded}>
+                  <button class="tool-call-header" onclick={toggleImagesExpand}>
+                    <div class="tool-call-left">
+                      <div class="tool-icon thinking">
+                        <Image size={14} strokeWidth={2} />
+                      </div>
+                      <div class="tool-call-copy">
+                        <div class="tool-call-title-row">
+                          <span class="tool-name">生成图片</span>
+                        </div>
+                        <div class="tool-summary">{imageSummary}</div>
+                      </div>
+                    </div>
+                    <div class="tool-call-right">
+                      <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
+                    </div>
+                  </button>
+                  {#if imagesExpanded}
+                    <div class="tool-call-body slide-down auxiliary-card-body">
+                      <div class="image-gallery">
+                        {#each streaming.images as img}
+                          <div class="generated-image">
+                            <img src={img.dataUrl} alt={img.path ?? "Generated image"} />
+                            {#if img.path}
+                              <span class="image-path">{img.path}</span>
+                            {/if}
+                          </div>
+                        {/each}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
               </div>
             {/if}
           </div>
@@ -635,7 +937,7 @@
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 20px;
+    gap: 4px;
     scroll-behavior: smooth;
   }
 
@@ -681,17 +983,17 @@
 
   .assistant-text {
     max-width: 85%;
-    padding: 4px 0;
+    padding: 1px 0;
     color: var(--text-primary);
     font-size: 15px;
-    line-height: 1.7;
+    line-height: 1.38;
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 3px;
   }
 
   .assistant-content {
-    white-space: pre-wrap;
+    white-space: normal;
     word-break: break-word;
   }
 
@@ -715,55 +1017,13 @@
     50% { opacity: 0; }
   }
 
-  /* Thinking indicator */
-  .thinking-indicator {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
-    border-radius: 12px;
-    background: var(--bg-elevated);
-    width: fit-content;
-    animation: fadeSlideIn 0.25s ease both;
-  }
-
-  .thinking-dots {
-    display: flex;
-    gap: 4px;
-    align-items: center;
-  }
-
-  .thinking-dots .dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-tertiary);
-    animation: dotPulse 1.4s ease-in-out infinite;
-  }
-
-  .thinking-dots .dot:nth-child(2) {
-    animation-delay: 0.2s;
-  }
-
-  .thinking-dots .dot:nth-child(3) {
-    animation-delay: 0.4s;
-  }
-
-  @keyframes dotPulse {
-    0%, 80%, 100% {
-      opacity: 0.3;
-      transform: scale(0.8);
-    }
-    40% {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  .thinking-label {
+  .thinking-text {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
     font-size: 13px;
-    color: var(--text-tertiary);
-    font-style: italic;
+    line-height: 1.6;
+    color: var(--text-secondary);
   }
 
   /* Reasoning block */
@@ -854,6 +1114,11 @@
     border-color: rgba(239, 68, 68, 0.3);
   }
 
+  .tool-call-card.thinking-card {
+    border-color: color-mix(in srgb, var(--accent-primary) 30%, var(--border-default));
+    background: color-mix(in srgb, var(--bg-surface) 90%, var(--accent-primary) 10%);
+  }
+
   .tool-call-header {
     display: flex;
     align-items: center;
@@ -875,8 +1140,25 @@
 
   .tool-call-left {
     display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .tool-call-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+  }
+
+  .tool-call-title-row {
+    display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 0;
   }
 
   .tool-spinner {
@@ -895,6 +1177,11 @@
     display: flex;
   }
 
+  .tool-icon.thinking {
+    color: var(--accent-primary);
+    display: flex;
+  }
+
   .tool-name {
     font-size: 13px;
     font-weight: 600;
@@ -905,6 +1192,16 @@
   .tool-duration {
     font-size: 12px;
     color: var(--text-muted);
+    flex-shrink: 0;
+  }
+
+  .tool-summary {
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .tool-call-right {
@@ -922,6 +1219,62 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+    max-height: 280px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .auxiliary-card-body {
+    padding-right: 6px;
+  }
+
+  .thinking-segment {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .thinking-segment:last-child {
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .tool-call-card.reasoning-card {
+    border-color: color-mix(in srgb, var(--accent-gold) 30%, var(--border-default));
+    background: color-mix(in srgb, var(--bg-surface) 90%, var(--accent-gold) 10%);
+  }
+
+  .tool-call-card.image-card {
+    border-color: color-mix(in srgb, var(--accent-green) 28%, var(--border-default));
+    background: color-mix(in srgb, var(--bg-surface) 92%, var(--accent-green) 8%);
+  }
+
+  .tool-group-card {
+    padding: 6px 0;
+  }
+
+  .tool-group-summary {
+    padding: 4px 14px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .tool-group-row {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .tool-group-row-header {
+    padding-top: 8px;
+    padding-bottom: 8px;
+  }
+
+  .tool-group-divider {
+    height: 1px;
+    margin: 2px 14px;
+    background: var(--border-subtle);
   }
 
   .slide-down {

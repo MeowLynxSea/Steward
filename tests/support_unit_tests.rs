@@ -191,6 +191,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
+                    tool_call_id: "call_1".to_string(),
                 },
                 &metadata,
             )
@@ -200,6 +201,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolCompleted {
                     name: "echo".to_string(),
+                    tool_call_id: "call_1".to_string(),
                     success: true,
                     error: None,
                     parameters: None,
@@ -211,7 +213,7 @@ mod test_channel_tests {
 
         let events = channel.captured_status_events();
         assert_eq!(events.len(), 2);
-        assert!(matches!(&events[0], StatusUpdate::ToolStarted { name } if name == "echo"));
+        assert!(matches!(&events[0], StatusUpdate::ToolStarted { name, .. } if name == "echo"));
         assert!(
             matches!(&events[1], StatusUpdate::ToolCompleted { name, success, .. } if name == "echo" && *success)
         );
@@ -226,6 +228,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolStarted {
                     name: "memory_search".to_string(),
+                    tool_call_id: "call_1".to_string(),
                 },
                 &metadata,
             )
@@ -239,6 +242,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
+                    tool_call_id: "call_2".to_string(),
                 },
                 &metadata,
             )
@@ -256,6 +260,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolResult {
                     name: "echo".to_string(),
+                    tool_call_id: "call_1".to_string(),
                     preview: "hello world".to_string(),
                 },
                 &serde_json::Value::Null,
@@ -266,6 +271,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolResult {
                     name: "time".to_string(),
+                    tool_call_id: "call_2".to_string(),
                     preview: "{\"iso\": \"2026-03-03\"}".to_string(),
                 },
                 &serde_json::Value::Null,
@@ -306,6 +312,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
+                    tool_call_id: "call_1".to_string(),
                 },
                 &serde_json::Value::Null,
             )
@@ -316,6 +323,7 @@ mod test_channel_tests {
             .send_status(
                 StatusUpdate::ToolCompleted {
                     name: "echo".to_string(),
+                    tool_call_id: "call_1".to_string(),
                     success: true,
                     error: None,
                     parameters: None,
