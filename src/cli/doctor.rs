@@ -87,8 +87,8 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
     );
 
     check(
-        "Gateway config",
-        check_gateway_config(&settings),
+        "Desktop transport",
+        check_desktop_transport(&settings),
         &mut passed,
         &mut failed,
         &mut skipped,
@@ -403,32 +403,21 @@ fn check_routines_config() -> CheckResult {
     }
 }
 
-// ── Gateway config ──────────────────────────────────────────
+// ── Desktop transport ───────────────────────────────────────
 
-fn check_gateway_config(settings: &Settings) -> CheckResult {
-    // Use the same resolve() path as runtime so invalid env values
-    // (e.g. GATEWAY_PORT=abc) are caught here too.
+fn check_desktop_transport(settings: &Settings) -> CheckResult {
     let owner_id = match crate::config::resolve_owner_id(settings) {
         Ok(owner_id) => owner_id,
         Err(e) => return CheckResult::Fail(format!("config error: {e}")),
     };
     match crate::config::ChannelsConfig::resolve(settings, &owner_id) {
-        Ok(channels) => match channels.gateway {
-            Some(gw) => {
-                if gw.auth_token.is_some() {
-                    CheckResult::Pass(format!(
-                        "enabled at {}:{} (auth token set)",
-                        gw.host, gw.port
-                    ))
-                } else {
-                    CheckResult::Pass(format!(
-                        "enabled at {}:{} (no auth token — random token will be generated)",
-                        gw.host, gw.port
-                    ))
-                }
+        Ok(channels) => {
+            if channels.desktop.tauri_ipc {
+                CheckResult::Pass("tauri-ipc enabled".into())
+            } else {
+                CheckResult::Fail("tauri-ipc disabled".into())
             }
-            None => CheckResult::Skip("disabled (GATEWAY_ENABLED=false)".into()),
-        },
+        }
         Err(e) => CheckResult::Fail(format!("config error: {e}")),
     }
 }
@@ -679,9 +668,9 @@ mod tests {
     }
 
     #[test]
-    fn check_gateway_config_does_not_panic() {
+    fn check_desktop_transport_does_not_panic() {
         let settings = Settings::default();
-        let result = check_gateway_config(&settings);
+        let result = check_desktop_transport(&settings);
         match result {
             CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
         }

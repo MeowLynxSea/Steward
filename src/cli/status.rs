@@ -129,14 +129,12 @@ pub async fn run_status_command() -> anyhow::Result<()> {
     };
     println!("{}", fmt::kv_line("WASM Tools", &tools_value, 12));
 
-    let mut channel_info = vec!["cli".to_string()];
-    if settings.channels.http_enabled {
-        channel_info.push(format!(
-            "http:{}",
-            settings.channels.http_port.unwrap_or(3000)
-        ));
-    }
-    println!("{}", fmt::kv_line("Channels", &channel_info.join(", "), 12));
+    let transport = if settings.channels.tauri_ipc {
+        "tauri-ipc"
+    } else {
+        "disabled"
+    };
+    println!("{}", fmt::kv_line("Transport", transport, 12));
 
     // Heartbeat
     let hb_enabled = settings.heartbeat.enabled

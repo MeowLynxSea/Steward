@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
 
 use crate::bootstrap::steward_base_dir;
-use crate::config::helpers::{optional_env, parse_optional_env};
+use crate::config::helpers::optional_env;
 use crate::error::ConfigError;
 
 /// Which database backend to use.
@@ -42,10 +42,6 @@ pub struct DatabaseConfig {
     /// Which backend to use (default: LibSql).
     pub backend: DatabaseBackend,
 
-    // -- Legacy fields (kept for compatibility, not used for libsql) --
-    pub url: SecretString,
-    pub pool_size: usize,
-
     // -- libSQL fields --
     /// Path to local libSQL database file (default: ~/.steward/steward.db).
     pub libsql_path: Option<PathBuf>,
@@ -66,15 +62,6 @@ impl DatabaseConfig {
             DatabaseBackend::LibSql
         };
 
-        let url = optional_env("DATABASE_URL")?
-            .or_else(|| Some("unused://libsql".to_string()))
-            .ok_or_else(|| ConfigError::MissingRequired {
-                key: "DATABASE_URL".to_string(),
-                hint: "DATABASE_URL is required for bootstrap compatibility".to_string(),
-            })?;
-
-        let pool_size = parse_optional_env("DATABASE_POOL_SIZE", 10)?;
-
         let libsql_path = optional_env("LIBSQL_PATH")?
             .map(PathBuf::from)
             .or_else(|| Some(default_libsql_path()));
@@ -91,8 +78,6 @@ impl DatabaseConfig {
 
         Ok(Self {
             backend,
-            url: SecretString::from(url),
-            pool_size,
             libsql_path,
             libsql_url,
             libsql_auth_token,
@@ -111,17 +96,10 @@ impl DatabaseConfig {
         let turso_token = turso_token.filter(|s| !s.is_empty());
         Self {
             backend: DatabaseBackend::LibSql,
-            url: SecretString::from("unused://libsql".to_string()),
-            pool_size: 1,
             libsql_path: Some(PathBuf::from(path)),
             libsql_url: turso_url.map(String::from),
             libsql_auth_token: turso_token.map(|t| SecretString::from(t.to_string())),
         }
-    }
-
-    /// Get the database URL (exposes the secret).
-    pub fn url(&self) -> &str {
-        self.url.expose_secret()
     }
 }
 

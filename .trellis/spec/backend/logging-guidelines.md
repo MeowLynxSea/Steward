@@ -10,10 +10,10 @@ The backend uses `tracing` and `tracing-subscriber`.
 
 Examples in the current codebase:
 
-- tracing setup imports and initialization: [src/main.rs](/Users/MeowLynxSea/Development/Steward/src/main.rs)
-- bootstrap warnings and migration info: [src/bootstrap.rs](/Users/MeowLynxSea/Development/Steward/src/bootstrap.rs)
-- runtime loop warnings/errors: [src/agent/agent_loop.rs](/Users/MeowLynxSea/Development/Steward/src/agent/agent_loop.rs)
-- session/runtime warnings: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/Steward/src/agent/session_manager.rs)
+- tracing setup imports and initialization: [src/main.rs](/Users/MeowLynxSea/Development/IronCowork/src/main.rs)
+- bootstrap warnings and migration info: [src/bootstrap.rs](/Users/MeowLynxSea/Development/IronCowork/src/bootstrap.rs)
+- runtime loop warnings/errors: [src/agent/agent_loop.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/agent_loop.rs)
+- session/runtime warnings: [src/agent/session_manager.rs](/Users/MeowLynxSea/Development/IronCowork/src/agent/session_manager.rs)
 
 ---
 

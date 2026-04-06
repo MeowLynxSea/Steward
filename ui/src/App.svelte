@@ -234,7 +234,7 @@
       <div class="center-area">
         <ChatArea
           session={sessionsStore.active}
-          task={sessionsStore.active?.current_task ?? null}
+          task={sessionsStore.active?.active_thread_task ?? null}
           streaming={sessionsStore.streaming}
           modelName={settingsStore.data.selected_model}
           availableModels={availableModels}

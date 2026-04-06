@@ -286,6 +286,8 @@ mod tests {
         tools_dir: &Path,
         owner_id: &str,
     ) -> Arc<ExtensionManager> {
+        let channels_dir = tempfile::tempdir().expect("channels dir");
+        let channels_dir = channels_dir.keep();
         let crypto = Arc::new(
             SecretsCrypto::new(SecretString::from(
                 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -302,6 +304,7 @@ mod tests {
             None,
             None,
             tools_dir.to_path_buf(),
+            channels_dir,
             None,
             owner_id.to_string(),
             None,
@@ -667,7 +670,7 @@ mod tests {
         engine.refresh_event_cache().await;
 
         let guest_msg = make_message(
-            "telegram",
+            "desktop",
             "guest",
             "default",
             "guest-sender",
@@ -692,7 +695,7 @@ mod tests {
         );
 
         let owner_msg = make_message(
-            "telegram",
+            "desktop",
             "default",
             "default",
             "owner-sender",

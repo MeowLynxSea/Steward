@@ -42,15 +42,13 @@ cargo run -- api serve --port 8765
 http://127.0.0.1:8765
 ```
 
-The Axum server serves the static bundle from `static/` and exposes the same
-REST/SSE contract used by the desktop shell.
+The Axum server serves the static bundle from `static/` for secondary browser-mode development.
 
 ## Desktop mode
 
-Desktop mode expects the backend API to stay available at `http://127.0.0.1:8765`
-while the static frontend bundle is rebuilt into `static/`.
+Desktop mode is the primary development path. Tauri IPC is the authoritative UI transport; the local browser server remains optional for browser-mode work.
 
-Use three terminals:
+Use two terminals for normal desktop development:
 
 1. Rebuild the static UI on change:
 
@@ -58,13 +56,7 @@ Use three terminals:
 npm --prefix ui run build -- --watch
 ```
 
-2. Run the local backend:
-
-```bash
-cargo run -- api serve --port 8765
-```
-
-3. Launch the Tauri shell:
+2. Launch the Tauri shell:
 
 ```bash
 cargo tauri dev --config src-tauri/tauri.conf.json
@@ -75,6 +67,6 @@ cargo tauri dev --config src-tauri/tauri.conf.json
 Run the same checks used during migration work before committing:
 
 ```bash
-cargo test --test api_http_integration
+cargo test
 npm --prefix ui run build
 ```

@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-
 use crate::agent::{Agent, AgentDeps};
 use crate::app::{AppBuilder, AppBuilderFlags};
-use crate::channels::{IncomingMessage, MessageStream};
+use crate::channels::{ChannelManager, MessageStream};
 use crate::config::Config;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
@@ -95,8 +92,12 @@ pub async fn start_embedded_runtime(
     .await;
 
     let session_manager = Arc::clone(&components.agent_session_manager);
-    let (inject_tx, inject_rx) = mpsc::channel::<IncomingMessage>(64);
-    let message_stream: MessageStream = Box::pin(ReceiverStream::new(inject_rx));
+    let channel_manager = Arc::new(ChannelManager::new());
+    let inject_tx = channel_manager.inject_sender();
+    let message_stream: MessageStream = channel_manager
+        .start_all()
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let scheduler_slot: crate::tools::builtin::SchedulerSlot =
         Arc::new(tokio::sync::RwLock::new(None));
 
@@ -136,6 +137,27 @@ pub async fn start_embedded_runtime(
     let app_state_mcp = Arc::clone(&components.mcp_session_manager);
     let app_state_session_manager = Arc::clone(&session_manager);
     let app_state_task_runtime = Arc::clone(&task_runtime);
+    let extension_manager = components.extension_manager.clone();
+
+    if let Some(extension_manager) = extension_manager.as_ref()
+        && config.channels.wasm_channels.enabled
+    {
+        let runtime = Arc::new(crate::channels::wasm::WasmChannelRuntime::new(
+            crate::channels::wasm::WasmChannelRuntimeConfig::default(),
+        )?);
+        extension_manager
+            .set_channel_runtime(Arc::clone(&channel_manager), Arc::clone(&runtime))
+            .await;
+
+        let active_channels = extension_manager
+            .load_persisted_active_channels(&config.owner_id)
+            .await;
+        for channel_name in active_channels {
+            if let Err(error) = extension_manager.activate(&channel_name, &config.owner_id).await {
+                tracing::warn!(channel = %channel_name, %error, "Failed to restore wasm channel");
+            }
+        }
+    }
 
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
@@ -145,7 +167,7 @@ pub async fn start_embedded_runtime(
         safety: components.safety,
         tools: components.tools,
         workspace: components.workspace,
-        extension_manager: components.extension_manager,
+        extension_manager,
         skill_registry: components.skill_registry,
         skill_catalog: components.skill_catalog,
         skills_config: config.skills.clone(),
@@ -180,7 +202,7 @@ pub async fn start_embedded_runtime(
         config.agent.clone(),
         deps,
         message_stream,
-        None,
+        Some(channel_manager),
         Some(config.heartbeat.clone()),
         Some(config.hygiene.clone()),
         Some(config.routines.clone()),

@@ -148,8 +148,8 @@ fn reject_if_injected(path: &str, content: &str) -> Result<(), WorkspaceError> {
 
 /// Internal storage abstraction for Workspace.
 ///
-/// Allows Workspace to work with either a PostgreSQL `Repository` (the original
-/// path) or any `Database` trait implementation (e.g. libSQL backend).
+/// Keeps the workspace wired to the runtime `Database` trait, which is backed
+/// by libSQL in the current product architecture.
 #[derive(Clone)]
 enum WorkspaceStorage {
     /// Generic backend implementing the Database trait.
@@ -463,7 +463,7 @@ const BOOTSTRAP_SEED: &str = include_str!("seeds/BOOTSTRAP.md");
 ///
 /// Each workspace is scoped to a user (and optionally an agent).
 /// Documents are persisted to the database and indexed for search.
-/// Supports both PostgreSQL (via Repository) and libSQL (via Database trait).
+/// Supports the runtime `Database` abstraction backed by libSQL.
 ///
 /// ## Multi-scope reads
 ///

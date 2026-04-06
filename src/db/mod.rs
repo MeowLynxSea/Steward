@@ -1013,8 +1013,6 @@ mod tests {
             libsql_path: Some(db_path),
             libsql_url: None,
             libsql_auth_token: None,
-            url: SecretString::from("unused://libsql".to_string()),
-            pool_size: 1,
         };
 
         let master_key = SecretString::from("a]".repeat(16));

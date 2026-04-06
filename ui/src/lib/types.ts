@@ -49,14 +49,13 @@ export interface PatchSettingsRequest {
 export interface SessionSummary {
   id: string;
   title: string;
-  message_count: number;
+  turn_count: number;
   started_at: string;
   last_activity: string;
-  thread_type: string | null;
-  channel: string;
+  active_thread_id: string | null;
 }
 
-export interface SessionMessage {
+export interface ThreadMessage {
   id: string;
   role: string;
   content: string;
@@ -65,8 +64,9 @@ export interface SessionMessage {
 
 export interface SessionDetail {
   session: SessionSummary;
-  messages: SessionMessage[];
-  current_task: TaskRecord | null;
+  active_thread_id: string;
+  thread_messages: ThreadMessage[];
+  active_thread_task: TaskRecord | null;
 }
 
 export interface TaskOperation {
@@ -245,8 +245,9 @@ export interface StreamEnvelope<T = Record<string, unknown>> {
 export interface SendSessionMessageResponse {
   accepted: boolean;
   session_id: string;
-  task_id: string | null;
-  task: TaskRecord | null;
+  active_thread_id: string;
+  active_thread_task_id: string | null;
+  active_thread_task: TaskRecord | null;
 }
 
 // --- Streaming state types ---

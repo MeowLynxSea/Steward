@@ -116,6 +116,7 @@ fn validate_manifest_install_inputs(manifest: &ExtensionManifest) -> Result<(), 
 
     let expected_prefix = match manifest.kind {
         ManifestKind::Tool => "tools-src/",
+        ManifestKind::Channel => "channels-src/",
         ManifestKind::McpServer => unreachable!(),
     };
 
@@ -203,13 +204,16 @@ pub struct RegistryInstaller {
     repo_root: PathBuf,
     /// Directory for installed tools (`~/.steward/tools/`).
     tools_dir: PathBuf,
+    /// Directory for installed channels (`~/.steward/channels/`).
+    channels_dir: PathBuf,
 }
 
 impl RegistryInstaller {
-    pub fn new(repo_root: PathBuf, tools_dir: PathBuf) -> Self {
+    pub fn new(repo_root: PathBuf, tools_dir: PathBuf, channels_dir: PathBuf) -> Self {
         Self {
             repo_root,
             tools_dir,
+            channels_dir,
         }
     }
 
@@ -219,6 +223,7 @@ impl RegistryInstaller {
         Self {
             repo_root,
             tools_dir: base_dir.join("tools"),
+            channels_dir: base_dir.join("channels"),
         }
     }
 
@@ -250,6 +255,7 @@ impl RegistryInstaller {
 
         let target_dir = match manifest.kind {
             ManifestKind::Tool => &self.tools_dir,
+            ManifestKind::Channel => &self.channels_dir,
             ManifestKind::McpServer => unreachable!(),
         };
 
@@ -434,6 +440,7 @@ impl RegistryInstaller {
 
         let target_dir = match manifest.kind {
             ManifestKind::Tool => &self.tools_dir,
+            ManifestKind::Channel => &self.channels_dir,
             ManifestKind::McpServer => {
                 return Err(RegistryError::InvalidManifest {
                     name: manifest.name.clone(),
@@ -845,6 +852,7 @@ mod tests {
         let installer = RegistryInstaller::new(
             PathBuf::from("/repo"),
             PathBuf::from("/home/.steward/tools"),
+            PathBuf::from("/home/.steward/channels"),
         );
         assert_eq!(installer.repo_root, PathBuf::from("/repo"));
     }
@@ -876,8 +884,11 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_source_rejects_path_traversal_name() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer =
-            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
+        let installer = RegistryInstaller::new(
+            temp.path().to_path_buf(),
+            temp.path().join("tools"),
+            temp.path().join("channels"),
+        );
 
         let manifest = test_manifest("../evil", "tools-src/evil", None, None);
 
@@ -893,8 +904,11 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_non_https_url() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer =
-            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
+        let installer = RegistryInstaller::new(
+            temp.path().to_path_buf(),
+            temp.path().join("tools"),
+            temp.path().join("channels"),
+        );
 
         let manifest = test_manifest(
             "demo",
@@ -917,8 +931,11 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_disallowed_host() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer =
-            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
+        let installer = RegistryInstaller::new(
+            temp.path().to_path_buf(),
+            temp.path().join("tools"),
+            temp.path().join("channels"),
+        );
 
         let manifest = test_manifest(
             "demo",
@@ -939,8 +956,11 @@ mod tests {
     #[tokio::test]
     async fn test_install_from_artifact_rejects_null_sha256() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let installer =
-            RegistryInstaller::new(temp.path().to_path_buf(), temp.path().join("tools"));
+        let installer = RegistryInstaller::new(
+            temp.path().to_path_buf(),
+            temp.path().join("tools"),
+            temp.path().join("channels"),
+        );
 
         // Valid URL but no sha256 — should be rejected before any download attempt
         let manifest = test_manifest(

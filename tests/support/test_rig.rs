@@ -787,10 +787,10 @@ impl TestRigBuilder {
         };
 
         // 7. Create the in-process test transport and message stream.
-        // When testing bootstrap, the channel must be named "gateway" because
-        // the bootstrap greeting targets only the gateway channel.
+        // When testing bootstrap, the channel must be named "desktop" because
+        // the bootstrap greeting targets the desktop transport path.
         let test_channel = if self.keep_bootstrap {
-            Arc::new(TestChannel::new().with_name("gateway"))
+            Arc::new(TestChannel::new().with_name("desktop"))
         } else {
             Arc::new(TestChannel::new())
         };

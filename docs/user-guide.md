@@ -8,35 +8,18 @@ The primary model is:
 
 - start or reopen a persistent session
 - give the agent a goal in natural language
-- watch the current run/plan/approval state
+- chat inside the active thread for that session
+- watch the current thread/run/approval state
 - approve risky actions when Ask mode pauses execution
 - use indexed workspace material to ground the agent's work
 
-Steward is not intended to be a hosted multi-user service and it does not expose a built-in remote control surface.
+Steward is not intended to be a hosted multi-user service and it does not expose built-in legacy chat gateways or a built-in remote control surface.
 
 ## Runtime Modes
 
-### Browser Mode
-
-Browser mode serves the Svelte UI from the local Axum backend and opens the product in a normal browser.
-
-Start it with:
-
-```bash
-cargo run -- api serve --port 8765
-```
-
-Then open:
-
-```text
-http://127.0.0.1:8765
-```
-
-Use browser mode when you want the full session/run/workspace UI without packaging a native app.
-
 ### Desktop Mode
 
-Desktop mode uses the same HTTP/SSE backend contract but wraps the UI inside the Tauri shell for native notifications, tray behavior, and folder-drop indexing.
+Desktop mode is the primary product path. The UI talks to the runtime through Tauri IPC and receives live updates through Tauri events, while the shell adds native notifications, tray behavior, and folder-drop indexing.
 
 Local development flow:
 
@@ -47,6 +30,12 @@ cargo tauri dev --config src-tauri/tauri.conf.json
 ```
 
 Packaged desktop builds are described in [release-readiness.md](./release-readiness.md).
+
+### Optional External Ingress
+
+Steward also supports installable WASM channels for non-desktop message ingress.
+
+These are not the primary product surface. They exist so the same session/thread runtime can later accept messages from other environments without restoring the old built-in channel product model.
 
 ## Initial Setup
 
@@ -90,11 +79,21 @@ Use sessions to:
 
 - keep a persistent conversation context
 - revisit prior work after restart
-- understand what run is currently attached to the conversation
+- understand which thread is active and what run is currently attached to it
 
-### Runs And Approvals
+### Threads Drive Execution
 
-Runs are durable execution records derived from session turns.
+Threads are the actual conversational and execution unit inside a session.
+
+Use threads to:
+
+- send and receive messages
+- attach run/task snapshots when approvals or execution tracking are needed
+- preserve the exact conversational context that drove the agent's work
+
+### Tasks And Approvals
+
+Tasks are durable execution records attached to session threads when the runtime needs approvals, mode tracking, or auditability.
 
 Use the Runs view to inspect:
 
@@ -135,13 +134,13 @@ Steward does not treat these as primary product goals:
 
 - predefined workflow forms as the main UX
 - mandatory cloud-hosted runtime
-- built-in remote/public exposure of the local agent
+- built-in remote/public exposure of the local agent beyond optional installable WASM channels
 - multi-tenant hosted administration
 
 ## Recommended First Run
 
 1. Configure one provider and verify the backend starts.
-2. Open browser mode at `127.0.0.1:8765`.
+2. Launch the desktop app through Tauri.
 3. Create a session and send a small goal.
 4. Switch between Ask and Yolo intentionally to understand the approval model.
-5. Index one workspace folder and use search results to ground a follow-up session turn.
+5. Index one workspace folder and use search results to ground a follow-up thread turn.

@@ -94,12 +94,6 @@ fn macos_plist_content(exe: &str, stdout: &str, stderr: &str) -> String {
   <true/>
   <key>KeepAlive</key>
   <true/>
-  <!-- Disable interactive CLI/REPL in daemon mode to prevent blocking on stdin -->
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>CLI_ENABLED</key>
-    <string>false</string>
-  </dict>
   <key>StandardOutPath</key>
   <string>{stdout}</string>
   <key>StandardErrorPath</key>
@@ -128,8 +122,6 @@ fn install_linux() -> Result<()> {
          \n\
          [Service]\n\
          Type=simple\n\
-         # Disable interactive CLI/REPL in daemon mode to prevent blocking on stdin\n\
-         Environment=\"CLI_ENABLED=false\"\n\
          ExecStart=\"{exe}\" run\n\
          Restart=always\n\
          RestartSec=3\n\
@@ -373,9 +365,8 @@ mod tests {
     }
 
     #[test]
-    fn macos_plist_sets_cli_enabled_false() {
+    fn macos_plist_does_not_reintroduce_legacy_channel_env() {
         let plist = macos_plist_content("/tmp/steward", "/tmp/stdout.log", "/tmp/stderr.log");
-        assert!(plist.contains("<key>EnvironmentVariables</key>"));
-        assert!(plist.contains("    <key>CLI_ENABLED</key>\n    <string>false</string>"));
+        assert!(!plist.contains("CLI_ENABLED"));
     }
 }

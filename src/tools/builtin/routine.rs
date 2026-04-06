@@ -283,7 +283,7 @@ fn routine_request_discovery_schema() -> Value {
         "examples": [
             { "kind": "manual" },
             { "kind": "cron", "schedule": "0 0 9 * * MON-FRI", "timezone": "UTC" },
-            { "kind": "message_event", "pattern": "deploy\\s+prod", "channel": "slack" },
+            { "kind": "message_event", "pattern": "deploy\\s+prod", "channel": "desktop" },
             { "kind": "system_event", "source": "github", "event_type": "issue.opened", "filters": { "repository": "MeowLynxSea/steward" } }
         ]
     })
@@ -374,7 +374,7 @@ fn routine_create_examples() -> Vec<Value> {
                 "timezone": "UTC"
             },
             "delivery": {
-                "channel": "telegram",
+                "channel": "desktop-alerts",
                 "user": "ops-team"
             }
         }),
@@ -384,7 +384,7 @@ fn routine_create_examples() -> Vec<Value> {
             "request": {
                 "kind": "message_event",
                 "pattern": "deploy\\s+prod",
-                "channel": "slack"
+                "channel": "desktop"
             },
             "execution": {
                 "mode": "lightweight",
@@ -1904,7 +1904,7 @@ mod tests {
                 "mode": "full_job"
             },
             "delivery": {
-                "channel": "telegram",
+                "channel": "desktop-alerts",
                 "user": "ops-team"
             },
             "advanced": {
@@ -1926,7 +1926,7 @@ mod tests {
             matches!(parsed.execution.mode, NormalizedExecutionMode::FullJob),
             "expected full_job execution mode",
         );
-        assert_eq!(parsed.delivery.channel.as_deref(), Some("telegram"));
+        assert_eq!(parsed.delivery.channel.as_deref(), Some("desktop-alerts"));
         assert_eq!(parsed.delivery.user.as_deref(), Some("ops-team"));
         assert_eq!(parsed.cooldown_secs, 30);
     }
@@ -1953,7 +1953,7 @@ mod tests {
             "request": {
                 "kind": "message_event",
                 "pattern": "deploy\\s+prod",
-                "channel": "slack"
+                "channel": "desktop"
             },
             "execution": {
                 "use_tools": true,
@@ -1969,7 +1969,7 @@ mod tests {
             matches!(
                 parsed.trigger,
                 NormalizedTriggerRequest::MessageEvent { ref pattern, ref channel }
-                if pattern == "deploy\\s+prod" && channel.as_deref() == Some("slack")
+                if pattern == "deploy\\s+prod" && channel.as_deref() == Some("desktop")
             ),
             "expected grouped message_event trigger",
         );
@@ -2139,9 +2139,9 @@ mod tests {
             "prompt": "Legacy create path.",
             "trigger_type": "event",
             "event_pattern": "hello",
-            "event_channel": "telegram",
+            "event_channel": "desktop",
             "action_type": "full_job",
-            "notify_channel": "telegram",
+            "notify_channel": "desktop-alerts",
             "notify_user": "123"
         });
 
@@ -2151,7 +2151,7 @@ mod tests {
             matches!(
                 parsed.trigger,
                 NormalizedTriggerRequest::MessageEvent { ref pattern, ref channel }
-                if pattern == "hello" && channel.as_deref() == Some("telegram")
+                if pattern == "hello" && channel.as_deref() == Some("desktop")
             ),
             "expected legacy message_event trigger",
         );
@@ -2159,7 +2159,7 @@ mod tests {
             matches!(parsed.execution.mode, NormalizedExecutionMode::FullJob),
             "expected full_job execution mode",
         );
-        assert_eq!(parsed.delivery.channel.as_deref(), Some("telegram"));
+        assert_eq!(parsed.delivery.channel.as_deref(), Some("desktop-alerts"));
         assert_eq!(parsed.delivery.user.as_deref(), Some("123"));
     }
 

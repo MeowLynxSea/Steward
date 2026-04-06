@@ -1,6 +1,6 @@
 //! SQLite-dialect migrations for the libSQL/Turso backend.
 //!
-//! Consolidates all PostgreSQL migrations (V1-V8) into a single SQLite-compatible
+//! Consolidates earlier schema history into a single SQLite-compatible
 //! schema. Run once on database creation; idempotent via `IF NOT EXISTS`.
 //!
 //! Incremental migrations (V9+) are tracked in the `_migrations` table and run
@@ -8,7 +8,7 @@
 
 /// Consolidated schema for libSQL.
 ///
-/// Translates PostgreSQL types and features:
+/// Translates legacy schema types and features:
 /// - `UUID` -> `TEXT` (store as hex string)
 /// - `TIMESTAMPTZ` -> `TEXT` (ISO-8601)
 /// - `JSONB` -> `TEXT` (JSON encoded)
@@ -490,7 +490,7 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE INDEX IF NOT EXISTS idx_settings_user ON settings(user_id);
 
--- ==================== Missing indexes (parity with PostgreSQL) ====================
+-- ==================== Missing indexes carried over from earlier schema revisions ====================
 
 -- agent_jobs
 CREATE INDEX IF NOT EXISTS idx_agent_jobs_stuck ON agent_jobs(stuck_since);
@@ -540,7 +540,7 @@ CREATE INDEX IF NOT EXISTS idx_heartbeat_next_run ON heartbeat_state(next_run);
 
 -- ==================== Seed data ====================
 
--- Pre-populate leak detection patterns (matches PostgreSQL V2 migration).
+-- Pre-populate leak detection patterns (matches the earlier V2 schema revision).
 INSERT OR IGNORE INTO leak_detection_patterns (id, name, pattern, severity, action, enabled, created_at) VALUES
     ('550e8400-e29b-41d4-a716-446655440001', 'openai_api_key', 'sk-(?:proj-)?[a-zA-Z0-9]{20,}(?:T3BlbkFJ[a-zA-Z0-9_-]*)?', 'critical', 'block', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     ('550e8400-e29b-41d4-a716-446655440002', 'anthropic_api_key', 'sk-ant-api[a-zA-Z0-9_-]{90,}', 'critical', 'block', 1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

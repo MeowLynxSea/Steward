@@ -195,11 +195,8 @@ fn bootstrap_env_preserves_existing_values() {
     let env_path = dir.path().join(".env");
 
     let initial_vars: &[(&str, &str)] = &[
-        ("DATABASE_BACKEND", "postgres"),
-        (
-            "DATABASE_URL",
-            "postgres://user:pass@localhost:5432/steward",
-        ),
+        ("DATABASE_BACKEND", "libsql"),
+        ("LIBSQL_PATH", "/home/user/.steward/steward.db"),
         ("LLM_BACKEND", "nearai"),
         ("NEARAI_API_KEY", "key_abc123"),
         ("EMBEDDING_ENABLED", "true"),
@@ -251,9 +248,9 @@ fn bootstrap_env_preserves_existing_values() {
         "LLM_BACKEND must be updated after upsert"
     );
     assert_eq!(
-        map3.get("DATABASE_URL").map(String::as_str),
-        Some("postgres://user:pass@localhost:5432/steward"),
-        "DATABASE_URL must be preserved after upsert of different key"
+        map3.get("LIBSQL_PATH").map(String::as_str),
+        Some("/home/user/.steward/steward.db"),
+        "LIBSQL_PATH must be preserved after upsert of different key"
     );
     assert_eq!(
         map3.get("LLM_MODEL").map(String::as_str),
@@ -274,8 +271,8 @@ fn bootstrap_env_handles_special_characters() {
         ("AGENT_NAME", "my steward agent"),
         // Equals signs in values (e.g., base64 tokens)
         ("API_TOKEN", "dGVzdA=="),
-        // Hash characters (common in URL-encoded passwords, treated as comments without quoting)
-        ("DATABASE_URL", "postgres://user:p%23assword@host:5432/db"),
+        // Hash characters inside a path would be treated as comments without quoting.
+        ("LIBSQL_PATH", "/tmp/steward#workspace/steward.db"),
         // Single quotes inside double-quoted values
         ("GREETING", "it's a test"),
         // Double quotes (must be escaped)

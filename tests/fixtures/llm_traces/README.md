@@ -239,12 +239,12 @@ Example (top-level):
 
 ```json
 {
-  "model_name": "recorded-telegram-check",
+  "model_name": "recorded-desktop-check",
   "expects": {
-    "response_contains": ["Telegram", "connected"],
+    "response_contains": ["desktop", "connected"],
     "tools_used": ["echo"],
     "all_tools_succeeded": true,
-    "tool_results_contain": { "echo": "Checking telegram" },
+    "tool_results_contain": { "echo": "Checking desktop" },
     "min_responses": 1
   },
   "steps": [ ... ]

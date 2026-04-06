@@ -1,7 +1,7 @@
 {
-  "model_name": "recorded-telegram-check",
+  "model_name": "recorded-desktop-check",
   "expects": {
-    "response_contains": ["Telegram", "connected"],
+    "response_contains": ["desktop", "connected"],
     "tools_used": ["tool_list"],
     "all_tools_succeeded": true,
     "tool_results_contain": { "tool_list": "extensions" },
@@ -17,12 +17,12 @@
     {
       "response": {
         "type": "user_input",
-        "content": "is telegram connected?"
+        "content": "is desktop connected?"
       }
     },
     {
       "request_hint": {
-        "last_user_message_contains": "is telegram connected?"
+        "last_user_message_contains": "is desktop connected?"
       },
       "response": {
         "type": "tool_calls",
@@ -41,7 +41,7 @@
     },
     {
       "request_hint": {
-        "last_user_message_contains": "is telegram connected?"
+        "last_user_message_contains": "is desktop connected?"
       },
       "expected_tool_results": [
         {
@@ -52,7 +52,7 @@
       ],
       "response": {
         "type": "text",
-        "content": "Yes! **Telegram is connected** and working.",
+        "content": "Yes! **Desktop is connected** and working.",
         "input_tokens": 300,
         "output_tokens": 50
       }

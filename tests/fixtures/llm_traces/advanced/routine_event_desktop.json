@@ -1,5 +1,5 @@
 {
-  "model_name": "advanced-routine-event-telegram",
+  "model_name": "advanced-routine-event-desktop",
   "expects": {
     "tools_used": ["routine_create"],
     "all_tools_succeeded": true,
@@ -11,13 +11,13 @@
         "type": "tool_calls",
         "tool_calls": [
           {
-            "id": "call_routine_create_event_telegram",
+            "id": "call_routine_create_event_desktop",
             "name": "routine_create",
             "arguments": {
-              "name": "telegram-bug-watcher",
-              "description": "Watch Telegram bug reports and alert on them.",
+              "name": "desktop-bug-watcher",
+              "description": "Watch desktop bug reports and alert on them.",
               "trigger_type": "event",
-              "event_channel": "telegram",
+              "event_channel": "desktop",
               "event_pattern": "^bug\\b",
               "prompt": "Summarize the bug report in one line."
             }
@@ -30,7 +30,7 @@
     {
       "response": {
         "type": "text",
-        "content": "Created the telegram-bug-watcher routine for Telegram bug messages.",
+        "content": "Created the desktop-bug-watcher routine for desktop bug messages.",
         "input_tokens": 180,
         "output_tokens": 20
       }

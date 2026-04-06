@@ -8,8 +8,8 @@
 //!    then normalizes to \[0,1\] by dividing by the maximum combined score.
 //!
 //! Both strategies combine results from:
-//! - PostgreSQL / libSQL full-text search
-//! - pgvector / libsql_vector cosine similarity search
+//! - libSQL full-text search
+//! - libSQL vector similarity search
 
 use std::collections::HashMap;
 

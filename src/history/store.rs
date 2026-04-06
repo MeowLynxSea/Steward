@@ -1,4 +1,4 @@
-//! History store types (non-postgres implementation).
+//! History store types for the current libSQL-backed runtime.
 
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
@@ -113,7 +113,7 @@ pub struct ConversationSummary {
     pub last_activity: DateTime<Utc>,
     /// Thread type extracted from metadata (e.g. "assistant", "thread").
     pub thread_type: Option<String>,
-    /// Channel that owns this conversation (e.g. "gateway", "telegram", "routine").
+    /// Channel-like source tag that owns this conversation (e.g. "desktop", "routine", "heartbeat").
     pub channel: String,
 }
 
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn test_conversation_summary_has_channel_field() {
         // Regression: ConversationSummary must include a `channel` field
-        // so the gateway can distinguish thread origins.
+        // so desktop/runtime flows can distinguish thread origins.
         let summary = ConversationSummary {
             id: Uuid::nil(),
             title: Some("Hello".to_string()),
@@ -151,14 +151,14 @@ mod tests {
             started_at: Utc::now(),
             last_activity: Utc::now(),
             thread_type: Some("thread".to_string()),
-            channel: "telegram".to_string(),
+            channel: "desktop".to_string(),
         };
-        assert_eq!(summary.channel, "telegram");
+        assert_eq!(summary.channel, "desktop");
     }
 
     #[test]
     fn test_conversation_summary_channel_various_values() {
-        for ch in ["gateway", "routine", "heartbeat", "telegram", "signal"] {
+        for ch in ["desktop", "routine", "heartbeat"] {
             let summary = ConversationSummary {
                 id: Uuid::nil(),
                 title: None,

@@ -4,7 +4,6 @@ import { createEventStream, type StreamHandle } from "../stream";
 import type {
   ActiveToolCall,
   SessionDetail,
-  SessionMessage,
   SessionSummary,
   StreamEnvelope,
   StreamingState,
@@ -113,7 +112,7 @@ class SessionsState {
     // Clear any previous error when sending a new message
     this.error = null;
 
-    const optimistic: SessionMessage = {
+    const optimistic = {
       id: crypto.randomUUID(),
       role: "user",
       content: content.trim(),
@@ -121,7 +120,7 @@ class SessionsState {
     };
     this.active = {
       ...this.active,
-      messages: [...this.active.messages, optimistic]
+      thread_messages: [...this.active.thread_messages, optimistic]
     };
 
     // Reset streaming state for new message — immediately show thinking
@@ -140,15 +139,16 @@ class SessionsState {
       );
       this.active = {
         ...this.active,
-        current_task: response.task ?? this.active.current_task
+        active_thread_id: response.active_thread_id,
+        active_thread_task: response.active_thread_task ?? this.active.active_thread_task
       };
       await this.refreshActiveTaskDetail();
-      this.status = response.task_id
+      this.status = response.active_thread_task_id
         ? `Message queued in ${this.messageMode} mode`
         : "Message queued";
 
-      // Fallback only if body streaming never arrives. Delay it enough that a
-      // healthy SSE session is not replaced by a sudden full refresh.
+      // Fallback only if live Tauri events never arrive. Delay it enough that a
+      // healthy event stream is not replaced by a sudden full refresh.
       this.#startPollFallback();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to send message";
@@ -186,9 +186,9 @@ class SessionsState {
         const fresh = await apiClient.getSession(sessionId);
         if (!fresh || this.activeId !== sessionId) return;
 
-        // If DB has more messages than we're displaying, SSE missed them
-        const currentCount = this.active?.messages.length ?? 0;
-        if (fresh.messages.length > currentCount) {
+        // If DB has more messages than we're displaying, the live event stream missed them
+        const currentCount = this.active?.thread_messages.length ?? 0;
+        if (fresh.thread_messages.length > currentCount) {
           this.active = fresh;
           this.streaming = emptyStreamingState();
         }
@@ -208,7 +208,7 @@ class SessionsState {
   }
 
   async refreshActiveTaskDetail() {
-    const taskId = this.active?.current_task?.id;
+    const taskId = this.active?.active_thread_task?.id;
     if (!taskId || !this.active) {
       this.activeTaskDetail = null;
       this.activeTaskLoading = false;
@@ -221,7 +221,7 @@ class SessionsState {
       this.activeTaskDetail = detail;
       this.active = {
         ...this.active,
-        current_task: detail.task
+        active_thread_task: detail.task
       };
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to load active run detail";
@@ -253,8 +253,8 @@ class SessionsState {
         const finalContent = this.streaming.streamingContent || content;
         this.active = {
           ...this.active,
-          messages: [
-            ...this.active.messages,
+          thread_messages: [
+            ...this.active.thread_messages,
             {
               id: crypto.randomUUID(),
               role: "assistant",

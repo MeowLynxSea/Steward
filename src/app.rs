@@ -696,6 +696,7 @@ impl AppBuilder {
                 Some(Arc::clone(hooks)),
                 wasm_tool_runtime.clone(),
                 self.config.wasm.tools_dir.clone(),
+                self.config.channels.wasm_channels.dir.clone(),
                 self.config.tunnel.public_url.clone(),
                 self.config.owner_id.clone(),
                 self.db.clone(),

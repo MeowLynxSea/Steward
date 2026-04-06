@@ -190,7 +190,7 @@ pub struct PendingApproval {
     /// Tool parameters (original values, used for execution).
     pub parameters: serde_json::Value,
     /// Redacted tool parameters (sensitive values replaced with `[REDACTED]`).
-    /// Used for display in approval UI, logs, and SSE broadcasts.
+    /// Used for display in approval UI, logs, and runtime event payloads.
     #[serde(default)]
     pub display_parameters: serde_json::Value,
     /// Description of what the tool will do.
@@ -896,10 +896,10 @@ mod tests {
         let mut thread = Thread::new(Uuid::new_v4());
         assert!(thread.pending_auth.is_none());
 
-        thread.enter_auth_mode("telegram".to_string());
+        thread.enter_auth_mode("desktop-auth".to_string());
         assert!(thread.pending_auth.is_some());
         let pending = thread.pending_auth.as_ref().unwrap();
-        assert_eq!(pending.extension_name, "telegram");
+        assert_eq!(pending.extension_name, "desktop-auth");
         assert!(pending.created_at >= before);
         assert!(!pending.is_expired());
     }

@@ -1,4 +1,5 @@
-//! Agent-callable tools for managing extensions (MCP servers and WASM tools).
+//! Agent-callable tools for managing extensions (WASM channels, WASM tools,
+//! and MCP servers).
 //!
 //! These six tools let the LLM search, install, authenticate, activate, list,
 //! and remove extensions entirely through conversation.
@@ -31,7 +32,7 @@ impl Tool for ToolSearchTool {
 
     fn description(&self) -> &str {
         "Search for available extensions to add new capabilities. Extensions include \
-         tools and MCP servers. Use discover:true to search online if the built-in registry \
+         channels, tools, and MCP servers. Use discover:true to search online if the built-in registry \
          has no results."
     }
 
@@ -101,7 +102,7 @@ impl Tool for ToolInstallTool {
     }
 
     fn description(&self) -> &str {
-        "Install an extension (tool or MCP server). \
+        "Install an extension (channel, tool, or MCP server). \
          Use the name from tool_search results, or provide an explicit URL."
     }
 
@@ -119,7 +120,7 @@ impl Tool for ToolInstallTool {
                 },
                 "kind": {
                     "type": "string",
-                    "enum": ["mcp_server", "wasm_tool"],
+                    "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
                     "description": "Extension type (auto-detected if omitted)"
                 }
             },
@@ -144,6 +145,7 @@ impl Tool for ToolInstallTool {
             .and_then(|k| match k {
                 "mcp_server" => Some(ExtensionKind::McpServer),
                 "wasm_tool" => Some(ExtensionKind::WasmTool),
+                "wasm_channel" => Some(ExtensionKind::WasmChannel),
                 _ => None,
             });
 
@@ -255,13 +257,7 @@ impl Tool for ToolAuthTool {
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        // In gateway mode, tool_auth only returns an auth URL for the frontend
-        // to open — no browser is launched server-side, so no approval needed.
-        if self.manager.should_use_gateway_mode() {
-            ApprovalRequirement::Never
-        } else {
-            ApprovalRequirement::UnlessAutoApproved
-        }
+        ApprovalRequirement::UnlessAutoApproved
     }
 }
 
@@ -388,7 +384,7 @@ impl Tool for ToolListTool {
             "properties": {
                 "kind": {
                     "type": "string",
-                    "enum": ["mcp_server", "wasm_tool"],
+                    "enum": ["mcp_server", "wasm_tool", "wasm_channel"],
                     "description": "Filter by extension type (omit to list all)"
                 },
                 "include_available": {
@@ -413,6 +409,7 @@ impl Tool for ToolListTool {
             .and_then(|k| match k {
                 "mcp_server" => Some(ExtensionKind::McpServer),
                 "wasm_tool" => Some(ExtensionKind::WasmTool),
+                "wasm_channel" => Some(ExtensionKind::WasmChannel),
                 _ => None,
             });
 
@@ -748,22 +745,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn tool_auth_no_approval_in_gateway_mode() {
-        let manager = test_manager_stub();
-        manager
-            .enable_gateway_mode("http://localhost:3000".to_string())
-            .await;
-        let tool = ToolAuthTool {
-            manager: manager.clone(),
-        };
-        assert_eq!(
-            tool.requires_approval(&serde_json::json!({})),
-            ApprovalRequirement::Never,
-            "tool_auth should not require approval in gateway mode"
-        );
-    }
-
     #[test]
     fn test_tool_upgrade_schema() {
         use crate::tools::tool::ApprovalRequirement;
@@ -814,6 +795,7 @@ mod tests {
             None,
             None,
             std::env::temp_dir().join("steward-test-tools"),
+            std::env::temp_dir().join("steward-test-channels"),
             None,
             "test".to_string(),
             None,

@@ -20,7 +20,7 @@ This directory contains the backend conventions that are already active in the r
 | [Error Handling](./error-handling.md) | Error types, handling strategies | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Active |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | Active |
-| [Task Runtime Contracts](./task-runtime-contracts.md) | Session/run APIs, Ask/Yolo rules, SSE contracts | Active |
+| [Task Runtime Contracts](./task-runtime-contracts.md) | Session/thread IPC contracts, Ask/Yolo rules, run snapshot rules | Active |
 
 ---
 

@@ -1,12 +1,12 @@
 //! WASM binary storage with integrity verification.
 //!
-//! Stores compiled WASM tools in PostgreSQL with BLAKE3 hash verification.
+//! Stores compiled WASM tools in the configured database with BLAKE3 hash verification.
 //! On load, the hash is verified to detect tampering.
 //!
 //! # Storage Flow
 //!
 //! ```text
-//! WASM bytes ──► BLAKE3 hash ──► Store in PostgreSQL
+//! WASM bytes ──► BLAKE3 hash ──► Store in libSQL
 //!                    │               (binary + hash)
 //!                    │
 //!                    └──► Later: Load ──► Verify hash ──► Return bytes

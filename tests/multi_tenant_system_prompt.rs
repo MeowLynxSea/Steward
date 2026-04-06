@@ -239,11 +239,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn telegram_system_prompt_uses_normal_reply_guidance() {
+    async fn desktop_system_prompt_uses_normal_reply_guidance() {
         let trace = simple_trace(1);
         let rig = TestRigBuilder::new().with_trace(trace).build().await;
 
-        let msg = IncomingMessage::new("telegram", "telegram-user", "Hello there");
+        let msg = IncomingMessage::new("desktop", "desktop-user", "Hello there");
         rig.send_incoming(msg).await;
         let _responses = rig.wait_for_responses(1, TIMEOUT).await;
 
@@ -253,11 +253,11 @@ mod tests {
 
         let has_reply_guidance =
             system_prompt.contains("Use normal assistant output to reply here");
-        let has_telegram_formatting = system_prompt.contains("## Channel Formatting (telegram)")
+        let has_desktop_formatting = system_prompt.contains("## Channel Formatting (desktop)")
             && system_prompt.contains("No markdown tables");
         assert!(
-            has_reply_guidance || has_telegram_formatting,
-            "System prompt should preserve Telegram reply/channel guidance.\n\
+            has_reply_guidance || has_desktop_formatting,
+            "System prompt should preserve desktop reply/channel guidance.\n\
              Actual system prompt:\n{system_prompt}"
         );
         assert!(

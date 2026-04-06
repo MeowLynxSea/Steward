@@ -15,7 +15,6 @@ Commands:
   routines    Manage routines
   mcp         Manage MCP servers
   memory      Manage workspace memory
-  pairing     Manage DM pairing
   service     Manage OS service
   skills      Manage skills
   hooks       Manage lifecycle hooks

@@ -26,8 +26,8 @@ impl ExtensionRegistry {
 
     /// Create a new registry merging builtin entries with catalog-provided entries.
     ///
-    /// Deduplicates by `(name, kind)` pair -- a builtin MCP "slack" and a registry
-    /// WASM "slack" can coexist since they're different kinds.
+    /// Deduplicates by `(name, kind)` pair -- a builtin MCP "desktop-bridge" and a registry
+    /// WASM "desktop-bridge" can coexist since they're different kinds.
     pub fn new_with_catalog(catalog_entries: Vec<RegistryEntry>) -> Self {
         let mut entries = builtin_entries();
         for entry in catalog_entries {
@@ -433,13 +433,13 @@ mod tests {
     async fn test_new_with_catalog() {
         let catalog_entries = vec![
             RegistryEntry {
-                name: "telegram".to_string(),
-                display_name: "Telegram".to_string(),
+                name: "desktop-bridge".to_string(),
+                display_name: "Desktop Bridge".to_string(),
                 kind: ExtensionKind::McpServer,
-                description: "Telegram MCP server".to_string(),
+                description: "Desktop bridge MCP server".to_string(),
                 keywords: vec!["messaging".into(), "bot".into()],
                 source: ExtensionSource::McpUrl {
-                    url: "https://mcp.telegram.example.com".to_string(),
+                    url: "https://mcp.desktop.example.com".to_string(),
                 },
                 fallback_source: None,
                 auth_hint: AuthHint::Dcr,
@@ -478,10 +478,10 @@ mod tests {
 
         let registry = ExtensionRegistry::new_with_catalog(catalog_entries);
 
-        // Should find the new telegram entry
-        let results = registry.search("telegram").await;
-        assert!(!results.is_empty(), "Should find telegram from catalog");
-        assert_eq!(results[0].entry.name, "telegram");
+        // Should find the new desktop bridge entry
+        let results = registry.search("desktop-bridge").await;
+        assert!(!results.is_empty(), "Should find desktop-bridge from catalog");
+        assert_eq!(results[0].entry.name, "desktop-bridge");
 
         // Should have both MCP and WASM entries with the same name
         let results = registry.search("dual-ext").await;
@@ -537,31 +537,31 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_with_kind_resolves_collision() {
-        // Two entries with the same name but different kinds (the telegram collision scenario)
+        // Two entries with the same name but different kinds must coexist.
         let catalog_entries = vec![
             RegistryEntry {
-                name: "telegram".to_string(),
-                display_name: "Telegram Tool".to_string(),
+                name: "desktop-bridge".to_string(),
+                display_name: "Desktop Bridge Tool".to_string(),
                 kind: ExtensionKind::WasmTool,
-                description: "Telegram MTProto tool".to_string(),
+                description: "Desktop bridge tool".to_string(),
                 keywords: vec!["messaging".into()],
                 source: ExtensionSource::WasmBuildable {
-                    source_dir: "tools-src/telegram".to_string(),
-                    build_dir: Some("tools-src/telegram".to_string()),
-                    crate_name: Some("telegram-tool".to_string()),
+                    source_dir: "tools-src/desktop-bridge".to_string(),
+                    build_dir: Some("tools-src/desktop-bridge".to_string()),
+                    crate_name: Some("desktop-bridge-tool".to_string()),
                 },
                 fallback_source: None,
                 auth_hint: AuthHint::CapabilitiesAuth,
                 version: None,
             },
             RegistryEntry {
-                name: "telegram".to_string(),
-                display_name: "Telegram MCP".to_string(),
+                name: "desktop-bridge".to_string(),
+                display_name: "Desktop Bridge MCP".to_string(),
                 kind: ExtensionKind::McpServer,
-                description: "Telegram MCP server".to_string(),
+                description: "Desktop bridge MCP server".to_string(),
                 keywords: vec!["messaging".into(), "bot".into()],
                 source: ExtensionSource::McpUrl {
-                    url: "https://mcp.telegram.example.com".to_string(),
+                    url: "https://mcp.desktop.example.com".to_string(),
                 },
                 fallback_source: None,
                 auth_hint: AuthHint::Dcr,
@@ -572,36 +572,36 @@ mod tests {
         let registry = ExtensionRegistry::new_with_catalog(catalog_entries);
 
         // Without kind hint, get() returns the first match (WasmTool)
-        let entry = registry.get("telegram").await;
+        let entry = registry.get("desktop-bridge").await;
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
 
         // With kind hint for McpServer, get_with_kind() returns the MCP entry
         let entry = registry
-            .get_with_kind("telegram", Some(ExtensionKind::McpServer))
+            .get_with_kind("desktop-bridge", Some(ExtensionKind::McpServer))
             .await;
         assert!(entry.is_some());
         let entry = entry.unwrap();
         assert_eq!(entry.kind, ExtensionKind::McpServer);
-        assert_eq!(entry.display_name, "Telegram MCP");
+        assert_eq!(entry.display_name, "Desktop Bridge MCP");
 
         // With kind hint for WasmTool, get_with_kind() returns the tool entry
         let entry = registry
-            .get_with_kind("telegram", Some(ExtensionKind::WasmTool))
+            .get_with_kind("desktop-bridge", Some(ExtensionKind::WasmTool))
             .await;
         assert!(entry.is_some());
         let entry = entry.unwrap();
         assert_eq!(entry.kind, ExtensionKind::WasmTool);
-        assert_eq!(entry.display_name, "Telegram Tool");
+        assert_eq!(entry.display_name, "Desktop Bridge Tool");
 
         // Without kind hint (None), get_with_kind() falls back to first match
-        let entry = registry.get_with_kind("telegram", None).await;
+        let entry = registry.get_with_kind("desktop-bridge", None).await;
         assert!(entry.is_some());
         assert_eq!(entry.unwrap().kind, ExtensionKind::WasmTool);
 
-        // Kind mismatch: no extra kind named "telegram" exists beyond MCP/WASM tool.
+        // Kind mismatch: no extra kind named "desktop-bridge" exists beyond MCP/WASM tool.
         let entry = registry
-            .get_with_kind("telegram", Some(ExtensionKind::McpServer))
+            .get_with_kind("desktop-bridge", Some(ExtensionKind::McpServer))
             .await;
         assert!(entry.is_some());
     }
@@ -667,26 +667,26 @@ mod tests {
         // An MCP server and WASM tool with the same name must coexist.
         let catalog_entries = vec![
             RegistryEntry {
-                name: "telegram".to_string(),
-                display_name: "Telegram MCP".to_string(),
+                name: "desktop-bridge".to_string(),
+                display_name: "Desktop Bridge MCP".to_string(),
                 kind: ExtensionKind::McpServer,
-                description: "Telegram MCP server".to_string(),
+                description: "Desktop bridge MCP server".to_string(),
                 keywords: vec!["messaging".into()],
                 source: ExtensionSource::McpUrl {
-                    url: "https://mcp.telegram.example.com".to_string(),
+                    url: "https://mcp.desktop.example.com".to_string(),
                 },
                 fallback_source: None,
                 auth_hint: AuthHint::Dcr,
                 version: None,
             },
             RegistryEntry {
-                name: "telegram".to_string(),
-                display_name: "Telegram Tool".to_string(),
+                name: "desktop-bridge".to_string(),
+                display_name: "Desktop Bridge Tool".to_string(),
                 kind: ExtensionKind::WasmTool,
-                description: "Telegram API tool".to_string(),
+                description: "Desktop bridge API tool".to_string(),
                 keywords: vec!["messaging".into()],
                 source: ExtensionSource::WasmBuildable {
-                    source_dir: "tools-src/telegram".to_string(),
+                    source_dir: "tools-src/desktop-bridge".to_string(),
                     build_dir: None,
                     crate_name: None,
                 },
@@ -702,22 +702,22 @@ mod tests {
         // Both should exist since they have different kinds.
         let mcp_server = all
             .iter()
-            .find(|e| e.name == "telegram" && e.kind == ExtensionKind::McpServer);
+            .find(|e| e.name == "desktop-bridge" && e.kind == ExtensionKind::McpServer);
         let tool = all
             .iter()
-            .find(|e| e.name == "telegram" && e.kind == ExtensionKind::WasmTool);
+            .find(|e| e.name == "desktop-bridge" && e.kind == ExtensionKind::WasmTool);
 
         assert!(mcp_server.is_some(), "MCP server entry missing");
         assert!(tool.is_some(), "Tool entry missing");
 
         // Search should return both.
-        let results = registry.search("telegram").await;
+        let results = registry.search("desktop-bridge").await;
         let mcp_server_hit = results
             .iter()
-            .any(|r| r.entry.name == "telegram" && r.entry.kind == ExtensionKind::McpServer);
+            .any(|r| r.entry.name == "desktop-bridge" && r.entry.kind == ExtensionKind::McpServer);
         let tool_hit = results
             .iter()
-            .any(|r| r.entry.name == "telegram" && r.entry.kind == ExtensionKind::WasmTool);
+            .any(|r| r.entry.name == "desktop-bridge" && r.entry.kind == ExtensionKind::WasmTool);
         assert!(mcp_server_hit, "Search should find MCP server");
         assert!(tool_hit, "Search should find tool");
     }

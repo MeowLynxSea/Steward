@@ -27,9 +27,9 @@ use steward_common::truncate_preview;
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 
 fn requires_preexisting_uuid_thread(channel: &str) -> bool {
-    // Gateway-style channels send server-issued conversation UUIDs.
+    // Desktop-driven threads send runtime-issued conversation UUIDs.
     // Unknown UUIDs should be rejected instead of silently creating a new thread.
-    matches!(channel, "gateway" | "test")
+    matches!(channel, "desktop" | "test")
 }
 
 impl Agent {
@@ -47,7 +47,7 @@ impl Agent {
         message: &IncomingMessage,
         external_thread_id: &str,
     ) -> Option<String> {
-        // Only hydrate UUID-shaped thread IDs (web gateway uses UUIDs)
+        // Only hydrate UUID-shaped thread IDs used by persisted desktop threads.
         let thread_uuid = match Uuid::parse_str(external_thread_id) {
             Ok(id) => id,
             Err(_) => return None,
@@ -554,7 +554,7 @@ impl Agent {
                 )
                 .await;
 
-                // Send suggestions after response (best-effort, rendered by web gateway)
+                // Send suggestions after response (best-effort, rendered by the desktop UI)
                 if !suggestions.is_empty() {
                     let _ = self
                         .channels

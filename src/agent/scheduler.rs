@@ -68,7 +68,7 @@ pub struct Scheduler {
     extension_manager: Option<Arc<ExtensionManager>>,
     store: Option<AdminScope>,
     hooks: Arc<HookRegistry>,
-    /// SSE manager for live job event streaming.
+    /// Runtime event broadcaster for live job event streaming.
     sse_tx: Option<Arc<crate::runtime_events::SseManager>>,
     /// HTTP interceptor for trace recording/replay (propagated to workers).
     http_interceptor: Option<Arc<dyn crate::llm::recording::HttpInterceptor>>,
@@ -104,7 +104,7 @@ impl Scheduler {
         }
     }
 
-    /// Set the SSE manager for live job event streaming.
+    /// Set the runtime event broadcaster for live job event streaming.
     pub fn set_sse_sender(&mut self, sse: Arc<crate::runtime_events::SseManager>) {
         self.sse_tx = Some(sse);
     }

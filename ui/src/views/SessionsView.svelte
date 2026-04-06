@@ -20,7 +20,10 @@
   function currentSessionTask() {
     const active = sessionsStore.active;
     if (!active) return null;
-    return tasksStore.list.find((task) => task.id === active.session.id) ?? active.current_task;
+    return (
+      tasksStore.list.find((task) => task.id === active.active_thread_id) ??
+      active.active_thread_task
+    );
   }
 
   function currentSessionTaskDetail() {
@@ -74,8 +77,8 @@
 
   function sessionSubtitle(): string {
     const active = sessionsStore.active;
-    if (!active) return "Open a session to chat with the local agent.";
-    return `${active.session.channel} · ${active.messages.length} messages`;
+    if (!active) return "Open a desktop session to chat with the local agent.";
+    return `Thread ${active.active_thread_id.slice(0, 8)} · ${active.thread_messages.length} messages`;
   }
 </script>
 
@@ -97,8 +100,8 @@
 
       <div class="startup-hints">
         <article class="mini-card">
-          <strong>Session = workspace</strong>
-          <span>Each chat opens as its own workspace-focused conversation.</span>
+          <strong>Session owns threads</strong>
+          <span>Each desktop session keeps one active conversation thread open here.</span>
         </article>
         <article class="mini-card">
           <strong>Workspace rail</strong>
@@ -130,7 +133,7 @@
               onclick={() => void sessionsStore.select(session.id)}
             >
               <strong>{session.title}</strong>
-              <span>{session.message_count} msgs</span>
+              <span>{session.turn_count} turns</span>
               <span>{formatDateTime(session.last_activity)}</span>
             </button>
           {/each}
@@ -178,13 +181,13 @@
         {/if}
 
         <div class="message-stream chat-stream">
-          {#if sessionsStore.active.messages.length === 0}
+          {#if sessionsStore.active.thread_messages.length === 0}
             <div class="empty-state">
               <h3>Send the first message</h3>
               <p>Describe the task, constraints, and what outcome you want back.</p>
             </div>
           {:else}
-            {#each sessionsStore.active.messages as message}
+            {#each sessionsStore.active.thread_messages as message}
               <article class={`message-bubble ${message.role === "user" ? "user" : "assistant"}`}>
                 <header>
                   <strong>{message.role}</strong>

@@ -1,7 +1,7 @@
 //! E2E regression test: forged thread IDs must not cross user boundaries.
 //!
 //! Demonstrates that a client cannot provide another user's conversation UUID
-//! and get that history hydrated into prompt context or written into.
+//! and get that history hydrated into prompt context or written into it.
 
 #[cfg(feature = "libsql")]
 mod support;
@@ -48,7 +48,7 @@ mod tests {
         let store = rig.database();
         assert!(
             store
-                .ensure_conversation(foreign_thread_id, "gateway", "victim-user", None)
+                .ensure_conversation(foreign_thread_id, "desktop", "victim-user", None)
                 .await
                 .expect("failed to create victim conversation"),
             "test setup failed: victim conversation was not created"

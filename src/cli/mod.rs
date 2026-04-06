@@ -23,7 +23,6 @@ mod mcp;
 pub mod memory;
 mod models;
 pub mod oauth_defaults;
-mod pairing;
 mod registry;
 mod routines;
 mod service;
@@ -42,7 +41,6 @@ pub use mcp::{McpCommand, run_mcp_command};
 pub use memory::MemoryCommand;
 pub use memory::run_memory_command_with_db;
 pub use models::{ModelsCommand, run_models_command};
-pub use pairing::{PairingCommand, run_pairing_command, run_pairing_command_with_store};
 pub use registry::{RegistryCommand, run_registry_command};
 pub use routines::{RoutinesCommand, run_routines_command};
 pub use service::{ServiceCommand, run_service_command};
@@ -143,14 +141,6 @@ pub enum Command {
         long_about = "Search, read, or write to memory.\nExample: steward memory search 'query'"
     )]
     Memory(MemoryCommand),
-
-    /// DM pairing (approve inbound requests from unknown senders)
-    #[command(
-        subcommand,
-        about = "Manage DM pairing",
-        long_about = "Approve or manage pairing requests.\nExamples:\n  steward pairing list telegram\n  steward pairing approve telegram ABC12345"
-    )]
-    Pairing(PairingCommand),
 
     /// Manage OS service (launchd / systemd)
     #[command(

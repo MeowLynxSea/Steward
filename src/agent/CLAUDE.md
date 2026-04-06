@@ -26,7 +26,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `routine_engine.rs` | Cron ticker and event matcher. Fires routines when triggers match. Lightweight runs inline; full_job dispatches to `Scheduler`. |
 | `task.rs` | Task types for the scheduler: `Job`, `ToolExec`, `Background`. Used by `spawn_subtask` and `spawn_batch`. |
 | `cost_guard.rs` | LLM spend and action-rate enforcement. Tracks daily budget (cents) and hourly call rate. Lives in `AgentDeps`. |
-| `job_monitor.rs` | Subscribes to SSE broadcast and injects Claude Code job output back into the agent loop as `IncomingMessage`. |
+| `job_monitor.rs` | Subscribes to runtime job events and injects Claude Code job output back into the agent loop as `IncomingMessage`. |
 
 ## Session / Thread / Turn Model
 
@@ -66,7 +66,7 @@ run_agentic_loop(delegate, reasoning, reason_ctx, config)
   7. Repeat until LoopOutcome returned or max_iterations reached
 ```
 
-**Tool approval:** Tools flagged `requires_approval` pause the loop — `ChatDelegate` returns `LoopOutcome::NeedApproval(pending)`. The web gateway stores the `PendingApproval` in session state and sends an `approval_needed` SSE event. The user's approval/deny resumes the loop.
+**Tool approval:** Tools flagged `requires_approval` pause the loop — `ChatDelegate` returns `LoopOutcome::NeedApproval(pending)`. The desktop runtime stores the `PendingApproval` in thread/session state and emits an `approval_needed` runtime event. The user's approval/deny resumes the loop.
 
 **Shared tool execution:** `tools/execute.rs` provides `execute_tool_with_safety()` (validate → timeout → execute → serialize) and `process_tool_result()` (sanitize → wrap → ChatMessage), used by all three delegates.
 
@@ -152,7 +152,7 @@ All commands parsed by `SubmissionParser::parse()`:
 | `yes/y/approve/ok` and aliases | `ApprovalResponse { approved: true, always: false }` | |
 | `always/a` and aliases | `ApprovalResponse { approved: true, always: true }` | |
 | `no/n/deny/reject/cancel` and aliases | `ApprovalResponse { approved: false }` | |
-| JSON `ExecApproval{...}` | `ExecApproval` | From web gateway approval endpoint |
+| JSON `ExecApproval{...}` | `ExecApproval` | From desktop approval IPC flow |
 | `/help`, `/?` | `SystemCommand { "help" }` | Bypasses thread-state checks |
 | `/version` | `SystemCommand { "version" }` | |
 | `/tools` | `SystemCommand { "tools" }` | |

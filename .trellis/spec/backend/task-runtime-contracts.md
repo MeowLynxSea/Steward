@@ -1,6 +1,6 @@
 # Task Runtime Contracts
 
-> Contracts for session-driven execution, persisted runs, and Ask/Yolo approval behavior.
+> Contracts for thread-driven desktop chat execution, secondary run snapshots, and Ask/Yolo approval behavior.
 
 ---
 
@@ -8,39 +8,39 @@
 
 ### 1. Scope / Trigger
 
-- Trigger: any change to session messaging, run creation, Ask/Yolo checkpoints, SSE streams, or run-mode switching.
-- Trigger: any API work under `/api/v0/sessions*`, `/api/v0/runs*`, or task/run-related settings behavior.
+- Trigger: any change to session/thread messaging, run snapshot creation, Ask/Yolo checkpoints, Tauri events, or mode switching.
+- Trigger: any Tauri IPC work that changes session/thread/task behavior.
 
 This contract exists to keep the product session-first while preserving durable execution records.
 
 ### 2. Signatures
 
-#### Session APIs
+#### Desktop IPC Commands
 
-```http
-POST /api/v0/sessions
-GET  /api/v0/sessions
-GET  /api/v0/sessions/:id
-POST /api/v0/sessions/:id/messages
-GET  /api/v0/sessions/:id/stream
+```text
+list_sessions
+create_session
+get_session
+send_session_message
+delete_session
 ```
 
-#### Run APIs
+#### Secondary execution commands
 
-```http
-GET    /api/v0/runs
-GET    /api/v0/runs/:id
-GET    /api/v0/runs/:id/stream
-POST   /api/v0/runs/:id/approve
-POST   /api/v0/runs/:id/reject
-PATCH  /api/v0/runs/:id/mode
-DELETE /api/v0/runs/:id
+```text
+list_tasks
+get_task
+approve_task
+reject_task
+patch_task_mode
+delete_task
 ```
 
 Rules:
 
-- `/api/v0/runs*` is the public session/run contract
-- `/api/v0/tasks*` may remain as a compatibility alias during migration, but it must expose the same durable record and state transitions
+- session/thread IPC is the public desktop contract
+- Tauri runtime events are the live update contract for desktop message/status streaming
+- task/run records remain secondary execution state, not the product center
 
 #### Core mode enum
 
@@ -56,9 +56,10 @@ enum RunMode {
 #### Product model
 
 - `session` is the primary user-facing object.
-- A user message may create, continue, or attach to one or more `runs`.
-- A `run` is the durable execution record for agent work.
-- Predefined workflow CRUD is not part of the core v0 contract.
+- `thread` is the primary conversational execution unit inside a session.
+- A user message always targets one thread inside one session.
+- A `run` or `task` is a durable execution snapshot for that thread when the runtime needs approval, mode tracking, or auditability.
+- Predefined workflow CRUD is not part of the core desktop contract.
 
 #### Run record shape
 
@@ -87,7 +88,7 @@ enum RunMode {
 }
 ```
 
-#### `GET /api/v0/runs/:id`
+#### `get_task`
 
 Response:
 
@@ -128,7 +129,7 @@ Rules:
 - detail must survive process restart
 - run detail is the authoritative reconstruction surface for the UI
 
-#### `POST /api/v0/sessions/:id/messages`
+#### `send_session_message`
 
 Request:
 
@@ -145,8 +146,9 @@ Response:
 {
   "accepted": true,
   "session_id": "uuid",
-  "task_id": "uuid-or-null",
-  "task": {
+  "active_thread_id": "uuid",
+  "active_thread_task_id": "uuid-or-null",
+  "active_thread_task": {
     "id": "uuid",
     "template_id": "legacy:session-thread",
     "mode": "ask",
@@ -168,13 +170,13 @@ Response:
 
 Rules:
 
-- `mode` is optional; if omitted, the current task mode stays in effect and a new session defaults to `ask`
-- the API must reject unsupported modes with `422`
-- a session-thread message should attach to the durable task/run record keyed by the same UUID as the session thread
-- if a task record is available, the API should expose `task_id` and the current task snapshot immediately
+- `mode` is optional; if omitted, the current thread mode stays in effect and a new thread defaults to `ask`
+- the IPC layer must reject unsupported modes
+- a thread message should attach to the durable task/run record keyed by the same UUID as the thread when a task record exists
+- if a task record is available, the IPC response should expose `active_thread_task_id` and the current thread task snapshot immediately
 - the effective mode must be persisted on the attached task record before the agent loop consumes the message
 
-#### `GET /api/v0/sessions/:id`
+#### `get_session`
 
 Response additions:
 
@@ -183,8 +185,9 @@ Response additions:
   "session": {
     "id": "uuid"
   },
-  "messages": [],
-  "current_task": {
+  "active_thread_id": "uuid",
+  "thread_messages": [],
+  "active_thread_task": {
     "id": "uuid",
     "template_id": "legacy:session-thread",
     "mode": "ask",
@@ -196,9 +199,9 @@ Response additions:
 
 Rules:
 
-- `current_task` is nullable
-- when present, it is the authoritative task/run record attached to that session thread
-- the UI must be able to render current execution state from session detail without guessing task identity from logs
+- `active_thread_task` is nullable
+- when present, it is the authoritative task/run record attached to the active thread
+- the UI must be able to render current execution state from session detail without guessing thread identity from logs
 
 #### Ask-mode contract
 
@@ -246,37 +249,40 @@ Rules:
 
 ### 4. Validation And Error Matrix
 
-| Condition | Expected Behavior | HTTP |
-|-----------|-------------------|------|
-| invalid mode | reject request | `422` |
-| session missing | reject message send | `404` |
-| run missing | reject run mutation/read | `404` |
-| approve when no pending approval | reject state transition | `409` |
-| reject when run already completed | reject state transition | `409` |
-| cancel when run already terminal | reject state transition | `409` |
+| Condition | Expected Behavior | IPC Error |
+|-----------|-------------------|-----------|
+| invalid mode | reject request | command returns validation error |
+| session missing | reject message send | command returns not found error |
+| thread missing | reject thread-scoped mutation/read | command returns not found error |
+| run missing | reject run mutation/read | command returns not found error |
+| approve when no pending approval | reject state transition | command returns conflict error |
+| reject when run already completed | reject state transition | command returns conflict error |
+| cancel when run already terminal | reject state transition | command returns conflict error |
 
 ### 5. Good / Base / Bad
 
 #### Good
 
-- the user chats naturally in a session, and the UI shows related run progress as needed
+- the user chats naturally in a session, each turn lands in a thread, and the UI shows related run progress as needed
 - Ask mode exposes real proposed side effects before execution
 - a completed run preserves outputs and errors for later review
 
 #### Base
 
 - sessions can exist without currently active runs
+- threads remain durable even when no run is currently attached
 - future routines may create runs without changing the core run contract
 
 #### Bad
 
 - the product requires users to create predefined workflows before they can use the agent
 - approval decisions are only visible as raw log text
-- run state is lost on refresh or restart
+- thread or run state is lost on refresh or restart
 
 ### 6. Tests Required
 
 - integration test for session creation and message send
+- integration test for thread creation/selection under a session
 - integration test proving a message can create a durable run record
 - integration test for Ask approval lifecycle
 - integration test for Yolo execution under the same safety policy

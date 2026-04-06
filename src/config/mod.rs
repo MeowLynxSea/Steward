@@ -6,8 +6,8 @@
 //! - **LLM settings** (backend, model, api_key, base_url): DB > env > default
 //! - **Most other settings** (agent, channels, tunnel, …): env > DB > default
 //!
-//! `DATABASE_URL` lives in `~/.steward/.env` (loaded via dotenvy early
-//! in startup).
+//! Bootstrap database settings such as `LIBSQL_PATH` live in
+//! `~/.steward/.env` (loaded via dotenvy early in startup).
 
 mod agent;
 mod builder;
@@ -19,7 +19,6 @@ mod heartbeat;
 pub(crate) mod helpers;
 mod hygiene;
 pub(crate) mod llm;
-pub mod relay;
 mod routines;
 mod safety;
 mod search;
@@ -39,17 +38,13 @@ use crate::settings::Settings;
 // Re-export all public types so `crate::config::FooConfig` continues to work.
 pub use self::agent::AgentConfig;
 pub use self::builder::BuilderModeConfig;
-pub use self::channels::{
-    ChannelsConfig, CliConfig, DEFAULT_GATEWAY_PORT, GatewayConfig, GatewayOidcConfig, HttpConfig,
-    SignalConfig,
-};
+pub use self::channels::{ChannelsConfig, DesktopConfig, WasmChannelsConfig};
 pub use self::claude_code::ClaudeCodeConfig;
 pub use self::database::{DatabaseBackend, DatabaseConfig, default_libsql_path};
 pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
 pub use self::hygiene::HygieneConfig;
 pub use self::llm::default_session_path;
-pub use self::relay::RelayConfig;
 pub use self::routines::RoutineConfig;
 pub use self::safety::SafetyConfig;
 use self::safety::resolve_safety_config;
@@ -106,9 +101,6 @@ pub struct Config {
     pub search: WorkspaceSearchConfig,
     pub workspace: WorkspaceConfig,
     pub observability: crate::observability::ObservabilityConfig,
-    /// Channel-relay integration (Slack via external relay service).
-    /// Present only when both `CHANNEL_RELAY_URL` and `CHANNEL_RELAY_API_KEY` are set.
-    pub relay: Option<RelayConfig>,
 }
 
 impl Config {
@@ -130,8 +122,6 @@ impl Config {
             owner_id: "default".to_string(),
             database: DatabaseConfig {
                 backend: DatabaseBackend::LibSql,
-                url: secrecy::SecretString::from("unused://test".to_string()),
-                pool_size: 1,
                 libsql_path: Some(libsql_path),
                 libsql_url: None,
                 libsql_auth_token: None,
@@ -140,10 +130,11 @@ impl Config {
             embeddings: EmbeddingsConfig::default(),
             tunnel: TunnelConfig::default(),
             channels: ChannelsConfig {
-                cli: CliConfig { enabled: false },
-                http: None,
-                gateway: None,
-                signal: None,
+                desktop: DesktopConfig { tauri_ipc: true },
+                wasm_channels: WasmChannelsConfig {
+                    enabled: false,
+                    dir: std::env::temp_dir().join("steward-test-wasm-channels"),
+                },
             },
             agent: AgentConfig::for_testing(),
             safety: SafetyConfig {
@@ -176,7 +167,6 @@ impl Config {
             search: WorkspaceSearchConfig::default(),
             workspace: WorkspaceConfig::default(),
             observability: crate::observability::ObservabilityConfig::default(),
-            relay: None,
         }
     }
 
@@ -339,9 +329,9 @@ impl Config {
         let channels = ChannelsConfig::resolve(settings, &owner_id)?;
 
         // Resolve the startup workspace against the durable owner scope. The
-        // gateway may expose a distinct sender identity, but the base runtime
-        // workspace stays owner-scoped and per-user gateway workspaces are
-        // handled separately by WorkspacePool.
+        // desktop runtime may receive different surface-level routing targets,
+        // but the base workspace stays owner-scoped and any alternate scopes
+        // are handled separately by WorkspacePool.
         let workspace = WorkspaceConfig::resolve(&owner_id)?;
 
         Ok(Self {
@@ -367,7 +357,6 @@ impl Config {
             observability: crate::observability::ObservabilityConfig {
                 backend: std::env::var("OBSERVABILITY_BACKEND").unwrap_or_else(|_| "none".into()),
             },
-            relay: RelayConfig::from_env(),
         })
     }
 }

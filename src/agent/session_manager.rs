@@ -317,6 +317,45 @@ impl SessionManager {
         // Create new thread
         let thread_id = {
             let mut sess = session.lock().await;
+            // If no external thread ID was provided, check if the session already has
+            // threads (loaded from DB on restart). Only reuse when the session has a
+            // single thread — this indicates a restored single-channel session where
+            // the frontend didn't pass thread_id on reconnect. Multi-thread sessions
+            // (different channels) should create fresh threads as before.
+            if external_thread_id.is_none() && sess.threads.len() == 1 {
+                // Session was likely restored from DB — reuse its thread
+                if let Some(active) = sess.active_thread {
+                    if sess.threads.contains_key(&active) {
+                        drop(sess);
+                        {
+                            let mut thread_map = self.thread_map.write().await;
+                            thread_map.insert(key, (owner_id.to_string(), active));
+                        }
+                        {
+                            let mut undo_managers = self.undo_managers.write().await;
+                            undo_managers
+                                .entry(active)
+                                .or_insert_with(|| Arc::new(Mutex::new(UndoManager::new())));
+                        }
+                        return (session, active);
+                    }
+                }
+                // active_thread was removed — use the single available thread
+                if let Some((&single_id, _)) = sess.threads.iter().next() {
+                    drop(sess);
+                    {
+                        let mut thread_map = self.thread_map.write().await;
+                        thread_map.insert(key, (owner_id.to_string(), single_id));
+                    }
+                    {
+                        let mut undo_managers = self.undo_managers.write().await;
+                        undo_managers
+                            .entry(single_id)
+                            .or_insert_with(|| Arc::new(Mutex::new(UndoManager::new())));
+                    }
+                    return (session, single_id);
+                }
+            }
             let thread = sess.create_thread();
             thread.id
         };
@@ -627,22 +666,22 @@ mod tests {
     async fn test_resolve_thread() {
         let manager = SessionManager::new();
 
-        let (session1, thread1) = manager.resolve_thread("user-1", "cli", None).await;
-        let (session2, thread2) = manager.resolve_thread("user-1", "cli", None).await;
+        let (session1, thread1) = manager.resolve_thread("user-1", "desktop", None).await;
+        let (session2, thread2) = manager.resolve_thread("user-1", "desktop", None).await;
 
         // Same thread for same channel
         assert!(Arc::ptr_eq(&session1, &session2));
         assert_eq!(thread1, thread2);
 
         // Different channel gets different thread
-        let (_, thread3) = manager.resolve_thread("user-1", "http", None).await;
+        let (_, thread3) = manager.resolve_thread("user-1", "routine", None).await;
         assert_ne!(thread1, thread3);
     }
 
     #[tokio::test]
     async fn test_undo_manager() {
         let manager = SessionManager::new();
-        let (_, thread_id) = manager.resolve_thread("user-1", "cli", None).await;
+        let (_, thread_id) = manager.resolve_thread("user-1", "desktop", None).await;
 
         let undo1 = manager.get_undo_manager(thread_id).await;
         let undo2 = manager.get_undo_manager(thread_id).await;
@@ -668,12 +707,12 @@ mod tests {
 
         // Register the thread
         manager
-            .register_thread("user-1", "gateway", thread_id, Arc::clone(&session))
+            .register_thread("user-1", "desktop", thread_id, Arc::clone(&session))
             .await;
 
         // resolve_thread should find it
         let (_, resolved) = manager
-            .resolve_thread("user-1", "gateway", Some(&thread_id.to_string()))
+            .resolve_thread("user-1", "desktop", Some(&thread_id.to_string()))
             .await;
         assert_eq!(resolved, thread_id);
     }
@@ -684,7 +723,7 @@ mod tests {
         let thread_id = Uuid::new_v4();
 
         let session = manager
-            .create_bound_thread("user-1", "cli", "ext-123", thread_id)
+            .create_bound_thread("user-1", "desktop", "ext-123", thread_id)
             .await;
 
         let sess = session.lock().await;

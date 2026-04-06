@@ -392,7 +392,7 @@ mod tests {
     }
 
     // === Regression: fire-and-forget jobs must transition out of InProgress ===
-    // Before this fix, spawn_job_monitor only forwarded SSE messages but never
+    // Before this fix, spawn_job_monitor only forwarded runtime messages but never
     // updated ContextManager. Background jobs stayed InProgress forever,
     // permanently consuming a max_jobs slot.
 

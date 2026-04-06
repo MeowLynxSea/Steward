@@ -45,11 +45,10 @@ pub struct PatchSettingsRequest {
 pub struct SessionSummaryResponse {
     pub id: Uuid,
     pub title: String,
-    pub message_count: i64,
+    pub turn_count: i64,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub last_activity: chrono::DateTime<chrono::Utc>,
-    pub thread_type: Option<String>,
-    pub channel: String,
+    pub active_thread_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,7 +57,7 @@ pub struct SessionListResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SessionMessageResponse {
+pub struct ThreadMessageResponse {
     pub id: Uuid,
     pub role: String,
     pub content: String,
@@ -69,8 +68,9 @@ pub struct SessionMessageResponse {
 #[derive(Debug, Serialize)]
 pub struct SessionDetailResponse {
     pub session: SessionSummaryResponse,
-    pub messages: Vec<SessionMessageResponse>,
-    pub current_task: Option<crate::task_runtime::TaskRecord>,
+    pub active_thread_id: Uuid,
+    pub thread_messages: Vec<ThreadMessageResponse>,
+    pub active_thread_task: Option<crate::task_runtime::TaskRecord>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,8 +93,9 @@ pub struct SendSessionMessageRequest {
 pub struct SendSessionMessageResponse {
     pub accepted: bool,
     pub session_id: Uuid,
-    pub task_id: Option<Uuid>,
-    pub task: Option<crate::task_runtime::TaskRecord>,
+    pub active_thread_id: Uuid,
+    pub active_thread_task_id: Option<Uuid>,
+    pub active_thread_task: Option<crate::task_runtime::TaskRecord>,
 }
 
 // =============================================================================

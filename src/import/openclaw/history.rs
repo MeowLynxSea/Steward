@@ -92,7 +92,7 @@ mod tests {
         // Verify that OpenClawConversation can be created with test data
         let conv = OpenClawConversation {
             id: "conv-123".to_string(),
-            channel: "telegram".to_string(),
+            channel: "desktop-import".to_string(),
             created_at: None,
             messages: vec![
                 OpenClawMessage {
@@ -110,6 +110,6 @@ mod tests {
 
         assert_eq!(conv.id, "conv-123");
         assert_eq!(conv.messages.len(), 2);
-        assert_eq!(conv.channel, "telegram");
+        assert_eq!(conv.channel, "desktop-import");
     }
 }

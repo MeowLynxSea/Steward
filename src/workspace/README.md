@@ -87,8 +87,7 @@ score(d) = Σ 1/(k + rank(d)) for each method where d appears
 
 Default k=60. Results from both methods are combined, with documents appearing in both getting boosted scores.
 
-**Backend differences:**
-- **PostgreSQL:** `ts_rank_cd` for FTS, pgvector cosine distance for vectors, full RRF
+**Current backend:**
 - **libSQL:** FTS5 for keyword search + vector search via `libsql_vector_idx` (dimension set dynamically by `ensure_vector_index()` during startup)
 
 ## Multi-Scope Reads & Identity Isolation
@@ -126,7 +125,7 @@ use crate::agent::{HeartbeatConfig, spawn_heartbeat};
 
 let config = HeartbeatConfig::default()
     .with_interval(Duration::from_secs(60 * 30))
-    .with_notify("user_123", "telegram");
+    .with_notify("user_123", "desktop");
 
 spawn_heartbeat(config, workspace, llm, response_tx);
 ```

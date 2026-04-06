@@ -2,8 +2,8 @@
 //!
 //! Shows a compact ANSI-styled status panel with three tiers:
 //! - **Tier 1 (always):** Name + version, model + backend.
-//! - **Tier 2 (conditional):** Gateway URL, tunnel URL, non-default channels.
-//! - **Tier 3 (removed):** Database, tool count, features → use `steward status`.
+//! - **Tier 2 (conditional):** Desktop transport, tunnel URL.
+//! - **Tier 3 (removed):** Database, tool count, features -> use `steward status`.
 
 use crate::cli::fmt;
 
@@ -17,7 +17,7 @@ pub struct BootInfo {
     pub db_backend: String,
     pub db_connected: bool,
     pub tool_count: usize,
-    pub gateway_url: Option<String>,
+    pub desktop_transport: String,
     pub embeddings_enabled: bool,
     pub embeddings_provider: Option<String>,
     pub heartbeat_enabled: bool,
@@ -25,7 +25,6 @@ pub struct BootInfo {
     pub claude_code_enabled: bool,
     pub routines_enabled: bool,
     pub skills_enabled: bool,
-    pub channels: Vec<String>,
     /// Public URL from a managed tunnel (e.g., "https://abc.ngrok.io").
     pub tunnel_url: Option<String>,
     /// Provider name for the managed tunnel (e.g., "ngrok").
@@ -39,7 +38,7 @@ const KW: usize = 10;
 /// Print the boot screen to stdout.
 ///
 /// **Tier 1 (always):** Name + version, model + backend.
-/// **Tier 2 (conditional):** Gateway URL, tunnel URL, non-default channels.
+/// **Tier 2 (conditional):** Desktop transport, tunnel URL.
 /// **Tier 3 (removed):** Database, tool count, features — use `steward status`.
 pub fn print_boot_screen(info: &BootInfo) {
     let border = format!("  {}", fmt::separator(58));
@@ -88,19 +87,16 @@ pub fn print_boot_screen(info: &BootInfo) {
 
     // ── Tier 2: conditional ───────────────────────────────────────────
 
-    // Gateway URL
-    if let Some(ref url) = info.gateway_url {
-        println!(
-            "  {}{:<width$}{}  {}{}{}",
-            fmt::dim(),
-            "gateway",
-            fmt::reset(),
-            fmt::link(),
-            url,
-            fmt::reset(),
-            width = KW,
-        );
-    }
+    println!(
+        "  {}{:<width$}{}  {}{}{}",
+        fmt::dim(),
+        "transport",
+        fmt::reset(),
+        fmt::accent(),
+        info.desktop_transport,
+        fmt::reset(),
+        width = KW,
+    );
 
     // Tunnel URL
     if let Some(ref url) = info.tunnel_url {
@@ -118,26 +114,6 @@ pub fn print_boot_screen(info: &BootInfo) {
             url,
             fmt::reset(),
             provider_tag,
-            width = KW,
-        );
-    }
-
-    // Non-default channels (skip if only the default set)
-    let non_default: Vec<&str> = info
-        .channels
-        .iter()
-        .filter(|c| !matches!(c.as_str(), "repl" | "gateway"))
-        .map(|c| c.as_str())
-        .collect();
-    if !non_default.is_empty() {
-        println!(
-            "  {}{:<width$}{}  {}{}{}",
-            fmt::dim(),
-            "channels",
-            fmt::reset(),
-            fmt::accent(),
-            non_default.join("  "),
-            fmt::reset(),
             width = KW,
         );
     }
@@ -249,7 +225,7 @@ mod tests {
             db_backend: "libsql".to_string(),
             db_connected: true,
             tool_count: 24,
-            gateway_url: Some("http://127.0.0.1:3001/?token=abc123".to_string()),
+            desktop_transport: "tauri-ipc".to_string(),
             embeddings_enabled: true,
             embeddings_provider: Some("openai".to_string()),
             heartbeat_enabled: true,
@@ -257,11 +233,6 @@ mod tests {
             claude_code_enabled: false,
             routines_enabled: true,
             skills_enabled: true,
-            channels: vec![
-                "repl".to_string(),
-                "gateway".to_string(),
-                "telegram".to_string(),
-            ],
             tunnel_url: Some("https://abc123.ngrok.io".to_string()),
             tunnel_provider: Some("ngrok".to_string()),
             startup_elapsed: None,
@@ -281,7 +252,7 @@ mod tests {
             db_backend: "none".to_string(),
             db_connected: false,
             tool_count: 5,
-            gateway_url: None,
+            desktop_transport: "tauri-ipc".to_string(),
             embeddings_enabled: false,
             embeddings_provider: None,
             heartbeat_enabled: false,
@@ -289,7 +260,6 @@ mod tests {
             claude_code_enabled: false,
             routines_enabled: false,
             skills_enabled: false,
-            channels: vec![],
             tunnel_url: None,
             tunnel_provider: None,
             startup_elapsed: None,
@@ -306,10 +276,10 @@ mod tests {
             llm_backend: "openai".to_string(),
             llm_model: "gpt-4o".to_string(),
             cheap_model: None,
-            db_backend: "postgres".to_string(),
+            db_backend: "libsql".to_string(),
             db_connected: true,
             tool_count: 10,
-            gateway_url: None,
+            desktop_transport: "tauri-ipc".to_string(),
             embeddings_enabled: false,
             embeddings_provider: None,
             heartbeat_enabled: false,
@@ -317,7 +287,6 @@ mod tests {
             claude_code_enabled: false,
             routines_enabled: false,
             skills_enabled: false,
-            channels: vec!["repl".to_string()],
             tunnel_url: None,
             tunnel_provider: None,
             startup_elapsed: None,

@@ -409,12 +409,12 @@ mod advanced {
     }
 
     // -----------------------------------------------------------------------
-    // 6b. Event routine: Telegram-scoped trigger fires on matching message
+    // 6b. Event routine: desktop-scoped trigger fires on matching message
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn routine_event_trigger_telegram_channel_fires() {
-        let trace = LlmTrace::from_file(format!("{FIXTURES}/routine_event_telegram.json")).unwrap();
+    async fn routine_event_trigger_desktop_channel_fires() {
+        let trace = LlmTrace::from_file(format!("{FIXTURES}/routine_event_desktop.json")).unwrap();
         let rig = TestRigBuilder::new()
             .with_trace(trace.clone())
             .with_routines()
@@ -423,7 +423,7 @@ mod advanced {
             .await;
 
         rig.send_message(
-            "Create a routine that watches Telegram messages starting with 'bug:' and alerts me.",
+            "Create a routine that watches desktop messages starting with 'bug:' and alerts me.",
         )
         .await;
         let create_responses = rig.wait_for_responses(1, TIMEOUT).await;
@@ -431,14 +431,14 @@ mod advanced {
 
         let routine = rig
             .database()
-            .get_routine_by_name("test-user", "telegram-bug-watcher")
+            .get_routine_by_name("test-user", "desktop-bug-watcher")
             .await
             .expect("get_routine_by_name")
-            .expect("telegram-bug-watcher should exist");
+            .expect("desktop-bug-watcher should exist");
 
         match &routine.trigger {
             Trigger::Event { channel, pattern } => {
-                assert_eq!(channel.as_deref(), Some("telegram"));
+                assert_eq!(channel.as_deref(), Some("desktop"));
                 assert_eq!(pattern, "^bug\\b");
             }
             other => panic!("expected event trigger, got {other:?}"),
@@ -448,7 +448,7 @@ mod advanced {
         let llm_calls_before = rig.llm_call_count();
 
         rig.send_incoming(IncomingMessage::new(
-            "telegram",
+            "desktop",
             "test-user",
             "bug: home button broken",
         ))
@@ -475,7 +475,7 @@ mod advanced {
     }
 
     // -----------------------------------------------------------------------
-    // 6c. Event routine without channel filter still fires on Telegram
+    // 6c. Event routine without channel filter still fires on desktop ingress
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -514,7 +514,7 @@ mod advanced {
         let llm_calls_before = rig.llm_call_count();
 
         rig.send_incoming(IncomingMessage::new(
-            "telegram",
+            "desktop",
             "test-user",
             "bug: login button broken",
         ))

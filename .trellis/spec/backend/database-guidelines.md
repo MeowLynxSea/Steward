@@ -16,9 +16,9 @@ Current repository facts:
 
 Examples:
 
-- dependency baseline: [Cargo.toml](/Users/MeowLynxSea/Development/Steward/Cargo.toml)
-- bootstrap env handling: [src/bootstrap.rs](/Users/MeowLynxSea/Development/Steward/src/bootstrap.rs)
-- API integration over a temp libSQL database: [tests/api_http_integration.rs](/Users/MeowLynxSea/Development/Steward/tests/api_http_integration.rs)
+- dependency baseline: [Cargo.toml](/Users/MeowLynxSea/Development/IronCowork/Cargo.toml)
+- bootstrap env handling: [src/bootstrap.rs](/Users/MeowLynxSea/Development/IronCowork/src/bootstrap.rs)
+- libSQL integration example: [libsql_workspace_integration.rs](/Users/MeowLynxSea/Development/IronCowork/tests/libsql_workspace_integration.rs)
 
 ---
 

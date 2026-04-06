@@ -64,7 +64,7 @@ pub enum Trigger {
     },
     /// Fire when a channel message matches a pattern.
     Event {
-        /// Optional channel filter (e.g. "telegram", "slack").
+        /// Optional channel filter (e.g. "desktop", "routine").
         channel: Option<String>,
         /// Regex pattern to match against message content.
         pattern: String,
@@ -748,13 +748,13 @@ mod tests {
     #[test]
     fn test_event_trigger_roundtrip() {
         let trigger = Trigger::Event {
-            channel: Some("telegram".to_string()),
+            channel: Some("desktop".to_string()),
             pattern: r"deploy\s+\w+".to_string(),
         };
         let json = trigger.to_config_json();
         let parsed = Trigger::from_db("event", json).expect("parse event");
         assert!(matches!(parsed, Trigger::Event { channel, pattern }
-            if channel == Some("telegram".to_string()) && pattern == r"deploy\s+\w+"));
+            if channel == Some("desktop".to_string()) && pattern == r"deploy\s+\w+"));
     }
 
     #[test]

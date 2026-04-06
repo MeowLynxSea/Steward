@@ -5,6 +5,7 @@
 use tauri::State;
 use uuid::Uuid;
 
+use steward_core::agent::session::Session;
 use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
 use steward_core::ipc::{
@@ -81,6 +82,16 @@ pub async fn patch_settings(
 // Sessions (5 commands)
 // =============================================================================
 
+fn session_title(session: &Session) -> String {
+    session
+        .metadata
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Untitled Session")
+        .to_string()
+}
+
 #[tauri::command]
 pub async fn list_sessions(
     state: State<'_, AppState>,
@@ -91,17 +102,18 @@ pub async fn list_sessions(
     let mut summaries = Vec::new();
     for (_, session) in sessions {
         let sess = session.lock().await;
-        let message_count: i64 = sess.threads.values()
-            .map(|t| t.turns.len() as i64)
-            .sum();
+        let active_thread_id = sess.active_thread.or_else(|| sess.threads.keys().copied().next());
+        let turn_count = active_thread_id
+            .and_then(|thread_id| sess.threads.get(&thread_id))
+            .map(|thread| thread.turns.len() as i64)
+            .unwrap_or(0);
         summaries.push(steward_core::ipc::SessionSummaryResponse {
             id: sess.id,
-            title: "Untitled Session".to_string(),
-            message_count,
+            title: session_title(&sess),
+            turn_count,
             started_at: sess.created_at,
             last_activity: sess.last_active_at,
-            thread_type: None,
-            channel: "desktop".to_string(),
+            active_thread_id,
         });
     }
 
@@ -121,13 +133,10 @@ pub async fn create_session(
     if let Some(req) = payload {
         if let Some(title) = req.title {
             let mut sess = session.lock().await;
-            if let Some(thread) = sess.threads.values_mut().next() {
-                if let Ok(metadata) = serde_json::from_value::<serde_json::Value>(thread.metadata.clone()) {
-                    if let Some(mut obj) = metadata.as_object().cloned() {
-                        obj.insert("title".to_string(), serde_json::json!(title));
-                        thread.metadata = serde_json::to_value(&obj).unwrap_or(thread.metadata.clone());
-                    }
-                }
+            if let Some(obj) = sess.metadata.as_object_mut() {
+                obj.insert("title".to_string(), serde_json::json!(title));
+            } else {
+                sess.metadata = serde_json::json!({ "title": title });
             }
         }
     }
@@ -170,12 +179,12 @@ pub async fn get_session(
         .get(&thread_id)
         .ok_or_else(|| "Thread not found".to_string())?;
 
-    let messages: Vec<steward_core::ipc::SessionMessageResponse> = thread
+    let thread_messages: Vec<steward_core::ipc::ThreadMessageResponse> = thread
         .turns
         .iter()
         .flat_map(|turn| {
             let mut msgs = Vec::new();
-            msgs.push(steward_core::ipc::SessionMessageResponse {
+            msgs.push(steward_core::ipc::ThreadMessageResponse {
                 id: Uuid::new_v4(),
                 role: "user".to_string(),
                 content: turn.user_input.clone(),
@@ -183,7 +192,7 @@ pub async fn get_session(
                 turn_number: turn.turn_number,
             });
             if let Some(response) = &turn.response {
-                msgs.push(steward_core::ipc::SessionMessageResponse {
+                msgs.push(steward_core::ipc::ThreadMessageResponse {
                     id: Uuid::new_v4(),
                     role: "assistant".to_string(),
                     content: response.clone(),
@@ -197,23 +206,23 @@ pub async fn get_session(
 
     let summary = steward_core::ipc::SessionSummaryResponse {
         id: sess.id,
-        title: "Untitled Session".to_string(),
-        message_count: thread.turns.len() as i64,
+        title: session_title(&sess),
+        turn_count: thread.turns.len() as i64,
         started_at: sess.created_at,
         last_activity: sess.last_active_at,
-        thread_type: None,
-        channel: "desktop".to_string(),
+        active_thread_id: Some(thread_id),
     };
 
-    let current_task = state
+    let active_thread_task = state
         .task_runtime
         .get_task(thread_id)
         .await;
 
     Ok(steward_core::ipc::SessionDetailResponse {
         session: summary,
-        messages,
-        current_task,
+        active_thread_id: thread_id,
+        thread_messages,
+        active_thread_task,
     })
 }
 
@@ -288,8 +297,9 @@ pub async fn send_session_message(
                     Ok(steward_core::ipc::SendSessionMessageResponse {
                         accepted: true,
                         session_id: id,
-                        task_id: None,
-                        task: None,
+                        active_thread_id: thread_id,
+                        active_thread_task_id: None,
+                        active_thread_task: None,
                     })
                 } else {
                     Err("Message queue full".to_string())
@@ -321,7 +331,7 @@ pub async fn send_session_message(
             drop(sess); // Release lock before injecting
 
             // Inject a message into the agent's stream to trigger processing
-            let msg = IncomingMessage::new("api", state.owner_id.clone(), payload.content)
+            let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
                 .with_thread(thread_id.to_string());
             tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
             state
@@ -335,8 +345,9 @@ pub async fn send_session_message(
             Ok(steward_core::ipc::SendSessionMessageResponse {
                 accepted: true,
                 session_id: id,
-                task_id: None,
-                task: None,
+                active_thread_id: thread_id,
+                active_thread_task_id: None,
+                active_thread_task: None,
             })
         }
         steward_core::agent::session::ThreadState::AwaitingApproval => {

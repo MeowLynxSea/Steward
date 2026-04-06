@@ -130,9 +130,9 @@ mod e2e_import_tests {
         for conv_num in 0..3 {
             let conv_id = Uuid::new_v4().to_string();
             let channel = match conv_num {
-                0 => "telegram",
-                1 => "slack",
-                _ => "discord",
+                0 => "desktop-import",
+                1 => "routine",
+                _ => "heartbeat",
             };
 
             conn.execute(
@@ -483,8 +483,8 @@ mod e2e_import_tests {
         // Should have different channels
         let channels: std::collections::HashSet<_> =
             conversations.iter().map(|c| c.channel.as_str()).collect();
-        assert!(channels.contains("telegram"));
-        assert!(channels.contains("slack"));
-        assert!(channels.contains("discord"));
+        assert!(channels.contains("desktop-import"));
+        assert!(channels.contains("routine"));
+        assert!(channels.contains("heartbeat"));
     }
 }

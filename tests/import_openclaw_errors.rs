@@ -401,7 +401,7 @@ mod error_handling_tests {
         // Insert conversation with NULL created_at
         conn.execute(
             "INSERT INTO conversations VALUES (?, ?, ?)",
-            libsql::params!["conv1", "telegram", libsql::Value::Null],
+            libsql::params!["conv1", "desktop", libsql::Value::Null],
         )
         .await
         .expect("insert failed");

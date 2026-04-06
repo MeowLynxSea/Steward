@@ -389,6 +389,50 @@ impl StatusUpdate {
     }
 }
 
+#[async_trait]
+pub trait Channel: Send + Sync {
+    fn name(&self) -> &str;
+
+    async fn start(&self) -> Result<MessageStream, ChannelError>;
+
+    async fn respond(
+        &self,
+        msg: &IncomingMessage,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError>;
+
+    async fn send_status(
+        &self,
+        _status: StatusUpdate,
+        _metadata: &serde_json::Value,
+    ) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    async fn broadcast(
+        &self,
+        _user_id: &str,
+        _response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        Ok(())
+    }
+
+    async fn health_check(&self) -> Result<(), ChannelError>;
+
+    fn conversation_context(&self, _metadata: &serde_json::Value) -> HashMap<String, String> {
+        HashMap::new()
+    }
+
+    async fn shutdown(&self) -> Result<(), ChannelError> {
+        Ok(())
+    }
+}
+
+#[async_trait]
+pub trait ChannelSecretUpdater: Send + Sync {
+    async fn update_secret(&self, new_secret: Option<secrecy::SecretString>);
+}
+
 /// Optional delivery transport for non-API ingress.
 ///
 /// The production runtime is API-first and injects [`IncomingMessage`] values

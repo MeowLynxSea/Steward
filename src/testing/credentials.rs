@@ -15,7 +15,7 @@ use crate::secrets::{InMemorySecretsStore, SecretsCrypto};
 /// 32-character key string for `SecretsCrypto::new()` in tests.
 pub const TEST_CRYPTO_KEY: &str = "0123456789abcdef0123456789abcdef";
 
-/// 32+ char key for web gateway `SecretsCrypto` in tests.
+/// 32+ char key for legacy shared-secret crypto tests.
 pub const TEST_GATEWAY_CRYPTO_KEY: &str = "test-key-at-least-32-chars-long!!";
 
 // ── OpenAI-style API keys ────────────────────────────────────────────────
@@ -62,11 +62,6 @@ pub const TEST_GOOGLE_OAUTH_LEGACY: &str = "ya29.legacy-token";
 /// GitHub personal access token (test).
 pub const TEST_GITHUB_TOKEN: &str = "ghp_test123";
 
-// ── Telegram ────────────────────────────────────────────────────────────
-
-/// Telegram bot token for credential redaction tests.
-pub const TEST_TELEGRAM_BOT_TOKEN: &str = "telegram-test-bot-token-not-a-real-token";
-
 // ── OAuth client credentials ────────────────────────────────────────────
 
 /// OAuth client ID for token refresh tests.
@@ -80,10 +75,13 @@ pub const TEST_OAUTH_CLIENT_SECRET: &str = "test-client-secret";
 /// Generic test bearer token.
 pub const TEST_BEARER_TOKEN: &str = "test-token";
 
+/// Telegram bot token for wasm channel tests.
+pub const TEST_TELEGRAM_BOT_TOKEN: &str = "123456789:telegram-test-token";
+
 /// Bearer token with suffix (wasm wrapper credential injection).
 pub const TEST_BEARER_TOKEN_123: &str = "test-token-123";
 
-/// Auth token used by web gateway middleware tests.
+/// Auth token used by legacy shared-secret middleware tests.
 pub const TEST_AUTH_SECRET_TOKEN: &str = "secret-token";
 
 // ── Stripe ──────────────────────────────────────────────────────────────

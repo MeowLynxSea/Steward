@@ -8,6 +8,6 @@ Here's what I can do for you right now:
 
 **Persistent Memory** — I remember things across sessions — your preferences, decisions, and important context — so we don't start from scratch every time.
 
-**Talk to me where you are** — I can set up Telegram, Slack, Discord, or Signal so I can message you directly on your preferred platforms.
+**Talk to me where you are** — desktop chat is the default, and I can also work through installed WASM chat channels when you choose to connect one.
 
 To get started, what would you like to tackle first? And while we're getting acquainted — what do you like to be called?

@@ -166,7 +166,7 @@ impl SubmissionParser {
             return Submission::Resume { checkpoint_id: id };
         }
 
-        // Try structured JSON approval (from web gateway's /api/chat/approval endpoint)
+        // Try structured JSON approval from a machine-driven frontend command.
         if trimmed.starts_with('{')
             && let Ok(submission) = serde_json::from_str::<Submission>(trimmed)
             && matches!(submission, Submission::ExecApproval { .. })

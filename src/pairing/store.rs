@@ -1,6 +1,6 @@
 //! Pairing store: pending requests and allowFrom list.
 //!
-//! Stored in ~/.steward/{channel}-pairing.json and {channel}-allowFrom.json.
+//! Stored in ~/.ironcowork/{channel}-pairing.json and {channel}-allowFrom.json.
 
 use std::collections::HashSet;
 use std::fs;
@@ -176,7 +176,7 @@ pub struct PairingStore {
 }
 
 impl PairingStore {
-    /// Create a new pairing store using default directory (~/.steward).
+    /// Create a new pairing store using default directory (~/.ironcowork).
     pub fn new() -> Self {
         Self {
             base_dir: default_pairing_dir(),

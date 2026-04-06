@@ -10,10 +10,10 @@ mod support;
 mod recorded_trace_tests {
     use crate::support::test_rig::run_recorded_trace;
 
-    /// Recorded trace: telegram connection check.
+    /// Recorded trace: desktop integration connection check.
     #[tokio::test]
-    async fn recorded_telegram_check() {
-        run_recorded_trace("telegram_check.json").await;
+    async fn recorded_desktop_connection_check() {
+        run_recorded_trace("desktop_connection_check.json").await;
     }
 
     /// Recorded trace: weather query for San Francisco.

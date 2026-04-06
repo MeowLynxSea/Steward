@@ -125,7 +125,7 @@ mod comprehensive_import_tests {
         let conv_id = Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO conversations (id, channel, created_at) VALUES (?, ?, ?)",
-            libsql::params![conv_id.clone(), "telegram", "2024-01-15T10:30:00Z"],
+            libsql::params![conv_id.clone(), "desktop-import", "2024-01-15T10:30:00Z"],
         )
         .await?;
 
@@ -293,7 +293,7 @@ mod comprehensive_import_tests {
         assert_eq!(conversations.len(), 1);
 
         let conv = &conversations[0];
-        assert_eq!(conv.channel, "telegram");
+        assert_eq!(conv.channel, "desktop-import");
         assert_eq!(conv.messages.len(), 2);
 
         // Verify messages

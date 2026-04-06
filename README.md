@@ -42,13 +42,13 @@ The target experience is closer to a desktop-native autonomous agent for knowled
 - the agent explores files, notes, and MCP-connected sources
 - it plans and executes multi-step work
 - Ask/Yolo controls decide whether risky side effects require approval
-- the same backend can run inside a local desktop shell or in a browser against `127.0.0.1`
+- the shared runtime can power the local desktop shell and optional extension ingress
 
 Saved routines may exist later as accelerators, but they are not the product center. The primary interaction model is an ongoing agent session with durable context, tool use, and background execution.
 
 ## Principles
 
-- **Desktop-first**: the product should feel native on macOS, Windows, and Linux through Tauri, without coupling business logic to Tauri IPC.
+- **Desktop-first**: the product should feel native on macOS, Windows, and Linux through Tauri, with Tauri IPC and native events as the primary desktop transport.
 - **Local-first**: libSQL is the embedded storage baseline; no PostgreSQL, no required cloud account, no mandatory external services.
 - **Autonomous but reviewable**: the agent should act independently, but Ask/Yolo and event logs keep risky actions inspectable.
 - **Workspace-centric**: local files, indexed notes, reports, and external MCP tools are agent context, not an afterthought.
@@ -68,7 +68,7 @@ What stays:
 
 What is being removed or demoted:
 
-- channel-first interaction surfaces
+- channel-first product assumptions and named chat gateways
 - NEAR-account-oriented onboarding
 - PostgreSQL assumptions
 - docs that describe Steward as a predefined-workflow runner
@@ -76,16 +76,18 @@ What is being removed or demoted:
 What replaces the old center of gravity:
 
 - persistent agent sessions
-- delegated runs/tasks as execution records
+- session-owned threads as the core conversational unit
+- delegated runs/tasks as secondary execution records
 - Ask/Yolo approval checkpoints
 - optional saved routines for recurring background work
-- Svelte UI over HTTP/SSE, optionally hosted inside Tauri
+- Svelte UI over Tauri IPC and native event delivery
 
 ## Features
 
 ### Runtime
 
 - **Autonomous agent sessions** for multi-step desktop work
+- **Thread-driven chat execution** inside each session
 - **Ask/Yolo execution control** for risky file or network side effects
 - **Background routines** for recurring jobs once the core agent loop is stable
 - **libSQL storage** for settings, sessions, runs, approvals, and workspace state
@@ -109,7 +111,7 @@ What replaces the old center of gravity:
 
 End-user setup and usage docs live here:
 
-- [docs/user-guide.md](docs/user-guide.md) for installation, browser-vs-desktop mode, provider setup, storage paths, sessions, approvals, and workspace usage
+- [docs/user-guide.md](docs/user-guide.md) for installation, desktop usage, provider setup, storage paths, sessions, approvals, workspace usage, and optional WASM channel ingress
 - [docs/release-readiness.md](docs/release-readiness.md) for supported packaging targets, build commands, and release verification
 
 ## Developer Bootstrap
@@ -124,9 +126,8 @@ Shortest path:
 
 That bootstrap prepares Rust + WASM prerequisites, installs UI dependencies, builds the static frontend bundle, and installs git hooks.
 
-Daily development flows:
+Daily development flow:
 
-- Browser mode: `cargo run -- api serve --port 8765`, then open `http://127.0.0.1:8765`
 - Desktop mode: run `cargo desktop`
 
 ## Configuration
@@ -155,27 +156,28 @@ Steward keeps the original defense-in-depth posture and applies it to desktop au
 ## Architecture
 
 ```
-+------------------------+      HTTP/SSE      +------------------------+
-|  Svelte UI             | <----------------> |  Axum API              |
-|  - sessions            |                    |  127.0.0.1 by default  |
-|  - runs                |                    |  settings/sessions     |
-|  - approvals           |                    |  tasks/workspace       |
++------------------------+      Tauri IPC     +------------------------+
+|  Svelte UI             | <----------------> |  Tauri commands        |
+|  - sessions            |                    |  settings/sessions     |
+|  - threads             |                    |  tasks/workspace       |
+|  - approvals           |                    |  desktop transport     |
 +-----------+------------+                    +-----------+------------+
             |                                             |
-            | optional Tauri shell                        |
+            | Tauri events                                |
             v                                             v
 +------------------------+                    +------------------------+
 |  Native bridge         |                    |  Rust runtime          |
 |  notifications         |                    |  agent loop            |
-|  tray                  |                    |  tools + MCP           |
-|  drag-and-drop         |                    |  safety + storage      |
-+------------------------+                    +------------------------+
-                                                         |
-                                                         v
-                                              +------------------------+
-                                              |  libSQL                |
-                                              |  local embedded DB     |
-                                              +------------------------+
+|  tray                  |                    |  threads + tasks       |
+|  drag-and-drop         |                    |  tools + MCP           |
++------------------------+                    |  safety + storage      |
+                                              +-----------+------------+
+                                                          |
+                                                          v
+                                               +------------------------+
+                                               |  libSQL                |
+                                               |  local embedded DB     |
+                                               +------------------------+
 ```
 
 ## Status
@@ -183,7 +185,7 @@ Steward keeps the original defense-in-depth posture and applies it to desktop au
 The documentation is being updated to match the corrected product direction:
 
 - desktop-native autonomous agent first
-- sessions/runs first
+- sessions/threads first
 - routines second
 - no predefined workflow system at the center of the product
 

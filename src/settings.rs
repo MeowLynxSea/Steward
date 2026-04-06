@@ -85,18 +85,7 @@ pub struct Settings {
     #[serde(default)]
     pub owner_id: Option<String>,
 
-    // === Step 1: Database ===
-    /// Database backend: "postgres" or "libsql".
-    #[serde(default)]
-    pub database_backend: Option<String>,
-
-    /// Database connection URL (postgres://...).
-    #[serde(default)]
-    pub database_url: Option<String>,
-
-    /// Database pool size.
-    #[serde(default)]
-    pub database_pool_size: Option<usize>,
+    // === Step 1: Local Storage ===
 
     /// Path to local libSQL database file.
     #[serde(default)]
@@ -158,12 +147,12 @@ pub struct Settings {
     #[serde(default)]
     pub embeddings: EmbeddingsSettings,
 
-    // === Step 6: Channels ===
-    /// Tunnel configuration for public webhook endpoints.
+    // === Step 6: Desktop Transport ===
+    /// Tunnel configuration for optional tool/webhook integrations.
     #[serde(default)]
     pub tunnel: TunnelSettings,
 
-    /// Channel configuration.
+    /// Desktop transport configuration.
     #[serde(default)]
     pub channels: ChannelSettings,
 
@@ -307,96 +296,26 @@ pub struct TunnelSettings {
     pub custom_url_pattern: Option<String>,
 }
 
-/// Channel-specific settings.
+/// Desktop transport settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelSettings {
-    /// Whether HTTP webhook channel is enabled.
-    #[serde(default)]
-    pub http_enabled: bool,
-
-    /// HTTP webhook port (if enabled).
-    #[serde(default)]
-    pub http_port: Option<u16>,
-
-    /// HTTP webhook host.
-    #[serde(default)]
-    pub http_host: Option<String>,
-
-    /// Whether the web gateway is enabled.
+    /// Whether the desktop shell should use Tauri IPC as the primary UI transport.
     #[serde(default = "default_true")]
-    pub gateway_enabled: bool,
-
-    /// Web gateway listen host.
+    pub tauri_ipc: bool,
+    /// Whether filesystem-installed WASM channels are enabled.
     #[serde(default)]
-    pub gateway_host: Option<String>,
-
-    /// Web gateway listen port.
+    pub wasm_channels_enabled: bool,
+    /// Optional directory for installed WASM channels.
     #[serde(default)]
-    pub gateway_port: Option<u16>,
-
-    /// Web gateway bearer auth token. Auto-generated at gateway startup if unset.
-    #[serde(default)]
-    pub gateway_auth_token: Option<String>,
-
-    /// Whether the CLI channel is enabled.
-    #[serde(default = "default_true")]
-    pub cli_enabled: bool,
-
-    /// Whether Signal channel is enabled.
-    #[serde(default)]
-    pub signal_enabled: bool,
-
-    /// Signal HTTP URL (signal-cli daemon endpoint).
-    #[serde(default)]
-    pub signal_http_url: Option<String>,
-
-    /// Signal account (E.164 phone number).
-    #[serde(default)]
-    pub signal_account: Option<String>,
-
-    /// Signal allow from list for DMs (comma-separated E.164 phone numbers).
-    /// Comma-separated identifiers: E.164 phone numbers, `*`, bare UUIDs, or `uuid:<id>` entries.
-    /// Defaults to the configured account.
-    #[serde(default)]
-    pub signal_allow_from: Option<String>,
-
-    /// Signal allow from groups (comma-separated group IDs).
-    #[serde(default)]
-    pub signal_allow_from_groups: Option<String>,
-
-    /// Signal DM policy: "open", "allowlist", or "pairing". Default: "pairing".
-    #[serde(default)]
-    pub signal_dm_policy: Option<String>,
-
-    /// Signal group policy: "allowlist", "open", or "disabled". Default: "allowlist".
-    #[serde(default)]
-    pub signal_group_policy: Option<String>,
-
-    /// Signal group allow from (comma-separated group member IDs).
-    /// If empty, inherits from signal_allow_from.
-    #[serde(default)]
-    pub signal_group_allow_from: Option<String>,
+    pub wasm_channels_dir: Option<PathBuf>,
 }
 
 impl Default for ChannelSettings {
     fn default() -> Self {
         Self {
-            http_enabled: false,
-            http_port: None,
-            http_host: None,
-            gateway_enabled: true,
-            gateway_host: None,
-            gateway_port: None,
-            gateway_auth_token: None,
-            cli_enabled: true,
-            signal_enabled: false,
-            signal_http_url: None,
-            signal_account: None,
-            signal_allow_from: None,
-            signal_allow_from_groups: None,
-            signal_dm_policy: None,
-            signal_group_policy: None,
-            signal_group_allow_from: None,
+            tauri_ipc: true,
+            wasm_channels_enabled: false,
+            wasm_channels_dir: None,
         }
     }
 }
@@ -1535,7 +1454,7 @@ mod tests {
     /// Simulates the wizard recovery scenario:
     ///
     /// 1. A prior partial run saved steps 1-4 to the DB
-    /// 2. User re-runs the wizard, Step 1 sets a new database_url
+    /// 2. User re-runs the wizard, Step 1 sets a new libsql_path
     /// 3. Prior settings are loaded from the DB
     /// 4. Step 1's fresh choices must win over stale DB values
     ///
@@ -1544,8 +1463,7 @@ mod tests {
     fn wizard_recovery_step1_overrides_stale_db() {
         // Simulate prior partial run (steps 1-4 completed):
         let prior_run = Settings {
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://old-host/steward".to_string()),
+            libsql_path: Some("/old/steward.db".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             embeddings: EmbeddingsSettings {
@@ -1560,10 +1478,9 @@ mod tests {
         let db_map = prior_run.to_db_map();
         let from_db = Settings::from_db_map(&db_map);
 
-        // Step 1 of the new wizard run: user enters a NEW database_url
+        // Step 1 of the new wizard run: user enters a NEW libsql_path
         let step1_settings = Settings {
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://new-host/steward".to_string()),
+            libsql_path: Some("/new/steward.db".to_string()),
             ..Settings::default()
         };
 
@@ -1574,10 +1491,10 @@ mod tests {
         // Re-apply Step 1 choices on top
         current.merge_from(&step1_settings);
 
-        // Step 1's fresh database_url wins over stale DB value
+        // Step 1's fresh libsql_path wins over stale DB value
         assert_eq!(
-            current.database_url,
-            Some("postgres://new-host/steward".to_string()),
+            current.libsql_path,
+            Some("/new/steward.db".to_string()),
             "Step 1 fresh choice must override stale DB value"
         );
 
@@ -1616,9 +1533,9 @@ mod tests {
         let db_map = prior_run.to_db_map();
         let from_db = Settings::from_db_map(&db_map);
 
-        // New wizard run: Step 1 only sets DB fields (rest is default)
+        // New wizard run: Step 1 only sets storage fields (rest is default)
         let step1 = Settings {
-            database_backend: Some("libsql".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
 
@@ -1634,7 +1551,10 @@ mod tests {
         assert_eq!(current.heartbeat.interval_secs, 900);
 
         // Step 1's choice applied
-        assert_eq!(current.database_backend, Some("libsql".to_string()));
+        assert_eq!(
+            current.libsql_path,
+            Some("/home/user/.steward/steward.db".to_string())
+        );
     }
 
     // === QA Plan P1 - 1.2: Config round-trip tests ===
@@ -1644,8 +1564,8 @@ mod tests {
         // Set a representative value in EVERY section and verify survival
         let settings = Settings {
             onboard_completed: true,
-            database_backend: Some("libsql".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
+            libsql_url: Some("https://example-org.turso.io".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             openai_compatible_base_url: Some("http://vllm:8000/v1".to_string()),
@@ -1661,9 +1581,8 @@ mod tests {
                 ..Default::default()
             },
             channels: ChannelSettings {
-                http_enabled: true,
-                http_port: Some(9090),
-                ..Default::default()
+                tauri_ipc: true,
+                ..ChannelSettings::default()
             },
             heartbeat: HeartbeatSettings {
                 enabled: true,
@@ -1683,14 +1602,14 @@ mod tests {
 
         assert!(restored.onboard_completed, "onboard_completed lost");
         assert_eq!(
-            restored.database_backend,
-            Some("libsql".to_string()),
-            "database_backend lost"
+            restored.libsql_path,
+            Some("/home/user/.steward/steward.db".to_string()),
+            "libsql_path lost"
         );
         assert_eq!(
-            restored.database_url,
-            Some("postgres://host/db".to_string()),
-            "database_url lost"
+            restored.libsql_url,
+            Some("https://example-org.turso.io".to_string()),
+            "libsql_url lost"
         );
         assert_eq!(
             restored.llm_backend,
@@ -1726,8 +1645,7 @@ mod tests {
             Some("ngrok".to_string()),
             "tunnel.provider lost"
         );
-        assert!(restored.channels.http_enabled, "http_enabled lost");
-        assert_eq!(restored.channels.http_port, Some(9090), "http_port lost");
+        assert!(restored.channels.tauri_ipc, "tauri_ipc lost");
         assert!(restored.heartbeat.enabled, "heartbeat.enabled lost");
         assert_eq!(
             restored.heartbeat.interval_secs, 900,
@@ -1806,8 +1724,7 @@ mod tests {
             ("agent.max_parallel_jobs", "8"),
             ("heartbeat.enabled", "true"),
             ("heartbeat.interval_secs", "300"),
-            ("channels.http_enabled", "true"),
-            ("channels.http_port", "8081"),
+            ("channels.tauri_ipc", "true"),
         ];
 
         for (path, value) in &test_cases {
@@ -1826,7 +1743,8 @@ mod tests {
         // When an Option<String> field is None, it should be stored as null
         // and come back as None, not silently become Some("")
         let settings = Settings {
-            database_url: None,
+            libsql_path: None,
+            libsql_url: None,
             llm_backend: None,
             selected_model: None,
             openai_compatible_base_url: None,
@@ -1837,8 +1755,12 @@ mod tests {
         let restored = Settings::from_db_map(&map);
 
         assert_eq!(
-            restored.database_url, None,
-            "None database_url should stay None"
+            restored.libsql_path, None,
+            "None libsql_path should stay None"
+        );
+        assert_eq!(
+            restored.libsql_url, None,
+            "None libsql_url should stay None"
         );
         assert_eq!(
             restored.llm_backend, None,
@@ -1864,7 +1786,6 @@ mod tests {
         // Prior completed run with everything configured
         let prior = Settings {
             onboard_completed: true,
-            database_backend: Some("libsql".to_string()),
             libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4o".to_string()),
@@ -1874,11 +1795,8 @@ mod tests {
                 model: "text-embedding-3-small".to_string(),
             },
             channels: ChannelSettings {
-                http_enabled: true,
-                http_port: Some(8080),
-                signal_enabled: true,
-                signal_account: Some("+1234567890".to_string()),
-                ..Default::default()
+                tauri_ipc: true,
+                ..ChannelSettings::default()
             },
             heartbeat: HeartbeatSettings {
                 enabled: true,
@@ -1905,17 +1823,15 @@ mod tests {
         assert_eq!(current.selected_model.as_deref(), Some("claude-sonnet-4-5"));
 
         // Verify: everything else preserved
-        assert!(current.channels.http_enabled, "HTTP channel must survive");
-        assert_eq!(current.channels.http_port, Some(8080));
-        assert!(current.channels.signal_enabled, "Signal must survive");
+        assert!(current.channels.tauri_ipc, "desktop transport must survive");
         assert!(current.embeddings.enabled, "Embeddings must survive");
         assert_eq!(current.embeddings.provider, "openai");
         assert!(current.heartbeat.enabled, "Heartbeat must survive");
         assert_eq!(current.heartbeat.interval_secs, 900);
         assert_eq!(
-            current.database_backend.as_deref(),
-            Some("libsql"),
-            "DB backend must survive"
+            current.libsql_path.as_deref(),
+            Some("/home/user/.steward/steward.db"),
+            "libsql_path must survive"
         );
     }
 
@@ -1923,11 +1839,10 @@ mod tests {
     /// configured installation. Only channel settings should change;
     /// provider, model, embeddings, heartbeat must survive.
     #[test]
-    fn channels_only_rerun_preserves_unrelated_settings() {
+    fn desktop_transport_rerun_preserves_unrelated_settings() {
         let prior = Settings {
             onboard_completed: true,
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             embeddings: EmbeddingsSettings {
@@ -1941,8 +1856,8 @@ mod tests {
                 ..Default::default()
             },
             channels: ChannelSettings {
-                http_enabled: false,
-                ..Default::default()
+                tauri_ipc: true,
+                ..ChannelSettings::default()
             },
             ..Default::default()
         };
@@ -1951,13 +1866,11 @@ mod tests {
         // channels_only mode: reconnect_existing_db loads from DB
         let mut current = Settings::from_db_map(&db_map);
 
-        // Simulate step_channels: user enables HTTP and adds discord
-        current.channels.http_enabled = true;
-        current.channels.http_port = Some(9090);
+        // Simulate desktop transport setup
+        current.channels.tauri_ipc = true;
 
-        // Verify: channels changed
-        assert!(current.channels.http_enabled);
-        assert_eq!(current.channels.http_port, Some(9090));
+        // Verify: transport remains enabled
+        assert!(current.channels.tauri_ipc);
 
         // Verify: everything else preserved
         assert_eq!(current.llm_backend.as_deref(), Some("anthropic"));
@@ -1973,18 +1886,15 @@ mod tests {
     /// provider + model; channels, embeddings, heartbeat, extensions
     /// should survive via the merge_from ordering.
     #[test]
-    fn quick_mode_rerun_preserves_prior_channels_and_heartbeat() {
+    fn quick_mode_rerun_preserves_prior_transport_and_heartbeat() {
         let prior = Settings {
             onboard_completed: true,
-            database_backend: Some("libsql".to_string()),
             libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4o".to_string()),
             channels: ChannelSettings {
-                http_enabled: true,
-                http_port: Some(8080),
-                signal_enabled: true,
-                ..Default::default()
+                tauri_ipc: true,
+                ..ChannelSettings::default()
             },
             embeddings: EmbeddingsSettings {
                 enabled: true,
@@ -2004,7 +1914,6 @@ mod tests {
         // Quick mode flow:
         // 1. auto_setup_database sets DB fields
         let step1 = Settings {
-            database_backend: Some("libsql".to_string()),
             libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
@@ -2025,16 +1934,8 @@ mod tests {
         assert_eq!(current.llm_backend.as_deref(), Some("anthropic"));
         assert_eq!(current.selected_model.as_deref(), Some("claude-opus-4-6"));
 
-        // Verify: channels, embeddings, heartbeat survived quick mode
-        assert!(
-            current.channels.http_enabled,
-            "HTTP channel must survive quick mode re-run"
-        );
-        assert_eq!(current.channels.http_port, Some(8080));
-        assert!(
-            current.channels.signal_enabled,
-            "Signal must survive quick mode re-run"
-        );
+        // Verify: transport, embeddings, heartbeat survived quick mode
+        assert!(current.channels.tauri_ipc, "desktop transport must survive quick mode re-run");
         assert!(
             current.embeddings.enabled,
             "Embeddings must survive quick mode re-run"
@@ -2054,8 +1955,7 @@ mod tests {
     fn full_rerun_same_provider_preserves_model_through_merge() {
         let prior = Settings {
             onboard_completed: true,
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             ..Default::default()
@@ -2065,8 +1965,7 @@ mod tests {
 
         // Step 1: user keeps same DB
         let step1 = Settings {
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
 
@@ -2108,8 +2007,7 @@ mod tests {
     fn full_rerun_different_provider_clears_model_through_merge() {
         let prior = Settings {
             onboard_completed: true,
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             llm_backend: Some("anthropic".to_string()),
             selected_model: Some("claude-sonnet-4-5".to_string()),
             ..Default::default()
@@ -2119,8 +2017,7 @@ mod tests {
 
         // Step 1 merge
         let step1 = Settings {
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
         let mut current = step1.clone();
@@ -2151,7 +2048,7 @@ mod tests {
     fn incremental_persist_does_not_clobber_prior_steps() {
         // After steps 1-2, settings has DB + security
         let after_step2 = Settings {
-            database_backend: Some("libsql".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             secrets_master_key_source: KeySource::Keychain,
             ..Default::default()
         };
@@ -2176,9 +2073,9 @@ mod tests {
             "Step 2 security setting must survive step 3 persist"
         );
         assert_eq!(
-            restored.database_backend.as_deref(),
-            Some("libsql"),
-            "Step 1 DB setting must survive step 3 persist"
+            restored.libsql_path.as_deref(),
+            Some("/home/user/.steward/steward.db"),
+            "Step 1 storage setting must survive step 3 persist"
         );
         assert_eq!(
             restored.llm_backend.as_deref(),
@@ -2204,14 +2101,12 @@ mod tests {
         );
     }
 
-    /// Switching database backend should allow fresh connection settings.
-    /// When user switches from postgres to libsql, the old database_url
-    /// should not prevent the new libsql_path from being used.
+    /// Switching libSQL targets should allow fresh connection settings.
+    /// A stale prior path must not prevent a newly chosen libsql_path from being used.
     #[test]
-    fn switching_db_backend_allows_fresh_connection_settings() {
+    fn switching_libsql_target_allows_fresh_connection_settings() {
         let prior = Settings {
-            database_backend: Some("postgres".to_string()),
-            database_url: Some("postgres://host/db".to_string()),
+            libsql_path: Some("/old/steward.db".to_string()),
             llm_backend: Some("openai".to_string()),
             selected_model: Some("gpt-4o".to_string()),
             ..Default::default()
@@ -2219,11 +2114,9 @@ mod tests {
         let db_map = prior.to_db_map();
         let from_db = Settings::from_db_map(&db_map);
 
-        // User picks libsql this time, wizard clears stale postgres settings
+        // User picks a new local database path this time
         let step1 = Settings {
-            database_backend: Some("libsql".to_string()),
             libsql_path: Some("/home/user/.steward/steward.db".to_string()),
-            database_url: None, // explicitly not set for libsql
             ..Default::default()
         };
 
@@ -2231,8 +2124,6 @@ mod tests {
         current.merge_from(&from_db);
         current.merge_from(&step1);
 
-        // libsql chosen
-        assert_eq!(current.database_backend.as_deref(), Some("libsql"));
         assert_eq!(
             current.libsql_path.as_deref(),
             Some("/home/user/.steward/steward.db")
@@ -2242,15 +2133,9 @@ mod tests {
         assert_eq!(current.llm_backend.as_deref(), Some("openai"));
         assert_eq!(current.selected_model.as_deref(), Some("gpt-4o"));
 
-        // Note: database_url from prior run persists in merge because
-        // step1.database_url is None (== default), so merge_from doesn't
-        // override it. This is expected — the .env writer decides which
-        // vars to emit based on database_backend. The stale URL is
-        // harmless because the libsql backend ignores it.
         assert_eq!(
-            current.database_url.as_deref(),
-            Some("postgres://host/db"),
-            "stale database_url persists (harmless, ignored by libsql backend)"
+            current.libsql_path.as_deref(),
+            Some("/home/user/.steward/steward.db")
         );
     }
 
@@ -2266,18 +2151,17 @@ mod tests {
                 ..Default::default()
             },
             channels: ChannelSettings {
-                http_enabled: true,
-                signal_enabled: true,
-                ..Default::default()
+                tauri_ipc: true,
+                ..ChannelSettings::default()
             },
             ..Default::default()
         };
         let db_map = prior.to_db_map();
         let from_db = Settings::from_db_map(&db_map);
 
-        // New wizard run only sets DB (everything else is default/false)
+        // New wizard run only sets storage (everything else is default/false)
         let step1 = Settings {
-            database_backend: Some("libsql".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
 
@@ -2291,12 +2175,8 @@ mod tests {
             "heartbeat.enabled=true must not be reset to false by default overlay"
         );
         assert!(
-            current.channels.http_enabled,
-            "http_enabled=true must not be reset to false by default overlay"
-        );
-        assert!(
-            current.channels.signal_enabled,
-            "signal_enabled=true must not be reset to false by default overlay"
+            current.channels.tauri_ipc,
+            "tauri_ipc=true must not be reset to false by default overlay"
         );
         assert_eq!(current.heartbeat.interval_secs, 600);
     }
@@ -2319,9 +2199,9 @@ mod tests {
         let db_map = prior.to_db_map();
         let from_db = Settings::from_db_map(&db_map);
 
-        // Full re-run: step 1 only sets DB
+        // Full re-run: step 1 only sets storage
         let step1 = Settings {
-            database_backend: Some("libsql".to_string()),
+            libsql_path: Some("/home/user/.steward/steward.db".to_string()),
             ..Default::default()
         };
         let mut current = step1.clone();

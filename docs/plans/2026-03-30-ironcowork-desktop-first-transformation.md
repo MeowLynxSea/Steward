@@ -72,36 +72,38 @@ This transformation corrects those assumptions without throwing away the core ru
 ### Runtime Layout
 
 ```
-+------------------------+      HTTP/SSE      +------------------------+
-|  Svelte UI             | <----------------> |  steward-api        |
-|  - sessions            |                    |  Axum on 127.0.0.1     |
-|  - runs                |                    |  settings/sessions     |
-|  - approvals           |                    |  runs/workspace        |
++------------------------+      Tauri IPC     +------------------------+
+|  Svelte UI             | <----------------> |  Tauri commands        |
+|  - sessions            |                    |  settings/sessions     |
+|  - threads             |                    |  tasks/workspace       |
+|  - approvals           |                    |  desktop transport     |
 |  - workspace           |                    +-----------+------------+
 +-----------+------------+                                |
             |                                             |
-            | optional desktop shell                      |
+            | Tauri events                                |
             v                                             v
 +------------------------+                    +------------------------+
 |  src-tauri             |                    |  runtime crates        |
 |  notifications         |                    |  agent loop            |
-|  tray                  |                    |  tools / MCP / safety  |
-|  drag-and-drop         |                    |  workspace / storage   |
-+------------------------+                    +------------------------+
-                                                         |
-                                                         v
-                                              +------------------------+
-                                              |  libSQL                |
-                                              |  local embedded DB     |
-                                              +------------------------+
+|  tray                  |                    |  threads / tasks       |
+|  drag-and-drop         |                    |  tools / MCP / safety  |
++------------------------+                    |  workspace / storage   |
+                                              +-----------+------------+
+                                                          |
+                                                          v
+                                               +------------------------+
+                                               |  libSQL                |
+                                               |  local embedded DB     |
+                                               +------------------------+
 ```
 
 ### Architectural Boundaries
 
 - `src-tauri/` only adds native desktop affordances.
-- All business state flows through Axum over HTTP/SSE.
+- All business state flows through shared runtime services, reached from Tauri IPC in desktop mode.
 - `session` is the main user-facing object.
-- `run` or `task` is a persisted execution record created by a session or by a background routine.
+- `thread` is the primary conversational execution unit inside a session.
+- `run` or `task` is a persisted execution record created by a thread or by a background routine.
 - Saved routines are optional later-stage automation helpers, not the center of the app.
 - Risky actions must flow through the tool/safety layer, never through ad hoc shell shortcuts.
 
@@ -137,7 +139,7 @@ The API and storage need first-class support for:
 - pending approval payload
 - approval decision history
 - mid-run mode switching
-- resumable run state after restart
+- resumable thread/run state after restart
 
 ---
 
@@ -209,18 +211,12 @@ Goal: real branding, packaging, setup docs, and a coherent user/developer story.
 
 The contract center should move away from predefined workflow CRUD and toward:
 
-- `/api/v0/sessions`
-- `/api/v0/sessions/:id/messages`
-- `/api/v0/sessions/:id/stream`
-- `/api/v0/runs`
-- `/api/v0/runs/:id`
-- `/api/v0/runs/:id/stream`
-- `/api/v0/runs/:id/approve`
-- `/api/v0/runs/:id/reject`
-- `/api/v0/runs/:id/mode`
-- `/api/v0/workspace/*`
+- Tauri IPC commands for sessions, threads, runs, approvals, and workspace operations
+- Tauri runtime events for live thread/run updates
+- session-first persistence with thread-driven execution
+- optional WASM channel ingress that feeds the same runtime instead of creating a second product surface
 
-If presets or routines are added later, they should sit on top of the session/run model instead of replacing it.
+If presets or routines are added later, they should sit on top of the session/thread/run model instead of replacing it.
 
 ---
 

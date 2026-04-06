@@ -61,6 +61,7 @@ pub struct ExtensionManifest {
 #[serde(rename_all = "snake_case")]
 pub enum ManifestKind {
     Tool,
+    Channel,
     McpServer,
 }
 
@@ -68,6 +69,7 @@ impl From<ManifestKind> for ExtensionKind {
     fn from(kind: ManifestKind) -> Self {
         match kind {
             ManifestKind::Tool => ExtensionKind::WasmTool,
+            ManifestKind::Channel => ExtensionKind::WasmChannel,
             ManifestKind::McpServer => ExtensionKind::McpServer,
         }
     }
@@ -77,6 +79,7 @@ impl std::fmt::Display for ManifestKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ManifestKind::Tool => write!(f, "tool"),
+            ManifestKind::Channel => write!(f, "channel"),
             ManifestKind::McpServer => write!(f, "mcp_server"),
         }
     }

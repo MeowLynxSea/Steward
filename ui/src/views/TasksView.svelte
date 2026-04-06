@@ -11,8 +11,8 @@
   <section class="panel column-panel">
     <div class="card-head">
       <div>
-        <p class="eyebrow">Runs</p>
-        <h2>Execution queue</h2>
+        <p class="eyebrow">Thread State</p>
+        <h2>Execution snapshots</h2>
       </div>
       <button class="button button-primary" onclick={() => void tasksStore.refresh()}>Refresh</button>
     </div>
@@ -33,9 +33,9 @@
     {/if}
 
     {#if tasksStore.loading}
-      <p class="muted">Loading runs...</p>
+      <p class="muted">Loading execution snapshots...</p>
     {:else if tasksStore.list.length === 0}
-      <p class="muted">No runs yet. Start from the session workbench.</p>
+      <p class="muted">No execution snapshots yet. Start from the session workbench.</p>
     {:else}
       <div class="stack">
         {#each tasksStore.list as task}
@@ -58,14 +58,14 @@
     {:else if tasksStore.detail}
       <div class="hero-panel compact">
         <div>
-          <p class="eyebrow">Run Detail</p>
+          <p class="eyebrow">Thread Execution Detail</p>
           <h2>{tasksStore.detail.task.title}</h2>
           <p class="muted">{tasksStore.detail.task.id}</p>
         </div>
 
         <div class="hero-status">
           <StatusBadge status={tasksStore.detail.task.status} />
-          <p>{tasksStore.detail.task.current_step?.title ?? "Run state updated"}</p>
+          <p>{tasksStore.detail.task.current_step?.title ?? "Thread execution state updated"}</p>
         </div>
       </div>
 
@@ -153,8 +153,8 @@
       </div>
     {:else}
       <div class="empty-state">
-        <h3>Select a run</h3>
-        <p>Inspect its timeline, approvals, and result metadata from here.</p>
+        <h3>Select an execution snapshot</h3>
+        <p>Inspect thread approvals, timeline, and result metadata from here.</p>
       </div>
     {/if}
   </section>

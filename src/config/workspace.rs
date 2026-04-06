@@ -4,8 +4,8 @@ use crate::workspace::layer::MemoryLayer;
 
 /// Workspace-level configuration (memory layers, read scopes).
 ///
-/// Parsed from environment variables. Lives outside of `GatewayConfig`
-/// so that non-gateway channels can eventually use the same settings.
+/// Parsed from environment variables. Lives outside desktop transport wiring
+/// so that browser-mode and desktop-mode surfaces can use the same settings.
 #[derive(Debug, Clone, Default)]
 pub struct WorkspaceConfig {
     /// Memory layer definitions (JSON in `MEMORY_LAYERS` env var, or defaults).

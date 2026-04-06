@@ -86,10 +86,6 @@ pub fn steward_env_path() -> PathBuf {
 ///
 ///   explicit env vars > `./.env` > `~/.steward/.env` > auto-detect
 ///
-/// If `~/.steward/.env` doesn't exist but the legacy `bootstrap.json` does,
-/// extracts bootstrap values and writes the `.env` file (one-time upgrade
-/// from the old config format).
-///
 /// After loading the `.env` file, auto-detects the libsql backend: if
 /// `DATABASE_BACKEND` is still unset and `~/.steward/steward.db` exists,
 /// defaults to `libsql` so cloud instances work out of the box without any
@@ -97,19 +93,12 @@ pub fn steward_env_path() -> PathBuf {
 pub fn load_steward_env() {
     let path = steward_env_path();
 
-    if !path.exists() {
-        // One-time upgrade: extract DATABASE_URL from legacy bootstrap.json
-        migrate_bootstrap_json_to_env(&path);
-    }
-
     if path.exists() {
         let _ = dotenvy::from_path(&path);
     }
 
     // Auto-detect libsql: if DATABASE_BACKEND is still unset after loading
     // all env files, and the local SQLite DB exists, default to libsql.
-    // This avoids the chicken-and-egg problem on cloud instances where no
-    // DATABASE_URL is configured but steward.db is already present.
     if std::env::var("DATABASE_BACKEND").is_err() {
         let default_db = dirs::home_dir()
             .unwrap_or_default()
@@ -129,47 +118,6 @@ pub fn load_steward_env() {
                 unsafe { std::env::set_var("DATABASE_BACKEND", "libsql") };
             }
         }
-    }
-}
-
-/// If `bootstrap.json` exists, pull `database_url` out of it and write `.env`.
-fn migrate_bootstrap_json_to_env(env_path: &std::path::Path) {
-    let steward_dir = env_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let bootstrap_path = steward_dir.join("bootstrap.json");
-
-    if !bootstrap_path.exists() {
-        return;
-    }
-
-    let content = match std::fs::read_to_string(&bootstrap_path) {
-        Ok(c) => c,
-        Err(_) => return,
-    };
-
-    // Minimal parse: just grab database_url from the JSON
-    let parsed: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    if let Some(url) = parsed.get("database_url").and_then(|v| v.as_str()) {
-        if let Some(parent) = env_path.parent()
-            && let Err(e) = std::fs::create_dir_all(parent)
-        {
-            eprintln!("Warning: failed to create {}: {}", parent.display(), e);
-            return;
-        }
-        if let Err(e) = std::fs::write(env_path, format!("DATABASE_URL=\"{}\"\n", url)) {
-            eprintln!("Warning: failed to migrate bootstrap.json to .env: {}", e);
-            return;
-        }
-        rename_to_migrated(&bootstrap_path);
-        eprintln!(
-            "Migrated DATABASE_URL from bootstrap.json to {}",
-            env_path.display()
-        );
     }
 }
 
@@ -324,14 +272,6 @@ fn restrict_file_permissions(_path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Write `DATABASE_URL` to `~/.steward/.env`.
-///
-/// Convenience wrapper around `save_bootstrap_env` for single-value migration
-/// paths. Prefer `save_bootstrap_env` for new code.
-pub fn save_database_url(url: &str) -> std::io::Result<()> {
-    save_bootstrap_env(&[("DATABASE_URL", url)])
-}
-
 /// One-time migration of legacy `~/.steward/settings.json` into the database.
 ///
 /// Only runs when a `settings.json` exists on disk AND the DB has no settings
@@ -377,11 +317,14 @@ pub async fn migrate_disk_to_db(
         tracing::info!("Migrated {} settings to database", db_map.len());
     }
 
-    // 2. Write DATABASE_URL to ~/.steward/.env
-    if let Some(ref url) = settings.database_url {
-        save_database_url(url)
-            .map_err(|e| MigrationError::Io(format!("Failed to write .env: {}", e)))?;
-        tracing::info!("Wrote DATABASE_URL to {}", steward_env_path().display());
+    // 2. Write libSQL bootstrap vars to ~/.steward/.env
+    if let Some(ref path) = settings.libsql_path {
+        upsert_bootstrap_vars(&[
+            ("DATABASE_BACKEND", "libsql"),
+            ("LIBSQL_PATH", path),
+        ])
+        .map_err(|e| MigrationError::Io(format!("Failed to write .env: {}", e)))?;
+        tracing::info!("Wrote libSQL bootstrap config to {}", steward_env_path().display());
     }
 
     // 3. Migrate mcp-servers.json if it exists
@@ -444,13 +387,6 @@ pub async fn migrate_disk_to_db(
 
     // 5. Rename settings.json to .migrated (don't delete, safety net)
     rename_to_migrated(&legacy_settings_path);
-
-    // 6. Clean up old bootstrap.json if it exists (superseded by .env)
-    let old_bootstrap = steward_dir.join("bootstrap.json");
-    if old_bootstrap.exists() {
-        rename_to_migrated(&old_bootstrap);
-        tracing::info!("Renamed old bootstrap.json to .migrated");
-    }
 
     tracing::info!("Disk-to-DB migration complete");
     Ok(())
@@ -574,20 +510,16 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_save_and_load_database_url() {
+    fn test_save_and_load_libsql_path() {
         let dir = tempdir().unwrap();
         let env_path = dir.path().join(".env");
 
-        // Write in the quoted format that save_database_url uses
-        let url = "postgres://localhost:5432/steward_test";
-        std::fs::write(&env_path, format!("DATABASE_URL=\"{}\"\n", url)).unwrap();
+        let path = "/tmp/steward_test.db";
+        std::fs::write(&env_path, format!("LIBSQL_PATH=\"{}\"\n", path)).unwrap();
 
         // Verify the content is a valid dotenv line (quoted)
         let content = std::fs::read_to_string(&env_path).unwrap();
-        assert_eq!(
-            content,
-            "DATABASE_URL=\"postgres://localhost:5432/steward_test\"\n"
-        );
+        assert_eq!(content, "LIBSQL_PATH=\"/tmp/steward_test.db\"\n");
 
         // Verify dotenvy can parse it (strips quotes automatically)
         let parsed: Vec<(String, String)> = dotenvy::from_path_iter(&env_path)
@@ -595,31 +527,29 @@ mod tests {
             .filter_map(|r| r.ok())
             .collect();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].0, "DATABASE_URL");
-        assert_eq!(parsed[0].1, url);
+        assert_eq!(parsed[0].0, "LIBSQL_PATH");
+        assert_eq!(parsed[0].1, path);
     }
 
     #[test]
-    fn test_save_database_url_with_hash_in_password() {
+    fn test_save_libsql_path_with_hash_in_directory() {
         let dir = tempdir().unwrap();
         let env_path = dir.path().join(".env");
 
-        // URLs with # in the password are common (URL-encoded special chars).
-        // Without quoting, dotenvy treats # as a comment delimiter.
-        let url = "postgres://user:p%23ss@localhost:5432/steward";
-        std::fs::write(&env_path, format!("DATABASE_URL=\"{}\"\n", url)).unwrap();
+        let path = "/tmp/steward#data/steward.db";
+        std::fs::write(&env_path, format!("LIBSQL_PATH=\"{}\"\n", path)).unwrap();
 
         let parsed: Vec<(String, String)> = dotenvy::from_path_iter(&env_path)
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].0, "DATABASE_URL");
-        assert_eq!(parsed[0].1, url);
+        assert_eq!(parsed[0].0, "LIBSQL_PATH");
+        assert_eq!(parsed[0].1, path);
     }
 
     #[test]
-    fn test_save_database_url_creates_parent_dirs() {
+    fn test_save_libsql_path_creates_parent_dirs() {
         let dir = tempdir().unwrap();
         let nested = dir.path().join("deep").join("nested");
         let env_path = nested.join(".env");
@@ -629,11 +559,11 @@ mod tests {
 
         // The global function uses a fixed path, so we test the logic directly
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(&env_path, "DATABASE_URL=postgres://test\n").unwrap();
+        std::fs::write(&env_path, "LIBSQL_PATH=/tmp/steward.db\n").unwrap();
 
         assert!(env_path.exists());
         let content = std::fs::read_to_string(&env_path).unwrap();
-        assert!(content.contains("DATABASE_URL=postgres://test"));
+        assert!(content.contains("LIBSQL_PATH=/tmp/steward.db"));
     }
 
     #[test]
@@ -686,80 +616,6 @@ INJECTED="pwned"#;
     }
 
     #[test]
-    fn test_migrate_bootstrap_json_to_env() {
-        let dir = tempdir().unwrap();
-        let env_path = dir.path().join(".env");
-        let bootstrap_path = dir.path().join("bootstrap.json");
-
-        // Write a legacy bootstrap.json
-        let bootstrap_json = serde_json::json!({
-            "database_url": "postgres://localhost/steward_upgrade",
-            "database_pool_size": 5,
-            "secrets_master_key_source": "keychain",
-            "onboard_completed": true
-        });
-        std::fs::write(
-            &bootstrap_path,
-            serde_json::to_string_pretty(&bootstrap_json).unwrap(),
-        )
-        .unwrap();
-
-        assert!(!env_path.exists());
-        assert!(bootstrap_path.exists());
-
-        // Run the migration
-        migrate_bootstrap_json_to_env(&env_path);
-
-        // .env should now exist with DATABASE_URL
-        assert!(env_path.exists());
-        let content = std::fs::read_to_string(&env_path).unwrap();
-        assert_eq!(
-            content,
-            "DATABASE_URL=\"postgres://localhost/steward_upgrade\"\n"
-        );
-
-        // bootstrap.json should be renamed to .migrated
-        assert!(!bootstrap_path.exists());
-        assert!(dir.path().join("bootstrap.json.migrated").exists());
-    }
-
-    #[test]
-    fn test_migrate_bootstrap_json_no_database_url() {
-        let dir = tempdir().unwrap();
-        let env_path = dir.path().join(".env");
-        let bootstrap_path = dir.path().join("bootstrap.json");
-
-        // bootstrap.json with no database_url
-        let bootstrap_json = serde_json::json!({
-            "onboard_completed": false
-        });
-        std::fs::write(
-            &bootstrap_path,
-            serde_json::to_string_pretty(&bootstrap_json).unwrap(),
-        )
-        .unwrap();
-
-        migrate_bootstrap_json_to_env(&env_path);
-
-        // .env should NOT be created
-        assert!(!env_path.exists());
-        // bootstrap.json should remain (no migration happened)
-        assert!(bootstrap_path.exists());
-    }
-
-    #[test]
-    fn test_migrate_bootstrap_json_missing() {
-        let dir = tempdir().unwrap();
-        let env_path = dir.path().join(".env");
-
-        // No bootstrap.json at all
-        migrate_bootstrap_json_to_env(&env_path);
-
-        // Nothing should happen
-        assert!(!env_path.exists());
-    }
-
-    #[test]
     fn test_save_bootstrap_env_multiple_vars() {
         let dir = tempdir().unwrap();
         let env_path = dir.path().join("nested").join(".env");
@@ -803,7 +659,7 @@ INJECTED="pwned"#;
         let env_path = dir.path().join(".env");
 
         // Write initial content
-        std::fs::write(&env_path, "DATABASE_URL=\"postgres://old\"\n").unwrap();
+        std::fs::write(&env_path, "OLD_VAR=\"legacy\"\n").unwrap();
 
         // Overwrite with new vars (simulating save_bootstrap_env behavior)
         let content = "DATABASE_BACKEND=\"libsql\"\nLIBSQL_PATH=\"/new/path.db\"\n";
@@ -813,9 +669,9 @@ INJECTED="pwned"#;
             .unwrap()
             .filter_map(|r| r.ok())
             .collect();
-        // Old DATABASE_URL should be gone
+        // Old content should be gone
         assert_eq!(parsed.len(), 2);
-        assert!(parsed.iter().all(|(k, _)| k != "DATABASE_URL"));
+        assert!(parsed.iter().all(|(k, _)| k != "OLD_VAR"));
     }
 
     #[test]
@@ -922,7 +778,7 @@ INJECTED="pwned"#;
         let _guard = lock_env();
         let old_val = std::env::var("DATABASE_BACKEND").ok();
         // SAFETY: ENV_MUTEX ensures single-threaded access to env vars in tests
-        unsafe { std::env::set_var("DATABASE_BACKEND", "postgres") };
+        unsafe { std::env::set_var("DATABASE_BACKEND", "libsql") };
 
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("steward.db");
@@ -946,14 +802,13 @@ INJECTED="pwned"#;
     }
 
     #[test]
-    fn bootstrap_env_special_chars_in_url() {
+    fn bootstrap_env_special_chars_in_path() {
         let dir = tempdir().unwrap();
         let env_path = dir.path().join(".env");
 
-        // URLs with special characters that are common in database passwords
-        let url = "postgres://user:p%23ss@host:5432/db?sslmode=require";
-        let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
-        let content = format!("DATABASE_URL=\"{}\"\n", escaped);
+        let path = "/tmp/steward data/with#hash/steward.db";
+        let escaped = path.replace('\\', "\\\\").replace('"', "\\\"");
+        let content = format!("LIBSQL_PATH=\"{}\"\n", escaped);
         std::fs::write(&env_path, &content).unwrap();
 
         let parsed: Vec<(String, String)> = dotenvy::from_path_iter(&env_path)
@@ -962,7 +817,7 @@ INJECTED="pwned"#;
             .collect();
 
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].1, url, "URL with special chars must survive");
+        assert_eq!(parsed[0].1, path, "path with special chars must survive");
     }
 
     #[test]
@@ -1016,8 +871,8 @@ INJECTED="pwned"#;
 
         // Full set of vars the wizard might write
         let vars = [
-            ("DATABASE_BACKEND", "postgres"),
-            ("DATABASE_URL", "postgres://u:p@h:5432/db"),
+            ("DATABASE_BACKEND", "libsql"),
+            ("LIBSQL_PATH", "/home/user/.steward/steward.db"),
             ("LLM_BACKEND", "nearai"),
             ("ONBOARD_COMPLETED", "true"),
             ("EMBEDDING_ENABLED", "false"),
@@ -1322,7 +1177,7 @@ INJECTED="pwned"#;
 
         // Simulate a user-edited .env with custom vars
         let initial =
-            "HTTP_HOST=\"0.0.0.0\"\nDATABASE_BACKEND=\"postgres\"\nCUSTOM_VAR=\"keep_me\"\n";
+            "HTTP_HOST=\"0.0.0.0\"\nDATABASE_BACKEND=\"libsql\"\nCUSTOM_VAR=\"keep_me\"\n";
         std::fs::write(&env_path, initial).unwrap();
 
         // Upsert wizard vars — should preserve HTTP_HOST and CUSTOM_VAR

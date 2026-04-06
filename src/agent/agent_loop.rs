@@ -40,7 +40,7 @@ use crate::workspace::Workspace;
 /// Static greeting persisted to DB and broadcast on first launch.
 ///
 /// Sent before the LLM is involved so the user sees something immediately.
-/// The conversational onboarding (profile building, channel setup) happens
+/// The conversational onboarding (profile building, desktop setup) happens
 /// organically in the subsequent turns driven by BOOTSTRAP.md.
 const BOOTSTRAP_GREETING: &str = include_str!("../workspace/seeds/GREETING.md");
 
@@ -89,8 +89,8 @@ fn resolve_owner_scope_notification_user(
     trimmed_option(explicit_user).or_else(|| trimmed_option(owner_fallback))
 }
 
-fn is_single_message_repl(message: &IncomingMessage) -> bool {
-    message.channel == "repl"
+fn is_single_message_console(message: &IncomingMessage) -> bool {
+    message.channel == "desktop-console"
         && message
             .metadata
             .get("single_message_mode")
@@ -171,7 +171,7 @@ pub struct AgentDeps {
     pub hooks: Arc<HookRegistry>,
     /// Cost enforcement guardrails (daily budget, hourly rate limits).
     pub cost_guard: Arc<crate::agent::cost_guard::CostGuard>,
-    /// SSE manager for live job event streaming to the web gateway.
+    /// Runtime event stream manager for browser-mode compatibility.
     pub sse_tx: Option<Arc<crate::runtime_events::SseManager>>,
     /// Optional Tauri event emitter for native desktop events.
     pub emitter: Option<Arc<dyn RuntimeEventEmitter>>,
@@ -233,7 +233,7 @@ impl AgentChannels {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        // Mirror status updates to SSE/Tauri so the web UI receives them in real-time.
+        // Mirror status updates to runtime events so the desktop UI receives them in real-time.
         let user_id = metadata
             .get("notify_user")
             .and_then(|v| v.as_str())
@@ -301,8 +301,8 @@ pub struct Agent {
     pub(super) heartbeat_config: Option<HeartbeatConfig>,
     pub(super) hygiene_config: Option<crate::config::HygieneConfig>,
     pub(super) routine_config: Option<RoutineConfig>,
-    /// Shared routine-engine slot used for internal event matching and for exposing
-    /// the engine to gateway/manual trigger entry points.
+    /// Shared routine-engine slot used for internal event matching and manual
+    /// runtime trigger entry points.
     pub(super) routine_engine_slot:
         Arc<tokio::sync::RwLock<Option<Arc<crate::agent::routine_engine::RoutineEngine>>>>,
 }
@@ -704,7 +704,7 @@ impl Agent {
         status: crate::channels::StatusUpdate,
         metadata: &serde_json::Value,
     ) -> Result<(), ChannelError> {
-        // SSE mirroring is handled inside AgentChannels::send_status().
+        // Runtime-event mirroring is handled inside AgentChannels::send_status().
         self.channels
             .send_status(channel_name, status, metadata)
             .await
@@ -815,8 +815,8 @@ impl Agent {
         }
     }
 
-    /// Replace the routine-engine slot with a shared one so the gateway and
-    /// agent reference the same engine.
+    /// Replace the routine-engine slot with a shared one so desktop/runtime
+    /// entry points reference the same engine.
     pub fn set_routine_engine_slot(
         &mut self,
         slot: Arc<tokio::sync::RwLock<Option<Arc<crate::agent::routine_engine::RoutineEngine>>>>,
@@ -975,7 +975,7 @@ impl Agent {
     /// Run the agent main loop.
     pub async fn run(self) -> Result<(), Error> {
         // Proactive bootstrap: persist the static greeting to DB *before*
-        // starting channels so the first web client sees it via history.
+        // starting transport consumers so the first desktop client sees it via history.
         let bootstrap_thread_id = if self
             .workspace()
             .is_some_and(|ws| ws.take_bootstrap_pending())
@@ -985,11 +985,11 @@ impl Agent {
             );
             if let Some(store) = self.store() {
                 let thread_id = store
-                    .get_or_create_assistant_conversation("default", "gateway")
+                    .get_or_create_assistant_conversation("default", "desktop")
                     .await
                     .ok();
                 if let Some(id) = thread_id {
-                    self.persist_assistant_response(id, "gateway", "default", BOOTSTRAP_GREETING)
+                    self.persist_assistant_response(id, "desktop", "default", BOOTSTRAP_GREETING)
                         .await;
                 }
                 thread_id
@@ -1082,7 +1082,7 @@ impl Agent {
                             );
                         }
                         let _ = repair_channels
-                            .broadcast("gateway", &repair_owner_id, response)
+                            .broadcast("desktop", &repair_owner_id, response)
                             .await;
                     }
                 }
@@ -1107,7 +1107,7 @@ impl Agent {
                                 );
                             }
                             let _ = repair_channels
-                                .broadcast("gateway", &repair_owner_id, response)
+                                .broadcast("desktop", &repair_owner_id, response)
                                 .await;
                         }
                         Ok(result) => {
@@ -1344,7 +1344,7 @@ impl Agent {
                             };
 
                             // Prefer the configured ingress target. If no transport
-                            // is attached, SSE remains the API-first delivery path.
+                            // is attached, runtime events remain the desktop delivery path.
                             let targeted_ok = if let Some(channel) = notify_channel.as_ref() {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
@@ -1407,7 +1407,7 @@ impl Agent {
                     // SAFETY: self is consumed by run(), we can smuggle the engine in
                     // via a local to use in the message loop below.
 
-                    // Expose engine to gateway for manual triggering
+                    // Expose engine for manual triggering through shared runtime paths
                     *self.routine_engine_slot.write().await = Some(Arc::clone(&engine));
 
                     tracing::debug!(
@@ -1429,7 +1429,7 @@ impl Agent {
         };
 
         // Bootstrap phase 2: register the thread in session manager and
-        // broadcast the greeting via SSE for any clients already connected.
+        // broadcast the greeting via runtime events for any clients already connected.
         // The greeting was already persisted to DB before start_all(), so
         // clients that connect after this point will see it via history.
         if let Some(id) = bootstrap_thread_id {
@@ -1444,12 +1444,12 @@ impl Agent {
                 sess.threads.entry(id).or_insert(thread);
             }
             self.session_manager
-                .register_thread("default", "gateway", id, session)
+                .register_thread("default", "desktop", id, session)
                 .await;
 
             let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
             out.thread_id = Some(id.to_string());
-            let _ = self.broadcast_channel("gateway", "default", out).await;
+            let _ = self.broadcast_channel("desktop", "default", out).await;
         }
 
         // Main message loop
@@ -1490,7 +1490,7 @@ impl Agent {
             // Store successfully extracted document text in workspace for indexing
             self.store_extracted_documents(&message).await;
 
-            // Notify the web UI that processing has started
+            // Notify the desktop UI that processing has started.
             self.emit_sse_event_for_message(
                 &message,
                 steward_common::AppEvent::Thinking {
@@ -1502,10 +1502,10 @@ impl Agent {
 
             match self.handle_message(&message).await {
                 Ok(Some(response)) if !response.is_empty() => {
-                    // Real streaming happens in the dispatcher via the SSE
-                    // forwarder task — StreamChunk events arrive as the LLM
-                    // produces tokens.  We just emit the final Response event
-                    // so the frontend can commit the completed message.
+                    // Real streaming happens in the dispatcher via runtime
+                    // chunk events as the LLM produces tokens. We just emit
+                    // the final Response event so the desktop frontend can
+                    // commit the completed message.
                     self.emit_sse_event_for_message(
                         &message,
                         steward_common::AppEvent::Response {
@@ -1527,8 +1527,8 @@ impl Agent {
                         Ok(crate::hooks::HookOutcome::Continue {
                             modified: Some(new_content),
                         }) => {
-                            // Skip channel delivery for "api" — SSE already delivered the response above.
-                            if message.channel != "api"
+                            // Skip transport echo for desktop-originated messages.
+                            if message.channel != "desktop"
                                 && let Err(e) = self
                                     .send_channel_response(
                                         &message,
@@ -1544,8 +1544,8 @@ impl Agent {
                             }
                         }
                         _ => {
-                            // Skip channel delivery for "api" — SSE already delivered the response above.
-                            if message.channel != "api"
+                            // Skip transport echo for desktop-originated messages.
+                            if message.channel != "desktop"
                                 && let Err(e) = self
                                     .send_channel_response(
                                         &message,
@@ -1572,10 +1572,10 @@ impl Agent {
                     );
                 }
                 Ok(None) => {
-                    // Shutdown signal only from REPL /quit command.
-                    // For API/web channels, treat as empty response — never
-                    // terminate the agent loop from an API message.
-                    if message.channel == "repl" || message.channel == "cli" {
+                    // Shutdown signal only from desktop-console /quit command.
+                    // For desktop-driven threads, treat as empty response — never
+                    // terminate the agent loop from a normal desktop message.
+                    if message.channel == "desktop-console" {
                         tracing::debug!("Shutdown command received from {}, exiting...", message.channel);
                         break;
                     }
@@ -1764,8 +1764,8 @@ impl Agent {
 
         // Resolve session and thread. Approval submissions are allowed to
         // target an already-loaded owned thread by UUID across channels so the
-        // web approval UI can approve work that originated from HTTP/other
-        // owner-scoped channels.
+        // desktop approval UI can approve work that originated from other
+        // owner-scoped runtime paths.
         let approval_thread_uuid = if matches!(
             submission,
             Submission::ExecApproval { .. } | Submission::ApprovalResponse { .. }
@@ -1884,10 +1884,10 @@ impl Agent {
             && let Submission::UserInput { ref content } = submission
             && let Some(engine) = self.routine_engine().await
         {
-            let single_message_repl = is_single_message_repl(message);
+            let single_message_console = is_single_message_console(message);
             // Use post-hook content so that BeforeInbound hooks that rewrite
             // input are respected by event trigger matching.
-            let fired = if single_message_repl {
+            let fired = if single_message_console {
                 engine.check_event_triggers_and_wait(message, content).await
             } else {
                 engine.check_event_triggers(message, content).await
@@ -1899,7 +1899,7 @@ impl Agent {
                     fired,
                     "Consumed inbound user message with matching event-triggered routine(s)"
                 );
-                return if single_message_repl {
+                return if single_message_console {
                     Ok(None)
                 } else {
                     Ok(Some(String::new()))
@@ -1912,7 +1912,7 @@ impl Agent {
 
         // Per-user bootstrap: if this user's workspace was just seeded (fresh),
         // persist the static greeting to their assistant conversation and
-        // broadcast it so the web client shows it immediately.
+        // broadcast it so the desktop client shows it immediately.
         if tenant
             .workspace()
             .is_some_and(|ws| ws.take_bootstrap_pending())
@@ -2061,7 +2061,7 @@ impl Agent {
                             Ok(Some(format!("Error: {}", message)))
                         }
                         _ => {
-                            if is_single_message_repl(message) {
+                            if is_single_message_console(message) {
                                 Ok(None)
                             } else {
                                 Ok(Some(String::new()))
@@ -2129,7 +2129,7 @@ impl Agent {
                 message: output_message,
             } => {
                 let should_exit =
-                    if output_message.as_deref() == Some("") && is_single_message_repl(message) {
+                    if output_message.as_deref() == Some("") && is_single_message_console(message) {
                         let sess = session_for_empty_exit.lock().await;
                         sess.threads
                             .get(&thread_id)
@@ -2160,7 +2160,7 @@ impl Agent {
 }
 
 /// Split a response string into UTF-8-safe chunks suitable for progressive
-/// delivery to the web UI. Only used by tests now — real streaming replaces this.
+/// delivery to the desktop UI. Only used by tests now — real streaming replaces this.
 #[cfg(test)]
 fn split_into_stream_chunks(text: &str) -> Vec<String> {
     const MIN_CHARS: usize = 12;
@@ -2225,9 +2225,9 @@ fn is_stream_chunk_boundary(ch: char) -> bool {
     )
 }
 
-/// Convert a channel [`StatusUpdate`] into an [`AppEvent`] suitable for SSE
-/// broadcast to the web UI.  Returns `None` for status variants that have no
-/// meaningful SSE counterpart.
+/// Convert a channel [`StatusUpdate`] into an [`AppEvent`] suitable for desktop
+/// runtime emission. Returns `None` for status variants that have no meaningful
+/// UI counterpart.
 fn status_update_to_app_event(
     status: &crate::channels::StatusUpdate,
     thread_id: Option<String>,
@@ -2356,7 +2356,8 @@ fn status_update_to_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_tool_execution_metadata, is_single_message_repl, resolve_routine_notification_user,
+        chat_tool_execution_metadata, is_single_message_console,
+        resolve_routine_notification_user,
         should_fallback_routine_notification, split_into_stream_chunks, truncate_for_preview,
     };
     #[cfg(feature = "libsql")]
@@ -2552,22 +2553,22 @@ mod tests {
 
     #[test]
     fn chat_tool_execution_metadata_prefers_message_routing_target() {
-        let message = IncomingMessage::new("telegram", "owner-scope", "hello")
-            .with_sender_id("telegram-user")
+        let message = IncomingMessage::new("desktop", "owner-scope", "hello")
+            .with_sender_id("desktop-user")
             .with_thread("thread-7")
             .with_metadata(serde_json::json!({
-                "chat_id": 424242,
-                "chat_type": "private",
+                "surface": "desktop",
+                "window_id": "main",
             }));
 
         let metadata = chat_tool_execution_metadata(&message);
         assert_eq!(
             metadata.get("notify_channel").and_then(|v| v.as_str()),
-            Some("telegram")
+            Some("desktop")
         ); // safety: test-only assertion
         assert_eq!(
             metadata.get("notify_user").and_then(|v| v.as_str()),
-            Some("424242")
+            Some("desktop-user")
         ); // safety: test-only assertion
         assert_eq!(
             metadata.get("notify_thread_id").and_then(|v| v.as_str()),
@@ -2577,12 +2578,12 @@ mod tests {
 
     #[test]
     fn chat_tool_execution_metadata_falls_back_to_user_scope_without_route() {
-        let message = IncomingMessage::new("gateway", "owner-scope", "hello").with_sender_id("");
+        let message = IncomingMessage::new("desktop", "owner-scope", "hello").with_sender_id("");
 
         let metadata = chat_tool_execution_metadata(&message);
         assert_eq!(
             metadata.get("notify_channel").and_then(|v| v.as_str()),
-            Some("gateway")
+            Some("desktop")
         ); // safety: test-only assertion
         assert_eq!(
             metadata.get("notify_user").and_then(|v| v.as_str()),
@@ -2597,8 +2598,8 @@ mod tests {
     #[test]
     fn targeted_routine_notifications_do_not_fallback_without_owner_route() {
         let error = ChannelError::MissingRoutingTarget {
-            name: "telegram".to_string(),
-            reason: "No stored owner routing target for channel 'telegram'.".to_string(),
+            name: "desktop".to_string(),
+            reason: "No stored owner routing target for channel 'desktop'.".to_string(),
         };
 
         assert!(!should_fallback_routine_notification(&error)); // safety: test-only assertion
@@ -2607,7 +2608,7 @@ mod tests {
     #[test]
     fn targeted_routine_notifications_may_fallback_for_other_errors() {
         let error = ChannelError::SendFailed {
-            name: "telegram".to_string(),
+            name: "desktop".to_string(),
             reason: "timeout talking to channel".to_string(),
         };
 
@@ -2615,16 +2616,16 @@ mod tests {
     }
 
     #[test]
-    fn single_message_repl_detection_requires_repl_channel_and_metadata_flag() {
-        let repl = IncomingMessage::new("repl", "owner-scope", "hello")
+    fn single_message_console_detection_requires_console_channel_and_metadata_flag() {
+        let console = IncomingMessage::new("desktop-console", "owner-scope", "hello")
             .with_metadata(serde_json::json!({ "single_message_mode": true }));
-        let gateway = IncomingMessage::new("gateway", "owner-scope", "hello")
+        let desktop = IncomingMessage::new("desktop", "owner-scope", "hello")
             .with_metadata(serde_json::json!({ "single_message_mode": true }));
-        let plain_repl = IncomingMessage::new("repl", "owner-scope", "hello");
+        let plain_console = IncomingMessage::new("desktop-console", "owner-scope", "hello");
 
-        assert!(is_single_message_repl(&repl)); // safety: test-only assertion
-        assert!(!is_single_message_repl(&gateway)); // safety: test-only assertion
-        assert!(!is_single_message_repl(&plain_repl)); // safety: test-only assertion
+        assert!(is_single_message_console(&console)); // safety: test-only assertion
+        assert!(!is_single_message_console(&desktop)); // safety: test-only assertion
+        assert!(!is_single_message_console(&plain_console)); // safety: test-only assertion
     }
 
     #[test]
@@ -2638,7 +2639,7 @@ mod tests {
 
     #[test]
     fn split_into_stream_chunks_splits_medium_text_for_visible_streaming() {
-        let text = "This response should be split into multiple visible chunks for the web UI.";
+        let text = "This response should be split into multiple visible chunks for the desktop UI.";
         let chunks = split_into_stream_chunks(text);
 
         assert!(chunks.len() > 1);

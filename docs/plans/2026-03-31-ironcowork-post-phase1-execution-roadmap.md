@@ -26,7 +26,7 @@ The remaining work is not "invent a shell". It is "correct the product model and
 - Keep tasks/runs as durable execution records and background units.
 - Delete predefined-workflow-centric product and API assumptions instead of layering over them.
 - Optimize for general-purpose agent behavior before vertical workflows.
-- Preserve the HTTP/SSE contract as the only business interface.
+- Preserve a single business interface, now centered on Tauri IPC for desktop and shared runtime services beneath it.
 - Treat Ask/Yolo as core runtime policy.
 
 ---
@@ -74,10 +74,9 @@ Deleted from the active plan:
 
 ### Exit Criteria
 
-- Browser mode can save settings, create/select sessions, send messages, and observe run state changes.
-- Desktop mode can do the same flows and additionally show notifications and accept folder drops.
-- API naming and SSE payloads reflect a session/run mental model rather than predefined workflow execution.
-- The UI survives refresh without losing authoritative session/run state.
+- Desktop mode can save settings, create/select sessions, send messages, observe thread/run state changes, show notifications, and accept folder drops.
+- API naming and runtime payloads reflect a session/thread/run mental model rather than predefined workflow execution.
+- The UI survives refresh without losing authoritative session/thread/run state.
 
 ### Issue 1.6: Manual Runtime Validation And Gap Fixes
 
@@ -85,10 +84,9 @@ Purpose: close the gap between "shell exists" and "developers can actually use i
 
 Work items:
 
-- validate browser mode against `127.0.0.1`
-- validate Tauri mode against the same backend
-- fix stream resubscribe and refresh-state rebuild issues
-- define capability fallback behavior for browser-only mode
+- validate Tauri desktop mode against the embedded runtime contract
+- fix runtime event resubscribe and refresh-state rebuild issues
+- define graceful fallback behavior for missing native capabilities
 - remove UI wording that implies the product is predefined-workflow-driven
 
 ### Issue 1.7: API Contract Cleanup Around Sessions And Runs
@@ -98,9 +96,10 @@ Purpose: normalize the current implementation before Phase 2 builds on it.
 Work items:
 
 - standardize `task` vs `run` terminology in API and UI
+- standardize `session` vs `thread` terminology across backend and frontend
 - normalize Ask/Yolo route shapes and error payloads
 - remove predefined workflow CRUD from the intended v0 contract
-- ensure run detail and run stream payloads are stable enough for typed frontend handling
+- ensure run detail and runtime event payloads are stable enough for typed frontend handling
 
 ### Issue 1.8: Frontend State Hygiene
 
@@ -108,8 +107,8 @@ Purpose: keep the session-first UI from collapsing into ad hoc state.
 
 Work items:
 
-- isolate stores for settings, sessions, runs, and workspace
-- centralize SSE envelope parsing
+- isolate stores for settings, sessions, threads, runs, and workspace
+- centralize Tauri event envelope parsing
 - add loading, empty, and error states
 - support direct links into a session or run detail view
 
@@ -138,14 +137,14 @@ Purpose: make sessions authoritative and make run creation an implementation det
 Work items:
 
 - define how session messages create or attach to runs
-- persist session state needed for restart and replay
+- persist session and thread state needed for restart and replay
 - make current agent action visible as part of the session experience
 - ensure the API does not force users through predefined forms
 
 Acceptance:
 
 - a user can create a session, send a goal, and observe the agent progress
-- session history survives refresh and restart
+- session and thread history survive refresh and restart
 - new execution records can be traced back to the initiating session turn
 
 ### Issue 2.2: Run History And Approval Center
@@ -163,7 +162,7 @@ Acceptance:
 
 - runs remain inspectable after completion or restart
 - Ask/Yolo decisions are preserved in history
-- the UI can reconstruct run state without scraping raw logs
+- the UI can reconstruct run state from structured runtime events and persisted records without scraping raw logs
 
 ### Issue 2.3: General Agent Workbench
 
@@ -238,8 +237,8 @@ Handled by `03-31-phase3-observability-and-safety`.
 
 Focus:
 
-- structured logs across session/run/approval lifecycles
-- correlation between REST, SSE, and runtime events
+- structured logs across session/thread/run/approval lifecycles
+- correlation between Tauri IPC commands and runtime events
 - regression tests proving no risky side effects bypass Ask/Yolo and safety boundaries
 
 ---
@@ -250,7 +249,7 @@ Focus:
 
 - repository identity consistently reflects Steward
 - developer startup and architecture docs reflect the session-first agent direction
-- user docs explain desktop mode, browser mode, workspace usage, approvals, and safety
+- user docs explain desktop mode, optional WASM channel ingress, workspace usage, approvals, and safety
 - packaging targets and release metadata are coherent
 
 ### Issue 4.1: Rebrand And Bootstrap

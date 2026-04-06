@@ -132,7 +132,7 @@ impl Agent {
 
         // Set up real LLM streaming: create a channel so the LLM provider
         // can push token deltas as they arrive, and spawn a task that
-        // forwards them to SSE as `StreamChunk` events.
+        // forwards them to runtime `StreamChunk` events.
         let (stream_tx, mut stream_rx) =
             tokio::sync::mpsc::unbounded_channel::<crate::llm::StreamDelta>();
         reasoning = reasoning.with_stream_tx(stream_tx);
@@ -253,7 +253,7 @@ impl Agent {
         )
         .await?;
 
-        // Wait for the SSE forwarder to drain any remaining deltas.
+        // Wait for the runtime-event forwarder to drain any remaining deltas.
         // Reasoning drops its stream_tx clone when respond_with_tools returns,
         // but the channel stays open until *all* senders are dropped.
         // We explicitly drop reasoning here so the forwarder can finish.
@@ -739,31 +739,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                     .await;
 
                 if needs_approval {
-                    // In non-DM relay channels, auto-deny approval-
-                    // requiring tools to prevent stuck AwaitingApproval
-                    // state and prompt injection from other users.
-                    let is_relay = self.message.channel.ends_with("-relay");
-                    let is_dm = self
-                        .message
-                        .metadata
-                        .get("event_type")
-                        .and_then(|v| v.as_str())
-                        == Some("direct_message");
-                    if is_relay && !is_dm {
-                        tracing::info!(
-                            tool = %tc.name,
-                            channel = %self.message.channel,
-                            "Auto-denying approval-requiring tool in non-DM relay channel"
-                        );
-                        let reject_msg = format!(
-                            "Tool '{}' requires approval and cannot run in shared channels. \
-                             Ask the user to message me directly (DM) to use this tool.",
-                            tc.name
-                        );
-                        preflight.push((tc, PreflightOutcome::Rejected(reject_msg)));
-                        continue;
-                    }
-
                     approval_needed = Some((idx, tc, tool, allow_always));
                     break;
                 }
@@ -1834,25 +1809,25 @@ mod tests {
     #[test]
     fn test_detect_auth_awaiting_positive() {
         let result: Result<String, Error> = Ok(serde_json::json!({
-            "name": "telegram",
+            "name": "desktop_auth",
             "kind": "WasmTool",
             "awaiting_token": true,
             "status": "awaiting_token",
-            "instructions": "Please provide your Telegram Bot API token."
+            "instructions": "Please provide your desktop auth token."
         })
         .to_string());
 
         let detected = check_auth_required("tool_auth", &result);
         assert!(detected.is_some());
         let (name, instructions) = detected.unwrap();
-        assert_eq!(name, "telegram");
-        assert!(instructions.contains("Telegram Bot API"));
+        assert_eq!(name, "desktop_auth");
+        assert!(instructions.contains("desktop auth token"));
     }
 
     #[test]
     fn test_detect_auth_awaiting_not_awaiting() {
         let result: Result<String, Error> = Ok(serde_json::json!({
-            "name": "telegram",
+            "name": "desktop_auth",
             "kind": "WasmTool",
             "awaiting_token": false,
             "status": "authenticated"
@@ -1865,7 +1840,7 @@ mod tests {
     #[test]
     fn test_detect_auth_awaiting_wrong_tool() {
         let result: Result<String, Error> = Ok(serde_json::json!({
-            "name": "telegram",
+            "name": "desktop_auth",
             "awaiting_token": true,
         })
         .to_string());
@@ -1896,26 +1871,26 @@ mod tests {
     #[test]
     fn test_detect_auth_awaiting_tool_activate() {
         let result: Result<String, Error> = Ok(serde_json::json!({
-            "name": "slack",
+            "name": "desktop_mcp",
             "kind": "McpServer",
             "awaiting_token": true,
             "status": "awaiting_token",
-            "instructions": "Provide your Slack Bot token."
+            "instructions": "Provide your desktop integration token."
         })
         .to_string());
 
         let detected = check_auth_required("tool_activate", &result);
         assert!(detected.is_some());
         let (name, instructions) = detected.unwrap();
-        assert_eq!(name, "slack");
-        assert!(instructions.contains("Slack Bot"));
+        assert_eq!(name, "desktop_mcp");
+        assert!(instructions.contains("desktop integration token"));
     }
 
     #[test]
     fn test_detect_auth_awaiting_tool_activate_not_awaiting() {
         let result: Result<String, Error> = Ok(serde_json::json!({
-            "name": "slack",
-            "tools_loaded": ["slack_post_message"],
+            "name": "desktop_mcp",
+            "tools_loaded": ["desktop_post_message"],
             "message": "Activated"
         })
         .to_string());
@@ -2882,53 +2857,6 @@ mod tests {
             !data_url.is_empty(),
             "Present 'data' field should produce non-empty string"
         );
-    }
-
-    /// Test the relay channel auto-deny decision logic:
-    /// approval-requiring tools in non-DM relay channels must be rejected.
-    #[test]
-    fn test_relay_non_dm_auto_deny_decision() {
-        use crate::channels::IncomingMessage;
-
-        // Case 1: relay channel + non-DM → should auto-deny
-        let msg = IncomingMessage::new("slack-relay", "u1", "hello")
-            .with_metadata(serde_json::json!({ "event_type": "message" }));
-        let is_relay = msg.channel.ends_with("-relay");
-        let is_dm =
-            msg.metadata.get("event_type").and_then(|v| v.as_str()) == Some("direct_message");
-        assert!(is_relay && !is_dm, "Should auto-deny in relay non-DM");
-
-        // Case 2: relay channel + DM → should NOT auto-deny
-        let msg_dm = IncomingMessage::new("slack-relay", "u1", "hello")
-            .with_metadata(serde_json::json!({ "event_type": "direct_message" }));
-        let is_dm_2 =
-            msg_dm.metadata.get("event_type").and_then(|v| v.as_str()) == Some("direct_message");
-        assert!(
-            !msg_dm.channel.ends_with("-relay") || is_dm_2,
-            "Should NOT auto-deny in relay DM"
-        );
-
-        // Case 3: non-relay channel → should NOT auto-deny
-        let msg_web = IncomingMessage::new("web", "u1", "hello")
-            .with_metadata(serde_json::json!({ "event_type": "message" }));
-        assert!(
-            !msg_web.channel.ends_with("-relay"),
-            "Non-relay channel should not trigger auto-deny"
-        );
-    }
-
-    /// Test that the auto-deny produces a PreflightOutcome::Rejected-style message.
-    #[test]
-    fn test_relay_auto_deny_message_format() {
-        let tool_name = "shell";
-        let result_msg = format!(
-            "Tool '{}' requires approval and cannot run in shared channels. \
-             Ask the user to message me directly (DM) to use this tool.",
-            tool_name
-        );
-        assert!(result_msg.contains("shell"));
-        assert!(result_msg.contains("approval"));
-        assert!(result_msg.contains("DM"));
     }
 
     #[test]

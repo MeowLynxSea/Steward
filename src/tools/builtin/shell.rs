@@ -1214,7 +1214,7 @@ mod tests {
             ("OPENAI_API_KEY", "sk-test-fake-key-123"),
             ("NEARAI_SESSION_TOKEN", "sess_fake_token_abc"),
             ("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/fake"),
-            ("DATABASE_URL", "postgres://user:pass@localhost/db"),
+            ("LIBSQL_AUTH_TOKEN", "libsql-secret-token"),
         ];
 
         // SAFETY: test-only, single-threaded tokio runtime, no concurrent env access.

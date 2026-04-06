@@ -1,7 +1,8 @@
 //! Lifecycle management for extensions: discovery, installation, authentication,
-//! and activation of tools and MCP servers.
+//! and activation of channels, tools, and MCP servers.
 //!
-//! Extensions are the user-facing abstraction that unifies two runtime kinds:
+//! Extensions are the user-facing abstraction that unifies three runtime kinds:
+//! - **Channels** — optional WASM message-ingress adapters beyond the desktop shell
 //! - **Tools** — sandboxed capabilities (WASM)
 //! - **MCP servers** — external API integrations via Model Context Protocol
 //!
@@ -35,6 +36,8 @@ pub enum ExtensionKind {
     McpServer,
     /// Sandboxed WASM module, file-based, capabilities auth.
     WasmTool,
+    /// WASM channel module for external message ingress.
+    WasmChannel,
 }
 
 impl std::fmt::Display for ExtensionKind {
@@ -42,6 +45,7 @@ impl std::fmt::Display for ExtensionKind {
         match self {
             ExtensionKind::McpServer => write!(f, "mcp_server"),
             ExtensionKind::WasmTool => write!(f, "wasm_tool"),
+            ExtensionKind::WasmChannel => write!(f, "wasm_channel"),
         }
     }
 }
@@ -499,7 +503,7 @@ pub struct InstalledExtension {
     /// Whether this extension is installed locally (false = available in registry but not installed).
     #[serde(default = "default_true")]
     pub installed: bool,
-    /// Last activation error for WASM channels.
+    /// Last activation error for WASM tools or channels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activation_error: Option<String>,
     /// Extension version from capabilities file (semver).

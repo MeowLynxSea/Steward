@@ -205,7 +205,7 @@ Permanently delete a user and all associated data (tokens, jobs, conversations, 
 
 **Errors:** `404` (user not found), `403` (not admin)
 
-**Cascade:** Deletes from `api_tokens`, `agent_jobs`, `conversations`, `memory_documents`, `routines`, `secrets`, `settings`, `wasm_tools`, and related tables. On PostgreSQL this uses FK cascades; on libSQL it uses explicit deletes.
+**Cascade:** Deletes from `api_tokens`, `agent_jobs`, `conversations`, `memory_documents`, `routines`, `secrets`, `settings`, `wasm_tools`, and related tables through the current libSQL-backed deletion flow.
 
 ---
 

@@ -407,10 +407,10 @@ mod tests {
 
     #[test]
     fn config_error_display() {
-        let err = ConfigError::MissingEnvVar("DATABASE_URL".to_string());
+        let err = ConfigError::MissingEnvVar("LIBSQL_PATH".to_string());
         let msg = err.to_string();
         assert!(
-            msg.contains("DATABASE_URL"),
+            msg.contains("LIBSQL_PATH"),
             "Should mention the variable name: {msg}"
         );
 

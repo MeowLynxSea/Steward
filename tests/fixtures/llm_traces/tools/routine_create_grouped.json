@@ -27,7 +27,7 @@
                 "tool_permissions": ["http"]
               },
               "delivery": {
-                "channel": "telegram",
+                "channel": "routine",
                 "user": "ops-team"
               },
               "advanced": {

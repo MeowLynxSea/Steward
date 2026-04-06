@@ -61,7 +61,7 @@
   let darkMode = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
 
-  const hasMessages = $derived(session && session.messages.length > 0);
+  const hasMessages = $derived(session && session.thread_messages.length > 0);
   const hasStreamingContent = $derived(streaming.streamingContent.length > 0 || streaming.toolCalls.length > 0 || streaming.thinking);
   const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
 
@@ -79,7 +79,7 @@
     void streaming.streamingContent;
     void streaming.toolCalls.length;
     void streaming.thinking;
-    void session?.messages.length;
+    void session?.thread_messages.length;
     scrollToBottom();
   });
 
@@ -220,7 +220,7 @@
     </div>
   {:else}
     <div class="message-list" bind:this={messageListRef}>
-      {#each session?.messages ?? [] as message, idx}
+      {#each session?.thread_messages ?? [] as message, idx}
         <div class="message {message.role} fade-in" style="animation-delay: {Math.min(idx * 30, 300)}ms">
           {#if message.role === "user"}
             <div class="user-bubble">
