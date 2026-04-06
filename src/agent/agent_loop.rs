@@ -150,6 +150,14 @@ fn should_fallback_routine_notification(error: &ChannelError) -> bool {
     !matches!(error, ChannelError::MissingRoutingTarget { .. })
 }
 
+fn preferred_desktop_session_id(message: &IncomingMessage) -> Option<Uuid> {
+    message
+        .metadata
+        .get("desktop_session_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
 /// Core dependencies for the agent.
 ///
 /// Bundles the shared components to reduce argument count.
@@ -1795,14 +1803,36 @@ impl Agent {
             }
         }
 
+        let preferred_session_id = preferred_desktop_session_id(message);
+
         // Hydrate thread from DB if it's a historical thread not in memory
         if let Some(external_thread_id) = message.conversation_scope() {
+            let external_thread_uuid = Uuid::parse_str(external_thread_id).ok();
+            let thread_loaded_in_preferred_session = if let Some(session_id) = preferred_session_id {
+                if let Some(session) = self
+                    .session_manager
+                    .get_session_by_id(&message.user_id, session_id)
+                    .await
+                {
+                    let sess = session.lock().await;
+                    external_thread_uuid
+                        .map(|thread_id| sess.threads.contains_key(&thread_id))
+                        .unwrap_or(false)
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
             tracing::trace!(
                 message_id = %message.id,
                 thread_id = %external_thread_id,
                 "Hydrating thread from DB"
             );
-            if let Some(rejection) = self.maybe_hydrate_thread(message, external_thread_id).await {
+            if !thread_loaded_in_preferred_session
+                && let Some(rejection) =
+                    self.maybe_hydrate_thread(message, external_thread_id).await
+            {
                 return Ok(Some(format!("Error: {}", rejection)));
             }
         }
@@ -1822,7 +1852,45 @@ impl Agent {
             None
         };
 
-        let (session, thread_id) = if let Some(target_thread_id) = approval_thread_uuid {
+        let preferred_thread_uuid = message
+            .conversation_scope()
+            .and_then(|thread_id| Uuid::parse_str(thread_id).ok());
+
+        let preferred_session_thread = if let (Some(session_id), Some(target_thread_id)) =
+            (preferred_session_id, preferred_thread_uuid)
+        {
+            if let Some(session) = self
+                .session_manager
+                .get_session_by_id(&message.user_id, session_id)
+                .await
+            {
+                let mut sess = session.lock().await;
+                if sess.threads.contains_key(&target_thread_id) {
+                    sess.active_thread = Some(target_thread_id);
+                    sess.last_active_at = chrono::Utc::now();
+                    drop(sess);
+                    self.session_manager
+                        .register_thread(
+                            &message.user_id,
+                            &message.channel,
+                            target_thread_id,
+                            Arc::clone(&session),
+                        )
+                        .await;
+                    Some((session, target_thread_id))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let (session, thread_id) = if let Some((session, thread_id)) = preferred_session_thread {
+            (session, thread_id)
+        } else if let Some(target_thread_id) = approval_thread_uuid {
             let session = self
                 .session_manager
                 .get_or_create_session(&message.user_id)

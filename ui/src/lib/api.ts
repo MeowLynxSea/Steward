@@ -35,7 +35,11 @@ export const apiClient = {
   },
 
   createSession(title?: string) {
-    return invoke<{ id: string }>("create_session", { title: title ?? null });
+    return invoke<{ id: string }>("create_session", {
+      payload: {
+        title: title ?? null
+      }
+    });
   },
 
   getSession(id: string) {

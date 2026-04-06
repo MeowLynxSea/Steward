@@ -4,6 +4,7 @@ import { createEventStream, type StreamHandle } from "../stream";
 import type {
   ActiveToolCall,
   SessionDetail,
+  ThreadMessage,
   SessionSummary,
   StreamEnvelope,
   StreamingState,
@@ -41,6 +42,8 @@ class SessionsState {
 
   #streamHandle: StreamHandle | null = null;
   #pollTimer: ReturnType<typeof setTimeout> | null = null;
+  #streamingAssistantId: string | null = null;
+  #liveTurnNumber: number | null = null;
 
   async fetchList() {
     this.listLoading = true;
@@ -63,8 +66,11 @@ class SessionsState {
     this.loading = true;
     this.error = null;
     this.streaming = emptyStreamingState();
+    this.#streamingAssistantId = null;
+    this.#liveTurnNumber = null;
     try {
       this.active = await apiClient.getSession(id);
+      this.#liveTurnNumber = this.#inferLiveTurnNumber();
       await this.refreshActiveTaskDetail();
       this.#streamHandle = createEventStream(
         `/sessions/${id}/stream`,
@@ -114,10 +120,15 @@ class SessionsState {
 
     const optimistic = {
       id: crypto.randomUUID(),
+      kind: "message" as const,
       role: "user",
       content: content.trim(),
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      turn_number: this.#nextTurnNumber(),
+      tool_call: null
     };
+    this.#liveTurnNumber = optimistic.turn_number;
+    this.#streamingAssistantId = null;
     this.active = {
       ...this.active,
       thread_messages: [...this.active.thread_messages, optimistic]
@@ -164,6 +175,8 @@ class SessionsState {
 
   disconnect() {
     this.#stopPollFallback();
+    this.#streamingAssistantId = null;
+    this.#liveTurnNumber = null;
     if (this.#streamHandle) {
       this.#streamHandle.close();
       this.#streamHandle = null;
@@ -231,11 +244,12 @@ class SessionsState {
   }
 
   #handleEvent(event: StreamEnvelope) {
-    if (!this.active) return;
+    if (!this.active || !this.#eventMatchesActiveThread(event)) return;
 
     switch (event.event) {
       case "session.stream_chunk": {
         const { content } = event.payload as { content: string };
+        this.#appendAssistantChunk(content);
         this.streaming = {
           ...this.streaming,
           streamingContent: this.streaming.streamingContent + content,
@@ -249,21 +263,7 @@ class SessionsState {
       case "session.response": {
         const { content } = event.payload as { content: string };
         this.#stopPollFallback();
-        // Finalize: commit accumulated streaming content OR the response content as a message
-        const finalContent = this.streaming.streamingContent || content;
-        this.active = {
-          ...this.active,
-          thread_messages: [
-            ...this.active.thread_messages,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: finalContent,
-              created_at: new Date().toISOString()
-            }
-          ]
-        };
-        // Keep tool calls, suggestions, turn cost, images for display but reset streaming text
+        this.#finalizeAssistantMessage(content);
         this.streaming = {
           ...this.streaming,
           streamingContent: "",
@@ -271,6 +271,7 @@ class SessionsState {
           thinking: false,
           thinkingMessage: ""
         };
+        this.#liveTurnNumber = null;
         break;
       }
 
@@ -287,6 +288,7 @@ class SessionsState {
 
       case "session.tool_started": {
         const { name } = event.payload as { name: string };
+        this.#streamingAssistantId = null;
         const newTool: ActiveToolCall = {
           id: crypto.randomUUID(),
           name,
@@ -295,8 +297,10 @@ class SessionsState {
           completedAt: null,
           error: null,
           parameters: null,
-          resultPreview: null
+          resultPreview: null,
+          rationale: null
         };
+        this.#appendToolCallMessage(newTool);
         this.streaming = {
           ...this.streaming,
           toolCalls: [...this.streaming.toolCalls, newTool],
@@ -328,6 +332,13 @@ class SessionsState {
             break;
           }
         }
+        this.#updateLatestToolCall(name, (tool) => ({
+          ...tool,
+          status: success ? "completed" : "failed",
+          completedAt: new Date().toISOString(),
+          error: error ?? null,
+          parameters: parameters ?? null
+        }));
         this.streaming = { ...this.streaming, toolCalls: updatedCalls };
         break;
       }
@@ -342,6 +353,7 @@ class SessionsState {
             break;
           }
         }
+        this.#updateLatestToolCall(name, (tool) => ({ ...tool, resultPreview: preview }));
         this.streaming = { ...this.streaming, toolCalls: updatedCalls };
         break;
       }
@@ -384,15 +396,21 @@ class SessionsState {
       }
 
       case "session.approval_needed": {
-        const { tool_name, summary } = event.payload as { tool_name: string; summary: string };
+        const { tool_name, summary, description } = event.payload as {
+          tool_name: string;
+          summary?: string;
+          description?: string;
+        };
         this.status = `Approval needed: ${tool_name}`;
-        void notify("Steward needs confirmation", `${tool_name}: ${summary}`);
+        void notify("Steward needs confirmation", `${tool_name}: ${summary ?? description ?? ""}`);
         break;
       }
 
       case "session.error": {
         const { message } = event.payload as { message: string };
         this.error = message;
+        this.#streamingAssistantId = null;
+        this.#liveTurnNumber = null;
         this.streaming = {
           ...this.streaming,
           isStreaming: false,
@@ -404,11 +422,162 @@ class SessionsState {
       case "session.status": {
         const { message } = event.payload as { message: string };
         this.status = message;
+        if (message === "task.completed") {
+          this.#streamingAssistantId = null;
+          this.#liveTurnNumber = null;
+        }
         break;
       }
     }
 
     void this.refreshActiveTaskDetail();
+  }
+
+  #eventMatchesActiveThread(event: StreamEnvelope) {
+    const activeThreadId = this.active?.active_thread_id;
+    if (!activeThreadId || !event.thread_id) {
+      return true;
+    }
+    return event.thread_id === activeThreadId;
+  }
+
+  #nextTurnNumber() {
+    const turns = this.active?.thread_messages.map((message) => message.turn_number) ?? [];
+    return turns.length > 0 ? Math.max(...turns) + 1 : 0;
+  }
+
+  #inferLiveTurnNumber() {
+    const messages = this.active?.thread_messages ?? [];
+    if (messages.length === 0) {
+      return null;
+    }
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.kind === "message" && lastMessage.role === "assistant") {
+      return null;
+    }
+    return lastMessage.turn_number;
+  }
+
+  #ensureLiveTurnNumber() {
+    if (this.#liveTurnNumber !== null) {
+      return this.#liveTurnNumber;
+    }
+    const inferred = this.#inferLiveTurnNumber();
+    if (inferred !== null) {
+      this.#liveTurnNumber = inferred;
+      return inferred;
+    }
+    const nextTurn = this.#nextTurnNumber();
+    this.#liveTurnNumber = nextTurn;
+    return nextTurn;
+  }
+
+  #appendMessage(entry: ThreadMessage) {
+    if (!this.active) return;
+    this.active = {
+      ...this.active,
+      thread_messages: [...this.active.thread_messages, entry]
+    };
+  }
+
+  #updateMessage(id: string, mutate: (message: ThreadMessage) => ThreadMessage) {
+    if (!this.active) return;
+    this.active = {
+      ...this.active,
+      thread_messages: this.active.thread_messages.map((message) =>
+        message.id === id ? mutate(message) : message
+      )
+    };
+  }
+
+  #appendAssistantChunk(content: string) {
+    if (!this.active) return;
+    const now = new Date().toISOString();
+    const turnNumber = this.#ensureLiveTurnNumber();
+    if (!this.#streamingAssistantId) {
+      const id = crypto.randomUUID();
+      this.#streamingAssistantId = id;
+      this.#appendMessage({
+        id,
+        kind: "message",
+        role: "assistant",
+        content,
+        created_at: now,
+        turn_number: turnNumber,
+        tool_call: null
+      });
+      return;
+    }
+
+    this.#updateMessage(this.#streamingAssistantId, (message) => ({
+      ...message,
+      content: `${message.content ?? ""}${content}`
+    }));
+  }
+
+  #finalizeAssistantMessage(content: string) {
+    if (!this.active) return;
+    const finalContent = this.streaming.streamingContent || content;
+    if (this.#streamingAssistantId) {
+      this.#updateMessage(this.#streamingAssistantId, (message) => ({
+        ...message,
+        content: finalContent || message.content
+      }));
+    } else if (finalContent) {
+      this.#appendMessage({
+        id: crypto.randomUUID(),
+        kind: "message",
+        role: "assistant",
+        content: finalContent,
+        created_at: new Date().toISOString(),
+        turn_number: this.#ensureLiveTurnNumber(),
+        tool_call: null
+      });
+    }
+    this.#streamingAssistantId = null;
+  }
+
+  #appendToolCallMessage(tool: ActiveToolCall) {
+    this.#appendMessage({
+      id: tool.id,
+      kind: "tool_call",
+      role: null,
+      content: null,
+      created_at: tool.startedAt,
+      turn_number: this.#ensureLiveTurnNumber(),
+      tool_call: tool
+    });
+  }
+
+  #updateLatestToolCall(name: string, mutate: (tool: ActiveToolCall) => ActiveToolCall) {
+    if (!this.active) return;
+    const messages = [...this.active.thread_messages];
+    let fallbackIndex = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const entry = messages[i];
+      if (entry.kind === "tool_call" && entry.tool_call?.name === name) {
+        if (entry.tool_call.status === "running") {
+          messages[i] = {
+            ...entry,
+            tool_call: mutate(entry.tool_call as ActiveToolCall)
+          };
+          this.active = { ...this.active, thread_messages: messages };
+          return;
+        }
+        if (fallbackIndex === -1) {
+          fallbackIndex = i;
+        }
+      }
+    }
+
+    if (fallbackIndex >= 0) {
+      const entry = messages[fallbackIndex];
+      messages[fallbackIndex] = {
+        ...entry,
+        tool_call: mutate(entry.tool_call as ActiveToolCall)
+      };
+      this.active = { ...this.active, thread_messages: messages };
+    }
   }
 }
 

@@ -4,6 +4,7 @@ mod tauri_commands;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
 use steward_core::desktop_runtime::{AppState, TauriEventEmitterHandle};
@@ -25,11 +26,15 @@ struct CodexLoginJobs(Arc<RwLock<HashMap<String, CodexLoginJob>>>);
 /// Emits events to the frontend via Tauri's event system.
 struct TauriEventEmitter {
     app: tauri::AppHandle,
+    sequence: AtomicU64,
 }
 
 impl TauriEventEmitter {
     fn new(app: tauri::AppHandle) -> Self {
-        Self { app }
+        Self {
+            app,
+            sequence: AtomicU64::new(1),
+        }
     }
 }
 
@@ -228,7 +233,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             "event": format!("session.{}", event.event_type()),
             "thread_id": thread_id.unwrap_or_default(),
             "payload": payload_data,
-            "sequence": 0,
+            "sequence": self.sequence.fetch_add(1, Ordering::Relaxed),
             "timestamp": Utc::now().to_rfc3339()
         });
 

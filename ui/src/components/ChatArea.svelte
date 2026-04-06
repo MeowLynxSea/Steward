@@ -18,7 +18,12 @@
     AlertCircle,
     CheckCircle2
   } from "lucide-svelte";
-  import type { ActiveToolCall, SessionDetail, StreamingState, TaskRecord } from "../lib/types";
+  import type {
+    SessionDetail,
+    StreamingState,
+    TaskRecord,
+    TimelineToolCall
+  } from "../lib/types";
   import { renderMarkdown } from "../lib/markdown";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { tick } from "svelte";
@@ -62,7 +67,7 @@
   let expandedToolCalls = $state<Set<string>>(new Set());
 
   const hasMessages = $derived(session && session.thread_messages.length > 0);
-  const hasStreamingContent = $derived(streaming.streamingContent.length > 0 || streaming.toolCalls.length > 0 || streaming.thinking);
+  const hasStreamingContent = $derived(streaming.streamingContent.length > 0 || streaming.thinking);
   const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
 
   function scrollToBottom() {
@@ -77,7 +82,6 @@
   $effect(() => {
     // Touch reactive deps
     void streaming.streamingContent;
-    void streaming.toolCalls.length;
     void streaming.thinking;
     void session?.thread_messages.length;
     scrollToBottom();
@@ -93,12 +97,19 @@
     expandedToolCalls = next;
   }
 
-  function toolCallDuration(tool: ActiveToolCall): string {
-    if (!tool.completedAt) {
-      const elapsed = Date.now() - new Date(tool.startedAt).getTime();
+  function toolCallDuration(tool: TimelineToolCall, createdAt?: string): string {
+    const startedAt =
+      "startedAt" in tool && typeof tool.startedAt === "string" ? tool.startedAt : createdAt;
+    const completedAt =
+      "completedAt" in tool && typeof tool.completedAt === "string" ? tool.completedAt : null;
+    if (!startedAt) {
+      return tool.status;
+    }
+    if (!completedAt) {
+      const elapsed = Date.now() - new Date(startedAt).getTime();
       return `${(elapsed / 1000).toFixed(1)}s`;
     }
-    const duration = new Date(tool.completedAt).getTime() - new Date(tool.startedAt).getTime();
+    const duration = new Date(completedAt).getTime() - new Date(startedAt).getTime();
     return `${(duration / 1000).toFixed(1)}s`;
   }
 
@@ -221,14 +232,71 @@
   {:else}
     <div class="message-list" bind:this={messageListRef}>
       {#each session?.thread_messages ?? [] as message, idx}
-        <div class="message {message.role} fade-in" style="animation-delay: {Math.min(idx * 30, 300)}ms">
-          {#if message.role === "user"}
+        <div class="message {message.role ?? message.kind} fade-in" style="animation-delay: {Math.min(idx * 30, 300)}ms">
+          {#if message.kind === "tool_call" && message.tool_call}
+            <div class="assistant-text">
+              <div class="tool-calls-container inline-tool-call">
+                <div class="tool-call-card {message.tool_call.status}" class:expanded={expandedToolCalls.has(message.id)}>
+                  <button class="tool-call-header" onclick={() => toggleToolCallExpand(message.id)}>
+                    <div class="tool-call-left">
+                      {#if message.tool_call.status === "running"}
+                        <div class="tool-spinner">
+                          <Loader size={14} strokeWidth={2} />
+                        </div>
+                      {:else if message.tool_call.status === "completed"}
+                        <div class="tool-icon success">
+                          <CheckCircle2 size={14} strokeWidth={2} />
+                        </div>
+                      {:else}
+                        <div class="tool-icon error">
+                          <AlertCircle size={14} strokeWidth={2} />
+                        </div>
+                      {/if}
+                      <span class="tool-name">{message.tool_call.name}</span>
+                      <span class="tool-duration">{toolCallDuration(message.tool_call, message.created_at)}</span>
+                    </div>
+                    <div class="tool-call-right">
+                      <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
+                    </div>
+                  </button>
+                  {#if expandedToolCalls.has(message.id)}
+                    <div class="tool-call-body slide-down">
+                      {#if message.tool_call.rationale}
+                        <div class="tool-detail">
+                          <span class="tool-detail-label">原因</span>
+                          <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
+                        </div>
+                      {/if}
+                      {#if message.tool_call.parameters}
+                        <div class="tool-detail">
+                          <span class="tool-detail-label">参数</span>
+                          <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
+                        </div>
+                      {/if}
+                      {#if message.tool_call.resultPreview}
+                        <div class="tool-detail">
+                          <span class="tool-detail-label">结果</span>
+                          <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
+                        </div>
+                      {/if}
+                      {#if message.tool_call.error}
+                        <div class="tool-detail error-detail">
+                          <span class="tool-detail-label">错误</span>
+                          <pre class="tool-detail-content">{message.tool_call.error}</pre>
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            </div>
+          {:else if message.role === "user"}
             <div class="user-bubble">
-              {message.content}
+              {message.content ?? ""}
             </div>
           {:else}
             <div class="assistant-text">
-              <div class="assistant-content markdown-body">{@html renderMarkdown(message.content)}</div>
+              <div class="assistant-content markdown-body">{@html renderMarkdown(message.content ?? "")}</div>
             </div>
           {/if}
         </div>
@@ -269,67 +337,6 @@
                     {/each}
                   </div>
                 {/if}
-              </div>
-            {/if}
-
-            <!-- Tool calls -->
-            {#if streaming.toolCalls.length > 0}
-              <div class="tool-calls-container">
-                {#each streaming.toolCalls as tool (tool.id)}
-                  <div class="tool-call-card {tool.status}" class:expanded={expandedToolCalls.has(tool.id)}>
-                    <button class="tool-call-header" onclick={() => toggleToolCallExpand(tool.id)}>
-                      <div class="tool-call-left">
-                        {#if tool.status === "running"}
-                          <div class="tool-spinner">
-                            <Loader size={14} strokeWidth={2} />
-                          </div>
-                        {:else if tool.status === "completed"}
-                          <div class="tool-icon success">
-                            <CheckCircle2 size={14} strokeWidth={2} />
-                          </div>
-                        {:else}
-                          <div class="tool-icon error">
-                            <AlertCircle size={14} strokeWidth={2} />
-                          </div>
-                        {/if}
-                        <span class="tool-name">{tool.name}</span>
-                        <span class="tool-duration">{toolCallDuration(tool)}</span>
-                      </div>
-                      <div class="tool-call-right">
-                        <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
-                      </div>
-                    </button>
-                    {#if expandedToolCalls.has(tool.id)}
-                      <div class="tool-call-body slide-down">
-                        {#if tool.parameters}
-                          <div class="tool-detail">
-                            <span class="tool-detail-label">参数</span>
-                            <pre class="tool-detail-content">{tool.parameters}</pre>
-                          </div>
-                        {/if}
-                        {#if tool.resultPreview}
-                          <div class="tool-detail">
-                            <span class="tool-detail-label">结果</span>
-                            <pre class="tool-detail-content">{tool.resultPreview}</pre>
-                          </div>
-                        {/if}
-                        {#if tool.error}
-                          <div class="tool-detail error-detail">
-                            <span class="tool-detail-label">错误</span>
-                            <pre class="tool-detail-content">{tool.error}</pre>
-                          </div>
-                        {/if}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-              </div>
-            {/if}
-
-            <!-- Streaming text content -->
-            {#if streaming.streamingContent}
-              <div class="assistant-content markdown-body streaming-text">
-                {@html renderMarkdown(streaming.streamingContent)}<span class="typing-cursor"></span>
               </div>
             {/if}
 
@@ -820,6 +827,10 @@
     flex-direction: column;
     gap: 6px;
     animation: fadeSlideIn 0.3s ease both;
+  }
+
+  .inline-tool-call {
+    margin-top: 0;
   }
 
   .tool-call-card {

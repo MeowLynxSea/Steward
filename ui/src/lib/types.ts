@@ -57,9 +57,23 @@ export interface SessionSummary {
 
 export interface ThreadMessage {
   id: string;
-  role: string;
-  content: string;
+  kind: "message" | "tool_call";
+  role: string | null;
+  content: string | null;
   created_at: string;
+  turn_number: number;
+  tool_call: TimelineToolCall | null;
+}
+
+export type ToolCallStatus = "running" | "completed" | "failed";
+
+export interface TimelineToolCall {
+  name: string;
+  status: ToolCallStatus;
+  parameters: string | null;
+  resultPreview: string | null;
+  error: string | null;
+  rationale: string | null;
 }
 
 export interface SessionDetail {
@@ -252,17 +266,10 @@ export interface SendSessionMessageResponse {
 
 // --- Streaming state types ---
 
-export type ToolCallStatus = "running" | "completed" | "failed";
-
-export interface ActiveToolCall {
+export interface ActiveToolCall extends TimelineToolCall {
   id: string;
-  name: string;
-  status: ToolCallStatus;
   startedAt: string;
   completedAt: string | null;
-  error: string | null;
-  parameters: string | null;
-  resultPreview: string | null;
 }
 
 export interface ToolDecision {

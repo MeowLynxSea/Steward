@@ -57,12 +57,25 @@ pub struct SessionListResponse {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadToolCallResponse {
+    pub name: String,
+    pub status: String,
+    pub parameters: Option<String>,
+    pub result_preview: Option<String>,
+    pub error: Option<String>,
+    pub rationale: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ThreadMessageResponse {
     pub id: Uuid,
-    pub role: String,
-    pub content: String,
+    pub kind: String,
+    pub role: Option<String>,
+    pub content: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub turn_number: usize,
+    pub tool_call: Option<ThreadToolCallResponse>,
 }
 
 #[derive(Debug, Serialize)]

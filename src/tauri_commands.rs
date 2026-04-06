@@ -124,6 +124,81 @@ fn session_title(session: &Session) -> String {
         .to_string()
 }
 
+fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
+    if parameters.is_null() {
+        None
+    } else {
+        Some(
+            serde_json::to_string_pretty(parameters).unwrap_or_else(|_| parameters.to_string()),
+        )
+    }
+}
+
+fn tool_status(tool_call: &steward_core::agent::session::TurnToolCall) -> String {
+    if tool_call.error.is_some() {
+        "failed".to_string()
+    } else if tool_call.result.is_some() {
+        "completed".to_string()
+    } else {
+        "running".to_string()
+    }
+}
+
+fn build_thread_messages(
+    thread: &steward_core::agent::session::Thread,
+) -> Vec<steward_core::ipc::ThreadMessageResponse> {
+    thread
+        .turns
+        .iter()
+        .flat_map(|turn| {
+            let mut msgs = Vec::new();
+            msgs.push(steward_core::ipc::ThreadMessageResponse {
+                id: Uuid::new_v4(),
+                kind: "message".to_string(),
+                role: Some("user".to_string()),
+                content: Some(turn.user_input.clone()),
+                created_at: turn.started_at,
+                turn_number: turn.turn_number,
+                tool_call: None,
+            });
+            for tool_call in &turn.tool_calls {
+                let result_preview = tool_call.result.as_ref().map(|result| match result {
+                    serde_json::Value::String(value) => steward_common::truncate_preview(value, 500),
+                    other => steward_common::truncate_preview(&other.to_string(), 500),
+                });
+                msgs.push(steward_core::ipc::ThreadMessageResponse {
+                    id: Uuid::new_v4(),
+                    kind: "tool_call".to_string(),
+                    role: None,
+                    content: None,
+                    created_at: turn.completed_at.unwrap_or(turn.started_at),
+                    turn_number: turn.turn_number,
+                    tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
+                        name: tool_call.name.clone(),
+                        status: tool_status(tool_call),
+                        parameters: format_tool_parameters(&tool_call.parameters),
+                        result_preview,
+                        error: tool_call.error.clone(),
+                        rationale: tool_call.rationale.clone(),
+                    }),
+                });
+            }
+            if let Some(response) = &turn.response {
+                msgs.push(steward_core::ipc::ThreadMessageResponse {
+                    id: Uuid::new_v4(),
+                    kind: "message".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: Some(response.clone()),
+                    created_at: turn.completed_at.unwrap_or(turn.started_at),
+                    turn_number: turn.turn_number,
+                    tool_call: None,
+                });
+            }
+            msgs
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub async fn list_sessions(
     state: State<'_, AppState>,
@@ -217,30 +292,7 @@ pub async fn get_session(
         .get(&thread_id)
         .ok_or_else(|| "Thread not found".to_string())?;
 
-    let thread_messages: Vec<steward_core::ipc::ThreadMessageResponse> = thread
-        .turns
-        .iter()
-        .flat_map(|turn| {
-            let mut msgs = Vec::new();
-            msgs.push(steward_core::ipc::ThreadMessageResponse {
-                id: Uuid::new_v4(),
-                role: "user".to_string(),
-                content: turn.user_input.clone(),
-                created_at: turn.started_at,
-                turn_number: turn.turn_number,
-            });
-            if let Some(response) = &turn.response {
-                msgs.push(steward_core::ipc::ThreadMessageResponse {
-                    id: Uuid::new_v4(),
-                    role: "assistant".to_string(),
-                    content: response.clone(),
-                    created_at: turn.completed_at.unwrap_or(turn.started_at),
-                    turn_number: turn.turn_number,
-                });
-            }
-            msgs
-        })
-        .collect();
+    let thread_messages = build_thread_messages(thread);
 
     let summary = steward_core::ipc::SessionSummaryResponse {
         id: sess.id,
@@ -339,7 +391,10 @@ pub async fn send_session_message(
         DesktopDispatchPlan::InjectOnly => {
             tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, injecting message");
             let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
-                .with_thread(thread_id.to_string());
+                .with_thread(thread_id.to_string())
+                .with_metadata(serde_json::json!({
+                    "desktop_session_id": id.to_string(),
+                }));
             tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
             state
                 .message_inject_tx
@@ -362,7 +417,7 @@ pub async fn send_session_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopDispatchPlan, plan_desktop_message_dispatch};
+    use super::{DesktopDispatchPlan, build_thread_messages, plan_desktop_message_dispatch};
     use steward_core::agent::session::{Thread, ThreadState};
     use uuid::Uuid;
 
@@ -392,6 +447,35 @@ mod tests {
             thread.pending_messages.front().map(String::as_str),
             Some("hello")
         );
+    }
+
+    #[test]
+    fn build_thread_messages_keeps_tool_calls_in_order() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let turn = thread.start_turn("hello");
+        turn.record_tool_call_with_reasoning(
+            "search",
+            serde_json::json!({ "query": "hello" }),
+            Some("Need docs".to_string()),
+            Some("call_1".to_string()),
+        );
+        turn.record_tool_result_for("call_1", serde_json::json!("found docs"));
+        thread.complete_turn("done");
+
+        let messages = build_thread_messages(&thread);
+
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].kind, "message");
+        assert_eq!(messages[0].role.as_deref(), Some("user"));
+        assert_eq!(messages[1].kind, "tool_call");
+        assert_eq!(
+            messages[1]
+                .tool_call
+                .as_ref()
+                .map(|tool| tool.name.as_str()),
+            Some("search")
+        );
+        assert_eq!(messages[2].role.as_deref(), Some("assistant"));
     }
 }
 
