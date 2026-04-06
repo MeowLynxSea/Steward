@@ -767,6 +767,13 @@ impl AppBuilder {
         let agent_session_manager =
             Arc::new(AgentSessionManager::new().with_hooks(Arc::clone(&hooks)));
 
+        // Attach database store for session persistence (load on startup).
+        if let Some(ref db) = self.db {
+            agent_session_manager
+                .attach_store(Arc::clone(db), &self.config.owner_id)
+                .await;
+        }
+
         let (
             mcp_session_manager,
             mcp_process_manager,
@@ -958,8 +965,8 @@ mod tests {
                 .expect("session start hook should fire")
                 .expect("session start payload should be present");
 
-        // Single-user mode: always uses "default" regardless of input
-        assert_eq!(user_id, "default");
+        // Multi-user mode: the hook receives the actual user_id passed in
+        assert_eq!(user_id, "user-123");
         assert!(!session_id.is_empty());
     }
 }

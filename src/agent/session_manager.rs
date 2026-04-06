@@ -1,8 +1,9 @@
 //! Session manager for multi-user, multi-session conversation handling.
 //!
 //! Each user can have multiple sessions indexed by session_id.
-//! 
-//! For database persistence, implement the SessionStore sub-trait on Database.
+//!
+//! Persistence: sessions are saved to/loaded from the attached database store
+//! via the SettingsStore interface (key: "agent_sessions:<owner_id>").
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::agent::session::Session;
 use crate::agent::undo::UndoManager;
+use crate::db::Database;
 use crate::hooks::HookRegistry;
 
 /// Warn when session count exceeds this threshold.
@@ -27,7 +29,7 @@ struct ThreadKey {
 }
 
 /// Manages sessions, threads, and undo state for all users.
-/// 
+///
 /// Sessions are indexed by owner_id, allowing each user to have multiple
 /// concurrent sessions.
 pub struct SessionManager {
@@ -37,6 +39,10 @@ pub struct SessionManager {
     thread_map: RwLock<HashMap<ThreadKey, (String, Uuid)>>,
     undo_managers: RwLock<HashMap<Uuid, Arc<Mutex<UndoManager>>>>,
     hooks: Option<Arc<HookRegistry>>,
+    /// Attached database store for persistence.
+    store: RwLock<Option<Arc<dyn Database>>>,
+    /// The owner_id this manager is attached to (for DB operations).
+    owner_id: RwLock<Option<String>>,
 }
 
 impl SessionManager {
@@ -47,6 +53,8 @@ impl SessionManager {
             thread_map: RwLock::new(HashMap::new()),
             undo_managers: RwLock::new(HashMap::new()),
             hooks: None,
+            store: RwLock::new(None),
+            owner_id: RwLock::new(None),
         }
     }
 
@@ -54,6 +62,95 @@ impl SessionManager {
     pub fn with_hooks(mut self, hooks: Arc<HookRegistry>) -> Self {
         self.hooks = Some(hooks);
         self
+    }
+
+    /// Attach a database store for persisting sessions.
+    /// Loads any existing sessions from the DB for the given owner.
+    pub async fn attach_store(&self, store: Arc<dyn Database>, owner_id: &str) {
+        *self.store.write().await = Some(store);
+        *self.owner_id.write().await = Some(owner_id.to_string());
+        self.load_sessions_from_db(owner_id).await;
+    }
+
+    /// Load sessions from the database for the given owner.
+    async fn load_sessions_from_db(&self, owner_id: &str) {
+        let store = self.store.read().await;
+        let Some(ref db) = *store else { return; };
+
+        let key = format!("agent_sessions:{}", owner_id);
+        match db.get_setting(owner_id, &key).await {
+            Ok(Some(value)) => {
+                match serde_json::from_value::<HashMap<Uuid, Session>>(value) {
+                    Ok(sessions_map) => {
+                        if sessions_map.is_empty() {
+                            tracing::debug!("No sessions found in DB for owner {}", owner_id);
+                            return;
+                        }
+                        let mut all_sessions = self.sessions.write().await;
+                        for (session_id, session) in sessions_map {
+                            let session = Arc::new(Mutex::new(session));
+                            all_sessions
+                                .entry(owner_id.to_string())
+                                .or_insert_with(HashMap::new)
+                                .insert(session_id, session);
+                        }
+                        tracing::info!(
+                            "Loaded {} sessions from DB for owner {}",
+                            all_sessions.get(owner_id).map(|s| s.len()).unwrap_or(0),
+                            owner_id
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to deserialize sessions from DB for owner {}: {}", owner_id, e);
+                    }
+                }
+            }
+            Ok(None) => {
+                tracing::debug!("No sessions key in DB for owner {}", owner_id);
+            }
+            Err(e) => {
+                tracing::debug!("No sessions in DB for owner {}: {}", owner_id, e);
+            }
+        }
+    }
+
+    /// Save a session to the database.
+    async fn save_session_to_db(&self, owner_id: &str, session: &Session) {
+        let store = self.store.read().await;
+        if let Some(ref db) = *store {
+            let key = format!("agent_sessions:{}", owner_id);
+            // Load current sessions map, update, save
+            let current: HashMap<Uuid, Session> = match db.get_setting(owner_id, &key).await {
+                Ok(Some(value)) => {
+                    serde_json::from_value(value).unwrap_or_default()
+                }
+                _ => HashMap::new(),
+            };
+            let mut sessions = current;
+            sessions.insert(session.id, session.clone());
+            if let Err(e) = db.set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap()).await {
+                tracing::error!("Failed to save session {} to DB: {}", session.id, e);
+            }
+        }
+    }
+
+    /// Delete a session from the database.
+    async fn delete_session_from_db(&self, owner_id: &str, session_id: Uuid) {
+        let store = self.store.read().await;
+        if let Some(ref db) = *store {
+            let key = format!("agent_sessions:{}", owner_id);
+            let current: HashMap<Uuid, Session> = match db.get_setting(owner_id, &key).await {
+                Ok(Some(value)) => {
+                    serde_json::from_value(value).unwrap_or_default()
+                }
+                _ => HashMap::new(),
+            };
+            let mut sessions = current;
+            sessions.remove(&session_id);
+            if let Err(e) = db.set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap()).await {
+                tracing::error!("Failed to delete session {} from DB: {}", session_id, e);
+            }
+        }
     }
 
     /// Get or create the first session for the given owner.
@@ -87,6 +184,10 @@ impl SessionManager {
             .or_insert_with(HashMap::new)
             .insert(session_id, Arc::clone(&session));
 
+        // Persist to DB
+        let session_data = session.lock().await.clone();
+        self.save_session_to_db(owner_id, &session_data).await;
+
         // Fire OnSessionStart hook
         self.fire_session_start_hook(owner_id, session_id).await;
 
@@ -107,6 +208,10 @@ impl SessionManager {
                 .or_insert_with(HashMap::new)
                 .insert(session_id, Arc::clone(&session));
         }
+
+        // Persist to DB
+        let session_data = session.lock().await.clone();
+        self.save_session_to_db(owner_id, &session_data).await;
 
         // Fire OnSessionStart hook
         self.fire_session_start_hook(owner_id, session_id).await;
@@ -394,6 +499,8 @@ impl SessionManager {
                     undo_managers.remove(tid);
                 }
             }
+            // Delete from DB
+            self.delete_session_from_db(owner_id, session_id).await;
             true
         } else {
             false
@@ -406,7 +513,7 @@ impl SessionManager {
         let mut pruned = 0;
 
         let mut sessions = self.sessions.write().await;
-        for (_owner_id, user_sessions) in sessions.iter_mut() {
+        for (owner_id, user_sessions) in sessions.iter_mut() {
             let stale_ids: Vec<Uuid> = user_sessions
                 .iter()
                 .filter(|(_, session)| {
@@ -420,6 +527,7 @@ impl SessionManager {
 
             for id in stale_ids {
                 if user_sessions.remove(&id).is_some() {
+                    self.delete_session_from_db(owner_id, id).await;
                     pruned += 1;
                 }
             }
