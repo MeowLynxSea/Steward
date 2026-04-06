@@ -658,7 +658,7 @@ impl Agent {
         self.deps.emitter.as_ref()
     }
 
-    pub(super) fn emit_sse_event_for_message(
+    pub(super) fn emit_runtime_event_for_message(
         &self,
         message: &IncomingMessage,
         event: steward_common::AppEvent,
@@ -668,6 +668,22 @@ impl Agent {
             emitter.emit_for_user(&message.user_id, event);
         } else {
             tracing::info!(message_id = %message.id, "EMITTER: no emitter available, event dropped");
+        }
+    }
+
+    pub(super) fn emit_runtime_event_for_user(
+        &self,
+        user_id: &str,
+        event: steward_common::AppEvent,
+    ) {
+        if let Some(emitter) = self.emitter() {
+            tracing::info!(user_id, event_type = %event.event_type(), "EMITTER: emitting user-scoped event");
+            emitter.emit_for_user(user_id, event);
+        } else {
+            tracing::info!(
+                user_id,
+                "EMITTER: no emitter available for user-scoped event"
+            );
         }
     }
 
@@ -723,6 +739,49 @@ impl Agent {
 
     pub(super) async fn shutdown_channels(&self) -> Result<(), ChannelError> {
         self.channels.shutdown_all().await
+    }
+
+    pub(super) async fn deliver_response(
+        &self,
+        message: &IncomingMessage,
+        response: OutgoingResponse,
+    ) -> Result<(), ChannelError> {
+        if message.channel == "desktop" {
+            self.emit_runtime_event_for_message(
+                message,
+                steward_common::AppEvent::Response {
+                    content: response.content,
+                    thread_id: response
+                        .thread_id
+                        .unwrap_or_else(|| message.thread_id.clone().unwrap_or_default()),
+                },
+            );
+            Ok(())
+        } else {
+            self.send_channel_response(message, response).await
+        }
+    }
+
+    pub(super) async fn deliver_bootstrap_greeting(
+        &self,
+        channel_name: &str,
+        user_id: &str,
+        thread_id: Uuid,
+    ) -> Result<(), ChannelError> {
+        if channel_name == "desktop" {
+            self.emit_runtime_event_for_user(
+                user_id,
+                steward_common::AppEvent::Response {
+                    content: BOOTSTRAP_GREETING.to_string(),
+                    thread_id: thread_id.to_string(),
+                },
+            );
+            Ok(())
+        } else {
+            let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
+            out.thread_id = Some(thread_id.to_string());
+            self.broadcast_channel(channel_name, user_id, out).await
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -797,11 +856,7 @@ impl Agent {
         Self {
             config,
             deps,
-            channels: AgentChannels::new(
-                transport,
-                emitter_for_channels,
-                owner_for_channels,
-            ),
+            channels: AgentChannels::new(transport, emitter_for_channels, owner_for_channels),
             message_stream: tokio::sync::Mutex::new(Some(message_stream)),
             context_manager,
             scheduler,
@@ -1227,7 +1282,10 @@ impl Agent {
                                         user,
                                         steward_common::AppEvent::Response {
                                             content: response.content.clone(),
-                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                            thread_id: response
+                                                .thread_id
+                                                .clone()
+                                                .unwrap_or_default(),
                                         },
                                     );
                                 }
@@ -1380,15 +1438,16 @@ impl Agent {
                                 false
                             };
 
-                            if !targeted_ok
-                                && let Some(user) = fallback_user
-                            {
+                            if !targeted_ok && let Some(user) = fallback_user {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         &user,
                                         steward_common::AppEvent::Response {
                                             content: response.content.clone(),
-                                            thread_id: response.thread_id.clone().unwrap_or_default(),
+                                            thread_id: response
+                                                .thread_id
+                                                .clone()
+                                                .unwrap_or_default(),
                                         },
                                     );
                                 }
@@ -1447,9 +1506,9 @@ impl Agent {
                 .register_thread("default", "desktop", id, session)
                 .await;
 
-            let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
-            out.thread_id = Some(id.to_string());
-            let _ = self.broadcast_channel("desktop", "default", out).await;
+            let _ = self
+                .deliver_bootstrap_greeting("desktop", "default", id)
+                .await;
         }
 
         // Main message loop
@@ -1491,7 +1550,7 @@ impl Agent {
             self.store_extracted_documents(&message).await;
 
             // Notify the desktop UI that processing has started.
-            self.emit_sse_event_for_message(
+            self.emit_runtime_event_for_message(
                 &message,
                 steward_common::AppEvent::Thinking {
                     message: "正在处理...".to_string(),
@@ -1502,18 +1561,9 @@ impl Agent {
 
             match self.handle_message(&message).await {
                 Ok(Some(response)) if !response.is_empty() => {
-                    // Real streaming happens in the dispatcher via runtime
-                    // chunk events as the LLM produces tokens. We just emit
-                    // the final Response event so the desktop frontend can
-                    // commit the completed message.
-                    self.emit_sse_event_for_message(
-                        &message,
-                        steward_common::AppEvent::Response {
-                            content: response.clone(),
-                            thread_id: message.thread_id.clone().unwrap_or_default(),
-                        },
-                    );
                     // Hook: BeforeOutbound — allow hooks to modify or suppress outbound
+                    // Final delivery happens after hooks so desktop receives the
+                    // exact outbound payload once, from a single code path.
                     let event = crate::hooks::HookEvent::Outbound {
                         user_id: message.user_id.clone(),
                         channel: message.channel.clone(),
@@ -1528,13 +1578,9 @@ impl Agent {
                             modified: Some(new_content),
                         }) => {
                             // Skip transport echo for desktop-originated messages.
-                            if message.channel != "desktop"
-                                && let Err(e) = self
-                                    .send_channel_response(
-                                        &message,
-                                        OutgoingResponse::text(new_content),
-                                    )
-                                    .await
+                            if let Err(e) = self
+                                .deliver_response(&message, OutgoingResponse::text(new_content))
+                                .await
                             {
                                 tracing::error!(
                                     channel = %message.channel,
@@ -1545,13 +1591,9 @@ impl Agent {
                         }
                         _ => {
                             // Skip transport echo for desktop-originated messages.
-                            if message.channel != "desktop"
-                                && let Err(e) = self
-                                    .send_channel_response(
-                                        &message,
-                                        OutgoingResponse::text(response),
-                                    )
-                                    .await
+                            if let Err(e) = self
+                                .deliver_response(&message, OutgoingResponse::text(response))
+                                .await
                             {
                                 tracing::error!(
                                     channel = %message.channel,
@@ -1576,7 +1618,10 @@ impl Agent {
                     // For desktop-driven threads, treat as empty response — never
                     // terminate the agent loop from a normal desktop message.
                     if message.channel == "desktop-console" {
-                        tracing::debug!("Shutdown command received from {}, exiting...", message.channel);
+                        tracing::debug!(
+                            "Shutdown command received from {}, exiting...",
+                            message.channel
+                        );
                         break;
                     }
                     tracing::debug!(
@@ -1585,7 +1630,7 @@ impl Agent {
                     );
                 }
                 Err(e) => {
-                    self.emit_sse_event_for_message(
+                    self.emit_runtime_event_for_message(
                         &message,
                         steward_common::AppEvent::Error {
                             message: e.to_string(),
@@ -1932,7 +1977,7 @@ impl Agent {
                 let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
                 out.thread_id = Some(conv_id.to_string());
                 let _ = self
-                    .broadcast_channel(&message.channel, &message.user_id, out)
+                    .deliver_bootstrap_greeting(&message.channel, &message.user_id, conv_id)
                     .await;
             }
         }
@@ -1998,15 +2043,22 @@ impl Agent {
                     //   identity will attribute every response to the first
                     //   message. This is acceptable for the current
                     //   single-user-per-thread model.
-                    if let Err(e) = self
-                        .channels
-                        .respond(message, OutgoingResponse::text(outgoing.clone()))
-                        .await
-                    {
-                        tracing::warn!(
-                            thread_id = %thread_id,
-                            "Failed to send intermediate drain-loop response: {e}"
-                        );
+                    //
+                    // Desktop channel bypasses the channel transport entirely
+                    // (responses go through SSE emitter in handle_message), so
+                    // skip respond() for desktop to avoid misleading "Channel not
+                    // found" warnings when the drain loop runs.
+                    if message.channel != "desktop" {
+                        if let Err(e) = self
+                            .channels
+                            .respond(message, OutgoingResponse::text(outgoing.clone()))
+                            .await
+                        {
+                            tracing::warn!(
+                                thread_id = %thread_id,
+                                "Failed to send intermediate drain-loop response: {e}"
+                            );
+                        }
                     }
 
                     // Process merged queued messages as a single turn.
@@ -2014,6 +2066,7 @@ impl Agent {
                     // augment_with_attachments doesn't re-apply the original
                     // message's attachments to unrelated queued text.
                     let mut queued_msg = message.clone();
+                    queued_msg.id = Uuid::new_v4();
                     queued_msg.attachments.clear();
                     result = self
                         .process_user_input(
@@ -2128,16 +2181,17 @@ impl Agent {
             SubmissionResult::Ok {
                 message: output_message,
             } => {
-                let should_exit =
-                    if output_message.as_deref() == Some("") && is_single_message_console(message) {
-                        let sess = session_for_empty_exit.lock().await;
-                        sess.threads
-                            .get(&thread_id)
-                            .map(|thread| thread.state != ThreadState::AwaitingApproval)
-                            .unwrap_or(true)
-                    } else {
-                        false
-                    };
+                let should_exit = if output_message.as_deref() == Some("")
+                    && is_single_message_console(message)
+                {
+                    let sess = session_for_empty_exit.lock().await;
+                    sess.threads
+                        .get(&thread_id)
+                        .map(|thread| thread.state != ThreadState::AwaitingApproval)
+                        .unwrap_or(true)
+                } else {
+                    false
+                };
 
                 if should_exit {
                     Ok(None)
@@ -2206,8 +2260,7 @@ fn split_into_stream_chunks(text: &str) -> Vec<String> {
 fn is_stream_chunk_boundary(ch: char) -> bool {
     matches!(
         ch,
-        '\n'
-            | ' '
+        '\n' | ' '
             | '\t'
             | '.'
             | ','
@@ -2255,13 +2308,11 @@ fn status_update_to_app_event(
             parameters: parameters.clone(),
             thread_id,
         }),
-        StatusUpdate::ToolResult { name, preview } => {
-            Some(steward_common::AppEvent::ToolResult {
-                name: name.clone(),
-                preview: preview.clone(),
-                thread_id,
-            })
-        }
+        StatusUpdate::ToolResult { name, preview } => Some(steward_common::AppEvent::ToolResult {
+            name: name.clone(),
+            preview: preview.clone(),
+            thread_id,
+        }),
         StatusUpdate::StreamChunk(content) => Some(steward_common::AppEvent::StreamChunk {
             content: content.clone(),
             thread_id,
@@ -2277,12 +2328,10 @@ fn status_update_to_app_event(
                 thread_id,
             })
         }
-        StatusUpdate::Suggestions { suggestions } => {
-            Some(steward_common::AppEvent::Suggestions {
-                suggestions: suggestions.clone(),
-                thread_id,
-            })
-        }
+        StatusUpdate::Suggestions { suggestions } => Some(steward_common::AppEvent::Suggestions {
+            suggestions: suggestions.clone(),
+            thread_id,
+        }),
         StatusUpdate::TurnCost {
             input_tokens,
             output_tokens,
@@ -2356,8 +2405,7 @@ fn status_update_to_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_tool_execution_metadata, is_single_message_console,
-        resolve_routine_notification_user,
+        chat_tool_execution_metadata, is_single_message_console, resolve_routine_notification_user,
         should_fallback_routine_notification, split_into_stream_chunks, truncate_for_preview,
     };
     #[cfg(feature = "libsql")]

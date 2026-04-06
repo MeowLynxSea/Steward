@@ -58,9 +58,9 @@ pub mod extensions;
 pub mod file_archive_workflow;
 pub mod history;
 pub mod hooks;
-pub mod ipc;
 #[cfg(feature = "import")]
 pub mod import;
+pub mod ipc;
 pub mod llm;
 pub mod observability;
 pub mod pairing;

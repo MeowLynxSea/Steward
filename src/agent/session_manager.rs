@@ -75,36 +75,40 @@ impl SessionManager {
     /// Load sessions from the database for the given owner.
     async fn load_sessions_from_db(&self, owner_id: &str) {
         let store = self.store.read().await;
-        let Some(ref db) = *store else { return; };
+        let Some(ref db) = *store else {
+            return;
+        };
 
         let key = format!("agent_sessions:{}", owner_id);
         match db.get_setting(owner_id, &key).await {
-            Ok(Some(value)) => {
-                match serde_json::from_value::<HashMap<Uuid, Session>>(value) {
-                    Ok(sessions_map) => {
-                        if sessions_map.is_empty() {
-                            tracing::debug!("No sessions found in DB for owner {}", owner_id);
-                            return;
-                        }
-                        let mut all_sessions = self.sessions.write().await;
-                        for (session_id, session) in sessions_map {
-                            let session = Arc::new(Mutex::new(session));
-                            all_sessions
-                                .entry(owner_id.to_string())
-                                .or_insert_with(HashMap::new)
-                                .insert(session_id, session);
-                        }
-                        tracing::info!(
-                            "Loaded {} sessions from DB for owner {}",
-                            all_sessions.get(owner_id).map(|s| s.len()).unwrap_or(0),
-                            owner_id
-                        );
+            Ok(Some(value)) => match serde_json::from_value::<HashMap<Uuid, Session>>(value) {
+                Ok(sessions_map) => {
+                    if sessions_map.is_empty() {
+                        tracing::debug!("No sessions found in DB for owner {}", owner_id);
+                        return;
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to deserialize sessions from DB for owner {}: {}", owner_id, e);
+                    let mut all_sessions = self.sessions.write().await;
+                    for (session_id, session) in sessions_map {
+                        let session = Arc::new(Mutex::new(session));
+                        all_sessions
+                            .entry(owner_id.to_string())
+                            .or_insert_with(HashMap::new)
+                            .insert(session_id, session);
                     }
+                    tracing::info!(
+                        "Loaded {} sessions from DB for owner {}",
+                        all_sessions.get(owner_id).map(|s| s.len()).unwrap_or(0),
+                        owner_id
+                    );
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to deserialize sessions from DB for owner {}: {}",
+                        owner_id,
+                        e
+                    );
+                }
+            },
             Ok(None) => {
                 tracing::debug!("No sessions key in DB for owner {}", owner_id);
             }
@@ -121,14 +125,15 @@ impl SessionManager {
             let key = format!("agent_sessions:{}", owner_id);
             // Load current sessions map, update, save
             let current: HashMap<Uuid, Session> = match db.get_setting(owner_id, &key).await {
-                Ok(Some(value)) => {
-                    serde_json::from_value(value).unwrap_or_default()
-                }
+                Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
                 _ => HashMap::new(),
             };
             let mut sessions = current;
             sessions.insert(session.id, session.clone());
-            if let Err(e) = db.set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap()).await {
+            if let Err(e) = db
+                .set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap())
+                .await
+            {
                 tracing::error!("Failed to save session {} to DB: {}", session.id, e);
             }
         }
@@ -140,14 +145,15 @@ impl SessionManager {
         if let Some(ref db) = *store {
             let key = format!("agent_sessions:{}", owner_id);
             let current: HashMap<Uuid, Session> = match db.get_setting(owner_id, &key).await {
-                Ok(Some(value)) => {
-                    serde_json::from_value(value).unwrap_or_default()
-                }
+                Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
                 _ => HashMap::new(),
             };
             let mut sessions = current;
             sessions.remove(&session_id);
-            if let Err(e) = db.set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap()).await {
+            if let Err(e) = db
+                .set_setting(owner_id, &key, &serde_json::to_value(&sessions).unwrap())
+                .await
+            {
                 tracing::error!("Failed to delete session {} from DB: {}", session_id, e);
             }
         }
@@ -479,12 +485,10 @@ impl SessionManager {
     pub async fn list_sessions(&self, owner_id: &str) -> Vec<(Uuid, Arc<Mutex<Session>>)> {
         let sessions = self.sessions.read().await;
         match sessions.get(owner_id) {
-            Some(user_sessions) => {
-                user_sessions
-                    .iter()
-                    .map(|(id, s)| (*id, Arc::clone(s)))
-                    .collect()
-            }
+            Some(user_sessions) => user_sessions
+                .iter()
+                .map(|(id, s)| (*id, Arc::clone(s)))
+                .collect(),
             None => vec![],
         }
     }
@@ -547,8 +551,7 @@ impl SessionManager {
     }
 
     pub async fn prune_stale_sessions(&self, max_idle: std::time::Duration) -> usize {
-        let cutoff =
-            chrono::Utc::now() - chrono::TimeDelta::seconds(max_idle.as_secs() as i64);
+        let cutoff = chrono::Utc::now() - chrono::TimeDelta::seconds(max_idle.as_secs() as i64);
         let mut pruned = 0;
 
         let mut sessions = self.sessions.write().await;

@@ -480,7 +480,10 @@ mod tests {
 
         // Should find the new desktop bridge entry
         let results = registry.search("desktop-bridge").await;
-        assert!(!results.is_empty(), "Should find desktop-bridge from catalog");
+        assert!(
+            !results.is_empty(),
+            "Should find desktop-bridge from catalog"
+        );
         assert_eq!(results[0].entry.name, "desktop-bridge");
 
         // Should have both MCP and WASM entries with the same name

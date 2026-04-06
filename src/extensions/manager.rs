@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use tokio::sync::RwLock;
 
-use crate::channels::wasm::{ChannelCapabilitiesFile, WasmChannelLoader, WasmChannelRuntime};
 use crate::channels::ChannelManager;
+use crate::channels::wasm::{ChannelCapabilitiesFile, WasmChannelLoader, WasmChannelRuntime};
 use crate::extensions::discovery::OnlineDiscovery;
 use crate::extensions::registry::ExtensionRegistry;
 use crate::extensions::setup_schema::{SecretFieldInfo, SetupFieldInfo};
@@ -173,7 +173,13 @@ impl ExtensionManager {
 
     pub async fn load_persisted_active_channels(&self, user_id: &str) -> Vec<String> {
         let Some(store) = &self.store else {
-            return self.active_channel_names.read().await.iter().cloned().collect();
+            return self
+                .active_channel_names
+                .read()
+                .await
+                .iter()
+                .cloned()
+                .collect();
         };
 
         match store
@@ -181,7 +187,13 @@ impl ExtensionManager {
             .await
         {
             Ok(Some(value)) => serde_json::from_value::<Vec<String>>(value).unwrap_or_default(),
-            Ok(None) | Err(_) => self.active_channel_names.read().await.iter().cloned().collect(),
+            Ok(None) | Err(_) => self
+                .active_channel_names
+                .read()
+                .await
+                .iter()
+                .cloned()
+                .collect(),
         }
     }
 
@@ -365,7 +377,9 @@ impl ExtensionManager {
         }
 
         if kind_filter.is_none() || kind_filter == Some(ExtensionKind::WasmChannel) {
-            if let Ok(channels) = crate::channels::wasm::discover_channels(&self.wasm_channels_dir).await {
+            if let Ok(channels) =
+                crate::channels::wasm::discover_channels(&self.wasm_channels_dir).await
+            {
                 let active_channels = self.active_channel_names.read().await.clone();
                 let activation_errors = self.activation_errors.read().await.clone();
                 for (name, discovered) in channels {
@@ -383,7 +397,11 @@ impl ExtensionManager {
                     } else {
                         None
                     }
-                    .or_else(|| registry_entry.as_ref().and_then(|entry| entry.version.clone()));
+                    .or_else(|| {
+                        registry_entry
+                            .as_ref()
+                            .and_then(|entry| entry.version.clone())
+                    });
                     let description = if let Some(cap_path) = &discovered.capabilities_path {
                         tokio::fs::read(cap_path)
                             .await
@@ -391,7 +409,9 @@ impl ExtensionManager {
                             .and_then(|bytes| ChannelCapabilitiesFile::from_bytes(&bytes).ok())
                             .and_then(|cap| cap.description)
                     } else {
-                        registry_entry.as_ref().map(|entry| entry.description.clone())
+                        registry_entry
+                            .as_ref()
+                            .map(|entry| entry.description.clone())
                     };
                     extensions.push(InstalledExtension {
                         name: name.clone(),
@@ -562,7 +582,9 @@ impl ExtensionManager {
             candidates.push(name.to_string());
         } else if let Ok(tools) = discover_tools(&self.wasm_tools_dir).await {
             candidates.extend(tools.keys().cloned());
-            if let Ok(channels) = crate::channels::wasm::discover_channels(&self.wasm_channels_dir).await {
+            if let Ok(channels) =
+                crate::channels::wasm::discover_channels(&self.wasm_channels_dir).await
+            {
                 candidates.extend(channels.keys().cloned());
             }
         }
@@ -647,11 +669,13 @@ impl ExtensionManager {
                     value["version"] =
                         serde_json::json!(cap.version.unwrap_or_else(|| "unknown".to_string()));
                     value["description"] = serde_json::json!(cap.description);
-                    value["allowed_paths"] = serde_json::json!(cap.capabilities
-                        .channel
-                        .as_ref()
-                        .map(|c| c.allowed_paths.clone())
-                        .unwrap_or_default());
+                    value["allowed_paths"] = serde_json::json!(
+                        cap.capabilities
+                            .channel
+                            .as_ref()
+                            .map(|c| c.allowed_paths.clone())
+                            .unwrap_or_default()
+                    );
                 }
                 Ok(value)
             }
@@ -714,12 +738,9 @@ impl ExtensionManager {
                         fields: Vec::new(),
                     });
                 };
-                let secrets = futures::future::join_all(
-                    cap_file
-                        .setup
-                        .required_secrets
-                        .iter()
-                        .map(|secret| async move {
+                let secrets =
+                    futures::future::join_all(cap_file.setup.required_secrets.iter().map(
+                        |secret| async move {
                             let provided = self
                                 .secrets
                                 .exists(user_id, &secret.name)
@@ -732,9 +753,9 @@ impl ExtensionManager {
                                 provided,
                                 auto_generate: secret.auto_generate.is_some(),
                             }
-                        }),
-                )
-                .await;
+                        },
+                    ))
+                    .await;
                 Ok(ExtensionSetupSchema {
                     secrets,
                     fields: Vec::new(),
@@ -939,10 +960,7 @@ impl ExtensionManager {
                     .first()
                     .map(|secret| secret.name.clone())
                     .ok_or_else(|| {
-                        ExtensionError::Other(format!(
-                            "Channel '{}' has no setup secrets",
-                            name
-                        ))
+                        ExtensionError::Other(format!("Channel '{}' has no setup secrets", name))
                     })?
             }
         };
@@ -1188,7 +1206,10 @@ impl ExtensionManager {
         user_id: &str,
     ) -> Result<AuthResult, ExtensionError> {
         let Some(cap) = self.load_channel_capabilities(name).await else {
-            return Ok(AuthResult::no_auth_required(name, ExtensionKind::WasmChannel));
+            return Ok(AuthResult::no_auth_required(
+                name,
+                ExtensionKind::WasmChannel,
+            ));
         };
 
         let required: Vec<_> = cap
@@ -1198,7 +1219,10 @@ impl ExtensionManager {
             .filter(|secret| !secret.optional)
             .collect();
         if required.is_empty() {
-            return Ok(AuthResult::no_auth_required(name, ExtensionKind::WasmChannel));
+            return Ok(AuthResult::no_auth_required(
+                name,
+                ExtensionKind::WasmChannel,
+            ));
         }
 
         let all_present = futures::future::join_all(
@@ -1385,9 +1409,7 @@ impl ExtensionManager {
             .await
             .clone()
             .ok_or_else(|| {
-                ExtensionError::ActivationFailed(
-                    "WASM channel runtime not available".to_string(),
-                )
+                ExtensionError::ActivationFailed("WASM channel runtime not available".to_string())
             })?;
         let channel_manager = self.channel_manager.read().await.clone().ok_or_else(|| {
             ExtensionError::ActivationFailed("Channel manager not available".to_string())
@@ -1405,8 +1427,13 @@ impl ExtensionManager {
             .join(format!("{}.capabilities.json", name));
         let cap_path_option = cap_path.exists().then_some(cap_path.as_path());
 
-        let loader = WasmChannelLoader::new(runtime, Arc::new(crate::pairing::PairingStore::new()), None, self.user_id.clone())
-            .with_secrets_store(Arc::clone(&self.secrets));
+        let loader = WasmChannelLoader::new(
+            runtime,
+            Arc::new(crate::pairing::PairingStore::new()),
+            None,
+            self.user_id.clone(),
+        )
+        .with_secrets_store(Arc::clone(&self.secrets));
         let loaded = loader
             .load_from_files(name, &wasm_path, cap_path_option)
             .await
@@ -1418,7 +1445,13 @@ impl ExtensionManager {
             .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
 
         self.activation_errors.write().await.remove(name);
-        let mut active = self.active_channel_names.read().await.iter().cloned().collect::<Vec<_>>();
+        let mut active = self
+            .active_channel_names
+            .read()
+            .await
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
         if !active.iter().any(|existing| existing == name) {
             active.push(name.to_string());
         }
@@ -1443,7 +1476,11 @@ impl ExtensionManager {
         if self.wasm_tools_dir.join(format!("{}.wasm", name)).exists() {
             return Ok(ExtensionKind::WasmTool);
         }
-        if self.wasm_channels_dir.join(format!("{}.wasm", name)).exists() {
+        if self
+            .wasm_channels_dir
+            .join(format!("{}.wasm", name))
+            .exists()
+        {
             return Ok(ExtensionKind::WasmChannel);
         }
         Err(ExtensionError::NotInstalled(format!(
@@ -1813,7 +1850,6 @@ fn infer_kind_from_url(url: &str) -> ExtensionKind {
         ExtensionKind::McpServer
     }
 }
-
 
 #[allow(dead_code)]
 fn normalize_hosted_callback_url(callback_url: &str) -> String {

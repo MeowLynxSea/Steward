@@ -20,7 +20,11 @@ fn embed_registry_catalog(root: &std::path::Path) {
     let out_path = out_dir.join("embedded_catalog.json");
 
     if !registry_dir.is_dir() {
-        fs::write(&out_path, r#"{"tools":[],"mcp_servers":[],"bundles":{"bundles":{}}}"#).unwrap();
+        fs::write(
+            &out_path,
+            r#"{"tools":[],"mcp_servers":[],"bundles":{"bundles":{}}}"#,
+        )
+        .unwrap();
         return;
     }
 

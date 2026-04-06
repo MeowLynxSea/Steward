@@ -144,7 +144,9 @@ mod test_channel_tests {
     use std::time::Duration;
 
     use crate::support::test_channel::TestChannel;
-    use steward_core::channels::{IncomingMessage, MessageTransport, OutgoingResponse, StatusUpdate};
+    use steward_core::channels::{
+        IncomingMessage, MessageTransport, OutgoingResponse, StatusUpdate,
+    };
 
     #[tokio::test]
     async fn send_and_receive_message() {

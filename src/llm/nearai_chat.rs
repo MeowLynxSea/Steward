@@ -359,14 +359,10 @@ impl NearAiChatProvider {
             let retry_after = Some(crate::llm::retry::parse_retry_after(
                 response.headers().get("retry-after"),
             ));
-            let response_text =
-                response
-                    .text()
-                    .await
-                    .map_err(|e| LlmError::RequestFailed {
-                        provider: "nearai_chat".to_string(),
-                        reason: format!("Failed to read error body: {e}"),
-                    })?;
+            let response_text = response.text().await.map_err(|e| LlmError::RequestFailed {
+                provider: "nearai_chat".to_string(),
+                reason: format!("Failed to read error body: {e}"),
+            })?;
 
             if status.as_u16() == 401 {
                 if !self.uses_api_key() {
@@ -1267,8 +1263,15 @@ struct StreamFunctionDelta {
 async fn consume_openai_stream(
     response: reqwest::Response,
     stream_tx: &tokio::sync::mpsc::UnboundedSender<crate::llm::StreamDelta>,
-) -> Result<(Option<String>, Vec<ToolCall>, Option<String>, Option<ChatCompletionUsage>), LlmError>
-{
+) -> Result<
+    (
+        Option<String>,
+        Vec<ToolCall>,
+        Option<String>,
+        Option<ChatCompletionUsage>,
+    ),
+    LlmError,
+> {
     use futures::StreamExt;
 
     let mut content_buf = String::new();
@@ -1329,8 +1332,7 @@ async fn consume_openai_stream(
                 if let Some(ref c) = choice.delta.content {
                     if !c.is_empty() {
                         content_buf.push_str(c);
-                        let _ =
-                            stream_tx.send(crate::llm::StreamDelta::TextDelta(c.clone()));
+                        let _ = stream_tx.send(crate::llm::StreamDelta::TextDelta(c.clone()));
                     }
                 }
 
@@ -1338,8 +1340,7 @@ async fn consume_openai_stream(
                 if let Some(ref r) = choice.delta.reasoning_content {
                     if !r.is_empty() {
                         reasoning_buf.push_str(r);
-                        let _ = stream_tx
-                            .send(crate::llm::StreamDelta::ThinkingDelta(r.clone()));
+                        let _ = stream_tx.send(crate::llm::StreamDelta::ThinkingDelta(r.clone()));
                     }
                 }
 

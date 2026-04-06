@@ -300,7 +300,9 @@ mod advanced {
 
     #[tokio::test]
     async fn routine_news_digest() {
-        use steward_core::llm::recording::{HttpExchange, HttpExchangeRequest, HttpExchangeResponse};
+        use steward_core::llm::recording::{
+            HttpExchange, HttpExchangeRequest, HttpExchangeResponse,
+        };
 
         let trace = LlmTrace::from_file(format!("{FIXTURES}/routine_news_digest.json")).unwrap();
 

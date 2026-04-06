@@ -596,7 +596,7 @@ impl Agent {
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime.mark_completed(thread_id).await;
                 }
-                self.emit_sse_event_for_message(
+                self.emit_runtime_event_for_message(
                     message,
                     steward_common::AppEvent::Status {
                         message: "task.completed".to_string(),
@@ -621,7 +621,7 @@ impl Agent {
                         .mark_waiting_approval(message, thread_id, pending_approval)
                         .await;
                 }
-                self.emit_sse_event_for_message(
+                self.emit_runtime_event_for_message(
                     message,
                     steward_common::AppEvent::ApprovalNeeded {
                         request_id: request_id.to_string(),
@@ -659,7 +659,7 @@ impl Agent {
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime.mark_failed(thread_id, e.to_string()).await;
                 }
-                self.emit_sse_event_for_message(
+                self.emit_runtime_event_for_message(
                     message,
                     steward_common::AppEvent::Error {
                         message: e.to_string(),
@@ -1558,7 +1558,7 @@ impl Agent {
                     )
                     .await;
 
-                self.emit_sse_event_for_message(
+                self.emit_runtime_event_for_message(
                     message,
                     steward_common::AppEvent::ApprovalNeeded {
                         request_id: request_id.to_string(),
@@ -1645,7 +1645,7 @@ impl Agent {
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime.mark_completed(thread_id).await;
                     }
-                    self.emit_sse_event_for_message(
+                    self.emit_runtime_event_for_message(
                         message,
                         steward_common::AppEvent::Status {
                             message: "task.completed".to_string(),
@@ -1670,7 +1670,7 @@ impl Agent {
                             .mark_waiting_approval(message, thread_id, pending_approval)
                             .await;
                     }
-                    self.emit_sse_event_for_message(
+                    self.emit_runtime_event_for_message(
                         message,
                         steward_common::AppEvent::ApprovalNeeded {
                             request_id: request_id.to_string(),
@@ -1708,7 +1708,7 @@ impl Agent {
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime.mark_failed(thread_id, e.to_string()).await;
                     }
-                    self.emit_sse_event_for_message(
+                    self.emit_runtime_event_for_message(
                         message,
                         steward_common::AppEvent::Error {
                             message: e.to_string(),
@@ -1747,7 +1747,7 @@ impl Agent {
                     .mark_rejected(thread_id, "tool execution rejected")
                     .await;
             }
-            self.emit_sse_event_for_message(
+            self.emit_runtime_event_for_message(
                 message,
                 steward_common::AppEvent::Status {
                     message: "task.rejected".to_string(),

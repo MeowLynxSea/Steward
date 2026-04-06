@@ -192,7 +192,8 @@ mod tests {
             .build()
             .await;
 
-        rig.send_message("Get issue 42 from MeowLynxSea/steward").await;
+        rig.send_message("Get issue 42 from MeowLynxSea/steward")
+            .await;
         let responses = rig.wait_for_responses(1, Duration::from_secs(15)).await;
         rig.verify_trace_expects(&trace, &responses);
 

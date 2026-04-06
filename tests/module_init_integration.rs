@@ -27,7 +27,8 @@ fn libsql_config(path: &std::path::Path) -> steward_core::config::DatabaseConfig
 
 /// Build a master-key crypto instance for tests.
 fn test_crypto() -> Arc<SecretsCrypto> {
-    let key = secrecy::SecretString::from(steward_core::secrets::keychain::generate_master_key_hex());
+    let key =
+        secrecy::SecretString::from(steward_core::secrets::keychain::generate_master_key_hex());
     Arc::new(SecretsCrypto::new(key).expect("test crypto"))
 }
 

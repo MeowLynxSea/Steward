@@ -1,21 +1,20 @@
 use std::sync::Arc;
 
+use crate::agent::SessionManager as AgentSessionManager;
 use crate::agent::{Agent, AgentDeps};
 use crate::app::{AppBuilder, AppBuilderFlags};
 use crate::channels::{ChannelManager, MessageStream};
 use crate::config::Config;
+use crate::db::Database;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
-    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot,
-    create_session_manager,
+    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, create_session_manager,
 };
 use crate::runtime_events::{RuntimeEventEmitter, SseManager};
 use crate::task_runtime::TaskRuntime;
-use crate::tracing_fmt::init_app_tracing;
-use crate::agent::SessionManager as AgentSessionManager;
 use crate::tools::mcp::McpSessionManager;
+use crate::tracing_fmt::init_app_tracing;
 use crate::workspace::Workspace;
-use crate::db::Database;
 
 /// Optional Tauri event emitter for native desktop events.
 /// When provided, events will be emitted via Tauri in addition to SSE.
@@ -128,7 +127,7 @@ pub async fn start_embedded_runtime(
     let app_cheap_llm: Arc<dyn crate::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Cheap,
-));
+    ));
 
     // Clone values needed for AppState BEFORE moving components into AgentDeps
     let app_state_db = components.db.clone();
@@ -153,7 +152,10 @@ pub async fn start_embedded_runtime(
             .load_persisted_active_channels(&config.owner_id)
             .await;
         for channel_name in active_channels {
-            if let Err(error) = extension_manager.activate(&channel_name, &config.owner_id).await {
+            if let Err(error) = extension_manager
+                .activate(&channel_name, &config.owner_id)
+                .await
+            {
                 tracing::warn!(channel = %channel_name, %error, "Failed to restore wasm channel");
             }
         }

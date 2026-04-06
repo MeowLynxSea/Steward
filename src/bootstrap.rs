@@ -319,12 +319,12 @@ pub async fn migrate_disk_to_db(
 
     // 2. Write libSQL bootstrap vars to ~/.steward/.env
     if let Some(ref path) = settings.libsql_path {
-        upsert_bootstrap_vars(&[
-            ("DATABASE_BACKEND", "libsql"),
-            ("LIBSQL_PATH", path),
-        ])
-        .map_err(|e| MigrationError::Io(format!("Failed to write .env: {}", e)))?;
-        tracing::info!("Wrote libSQL bootstrap config to {}", steward_env_path().display());
+        upsert_bootstrap_vars(&[("DATABASE_BACKEND", "libsql"), ("LIBSQL_PATH", path)])
+            .map_err(|e| MigrationError::Io(format!("Failed to write .env: {}", e)))?;
+        tracing::info!(
+            "Wrote libSQL bootstrap config to {}",
+            steward_env_path().display()
+        );
     }
 
     // 3. Migrate mcp-servers.json if it exists
@@ -1092,11 +1092,7 @@ INJECTED="pwned"#;
     #[test]
     fn test_pid_lock_creates_parent_dirs() {
         let dir = tempdir().unwrap();
-        let pid_path = dir
-            .path()
-            .join("nested")
-            .join("deep")
-            .join("steward.pid");
+        let pid_path = dir.path().join("nested").join("deep").join("steward.pid");
 
         let lock = PidLock::acquire_at(pid_path.clone()).unwrap();
         assert!(pid_path.exists());

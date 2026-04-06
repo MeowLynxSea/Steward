@@ -88,7 +88,11 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Status { message, .. } => {
                 serde_json::json!({ "message": message })
             }
-            steward_common::AppEvent::JobStarted { job_id, title, browse_url } => {
+            steward_common::AppEvent::JobStarted {
+                job_id,
+                title,
+                browse_url,
+            } => {
                 serde_json::json!({ "job_id": job_id, "title": title, "browse_url": browse_url })
             }
             steward_common::AppEvent::ApprovalNeeded {
@@ -137,19 +141,36 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Heartbeat => {
                 serde_json::json!({})
             }
-            steward_common::AppEvent::JobMessage { job_id, role, content } => {
+            steward_common::AppEvent::JobMessage {
+                job_id,
+                role,
+                content,
+            } => {
                 serde_json::json!({ "job_id": job_id, "role": role, "content": content })
             }
-            steward_common::AppEvent::JobToolUse { job_id, tool_name, input } => {
+            steward_common::AppEvent::JobToolUse {
+                job_id,
+                tool_name,
+                input,
+            } => {
                 serde_json::json!({ "job_id": job_id, "tool_name": tool_name, "input": input })
             }
-            steward_common::AppEvent::JobToolResult { job_id, tool_name, output } => {
+            steward_common::AppEvent::JobToolResult {
+                job_id,
+                tool_name,
+                output,
+            } => {
                 serde_json::json!({ "job_id": job_id, "tool_name": tool_name, "output": output })
             }
             steward_common::AppEvent::JobStatus { job_id, message } => {
                 serde_json::json!({ "job_id": job_id, "message": message })
             }
-            steward_common::AppEvent::JobResult { job_id, status, session_id, fallback_deliverable } => {
+            steward_common::AppEvent::JobResult {
+                job_id,
+                status,
+                session_id,
+                fallback_deliverable,
+            } => {
                 serde_json::json!({
                     "job_id": job_id,
                     "status": status,
@@ -163,24 +184,41 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Suggestions { suggestions, .. } => {
                 serde_json::json!({ "suggestions": suggestions })
             }
-            steward_common::AppEvent::TurnCost { input_tokens, output_tokens, cost_usd, .. } => {
+            steward_common::AppEvent::TurnCost {
+                input_tokens,
+                output_tokens,
+                cost_usd,
+                ..
+            } => {
                 serde_json::json!({
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
                     "cost_usd": cost_usd
                 })
             }
-            steward_common::AppEvent::ExtensionStatus { extension_name, status, message } => {
+            steward_common::AppEvent::ExtensionStatus {
+                extension_name,
+                status,
+                message,
+            } => {
                 serde_json::json!({
                     "extension_name": extension_name,
                     "status": status,
                     "message": message
                 })
             }
-            steward_common::AppEvent::ReasoningUpdate { narrative, decisions, .. } => {
+            steward_common::AppEvent::ReasoningUpdate {
+                narrative,
+                decisions,
+                ..
+            } => {
                 serde_json::json!({ "narrative": narrative, "decisions": decisions })
             }
-            steward_common::AppEvent::JobReasoning { job_id, narrative, decisions } => {
+            steward_common::AppEvent::JobReasoning {
+                job_id,
+                narrative,
+                decisions,
+            } => {
                 serde_json::json!({ "job_id": job_id, "narrative": narrative, "decisions": decisions })
             }
         };
@@ -264,8 +302,8 @@ async fn start_openai_codex_login(
     jobs: tauri::State<'_, CodexLoginJobs>,
 ) -> Result<CodexLoginStartResponse, String> {
     let config = steward_core::llm::OpenAiCodexConfig::default();
-    let manager =
-        steward_core::llm::OpenAiCodexSessionManager::new(config).map_err(|error| error.to_string())?;
+    let manager = steward_core::llm::OpenAiCodexSessionManager::new(config)
+        .map_err(|error| error.to_string())?;
     let device_code = manager
         .request_device_code()
         .await
@@ -361,7 +399,10 @@ fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
 #[cfg(target_os = "linux")]
 fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
     let output = std::process::Command::new("sh")
-        .args(["-c", "zenity --file-selection --directory 2>/dev/null || true"])
+        .args([
+            "-c",
+            "zenity --file-selection --directory 2>/dev/null || true",
+        ])
         .output()
         .map_err(|error| error.to_string())?;
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();

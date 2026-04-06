@@ -86,7 +86,6 @@ pub struct Settings {
     pub owner_id: Option<String>,
 
     // === Step 1: Local Storage ===
-
     /// Path to local libSQL database file.
     #[serde(default)]
     pub libsql_path: Option<String>,
@@ -1935,7 +1934,10 @@ mod tests {
         assert_eq!(current.selected_model.as_deref(), Some("claude-opus-4-6"));
 
         // Verify: transport, embeddings, heartbeat survived quick mode
-        assert!(current.channels.tauri_ipc, "desktop transport must survive quick mode re-run");
+        assert!(
+            current.channels.tauri_ipc,
+            "desktop transport must survive quick mode re-run"
+        );
         assert!(
             current.embeddings.enabled,
             "Embeddings must survive quick mode re-run"

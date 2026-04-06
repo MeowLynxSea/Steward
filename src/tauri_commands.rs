@@ -10,11 +10,41 @@ use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
-    CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest,
-    RejectTaskRequest, ResolveWorkspaceConflictRequest, SendSessionMessageRequest,
-    WorkspaceActionRequest, WorkspaceIndexRequest, WorkspaceSearchRequest,
+    CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
+    ResolveWorkspaceConflictRequest, SendSessionMessageRequest, WorkspaceActionRequest,
+    WorkspaceIndexRequest, WorkspaceSearchRequest,
 };
 use steward_core::settings::Settings;
+
+enum DesktopDispatchPlan {
+    InjectOnly,
+    QueueOnly,
+}
+
+fn plan_desktop_message_dispatch(
+    thread: &mut steward_core::agent::session::Thread,
+    content: &str,
+) -> Result<DesktopDispatchPlan, String> {
+    match thread.state {
+        steward_core::agent::session::ThreadState::Processing => {
+            if thread.queue_message(content.to_string()) {
+                Ok(DesktopDispatchPlan::QueueOnly)
+            } else {
+                Err("Message queue full".to_string())
+            }
+        }
+        steward_core::agent::session::ThreadState::Idle
+        | steward_core::agent::session::ThreadState::Interrupted => {
+            Ok(DesktopDispatchPlan::InjectOnly)
+        }
+        steward_core::agent::session::ThreadState::AwaitingApproval => {
+            Err("Thread is awaiting approval. Use /interrupt to cancel.".to_string())
+        }
+        steward_core::agent::session::ThreadState::Completed => {
+            Err("Thread completed. Use /thread new to start a new conversation.".to_string())
+        }
+    }
+}
 
 // =============================================================================
 // Settings (2 commands)
@@ -35,7 +65,9 @@ fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsRe
 }
 
 #[tauri::command]
-pub async fn get_settings(_state: State<'_, AppState>) -> Result<steward_core::ipc::SettingsResponse, String> {
+pub async fn get_settings(
+    _state: State<'_, AppState>,
+) -> Result<steward_core::ipc::SettingsResponse, String> {
     let settings = Settings::load_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
@@ -102,7 +134,9 @@ pub async fn list_sessions(
     let mut summaries = Vec::new();
     for (_, session) in sessions {
         let sess = session.lock().await;
-        let active_thread_id = sess.active_thread.or_else(|| sess.threads.keys().copied().next());
+        let active_thread_id = sess
+            .active_thread
+            .or_else(|| sess.threads.keys().copied().next());
         let turn_count = active_thread_id
             .and_then(|thread_id| sess.threads.get(&thread_id))
             .map(|thread| thread.turns.len() as i64)
@@ -117,7 +151,9 @@ pub async fn list_sessions(
         });
     }
 
-    Ok(steward_core::ipc::SessionListResponse { sessions: summaries })
+    Ok(steward_core::ipc::SessionListResponse {
+        sessions: summaries,
+    })
 }
 
 #[tauri::command]
@@ -152,7 +188,9 @@ pub async fn get_session(
 ) -> Result<steward_core::ipc::SessionDetailResponse, String> {
     let session_manager = &state.agent_session_manager;
 
-    let session = session_manager.get_session_by_id(&state.owner_id, id).await
+    let session = session_manager
+        .get_session_by_id(&state.owner_id, id)
+        .await
         .ok_or_else(|| "Session not found".to_string())?;
 
     // Get or create a thread if none exists
@@ -213,10 +251,7 @@ pub async fn get_session(
         active_thread_id: Some(thread_id),
     };
 
-    let active_thread_task = state
-        .task_runtime
-        .get_task(thread_id)
-        .await;
+    let active_thread_task = state.task_runtime.get_task(thread_id).await;
 
     Ok(steward_core::ipc::SessionDetailResponse {
         session: summary,
@@ -232,7 +267,9 @@ pub async fn delete_session(
     id: Uuid,
 ) -> Result<serde_json::Value, String> {
     let session_manager = &state.agent_session_manager;
-    let deleted = session_manager.delete_session_by_id(&state.owner_id, id).await;
+    let deleted = session_manager
+        .delete_session_by_id(&state.owner_id, id)
+        .await;
     Ok(serde_json::json!({ "deleted": deleted }))
 }
 
@@ -253,7 +290,8 @@ pub async fn send_session_message(
 
     // Get or create a thread if none exists
     let thread_id = {
-        let lock_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+        let lock_result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
         if lock_result.is_err() {
             tracing::error!("FIRST session.lock() TIMEOUT - session_id={}", id);
             return Err("Session lock timeout".to_string());
@@ -279,58 +317,27 @@ pub async fn send_session_message(
         tracing::error!("SECOND session.lock() TIMEOUT - thread_id={}", thread_id);
         return Err("Session lock timeout".to_string());
     }
-    let sess = sess_result.unwrap();
-    let thread = sess.threads.get(&thread_id).ok_or_else(|| "Thread not found".to_string())?;
+    let mut sess = sess_result.unwrap();
+    let thread = sess
+        .threads
+        .get_mut(&thread_id)
+        .ok_or_else(|| "Thread not found".to_string())?;
     tracing::info!(thread_id = %thread_id, state = ?thread.state, "Thread state checked, matching...");
 
     tracing::info!(thread_id = %thread_id, "About to match thread state");
-    match thread.state {
-        steward_core::agent::session::ThreadState::Processing => {
-            drop(sess);
-            let session = session_manager
-                .get_session_by_id(&state.owner_id, id)
-                .await
-                .ok_or_else(|| "Session not found".to_string())?;
-            let mut sess = session.lock().await;
-            if let Some(thread) = sess.threads.get_mut(&thread_id) {
-                if thread.queue_message(payload.content.clone()) {
-                    Ok(steward_core::ipc::SendSessionMessageResponse {
-                        accepted: true,
-                        session_id: id,
-                        active_thread_id: thread_id,
-                        active_thread_task_id: None,
-                        active_thread_task: None,
-                    })
-                } else {
-                    Err("Message queue full".to_string())
-                }
-            } else {
-                Err("Thread not found".to_string())
-            }
-        }
-        steward_core::agent::session::ThreadState::Idle
-        | steward_core::agent::session::ThreadState::Interrupted => {
-            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, dropping outer sess");
-            drop(sess); // Drop the guard from line 273 before re-acquiring
-            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, about to acquire lock");
-            // Queue the message and inject into the agent stream to trigger processing
-            let lock_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
-            if lock_result.is_err() {
-                tracing::error!(thread_id = %thread_id, "SESSION LOCK TIMEOUT after 5s - possible deadlock");
-                return Err("Session lock timeout - possible deadlock".to_string());
-            }
-            let mut sess = lock_result.unwrap();
-            tracing::info!(thread_id = %thread_id, "Lock acquired, queuing message");
-            if let Some(thread) = sess.threads.get_mut(&thread_id) {
-                if !thread.queue_message(payload.content.clone()) {
-                    return Err("Message queue full".to_string());
-                }
-            } else {
-                return Err("Thread not found".to_string());
-            }
-            drop(sess); // Release lock before injecting
+    let dispatch_plan = plan_desktop_message_dispatch(thread, &payload.content)?;
+    drop(sess);
 
-            // Inject a message into the agent's stream to trigger processing
+    match dispatch_plan {
+        DesktopDispatchPlan::QueueOnly => Ok(steward_core::ipc::SendSessionMessageResponse {
+            accepted: true,
+            session_id: id,
+            active_thread_id: thread_id,
+            active_thread_task_id: None,
+            active_thread_task: None,
+        }),
+        DesktopDispatchPlan::InjectOnly => {
+            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, injecting message");
             let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
                 .with_thread(thread_id.to_string());
             tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
@@ -350,12 +357,41 @@ pub async fn send_session_message(
                 active_thread_task: None,
             })
         }
-        steward_core::agent::session::ThreadState::AwaitingApproval => {
-            Err("Thread is awaiting approval. Use /interrupt to cancel.".to_string())
-        }
-        steward_core::agent::session::ThreadState::Completed => {
-            Err("Thread completed. Use /thread new to start a new conversation.".to_string())
-        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DesktopDispatchPlan, plan_desktop_message_dispatch};
+    use steward_core::agent::session::{Thread, ThreadState};
+    use uuid::Uuid;
+
+    #[test]
+    fn idle_desktop_dispatch_does_not_queue_message() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        assert_eq!(thread.state, ThreadState::Idle);
+
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello").unwrap();
+
+        assert!(matches!(plan, DesktopDispatchPlan::InjectOnly));
+        assert!(thread.pending_messages.is_empty());
+        assert_eq!(thread.state, ThreadState::Idle);
+    }
+
+    #[test]
+    fn processing_desktop_dispatch_queues_message_once() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        thread.start_turn("working");
+        assert_eq!(thread.state, ThreadState::Processing);
+
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello").unwrap();
+
+        assert!(matches!(plan, DesktopDispatchPlan::QueueOnly));
+        assert_eq!(thread.pending_messages.len(), 1);
+        assert_eq!(
+            thread.pending_messages.front().map(String::as_str),
+            Some("hello")
+        );
     }
 }
 
@@ -449,10 +485,7 @@ pub async fn approve_task(
     .with_sender_id(task.route.sender_id.clone())
     .with_thread(task.route.thread_id.clone());
 
-    state
-        .task_runtime
-        .mark_running(&message, id)
-        .await;
+    state.task_runtime.mark_running(&message, id).await;
 
     let task = state
         .task_runtime
@@ -469,7 +502,9 @@ pub async fn reject_task(
     id: Uuid,
     payload: RejectTaskRequest,
 ) -> Result<steward_core::ipc::TaskRecord, String> {
-    let reason = payload.reason.unwrap_or_else(|| "Rejected via IPC".to_string());
+    let reason = payload
+        .reason
+        .unwrap_or_else(|| "Rejected via IPC".to_string());
     state.task_runtime.mark_rejected(id, reason).await;
 
     let task = state
@@ -492,7 +527,12 @@ pub async fn patch_task_mode(
     let mode = match payload.mode.to_lowercase().as_str() {
         "yolo" => TaskMode::Yolo,
         "ask" => TaskMode::Ask,
-        _ => return Err(format!("Invalid mode: {}. Valid modes: 'ask', 'yolo'", payload.mode)),
+        _ => {
+            return Err(format!(
+                "Invalid mode: {}. Valid modes: 'ask', 'yolo'",
+                payload.mode
+            ));
+        }
     };
 
     let task = state
@@ -535,7 +575,11 @@ pub async fn index_workspace(
             import_root: String::new(),
             manifest_path: String::new(),
             status,
-            phase: if error.is_some() { "error".to_string() } else { "completed".to_string() },
+            phase: if error.is_some() {
+                "error".to_string()
+            } else {
+                "completed".to_string()
+            },
             total_files: indexed_files,
             processed_files: indexed_files,
             indexed_files,
@@ -572,13 +616,9 @@ pub async fn get_workspace_tree(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let uri = path.unwrap_or_else(|| "memory://".to_string());
-    let entries = workspace.list_tree(&uri).await
-        .map_err(|e| e.to_string())?;
+    let entries = workspace.list_tree(&uri).await.map_err(|e| e.to_string())?;
 
-    Ok(steward_core::ipc::WorkspaceTreeResponse {
-        path: uri,
-        entries,
-    })
+    Ok(steward_core::ipc::WorkspaceTreeResponse { path: uri, entries })
 }
 
 #[tauri::command]
@@ -625,8 +665,7 @@ pub async fn list_workspace_mounts(
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let mounts = workspace.list_mounts().await
-        .map_err(|e| e.to_string())?;
+    let mounts = workspace.list_mounts().await.map_err(|e| e.to_string())?;
 
     Ok(steward_core::ipc::WorkspaceMountListResponse { mounts })
 }
@@ -641,12 +680,13 @@ pub async fn create_workspace_mount(
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let display_name = payload.display_name
-        .unwrap_or_else(|| std::path::Path::new(&payload.path)
+    let display_name = payload.display_name.unwrap_or_else(|| {
+        std::path::Path::new(&payload.path)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("Mount")
-            .to_string());
+            .to_string()
+    });
 
     let summary = workspace
         .create_mount(display_name, &payload.path, payload.bypass_write)
@@ -666,8 +706,7 @@ pub async fn get_workspace_mount(
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let detail = workspace.get_mount(id).await
-        .map_err(|e| e.to_string())?;
+    let detail = workspace.get_mount(id).await.map_err(|e| e.to_string())?;
 
     Ok(detail)
 }
@@ -683,7 +722,9 @@ pub async fn get_workspace_mount_diff(
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let diff = workspace.diff_mount(id, scope_path.as_deref()).await
+    let diff = workspace
+        .diff_mount(id, scope_path.as_deref())
+        .await
         .map_err(|e| e.to_string())?;
 
     Ok(diff)

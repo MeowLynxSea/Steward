@@ -167,7 +167,9 @@ async fn set_setting(
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
     let store = store.ok_or_else(|| {
-        anyhow::anyhow!("Database connection required to save settings. Check libSQL startup config.")
+        anyhow::anyhow!(
+            "Database connection required to save settings. Check libSQL startup config."
+        )
     })?;
     let json_value = match serde_json::from_str::<serde_json::Value>(value) {
         Ok(v) => v,
@@ -190,7 +192,9 @@ async fn reset_setting(store: Option<&dyn crate::db::Database>, path: &str) -> a
         .ok_or_else(|| anyhow::anyhow!("Unknown setting: {}", path))?;
 
     let store = store.ok_or_else(|| {
-        anyhow::anyhow!("Database connection required to reset settings. Check libSQL startup config.")
+        anyhow::anyhow!(
+            "Database connection required to reset settings. Check libSQL startup config."
+        )
     })?;
     store
         .delete_setting(DEFAULT_USER_ID, path)

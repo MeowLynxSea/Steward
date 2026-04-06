@@ -24,7 +24,6 @@ pub trait RuntimeEventEmitter: Send + Sync {
     fn emit_for_user(&self, user_id: &str, event: AppEvent);
 }
 
-
 #[derive(Debug, Clone)]
 pub(crate) struct ScopedEvent {
     pub(crate) user_id: Option<String>,

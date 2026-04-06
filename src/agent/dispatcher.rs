@@ -2682,7 +2682,8 @@ mod tests {
 
     #[test]
     fn test_strip_json_tool_call_blocks_removes_tool_calls_format() {
-        let input = r#"{"tool_calls":[{"name":"search","arguments":{"q":"test"}}]} Here is the result."#;
+        let input =
+            r#"{"tool_calls":[{"name":"search","arguments":{"q":"test"}}]} Here is the result."#;
         let result = super::strip_internal_tool_call_text(input);
         assert_eq!(result, "Here is the result.");
     }

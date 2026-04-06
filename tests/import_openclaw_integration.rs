@@ -8,12 +8,12 @@
 
 #[cfg(feature = "import")]
 mod import_integration_tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use steward_core::db::Database;
     use steward_core::db::libsql::LibSqlBackend;
     use steward_core::import::ImportStats;
     use steward_core::import::openclaw::reader::OpenClawReader;
-    use std::path::PathBuf;
-    use std::sync::Arc;
     use tempfile::TempDir;
     use uuid::Uuid;
 
