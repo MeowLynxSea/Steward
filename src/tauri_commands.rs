@@ -132,6 +132,29 @@ fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
     }
 }
 
+fn normalize_tool_output_text(value: &str) -> String {
+    let trimmed = value.trim();
+    if !trimmed.starts_with("<tool_output") || !trimmed.ends_with("</tool_output>") {
+        return trimmed.to_string();
+    }
+
+    let Some(body_start) = trimmed.find('>') else {
+        return trimmed.to_string();
+    };
+    let body = &trimmed[body_start + 1..trimmed.len() - "</tool_output>".len()];
+    body.trim().to_string()
+}
+
+fn format_tool_result_preview(result: &serde_json::Value) -> String {
+    match result {
+        serde_json::Value::String(value) => {
+            let normalized = normalize_tool_output_text(value);
+            steward_common::truncate_preview(&normalized, 500)
+        }
+        other => steward_common::truncate_preview(&other.to_string(), 500),
+    }
+}
+
 fn tool_status(tool_call: &steward_core::agent::session::TurnToolCall) -> String {
     if tool_call.error.is_some() {
         "failed".to_string()
@@ -159,13 +182,20 @@ fn build_thread_messages(
                 turn_number: turn.turn_number,
                 tool_call: None,
             });
-            for tool_call in &turn.tool_calls {
-                let result_preview = tool_call.result.as_ref().map(|result| match result {
-                    serde_json::Value::String(value) => {
-                        steward_common::truncate_preview(value, 500)
-                    }
-                    other => steward_common::truncate_preview(&other.to_string(), 500),
+            if let Some(narrative) = turn.narrative.as_ref().filter(|value| !value.trim().is_empty()) {
+                msgs.push(steward_core::ipc::ThreadMessageResponse {
+                    id: Uuid::new_v4(),
+                    kind: "thinking".to_string(),
+                    role: None,
+                    content: Some(narrative.clone()),
+                    created_at: turn.started_at,
+                    turn_number: turn.turn_number,
+                    tool_call: None,
                 });
+            }
+            for tool_call in &turn.tool_calls {
+                let result_preview =
+                    tool_call.result.as_ref().map(format_tool_result_preview);
                 msgs.push(steward_core::ipc::ThreadMessageResponse {
                     id: Uuid::new_v4(),
                     kind: "tool_call".to_string(),

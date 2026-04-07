@@ -879,6 +879,7 @@ impl Agent {
                 let mut obj = serde_json::json!({
                     "name": tc.name,
                     "call_id": format!("turn{}_{}", turn_number, i),
+                    "parameters": tc.parameters,
                 });
                 if let Some(ref result) = tc.result {
                     let preview = match result {
@@ -1205,6 +1206,7 @@ impl Agent {
                     StatusUpdate::ToolStarted {
                         name: pending.tool_name.clone(),
                         tool_call_id: pending.tool_call_id.clone(),
+                        parameters: Some(pending.display_parameters.to_string()),
                     },
                     &message.metadata,
                 )
@@ -1389,6 +1391,7 @@ impl Agent {
                             StatusUpdate::ToolStarted {
                                 name: tc.name.clone(),
                                 tool_call_id: tc.id.clone(),
+                                parameters: Some(tc.arguments.to_string()),
                             },
                             &message.metadata,
                         )
@@ -1438,6 +1441,7 @@ impl Agent {
                                 StatusUpdate::ToolStarted {
                                     name: tc.name.clone(),
                                     tool_call_id: tc.id.clone(),
+                                    parameters: Some(tc.arguments.to_string()),
                                 },
                                 &metadata,
                             )
@@ -2089,15 +2093,20 @@ fn rebuild_chat_messages_from_db(
                 // Supports two formats:
                 // - Old: plain JSON array of tool call summaries
                 // - New: wrapped object { "calls": [...], "narrative": "..." }
-                let calls: Vec<serde_json::Value> =
+                let (calls, narrative): (Vec<serde_json::Value>, Option<String>) =
                     match serde_json::from_str::<serde_json::Value>(&msg.content) {
-                        Ok(serde_json::Value::Array(arr)) => arr,
-                        Ok(serde_json::Value::Object(obj)) => obj
-                            .get("calls")
-                            .and_then(|v| v.as_array())
-                            .cloned()
-                            .unwrap_or_default(),
-                        _ => Vec::new(),
+                        Ok(serde_json::Value::Array(arr)) => (arr, None),
+                        Ok(serde_json::Value::Object(obj)) => (
+                            obj.get("calls")
+                                .and_then(|v| v.as_array())
+                                .cloned()
+                                .unwrap_or_default(),
+                            obj.get("narrative")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_owned)
+                                .filter(|value| !value.trim().is_empty()),
+                        ),
+                        _ => (Vec::new(), None),
                     };
                 {
                     if calls.is_empty() {
@@ -2132,7 +2141,10 @@ fn rebuild_chat_messages_from_db(
                         // The assistant text for tool_calls is always None here;
                         // the final assistant response comes as a separate
                         // "assistant" row after this tool_calls row.
-                        result.push(ChatMessage::assistant_with_tool_calls(None, tool_calls));
+                        result.push(ChatMessage::assistant_with_tool_calls(
+                            narrative.clone(),
+                            tool_calls,
+                        ));
 
                         // Emit tool_result messages for each call
                         for c in &calls {

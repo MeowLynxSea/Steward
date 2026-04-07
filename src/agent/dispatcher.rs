@@ -744,6 +744,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                             StatusUpdate::ToolStarted {
                                 name: tc.name.clone(),
                                 tool_call_id: tc.id.clone(),
+                                parameters: Some(tc.arguments.to_string()),
                             },
                             &self.message.metadata,
                         )
@@ -792,6 +793,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                                 StatusUpdate::ToolStarted {
                                     name: tc.name.clone(),
                                     tool_call_id: tc.id.clone(),
+                                    parameters: Some(tc.arguments.to_string()),
                                 },
                                 &metadata,
                             )

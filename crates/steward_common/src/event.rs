@@ -49,6 +49,8 @@ pub enum AppEvent {
         name: String,
         tool_call_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        parameters: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
     #[serde(rename = "tool_completed")]
@@ -263,10 +265,13 @@ mod tests {
             },
             AppEvent::ToolStarted {
                 name: String::new(),
+                tool_call_id: String::new(),
+                parameters: None,
                 thread_id: None,
             },
             AppEvent::ToolCompleted {
                 name: String::new(),
+                tool_call_id: String::new(),
                 success: true,
                 error: None,
                 parameters: None,
@@ -274,6 +279,7 @@ mod tests {
             },
             AppEvent::ToolResult {
                 name: String::new(),
+                tool_call_id: String::new(),
                 preview: String::new(),
                 thread_id: None,
             },

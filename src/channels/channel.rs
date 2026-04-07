@@ -280,7 +280,12 @@ pub enum StatusUpdate {
     /// Agent is thinking/processing.
     Thinking(String),
     /// Tool execution started.
-    ToolStarted { name: String, tool_call_id: String },
+    ToolStarted {
+        name: String,
+        tool_call_id: String,
+        /// Redacted tool input parameters for live UI display.
+        parameters: Option<String>,
+    },
     /// Tool execution completed.
     ///
     /// Use [`StatusUpdate::tool_completed`] to construct this variant — it

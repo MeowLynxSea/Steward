@@ -192,6 +192,7 @@ mod test_channel_tests {
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
                     tool_call_id: "call_1".to_string(),
+                    parameters: None,
                 },
                 &metadata,
             )
@@ -229,6 +230,7 @@ mod test_channel_tests {
                 StatusUpdate::ToolStarted {
                     name: "memory_search".to_string(),
                     tool_call_id: "call_1".to_string(),
+                    parameters: None,
                 },
                 &metadata,
             )
@@ -243,6 +245,7 @@ mod test_channel_tests {
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
                     tool_call_id: "call_2".to_string(),
+                    parameters: None,
                 },
                 &metadata,
             )
@@ -313,6 +316,7 @@ mod test_channel_tests {
                 StatusUpdate::ToolStarted {
                     name: "echo".to_string(),
                     tool_call_id: "call_1".to_string(),
+                    parameters: None,
                 },
                 &serde_json::Value::Null,
             )

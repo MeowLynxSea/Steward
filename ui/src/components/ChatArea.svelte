@@ -71,6 +71,9 @@
   let animatedAssistantId = $state<string | null>(null);
   let animatedAssistantText = $state("");
   let typingTimer: ReturnType<typeof setTimeout> | null = null;
+  let animatedThinkingId = $state<string | null>(null);
+  let animatedThinkingText = $state("");
+  let thinkingTypingTimer: ReturnType<typeof setTimeout> | null = null;
   let settlingAuxiliarySummaries = $state<Set<string>>(new Set());
   let lastLiveThinkingId = $state<string | null>(null);
 
@@ -272,16 +275,16 @@
 
   function toolCallSummary(tool: TimelineToolCall) {
     if (tool.error) {
-      return buildCompactSummary(tool.error, 96) || "执行失败";
+      return buildCompactSummary(normalizeAuxiliaryText(tool.error), 96) || "执行失败";
     }
     if (tool.resultPreview) {
-      return buildCompactSummary(tool.resultPreview, 96);
+      return buildCompactSummary(normalizeAuxiliaryText(tool.resultPreview), 96);
     }
     if (tool.rationale) {
-      return buildCompactSummary(tool.rationale, 96);
+      return buildCompactSummary(normalizeAuxiliaryText(tool.rationale), 96);
     }
     if (tool.parameters) {
-      return buildCompactSummary(tool.parameters, 96);
+      return buildCompactSummary(normalizeAuxiliaryText(tool.parameters), 96);
     }
     if (tool.status === "running") {
       return "执行中...";
@@ -296,6 +299,13 @@
     if (typingTimer !== null) {
       clearTimeout(typingTimer);
       typingTimer = null;
+    }
+  }
+
+  function stopThinkingTypingTimer() {
+    if (thinkingTypingTimer !== null) {
+      clearTimeout(thinkingTypingTimer);
+      thinkingTypingTimer = null;
     }
   }
 
@@ -332,15 +342,42 @@
   }
 
   function thinkingInlineSummary(message: ThreadMessage) {
-    const normalized = normalizeThinkingTranscript(message.content ?? "");
+    const normalized = isLiveThinkingMessage(message)
+      ? displayedThinkingContent(message)
+      : normalizeThinkingTranscript(message.content ?? "");
     if (isLiveThinkingMessage(message)) {
       return buildTrailingSummary(normalized, 92) || "思考中...";
     }
     return buildCompactSummary(normalized, 92);
   }
 
-  function renderAuxiliaryDetail(value: string) {
+  function displayedThinkingContent(message: ThreadMessage) {
+    if (message.id === animatedThinkingId) {
+      return animatedThinkingText;
+    }
+    return normalizeThinkingTranscript(message.content ?? "");
+  }
+
+  function unwrapToolOutputEnvelope(value: string) {
     const trimmed = value.trim();
+    if (!trimmed.startsWith("<tool_output") || !trimmed.endsWith("</tool_output>")) {
+      return trimmed;
+    }
+
+    const start = trimmed.indexOf(">");
+    if (start < 0) {
+      return trimmed;
+    }
+
+    return trimmed.slice(start + 1, trimmed.length - "</tool_output>".length).trim();
+  }
+
+  function normalizeAuxiliaryText(value: string) {
+    return unwrapToolOutputEnvelope(value).trim();
+  }
+
+  function renderAuxiliaryDetail(value: string) {
+    const trimmed = normalizeAuxiliaryText(value);
     if (!trimmed) {
       return "";
     }
@@ -417,6 +454,47 @@
   });
 
   $effect(() => {
+    const targetId = liveThinkingMessageId;
+    const thinkingMessage = targetId && session
+      ? session.thread_messages.find((message) => message.id === targetId && message.kind === "thinking") ?? null
+      : null;
+    const targetText = thinkingMessage ? normalizeThinkingTranscript(thinkingMessage.content ?? "") : "";
+
+    if (targetId !== animatedThinkingId) {
+      stopThinkingTypingTimer();
+      animatedThinkingId = targetId;
+      animatedThinkingText = "";
+    }
+
+    if (!targetId) {
+      animatedThinkingText = "";
+      return;
+    }
+
+    if (animatedThinkingText.length > targetText.length) {
+      animatedThinkingText = targetText;
+      return;
+    }
+
+    if (animatedThinkingText.length === targetText.length) {
+      stopThinkingTypingTimer();
+      return;
+    }
+
+    stopThinkingTypingTimer();
+    const remaining = targetText.length - animatedThinkingText.length;
+    const stepSize = Math.max(1, Math.min(10, Math.ceil(remaining / 20)));
+    thinkingTypingTimer = setTimeout(() => {
+      if (animatedThinkingId !== targetId) {
+        return;
+      }
+      animatedThinkingText = targetText.slice(0, animatedThinkingText.length + stepSize);
+    }, 18);
+
+    return () => stopThinkingTypingTimer();
+  });
+
+  $effect(() => {
     const currentLiveThinkingId = liveThinkingMessageId;
     if (lastLiveThinkingId && lastLiveThinkingId !== currentLiveThinkingId) {
       markAuxiliarySummarySettling(lastLiveThinkingId);
@@ -426,6 +504,7 @@
 
   onDestroy(() => {
     stopTypingTimer();
+    stopThinkingTypingTimer();
     for (const timer of auxiliarySummaryTimers.values()) {
       clearTimeout(timer);
     }
@@ -568,7 +647,7 @@
                           {#if message.kind === "thinking"}
                             <div class="thinking-segment">
                               <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
-                                {@html renderAuxiliaryDetail(normalizeThinkingTranscript(message.content ?? ""))}
+                                {@html renderAuxiliaryDetail(displayedThinkingContent(message))}
                               </div>
                             </div>
                           {:else}
@@ -956,7 +1035,7 @@
     padding: 24px;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     scroll-behavior: smooth;
   }
 
@@ -970,7 +1049,8 @@
   }
 
   .message.assistant {
-    justify-content: flex-start;
+    justify-content: center;
+    width: 100%;
   }
 
   .fade-in {
@@ -1001,19 +1081,41 @@
   }
 
   .assistant-text {
-    max-width: 85%;
+    width: min(88%, 980px);
+    max-width: none;
     padding: 1px 0;
     color: var(--text-primary);
     font-size: 15px;
     line-height: 1.38;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 10px;
   }
 
   .assistant-content {
+    width: 100%;
     white-space: normal;
     word-break: break-word;
+  }
+
+  .assistant-content :global(p),
+  .assistant-content :global(li) {
+    line-height: 1.64 !important;
+  }
+
+  .assistant-content :global(p) {
+    margin: 0.28em 0 !important;
+  }
+
+  .assistant-content :global(ul),
+  .assistant-content :global(ol) {
+    margin: 0.38em 0 !important;
+  }
+
+  .assistant-content :global(blockquote),
+  .assistant-content :global(pre),
+  .assistant-content :global(table) {
+    margin: 0.68em 0;
   }
 
   /* Streaming text with cursor */
@@ -1113,6 +1215,7 @@
   }
 
   .tool-call-card {
+    width: 100%;
     border-radius: 12px;
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
@@ -1233,10 +1336,13 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+
+  .expand-icon {
     transition: transform 0.2s ease;
   }
 
-  .tool-call-card.expanded .tool-call-right {
+  .expand-icon.expanded {
     transform: rotate(90deg);
   }
 
@@ -1244,7 +1350,7 @@
     padding: 0 14px 12px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     max-height: 280px;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -1328,26 +1434,35 @@
 
   .tool-detail-content {
     margin: 0;
-    padding: 8px 10px;
-    border-radius: 8px;
-    background: var(--bg-elevated);
+    padding: 0;
+    border-radius: 0;
+    background: transparent;
     font-size: 12px;
     line-height: 1.5;
     color: var(--text-secondary);
     white-space: normal;
     word-break: break-word;
-    max-height: 200px;
-    overflow-y: auto;
     transition: background-color 0.18s ease, color 0.18s ease;
   }
 
   .error-detail .tool-detail-content {
-    background: var(--accent-danger);
     color: var(--accent-danger-text);
   }
 
   .auxiliary-detail {
     overflow-x: hidden;
+  }
+
+  .auxiliary-detail :global(p),
+  .auxiliary-detail :global(ul),
+  .auxiliary-detail :global(ol),
+  .auxiliary-detail :global(blockquote),
+  .auxiliary-detail :global(pre) {
+    margin-top: 0;
+  }
+
+  .auxiliary-detail :global(pre) {
+    background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
   }
 
   .detail-enter {

@@ -4770,6 +4770,7 @@ mod tests {
                 crate::channels::StatusUpdate::ToolStarted {
                     name: "http_request".into(),
                     tool_call_id: "call_1".into(),
+                    parameters: None,
                 },
                 &metadata,
             )
@@ -5086,6 +5087,7 @@ mod tests {
             &crate::channels::StatusUpdate::ToolStarted {
                 name: "http_request".to_string(),
                 tool_call_id: "call_1".to_string(),
+                parameters: None,
             },
             &metadata,
         )

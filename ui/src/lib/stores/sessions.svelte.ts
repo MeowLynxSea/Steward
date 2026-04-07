@@ -309,7 +309,11 @@ class SessionsState {
       }
 
       case "session.tool_started": {
-        const { name, tool_call_id } = event.payload as { name: string; tool_call_id?: string };
+        const { name, tool_call_id, parameters } = event.payload as {
+          name: string;
+          tool_call_id?: string;
+          parameters?: string;
+        };
         this.#streamingAssistantId = null;
         this.#streamingThinkingId = null;
         const newTool: ActiveToolCall = {
@@ -319,7 +323,7 @@ class SessionsState {
           startedAt: new Date().toISOString(),
           completedAt: null,
           error: null,
-          parameters: null,
+          parameters: parameters ?? null,
           resultPreview: null,
           rationale: null
         };
@@ -348,7 +352,7 @@ class SessionsState {
           status: success ? "completed" : "failed",
           completedAt: new Date().toISOString(),
           error: error ?? null,
-          parameters: parameters ?? null
+          parameters: parameters ?? tool.parameters
         });
         this.#updateStreamingToolCall(updatedCalls, tool_call_id, name, nextTool);
         this.#updateLatestToolCall(tool_call_id, name, nextTool);
