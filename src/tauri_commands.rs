@@ -170,6 +170,27 @@ fn parse_optional_timestamp(
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
+fn turn_cost_response(
+    value: &steward_core::agent::session::TurnCostInfo,
+) -> steward_core::ipc::TurnCostResponse {
+    steward_core::ipc::TurnCostResponse {
+        input_tokens: value.input_tokens,
+        output_tokens: value.output_tokens,
+        cost_usd: value.cost_usd.clone(),
+    }
+}
+
+fn turn_cost_from_message_metadata(
+    metadata: &serde_json::Value,
+) -> Option<steward_core::ipc::TurnCostResponse> {
+    let turn_cost = metadata.get("turn_cost")?.as_object()?;
+    Some(steward_core::ipc::TurnCostResponse {
+        input_tokens: turn_cost.get("input_tokens")?.as_u64()?,
+        output_tokens: turn_cost.get("output_tokens")?.as_u64()?,
+        cost_usd: turn_cost.get("cost_usd")?.as_str()?.to_string(),
+    })
+}
+
 fn build_thread_messages_from_db_messages(
     db_messages: &[ConversationMessage],
 ) -> Vec<steward_core::ipc::ThreadMessageResponse> {
@@ -191,6 +212,7 @@ fn build_thread_messages_from_db_messages(
                     content: Some(msg.content.clone()),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
+                    turn_cost: None,
                     tool_call: None,
                 });
             }
@@ -203,6 +225,7 @@ fn build_thread_messages_from_db_messages(
                     content: Some(msg.content.clone()),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
+                    turn_cost: None,
                     tool_call: None,
                 });
             }
@@ -214,6 +237,7 @@ fn build_thread_messages_from_db_messages(
                     content: Some(msg.content.clone()),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
+                    turn_cost: turn_cost_from_message_metadata(&msg.metadata),
                     tool_call: None,
                 });
             }
@@ -249,6 +273,7 @@ fn build_thread_messages_from_db_messages(
                     content: None,
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
+                    turn_cost: None,
                     tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
                         name: call
                             .get("name")
@@ -300,6 +325,7 @@ fn build_thread_messages_from_db_messages(
                         content: Some(narrative),
                         created_at: msg.created_at,
                         turn_number: active_turn_number,
+                        turn_cost: None,
                         tool_call: None,
                     });
                 }
@@ -330,6 +356,7 @@ fn build_thread_messages_from_db_messages(
                         content: None,
                         created_at: msg.created_at,
                         turn_number: active_turn_number,
+                        turn_cost: None,
                         tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
                             name: call
                                 .get("name")
@@ -383,6 +410,7 @@ fn build_thread_messages(
                 content: Some(turn.user_input.clone()),
                 created_at: turn.started_at,
                 turn_number: turn.turn_number,
+                turn_cost: None,
                 tool_call: None,
             });
             if let Some(narrative) = turn
@@ -397,6 +425,7 @@ fn build_thread_messages(
                     content: Some(narrative.clone()),
                     created_at: turn.started_at,
                     turn_number: turn.turn_number,
+                    turn_cost: None,
                     tool_call: None,
                 });
             }
@@ -409,6 +438,7 @@ fn build_thread_messages(
                     content: None,
                     created_at: turn.completed_at.unwrap_or(turn.started_at),
                     turn_number: turn.turn_number,
+                    turn_cost: None,
                     tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
                         name: tool_call.name.clone(),
                         status: tool_status(tool_call),
@@ -429,6 +459,7 @@ fn build_thread_messages(
                     content: Some(response.clone()),
                     created_at: turn.completed_at.unwrap_or(turn.started_at),
                     turn_number: turn.turn_number,
+                    turn_cost: turn.turn_cost.as_ref().map(turn_cost_response),
                     tool_call: None,
                 });
             }
@@ -1236,4 +1267,52 @@ pub async fn get_workbench_capabilities(
         dev_loaded_tools: active_tool_names,
         mcp_servers: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::build_thread_messages_from_db_messages;
+
+    #[test]
+    fn build_thread_messages_from_db_messages_keeps_persisted_turn_cost() {
+        let user_id = uuid::Uuid::new_v4();
+        let assistant_id = uuid::Uuid::new_v4();
+        let created_at = Utc::now();
+        let messages = vec![
+            steward_core::history::ConversationMessage {
+                id: user_id,
+                role: "user".to_string(),
+                content: "What changed?".to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: assistant_id,
+                role: "assistant".to_string(),
+                content: "Per-turn cost is now persisted.".to_string(),
+                metadata: serde_json::json!({
+                    "turn_cost": {
+                        "input_tokens": 512,
+                        "output_tokens": 96,
+                        "cost_usd": "$0.0034"
+                    }
+                }),
+                created_at,
+            },
+        ];
+
+        let thread_messages = build_thread_messages_from_db_messages(&messages);
+        let assistant = thread_messages
+            .iter()
+            .find(|message| message.role.as_deref() == Some("assistant"))
+            .expect("assistant message");
+        let turn_cost = assistant.turn_cost.as_ref().expect("turn cost");
+
+        assert_eq!(assistant.turn_number, 0);
+        assert_eq!(turn_cost.input_tokens, 512);
+        assert_eq!(turn_cost.output_tokens, 96);
+        assert_eq!(turn_cost.cost_usd, "$0.0034");
+    }
 }

@@ -62,6 +62,7 @@ export interface ThreadMessage {
   content: string | null;
   created_at: string;
   turn_number: number;
+  turn_cost: TurnCostInfo | null;
   tool_call: TimelineToolCall | null;
 }
 

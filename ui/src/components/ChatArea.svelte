@@ -717,6 +717,18 @@
               <div class="assistant-content markdown-body">
                 {@html renderMarkdown(displayedAssistantContent(entry.message))}
               </div>
+              {#if entry.message.turn_cost}
+                <div class="turn-cost-bar inline-turn-cost fade-in">
+                  <Zap size={12} strokeWidth={2} />
+                  <span>{entry.message.turn_cost.input_tokens.toLocaleString()} in</span>
+                  <span class="cost-sep">·</span>
+                  <span>{entry.message.turn_cost.output_tokens.toLocaleString()} out</span>
+                  {#if entry.message.turn_cost.cost_usd !== "$0.0000"}
+                    <span class="cost-sep">·</span>
+                    <span>{entry.message.turn_cost.cost_usd}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -792,19 +804,6 @@
         </div>
       {/if}
 
-      <!-- Turn cost -->
-      {#if streaming.turnCost && !streaming.isStreaming}
-        <div class="turn-cost-bar fade-in">
-          <Zap size={12} strokeWidth={2} />
-          <span>{streaming.turnCost.input_tokens.toLocaleString()} in</span>
-          <span class="cost-sep">·</span>
-          <span>{streaming.turnCost.output_tokens.toLocaleString()} out</span>
-          {#if streaming.turnCost.cost_usd !== "0.000000"}
-            <span class="cost-sep">·</span>
-            <span>${streaming.turnCost.cost_usd}</span>
-          {/if}
-        </div>
-      {/if}
     </div>
   {/if}
 
@@ -1552,6 +1551,10 @@
     font-size: 12px;
     color: var(--text-muted);
     width: fit-content;
+  }
+
+  .inline-turn-cost {
+    margin-top: 10px;
   }
 
   .cost-sep {

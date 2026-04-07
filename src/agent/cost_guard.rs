@@ -393,6 +393,20 @@ impl CostGuard {
     pub async fn model_usage(&self) -> HashMap<String, ModelTokens> {
         self.model_tokens.lock().await.clone()
     }
+
+    /// Total token/cost usage since startup across all models.
+    pub async fn total_usage(&self) -> ModelTokens {
+        self.model_tokens
+            .lock()
+            .await
+            .values()
+            .fold(ModelTokens::default(), |mut acc, usage| {
+                acc.input_tokens += usage.input_tokens;
+                acc.output_tokens += usage.output_tokens;
+                acc.cost += usage.cost;
+                acc
+            })
+    }
 }
 
 /// Convert a Decimal USD amount to whole cents (truncated).

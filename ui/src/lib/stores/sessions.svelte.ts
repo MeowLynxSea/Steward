@@ -157,6 +157,7 @@ class SessionsState {
       content: content.trim(),
       created_at: new Date().toISOString(),
       turn_number: this.#nextTurnNumber(),
+      turn_cost: null,
       tool_call: null
     };
     this.#liveTurnNumber = optimistic.turn_number;
@@ -284,6 +285,7 @@ class SessionsState {
       };
       const persistedTurnCost = turnCostFromResultMetadata(detail.task.result_metadata);
       if (persistedTurnCost) {
+        this.#attachTurnCostToLatestAssistant(persistedTurnCost);
         this.streaming = {
           ...this.streaming,
           turnCost: persistedTurnCost
@@ -441,9 +443,15 @@ class SessionsState {
 
       case "session.turn_cost": {
         const payload = event.payload as { input_tokens: number; output_tokens: number; cost_usd: string };
+        const turnCost = {
+          input_tokens: payload.input_tokens,
+          output_tokens: payload.output_tokens,
+          cost_usd: payload.cost_usd
+        };
+        this.#attachTurnCostToLatestAssistant(turnCost, this.#ensureLiveTurnNumber());
         this.streaming = {
           ...this.streaming,
-          turnCost: { input_tokens: payload.input_tokens, output_tokens: payload.output_tokens, cost_usd: payload.cost_usd }
+          turnCost
         };
         break;
       }
@@ -604,6 +612,7 @@ class SessionsState {
         content: normalized,
         created_at: now,
         turn_number: turnNumber,
+        turn_cost: null,
         tool_call: null
       });
       return;
@@ -626,6 +635,25 @@ class SessionsState {
     };
   }
 
+  #attachTurnCostToLatestAssistant(turnCost: TurnCostInfo, turnNumber?: number | null) {
+    if (!this.active) return;
+
+    const targetTurnNumber = turnNumber ?? this.#inferLiveTurnNumber();
+    const messages = [...this.active.thread_messages];
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (
+        message.kind === "message" &&
+        message.role === "assistant" &&
+        (targetTurnNumber === null || message.turn_number === targetTurnNumber)
+      ) {
+        messages[i] = { ...message, turn_cost: turnCost };
+        this.active = { ...this.active, thread_messages: messages };
+        return;
+      }
+    }
+  }
+
   #appendAssistantChunk(content: string) {
     if (!this.active) return;
     const now = new Date().toISOString();
@@ -644,6 +672,7 @@ class SessionsState {
         content,
         created_at: now,
         turn_number: turnNumber,
+        turn_cost: null,
         tool_call: null
       });
       return;
@@ -708,9 +737,13 @@ class SessionsState {
           content: finalContent,
           created_at: new Date().toISOString(),
           turn_number: turnNumber,
+          turn_cost: null,
           tool_call: null
         });
       }
+    }
+    if (this.streaming.turnCost) {
+      this.#attachTurnCostToLatestAssistant(this.streaming.turnCost, turnNumber);
     }
     this.#streamingAssistantId = null;
   }
@@ -723,6 +756,7 @@ class SessionsState {
       content: null,
       created_at: tool.startedAt,
       turn_number: this.#ensureLiveTurnNumber(),
+      turn_cost: null,
       tool_call: tool
     });
   }

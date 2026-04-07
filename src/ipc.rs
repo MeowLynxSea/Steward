@@ -69,6 +69,13 @@ pub struct ThreadToolCallResponse {
     pub rationale: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TurnCostResponse {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ThreadMessageResponse {
     pub id: Uuid,
@@ -77,6 +84,7 @@ pub struct ThreadMessageResponse {
     pub content: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub turn_number: usize,
+    pub turn_cost: Option<TurnCostResponse>,
     pub tool_call: Option<ThreadToolCallResponse>,
 }
 

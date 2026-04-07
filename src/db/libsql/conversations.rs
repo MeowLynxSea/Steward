@@ -52,8 +52,8 @@ impl ConversationStore for LibSqlBackend {
         let id = Uuid::new_v4();
         let now = fmt_ts(&Utc::now());
         conn.execute(
-                "INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![id.to_string(), conversation_id.to_string(), role, content, now],
+                "INSERT INTO conversation_messages (id, conversation_id, role, content, metadata, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![id.to_string(), conversation_id.to_string(), role, content, "{}", now],
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
@@ -70,6 +70,21 @@ impl ConversationStore for LibSqlBackend {
         conn.execute(
             "UPDATE conversation_messages SET content = ?2 WHERE id = ?1",
             params![message_id.to_string(), content],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn update_conversation_message_metadata(
+        &self,
+        message_id: Uuid,
+        metadata: &serde_json::Value,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.connect().await?;
+        conn.execute(
+            "UPDATE conversation_messages SET metadata = json_patch(COALESCE(metadata, '{}'), ?2) WHERE id = ?1",
+            params![message_id.to_string(), metadata.to_string()],
         )
         .await
         .map_err(|e| DatabaseError::Query(e.to_string()))?;
@@ -477,7 +492,7 @@ impl ConversationStore for LibSqlBackend {
         let mut rows = if let Some(before_ts) = before {
             conn.query(
                 r#"
-                    SELECT id, role, content, created_at
+                    SELECT id, role, content, metadata, created_at
                     FROM conversation_messages
                     WHERE conversation_id = ?1 AND created_at < ?2
                     ORDER BY created_at DESC, rowid DESC
@@ -489,7 +504,7 @@ impl ConversationStore for LibSqlBackend {
         } else {
             conn.query(
                 r#"
-                    SELECT id, role, content, created_at
+                    SELECT id, role, content, metadata, created_at
                     FROM conversation_messages
                     WHERE conversation_id = ?1
                     ORDER BY created_at DESC, rowid DESC
@@ -511,7 +526,8 @@ impl ConversationStore for LibSqlBackend {
                 id: get_text(&row, 0).parse().unwrap_or_default(),
                 role: get_text(&row, 1),
                 content: get_text(&row, 2),
-                created_at: get_ts(&row, 3),
+                metadata: get_json(&row, 3),
+                created_at: get_ts(&row, 4),
             });
         }
 
@@ -570,7 +586,7 @@ impl ConversationStore for LibSqlBackend {
         let mut rows = conn
             .query(
                 r#"
-                SELECT id, role, content, created_at
+                SELECT id, role, content, metadata, created_at
                 FROM conversation_messages
                 WHERE conversation_id = ?1
                 ORDER BY created_at ASC, rowid ASC
@@ -590,7 +606,8 @@ impl ConversationStore for LibSqlBackend {
                 id: get_text(&row, 0).parse().unwrap_or_default(),
                 role: get_text(&row, 1),
                 content: get_text(&row, 2),
-                created_at: get_ts(&row, 3),
+                metadata: get_json(&row, 3),
+                created_at: get_ts(&row, 4),
             });
         }
         Ok(messages)

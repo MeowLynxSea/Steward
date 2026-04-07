@@ -19,6 +19,13 @@ use uuid::Uuid;
 use crate::llm::{ChatMessage, ToolCall, generate_tool_call_id};
 use steward_common::truncate_preview;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TurnCostInfo {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cost_usd: String,
+}
+
 /// A session containing one or more threads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -635,9 +642,15 @@ pub struct Turn {
     /// Cleaned via `clean_response` and sanitized through `SafetyLayer` before storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrative: Option<String>,
+    /// Persisted cost summary for this user-message turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_cost: Option<TurnCostInfo>,
     /// Persisted conversation row backing the assistant response in history.
     #[serde(skip)]
     pub assistant_message_id: Option<Uuid>,
+    /// Cumulative usage snapshot captured at turn start to compute per-turn deltas.
+    #[serde(skip)]
+    pub cost_baseline: Option<crate::agent::cost_guard::ModelTokens>,
     /// Transient image content parts for multimodal LLM input.
     /// Not serialized — images are only needed for the current LLM call.
     /// The text description in `user_input` persists for compaction/context.
@@ -658,7 +671,9 @@ impl Turn {
             completed_at: None,
             error: None,
             narrative: None,
+            turn_cost: None,
             assistant_message_id: None,
+            cost_baseline: None,
             image_content_parts: Vec::new(),
         }
     }

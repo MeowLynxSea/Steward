@@ -32,17 +32,39 @@ fn requires_preexisting_uuid_thread(channel: &str) -> bool {
     matches!(channel, "desktop" | "test")
 }
 
-fn turn_cost_metadata(
-    input_tokens: u64,
-    output_tokens: u64,
-    cost_usd: &str,
-) -> serde_json::Value {
+fn decimal_to_cost_text(cost: rust_decimal::Decimal) -> String {
+    format!("${:.4}", cost)
+}
+
+fn turn_cost_delta(
+    baseline: Option<&crate::agent::cost_guard::ModelTokens>,
+    total: &crate::agent::cost_guard::ModelTokens,
+) -> crate::agent::session::TurnCostInfo {
+    let baseline_input = baseline.map(|value| value.input_tokens).unwrap_or(0);
+    let baseline_output = baseline.map(|value| value.output_tokens).unwrap_or(0);
+    let baseline_cost = baseline
+        .map(|value| value.cost)
+        .unwrap_or(rust_decimal::Decimal::ZERO);
+    let cost = if total.cost >= baseline_cost {
+        total.cost - baseline_cost
+    } else {
+        rust_decimal::Decimal::ZERO
+    };
+
+    crate::agent::session::TurnCostInfo {
+        input_tokens: total.input_tokens.saturating_sub(baseline_input),
+        output_tokens: total.output_tokens.saturating_sub(baseline_output),
+        cost_usd: decimal_to_cost_text(cost),
+    }
+}
+
+fn turn_cost_metadata(turn_cost: &crate::agent::session::TurnCostInfo) -> serde_json::Value {
     serde_json::json!({
         "outcome": "completed",
         "turn_cost": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost_usd": cost_usd,
+            "input_tokens": turn_cost.input_tokens,
+            "output_tokens": turn_cost.output_tokens,
+            "cost_usd": turn_cost.cost_usd,
         }
     })
 }
@@ -473,6 +495,7 @@ impl Agent {
             Some(result) => (result.text.as_str(), result.image_parts.clone()),
             None => (content, Vec::new()),
         };
+        let cost_baseline = self.cost_guard().total_usage().await;
 
         // Start the turn and get messages
         let turn_messages = {
@@ -483,6 +506,7 @@ impl Agent {
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
             let turn = thread.start_turn(effective_content);
             turn.image_content_parts = image_parts;
+            turn.cost_baseline = Some(cost_baseline);
             thread.messages()
         };
 
@@ -564,14 +588,21 @@ impl Agent {
                 };
                 let response = crate::agent::dispatcher::sanitize_user_visible_response(&response);
 
-                let (turn_number, tool_calls, narrative) = {
+                let (turn_number, tool_calls, narrative, cost_baseline) = {
                     thread.complete_turn(&response);
-                    let (turn_number, tool_calls, narrative) = thread
+                    let (turn_number, tool_calls, narrative, cost_baseline) = thread
                         .turns
                         .last()
-                        .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
+                        .map(|t| {
+                            (
+                                t.turn_number,
+                                t.tool_calls.clone(),
+                                t.narrative.clone(),
+                                t.cost_baseline.clone(),
+                            )
+                        })
                         .unwrap_or_default();
-                    (turn_number, tool_calls, narrative)
+                    (turn_number, tool_calls, narrative, cost_baseline)
                 };
                 drop(sess);
                 let _ = self
@@ -603,39 +634,30 @@ impl Agent {
                 .await;
 
                 // Emit per-turn cost summary
-                let (total_in, total_out, total_cost_text) = {
-                    let usage = self.cost_guard().model_usage().await;
-                    let (total_in, total_out, total_cost) =
-                        usage
-                            .values()
-                            .fold((0u64, 0u64, rust_decimal::Decimal::ZERO), |acc, m| {
-                                (
-                                    acc.0 + m.input_tokens,
-                                    acc.1 + m.output_tokens,
-                                    acc.2 + m.cost,
-                                )
-                            });
-                    let total_cost_text = format!("${:.4}", total_cost);
+                let turn_cost = {
+                    let usage = self.cost_guard().total_usage().await;
+                    let turn_cost = turn_cost_delta(cost_baseline.as_ref(), &usage);
                     let _ = self
                         .channels
                         .send_status(
                             &message.channel,
                             StatusUpdate::TurnCost {
-                                input_tokens: total_in,
-                                output_tokens: total_out,
-                                cost_usd: total_cost_text.clone(),
+                                input_tokens: turn_cost.input_tokens,
+                                output_tokens: turn_cost.output_tokens,
+                                cost_usd: turn_cost.cost_usd.clone(),
                             },
                             &message.metadata,
                         )
                         .await;
-                    (total_in, total_out, total_cost_text)
+                    turn_cost
                 };
+                self.persist_turn_cost(&session, thread_id, &turn_cost).await;
 
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime
                         .mark_completed_with_result(
                             thread_id,
-                            Some(turn_cost_metadata(total_in, total_out, &total_cost_text)),
+                            Some(turn_cost_metadata(&turn_cost)),
                         )
                         .await;
                 }
@@ -874,6 +896,53 @@ impl Agent {
             Err(error) => {
                 tracing::warn!("Failed to persist assistant message: {}", error);
             }
+        }
+    }
+
+    pub(super) async fn persist_turn_cost(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        turn_cost: &crate::agent::session::TurnCostInfo,
+    ) {
+        let (message_id, should_update_turn) = {
+            let sess = session.lock().await;
+            match sess.threads.get(&thread_id).and_then(|thread| thread.last_turn()) {
+                Some(turn) => (turn.assistant_message_id, turn.turn_cost.as_ref() != Some(turn_cost)),
+                None => (None, false),
+            }
+        };
+
+        if !should_update_turn {
+            return;
+        }
+
+        {
+            let mut sess = session.lock().await;
+            if let Some(thread) = sess.threads.get_mut(&thread_id)
+                && let Some(turn) = thread.last_turn_mut()
+            {
+                turn.turn_cost = Some(turn_cost.clone());
+            }
+        }
+
+        let Some(message_id) = message_id else {
+            return;
+        };
+        let Some(store) = self.store().map(Arc::clone) else {
+            return;
+        };
+
+        if let Err(error) = store
+            .update_conversation_message_metadata(message_id, &serde_json::json!({ "turn_cost": turn_cost }))
+            .await
+        {
+            tracing::warn!(
+                thread_id = %thread_id,
+                %message_id,
+                %error,
+                "Failed to persist assistant turn cost metadata"
+            );
         }
     }
 
@@ -1969,14 +2038,21 @@ impl Agent {
                         suggestions = ?suggestions,
                         "Extracted inline follow-up suggestions from approval-complete response"
                     );
-                    let (turn_number, tool_calls, narrative) = {
+                    let (turn_number, tool_calls, narrative, cost_baseline) = {
                         thread.complete_turn(&response);
-                        let (turn_number, tool_calls, narrative) = thread
+                        let (turn_number, tool_calls, narrative, cost_baseline) = thread
                             .turns
                             .last()
-                            .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
+                            .map(|t| {
+                                (
+                                    t.turn_number,
+                                    t.tool_calls.clone(),
+                                    t.narrative.clone(),
+                                    t.cost_baseline.clone(),
+                                )
+                            })
                             .unwrap_or_default();
-                        (turn_number, tool_calls, narrative)
+                        (turn_number, tool_calls, narrative, cost_baseline)
                     };
                     drop(sess);
                     // User message already persisted at turn start; save tool calls then assistant response
@@ -2005,38 +2081,29 @@ impl Agent {
                             &message.metadata,
                         )
                         .await;
-                    let (total_in, total_out, total_cost_text) = {
-                        let usage = self.cost_guard().model_usage().await;
-                        let (total_in, total_out, total_cost) =
-                            usage
-                                .values()
-                                .fold((0u64, 0u64, rust_decimal::Decimal::ZERO), |acc, m| {
-                                    (
-                                        acc.0 + m.input_tokens,
-                                        acc.1 + m.output_tokens,
-                                        acc.2 + m.cost,
-                                    )
-                                });
-                        let total_cost_text = format!("${:.4}", total_cost);
+                    let turn_cost = {
+                        let usage = self.cost_guard().total_usage().await;
+                        let turn_cost = turn_cost_delta(cost_baseline.as_ref(), &usage);
                         let _ = self
                             .channels
                             .send_status(
                                 &message.channel,
                                 StatusUpdate::TurnCost {
-                                    input_tokens: total_in,
-                                    output_tokens: total_out,
-                                    cost_usd: total_cost_text.clone(),
+                                    input_tokens: turn_cost.input_tokens,
+                                    output_tokens: turn_cost.output_tokens,
+                                    cost_usd: turn_cost.cost_usd.clone(),
                                 },
                                 &message.metadata,
                             )
                             .await;
-                        (total_in, total_out, total_cost_text)
+                        turn_cost
                     };
+                    self.persist_turn_cost(&session, thread_id, &turn_cost).await;
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime
                             .mark_completed_with_result(
                                 thread_id,
-                                Some(turn_cost_metadata(total_in, total_out, &total_cost_text)),
+                                Some(turn_cost_metadata(&turn_cost)),
                             )
                             .await;
                     }
@@ -2780,6 +2847,7 @@ mod tests {
             id: uuid::Uuid::new_v4(),
             role: role.to_string(),
             content: content.to_string(),
+            metadata: serde_json::json!({}),
             created_at: chrono::Utc::now(),
         }
     }
@@ -2964,7 +3032,11 @@ mod tests {
 
     #[test]
     fn test_turn_cost_metadata_shape() {
-        let metadata = super::turn_cost_metadata(1200, 280, "$0.0042");
+        let metadata = super::turn_cost_metadata(&crate::agent::session::TurnCostInfo {
+            input_tokens: 1200,
+            output_tokens: 280,
+            cost_usd: "$0.0042".to_string(),
+        });
 
         assert_eq!(
             metadata.get("outcome").and_then(|value| value.as_str()),
@@ -2991,6 +3063,26 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("$0.0042")
         );
+    }
+
+    #[test]
+    fn test_turn_cost_delta_uses_baseline_snapshot() {
+        let baseline = crate::agent::cost_guard::ModelTokens {
+            input_tokens: 1_200,
+            output_tokens: 280,
+            cost: rust_decimal::Decimal::new(42, 4),
+        };
+        let total = crate::agent::cost_guard::ModelTokens {
+            input_tokens: 1_560,
+            output_tokens: 410,
+            cost: rust_decimal::Decimal::new(95, 4),
+        };
+
+        let turn_cost = super::turn_cost_delta(Some(&baseline), &total);
+
+        assert_eq!(turn_cost.input_tokens, 360);
+        assert_eq!(turn_cost.output_tokens, 130);
+        assert_eq!(turn_cost.cost_usd, "$0.0053");
     }
 
     // Helper function to extract the approval message without needing a full Agent instance

@@ -265,6 +265,11 @@ pub trait ConversationStore: Send + Sync {
         message_id: Uuid,
         content: &str,
     ) -> Result<(), DatabaseError>;
+    async fn update_conversation_message_metadata(
+        &self,
+        message_id: Uuid,
+        metadata: &serde_json::Value,
+    ) -> Result<(), DatabaseError>;
     async fn ensure_conversation(
         &self,
         id: Uuid,

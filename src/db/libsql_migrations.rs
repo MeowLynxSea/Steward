@@ -906,6 +906,13 @@ CREATE TABLE IF NOT EXISTS workspace_mount_checkpoint_files (
 );
 "#,
     ),
+    (
+        18,
+        "conversation_message_metadata",
+        r#"
+ALTER TABLE conversation_messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

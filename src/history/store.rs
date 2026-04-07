@@ -123,6 +123,7 @@ pub struct ConversationMessage {
     pub id: Uuid,
     pub role: String,
     pub content: String,
+    pub metadata: serde_json::Value,
     pub created_at: DateTime<Utc>,
 }
 
