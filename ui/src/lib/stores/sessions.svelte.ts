@@ -297,8 +297,11 @@ class SessionsState {
       }
 
       case "session.thinking": {
-        const { message } = event.payload as { message: string };
-        this.#appendThinkingMessage(message);
+        const { message, message_id } = event.payload as {
+          message: string;
+          message_id?: string | null;
+        };
+        this.#appendThinkingMessage(message, message_id ?? null);
         this.streaming = {
           ...this.streaming,
           thinking: true,
@@ -492,17 +495,22 @@ class SessionsState {
     };
   }
 
-  #appendThinkingMessage(content: string) {
-    if (!this.active || !content.trim()) return;
+  #appendThinkingMessage(content: string, messageId: string | null) {
+    if (!content.trim()) return;
     const now = new Date().toISOString();
     const normalized = content.trim();
+    if (!messageId) {
+      this.#streamingThinkingId = null;
+      return;
+    }
+
+    if (!this.active) return;
     const turnNumber = this.#ensureLiveTurnNumber();
 
-    if (!this.#streamingThinkingId) {
-      const id = crypto.randomUUID();
-      this.#streamingThinkingId = id;
+    if (!this.active.thread_messages.some((message) => message.id === messageId)) {
+      this.#streamingThinkingId = messageId;
       this.#appendMessage({
-        id,
+        id: messageId,
         kind: "thinking",
         role: null,
         content: normalized,
@@ -513,7 +521,8 @@ class SessionsState {
       return;
     }
 
-    this.#updateMessage(this.#streamingThinkingId, (message) => ({
+    this.#streamingThinkingId = messageId;
+    this.#updateMessage(messageId, (message) => ({
       ...message,
       content: normalized
     }));

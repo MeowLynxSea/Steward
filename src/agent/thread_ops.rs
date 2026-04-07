@@ -573,19 +573,6 @@ impl Agent {
                     narrative.as_deref(),
                 )
                 .await;
-                if tool_calls.is_empty()
-                    && let Some(narrative) = narrative
-                        .as_deref()
-                        .filter(|value| !value.trim().is_empty())
-                {
-                    self.persist_thinking_message(
-                        thread_id,
-                        &message.channel,
-                        &message.user_id,
-                        narrative,
-                    )
-                    .await;
-                }
                 self.persist_assistant_response(
                     thread_id,
                     &message.channel,
@@ -812,35 +799,6 @@ impl Agent {
         }
     }
 
-    /// Persist a standalone thinking/narrative message when a turn has reasoning
-    /// but no tool-calls wrapper row to carry it.
-    pub(super) async fn persist_thinking_message(
-        &self,
-        thread_id: Uuid,
-        channel: &str,
-        user_id: &str,
-        narrative: &str,
-    ) {
-        let store = match self.store() {
-            Some(s) => Arc::clone(s),
-            None => return,
-        };
-
-        if !self
-            .ensure_writable_conversation(&store, thread_id, channel, user_id)
-            .await
-        {
-            return;
-        }
-
-        if let Err(e) = store
-            .add_conversation_message(thread_id, "thinking", narrative)
-            .await
-        {
-            tracing::warn!("Failed to persist thinking message: {}", e);
-        }
-    }
-
     async fn generate_follow_up_suggestions(&self, recent_turns: &[Turn]) -> Vec<String> {
         if recent_turns.is_empty() {
             return Vec::new();
@@ -890,9 +848,10 @@ impl Agent {
     ///
     /// Stored between the user and assistant messages so that
     /// `build_turns_from_db_messages` can reconstruct the tool call history.
-    /// Content is a JSON object: `{ "calls": [...], "narrative": "..." }`.
+    /// Content is a JSON object: `{ "calls": [...] }`.
     /// The `calls` array contains tool call summaries with optional `rationale`
-    /// and `tool_call_id` fields. Legacy rows may be plain JSON arrays.
+    /// and `tool_call_id` fields. Legacy rows may be plain JSON arrays or
+    /// wrapped objects that still include `narrative`.
     pub(super) async fn persist_tool_calls(
         &self,
         thread_id: Uuid,
@@ -900,7 +859,7 @@ impl Agent {
         user_id: &str,
         turn_number: usize,
         tool_calls: &[crate::agent::session::TurnToolCall],
-        narrative: Option<&str>,
+        _narrative: Option<&str>,
     ) {
         if tool_calls.is_empty() {
             return;
@@ -949,18 +908,9 @@ impl Agent {
             })
             .collect();
 
-        // Wrap in an object with optional narrative so it can be reconstructed.
-        // safety: no byte-index slicing here; comment describes JSON shape
-        let wrapper = if let Some(n) = narrative {
-            serde_json::json!({
-                "narrative": n,
-                "calls": summaries,
-            })
-        } else {
-            serde_json::json!({
-                "calls": summaries,
-            })
-        };
+        let wrapper = serde_json::json!({
+            "calls": summaries,
+        });
         let content = match serde_json::to_string(&wrapper) {
             Ok(c) => c,
             Err(e) => {
@@ -1736,19 +1686,6 @@ impl Agent {
                         narrative.as_deref(),
                     )
                     .await;
-                    if tool_calls.is_empty()
-                        && let Some(narrative) = narrative
-                            .as_deref()
-                            .filter(|value| !value.trim().is_empty())
-                    {
-                        self.persist_thinking_message(
-                            thread_id,
-                            &message.channel,
-                            &message.user_id,
-                            narrative,
-                        )
-                        .await;
-                    }
                     self.persist_assistant_response(
                         thread_id,
                         &message.channel,
@@ -2147,17 +2084,29 @@ fn rebuild_chat_messages_from_db(
     db_messages: &[crate::history::ConversationMessage],
 ) -> Vec<ChatMessage> {
     let mut result = Vec::new();
+    let mut pending_thinking_segments: Vec<String> = Vec::new();
 
     for msg in db_messages {
         match msg.role.as_str() {
-            "user" => result.push(ChatMessage::user(&msg.content)),
-            "assistant" => result.push(ChatMessage::assistant(&msg.content)),
+            "user" => {
+                pending_thinking_segments.clear();
+                result.push(ChatMessage::user(&msg.content));
+            }
+            "thinking" => {
+                if !msg.content.trim().is_empty() {
+                    pending_thinking_segments.push(msg.content.clone());
+                }
+            }
+            "assistant" => {
+                pending_thinking_segments.clear();
+                result.push(ChatMessage::assistant(&msg.content));
+            }
             "tool_calls" => {
                 // Try to parse the enriched JSON and rebuild tool messages.
                 // Supports two formats:
                 // - Old: plain JSON array of tool call summaries
                 // - New: wrapped object { "calls": [...], "narrative": "..." }
-                let (calls, narrative): (Vec<serde_json::Value>, Option<String>) =
+                let (calls, wrapper_narrative): (Vec<serde_json::Value>, Option<String>) =
                     match serde_json::from_str::<serde_json::Value>(&msg.content) {
                         Ok(serde_json::Value::Array(arr)) => (arr, None),
                         Ok(serde_json::Value::Object(obj)) => (
@@ -2176,6 +2125,13 @@ fn rebuild_chat_messages_from_db(
                     if calls.is_empty() {
                         continue;
                     }
+
+                    let narrative = if pending_thinking_segments.is_empty() {
+                        wrapper_narrative
+                    } else {
+                        Some(pending_thinking_segments.join(""))
+                    };
+                    pending_thinking_segments.clear();
 
                     // Check if this is an enriched row (has call_id) or legacy
                     let has_call_id = calls
@@ -2206,8 +2162,7 @@ fn rebuild_chat_messages_from_db(
                         // the final assistant response comes as a separate
                         // "assistant" row after this tool_calls row.
                         result.push(ChatMessage::assistant_with_tool_calls(
-                            narrative.clone(),
-                            tool_calls,
+                            narrative, tool_calls,
                         ));
 
                         // Emit tool_result messages for each call

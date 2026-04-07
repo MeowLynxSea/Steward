@@ -42,6 +42,8 @@ pub enum AppEvent {
     Thinking {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
     #[serde(rename = "tool_started")]
@@ -261,6 +263,7 @@ mod tests {
             },
             AppEvent::Thinking {
                 message: String::new(),
+                message_id: None,
                 thread_id: None,
             },
             AppEvent::ToolStarted {

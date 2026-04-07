@@ -260,6 +260,11 @@ pub trait ConversationStore: Send + Sync {
         role: &str,
         content: &str,
     ) -> Result<Uuid, DatabaseError>;
+    async fn update_conversation_message_content(
+        &self,
+        message_id: Uuid,
+        content: &str,
+    ) -> Result<(), DatabaseError>;
     async fn ensure_conversation(
         &self,
         id: Uuid,

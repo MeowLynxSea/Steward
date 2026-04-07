@@ -61,6 +61,21 @@ impl ConversationStore for LibSqlBackend {
         Ok(id)
     }
 
+    async fn update_conversation_message_content(
+        &self,
+        message_id: Uuid,
+        content: &str,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.connect().await?;
+        conn.execute(
+            "UPDATE conversation_messages SET content = ?2 WHERE id = ?1",
+            params![message_id.to_string(), content],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        Ok(())
+    }
+
     async fn ensure_conversation(
         &self,
         id: Uuid,

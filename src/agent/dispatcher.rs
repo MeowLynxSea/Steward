@@ -23,6 +23,34 @@ use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
 use crate::task_runtime::TaskMode;
 use crate::tools::redact_params;
 
+fn merge_streamed_thinking_segment(existing: &str, incoming: &str) -> String {
+    if existing.is_empty() {
+        return incoming.to_string();
+    }
+    if incoming.is_empty() {
+        return existing.to_string();
+    }
+    if incoming.starts_with(existing) {
+        return incoming.to_string();
+    }
+    if existing.starts_with(incoming) {
+        return existing.to_string();
+    }
+
+    let mut boundaries: Vec<usize> = incoming.char_indices().map(|(idx, _)| idx).collect();
+    boundaries.push(incoming.len());
+    for overlap in boundaries.into_iter().rev() {
+        if overlap == 0 {
+            continue;
+        }
+        if existing.ends_with(&incoming[..overlap]) {
+            return format!("{}{}", existing, &incoming[overlap..]);
+        }
+    }
+
+    format!("{existing}{incoming}")
+}
+
 /// Result of the agentic loop execution.
 pub(super) enum AgenticLoopResult {
     /// Completed with a response.
@@ -141,12 +169,16 @@ impl Agent {
         let emitter = self.emitter().cloned();
         let user_id = message.user_id.clone();
         let tid = message.thread_id.clone().or(Some(thread_id.to_string()));
-        let thinking_session = Arc::clone(&session);
         let safety = Arc::clone(self.safety());
+        let store = self.store().cloned();
+        let channel = message.channel.clone();
+        let current_thinking_message = Arc::new(Mutex::new(None::<(Uuid, String)>));
+        let forwarder_thinking_message = Arc::clone(&current_thinking_message);
         let sse_forwarder = Some(tokio::spawn(async move {
             while let Some(delta) = stream_rx.recv().await {
                 match delta {
                     crate::llm::StreamDelta::TextDelta(content) => {
+                        *forwarder_thinking_message.lock().await = None;
                         if let Some(ref emitter) = emitter {
                             emitter.emit_for_user(
                                 &user_id,
@@ -162,19 +194,52 @@ impl Agent {
                             .sanitize_tool_output("agent_narrative", &content)
                             .content;
                         if !sanitized.trim().is_empty() {
-                            let mut sess = thinking_session.lock().await;
-                            if let Some(thread) = sess.threads.get_mut(&thread_id)
-                                && let Some(turn) = thread.last_turn_mut()
+                            if let Some(ref store) = store
+                                && let Ok(true) = store
+                                    .ensure_conversation(thread_id, &channel, &user_id, None)
+                                    .await
                             {
-                                turn.narrative = Some(sanitized.clone());
+                                let mut current = forwarder_thinking_message.lock().await;
+                                match current.as_mut() {
+                                    Some((message_id, existing)) => {
+                                        let merged =
+                                            merge_streamed_thinking_segment(existing, &sanitized);
+                                        if merged != *existing
+                                            && store
+                                                .update_conversation_message_content(
+                                                    *message_id,
+                                                    &merged,
+                                                )
+                                                .await
+                                                .is_ok()
+                                        {
+                                            *existing = merged;
+                                        }
+                                    }
+                                    None => {
+                                        if let Ok(message_id) = store
+                                            .add_conversation_message(
+                                                thread_id, "thinking", &sanitized,
+                                            )
+                                            .await
+                                        {
+                                            *current = Some((message_id, sanitized.clone()));
+                                        }
+                                    }
+                                }
                             }
                         }
 
                         if let Some(ref emitter) = emitter {
+                            let message_id = {
+                                let current = forwarder_thinking_message.lock().await;
+                                current.as_ref().map(|(id, _)| id.to_string())
+                            };
                             emitter.emit_for_user(
                                 &user_id,
                                 steward_common::AppEvent::Thinking {
                                     message: content,
+                                    message_id,
                                     thread_id: tid.clone(),
                                 },
                             );
@@ -233,6 +298,7 @@ impl Agent {
             nudge_at,
             force_text_at,
             user_tz,
+            current_thinking_message,
         };
 
         let mut reason_ctx = ReasoningContext::new()
@@ -320,6 +386,7 @@ struct ChatDelegate<'a> {
     nudge_at: usize,
     force_text_at: usize,
     user_tz: chrono_tz::Tz,
+    current_thinking_message: Arc<Mutex<Option<(Uuid, String)>>>,
 }
 
 #[async_trait]
@@ -339,6 +406,8 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         reason_ctx: &mut ReasoningContext,
         iteration: usize,
     ) -> Option<LoopOutcome> {
+        *self.current_thinking_message.lock().await = None;
+
         // Inject a nudge message when approaching the iteration limit so the
         // LLM is aware it should produce a final answer on the next turn.
         if iteration == self.nudge_at {
@@ -1443,7 +1512,18 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_stream::wrappers::ReceiverStream;
 
-    use super::check_auth_required;
+    use super::{check_auth_required, merge_streamed_thinking_segment};
+
+    #[test]
+    fn merge_streamed_thinking_segment_is_utf8_safe() {
+        let existing = "详细介绍你自己";
+        let incoming = "己（this is the first message）";
+
+        assert_eq!(
+            merge_streamed_thinking_segment(existing, incoming),
+            "详细介绍你自己（this is the first message）"
+        );
+    }
 
     /// Minimal LLM provider for unit tests that always returns a static response.
     struct StaticLlmProvider;

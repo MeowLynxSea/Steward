@@ -159,12 +159,14 @@ fn build_thread_messages_from_db_messages(
     let mut messages = Vec::new();
     let mut next_turn_number = 0usize;
     let mut active_turn_number = 0usize;
+    let mut has_explicit_thinking_in_turn = false;
 
     for msg in db_messages {
         match msg.role.as_str() {
             "user" => {
                 active_turn_number = next_turn_number;
                 next_turn_number += 1;
+                has_explicit_thinking_in_turn = false;
                 messages.push(steward_core::ipc::ThreadMessageResponse {
                     id: msg.id,
                     kind: "message".to_string(),
@@ -176,6 +178,7 @@ fn build_thread_messages_from_db_messages(
                 });
             }
             "thinking" => {
+                has_explicit_thinking_in_turn = true;
                 messages.push(steward_core::ipc::ThreadMessageResponse {
                     id: msg.id,
                     kind: "thinking".to_string(),
@@ -218,7 +221,7 @@ fn build_thread_messages_from_db_messages(
                     _ => continue,
                 };
 
-                if let Some(narrative) = narrative {
+                if !has_explicit_thinking_in_turn && let Some(narrative) = narrative {
                     messages.push(steward_core::ipc::ThreadMessageResponse {
                         id: Uuid::new_v4(),
                         kind: "thinking".to_string(),

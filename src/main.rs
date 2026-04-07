@@ -64,8 +64,12 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Response { content, .. } => {
                 serde_json::json!({ "content": content })
             }
-            steward_common::AppEvent::Thinking { message, .. } => {
-                serde_json::json!({ "message": message })
+            steward_common::AppEvent::Thinking {
+                message,
+                message_id,
+                ..
+            } => {
+                serde_json::json!({ "message": message, "message_id": message_id })
             }
             steward_common::AppEvent::ToolStarted {
                 name,

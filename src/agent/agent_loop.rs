@@ -1562,6 +1562,7 @@ impl Agent {
                 &message,
                 steward_common::AppEvent::Thinking {
                     message: "正在处理...".to_string(),
+                    message_id: None,
                     thread_id: message.thread_id.clone(),
                 },
             );
@@ -2359,6 +2360,7 @@ fn status_update_to_app_event(
     match status {
         StatusUpdate::Thinking(message) => Some(steward_common::AppEvent::Thinking {
             message: message.clone(),
+            message_id: None,
             thread_id,
         }),
         StatusUpdate::ToolStarted {
