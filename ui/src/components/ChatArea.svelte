@@ -10,13 +10,10 @@
     Shield,
     Sun,
     Wrench,
-    X,
     Zap,
     Image,
     Brain,
-    Sparkles,
-    AlertCircle,
-    CheckCircle2
+    Sparkles
   } from "lucide-svelte";
   import type {
     SessionDetail,
@@ -70,12 +67,14 @@
   let showModelDropdown = $state(false);
   let darkMode = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
-  let expandedThinkingGroups = $state<Set<string>>(new Set());
-  let reasoningExpanded = $state(false);
   let imagesExpanded = $state(false);
   let animatedAssistantId = $state<string | null>(null);
   let animatedAssistantText = $state("");
   let typingTimer: ReturnType<typeof setTimeout> | null = null;
+  let settlingAuxiliarySummaries = $state<Set<string>>(new Set());
+  let lastLiveThinkingId = $state<string | null>(null);
+
+  const auxiliarySummaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const hasMessages = $derived(session && session.thread_messages.length > 0);
   const hasStreamingContent = $derived(
@@ -125,6 +124,20 @@
       ) ?? null
     );
   });
+  const liveThinkingMessageId = $derived.by(() => {
+    if (!streaming.thinking || !session) {
+      return null;
+    }
+
+    for (let i = session.thread_messages.length - 1; i >= 0; i--) {
+      const message = session.thread_messages[i];
+      if (message.kind === "thinking") {
+        return message.id;
+      }
+    }
+
+    return null;
+  });
 
   function scrollToBottom() {
     if (messageListRef) {
@@ -151,20 +164,6 @@
       next.add(id);
     }
     expandedToolCalls = next;
-  }
-
-  function toggleThinkingGroupExpand(id: string) {
-    const next = new Set(expandedThinkingGroups);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
-    expandedThinkingGroups = next;
-  }
-
-  function toggleReasoningExpand() {
-    reasoningExpanded = !reasoningExpanded;
   }
 
   function toggleImagesExpand() {
@@ -260,15 +259,15 @@
     return `${compact.slice(0, limit).trim()}...`;
   }
 
-  function buildThinkingSummary(segments: string[], isThinking: boolean) {
-    if (segments.length === 0) {
-      return isThinking ? "思考中..." : "";
+  function buildTrailingSummary(value: string, limit = 92) {
+    const compact = value.replace(/\s+/gu, " ").trim();
+    if (!compact) {
+      return "";
     }
-    const first = buildCompactSummary(segments[0], 84);
-    if (segments.length === 1) {
-      return first;
+    if (compact.length <= limit) {
+      return compact;
     }
-    return `${first} · ${segments.length} 段`;
+    return `...${compact.slice(-limit).trim()}`;
   }
 
   function toolCallSummary(tool: TimelineToolCall) {
@@ -293,26 +292,73 @@
     return "已结束";
   }
 
-  function toolGroupSummary(messages: ThreadMessage[]) {
-    if (messages.length === 0) {
-      return "";
-    }
-    const runningCount = messages.filter((message) => message.tool_call?.status === "running").length;
-    const failedCount = messages.filter((message) => message.tool_call?.status === "failed").length;
-    if (runningCount > 0) {
-      return `${messages.length} 个工具调用 · ${runningCount} 个进行中`;
-    }
-    if (failedCount > 0) {
-      return `${messages.length} 个工具调用 · ${failedCount} 个失败`;
-    }
-    return `${messages.length} 个工具调用`;
-  }
-
   function stopTypingTimer() {
     if (typingTimer !== null) {
       clearTimeout(typingTimer);
       typingTimer = null;
     }
+  }
+
+  function clearAuxiliarySummaryTimer(id: string) {
+    const existing = auxiliarySummaryTimers.get(id);
+    if (existing !== undefined) {
+      clearTimeout(existing);
+      auxiliarySummaryTimers.delete(id);
+    }
+  }
+
+  function markAuxiliarySummarySettling(id: string) {
+    clearAuxiliarySummaryTimer(id);
+    const next = new Set(settlingAuxiliarySummaries);
+    next.add(id);
+    settlingAuxiliarySummaries = next;
+
+    const timer = setTimeout(() => {
+      const updated = new Set(settlingAuxiliarySummaries);
+      updated.delete(id);
+      settlingAuxiliarySummaries = updated;
+      auxiliarySummaryTimers.delete(id);
+    }, 260);
+
+    auxiliarySummaryTimers.set(id, timer);
+  }
+
+  function isSettlingAuxiliarySummary(id: string) {
+    return settlingAuxiliarySummaries.has(id);
+  }
+
+  function isLiveThinkingMessage(message: ThreadMessage) {
+    return message.kind === "thinking" && message.id === liveThinkingMessageId;
+  }
+
+  function thinkingInlineSummary(message: ThreadMessage) {
+    const normalized = normalizeThinkingTranscript(message.content ?? "");
+    if (isLiveThinkingMessage(message)) {
+      return buildTrailingSummary(normalized, 92) || "思考中...";
+    }
+    return buildCompactSummary(normalized, 92);
+  }
+
+  function renderAuxiliaryDetail(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+
+    const looksLikeJson =
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"));
+
+    if (looksLikeJson) {
+      try {
+        const formatted = JSON.stringify(JSON.parse(trimmed), null, 2);
+        return renderMarkdown(`\`\`\`json\n${formatted}\n\`\`\``);
+      } catch {
+        // Fall back to markdown rendering for non-strict JSON payloads.
+      }
+    }
+
+    return renderMarkdown(trimmed);
   }
 
   function displayedAssistantContent(message: ThreadMessage) {
@@ -370,8 +416,20 @@
     return () => stopTypingTimer();
   });
 
+  $effect(() => {
+    const currentLiveThinkingId = liveThinkingMessageId;
+    if (lastLiveThinkingId && lastLiveThinkingId !== currentLiveThinkingId) {
+      markAuxiliarySummarySettling(lastLiveThinkingId);
+    }
+    lastLiveThinkingId = currentLiveThinkingId;
+  });
+
   onDestroy(() => {
     stopTypingTimer();
+    for (const timer of auxiliarySummaryTimers.values()) {
+      clearTimeout(timer);
+    }
+    auxiliarySummaryTimers.clear();
   });
 </script>
 
@@ -455,7 +513,6 @@
             <div class="assistant-text">
               <div class="tool-calls-container inline-tool-call">
                 <div class="tool-call-card tool-group-card aux-group-card">
-                  <div class="tool-group-summary">{entry.messages.length} 个执行步骤</div>
                   <div class="aux-scroll-area">
                   {#each entry.messages as message, groupIndex}
                     <div class="tool-group-row">
@@ -465,41 +522,44 @@
                             <div class="tool-icon thinking">
                               <Brain size={14} strokeWidth={2} />
                             </div>
-                            <div class="tool-call-copy">
-                              <div class="tool-call-title-row">
-                                <span class="tool-name">思考过程</span>
-                              </div>
-                              <div class="tool-summary">
-                                {buildThinkingSummary(
-                                  [normalizeThinkingTranscript(message.content ?? "")].filter(Boolean),
-                                  false
-                                )}
+                            <div class="tool-call-copy tool-row-copy">
+                              <div class="tool-row-inline">
+                                <span class="tool-name">思考</span>
+                                <span
+                                  class="tool-inline-summary"
+                                  class:live-tool-summary={isLiveThinkingMessage(message)}
+                                  class:summary-settle={isSettlingAuxiliarySummary(message.id)}
+                                >
+                                  {thinkingInlineSummary(message)}
+                                </span>
                               </div>
                             </div>
                           {:else}
-                            {#if message.tool_call?.status === "running"}
-                              <div class="tool-spinner">
-                                <Loader size={14} strokeWidth={2} />
-                              </div>
-                            {:else if message.tool_call?.status === "completed"}
-                              <div class="tool-icon success">
-                                <CheckCircle2 size={14} strokeWidth={2} />
-                              </div>
-                            {:else}
-                              <div class="tool-icon error">
-                                <AlertCircle size={14} strokeWidth={2} />
-                              </div>
-                            {/if}
-                            <div class="tool-call-copy">
-                              <div class="tool-call-title-row">
+                            <div class="tool-icon tool-kind-icon">
+                              <Wrench size={14} strokeWidth={2} />
+                            </div>
+                            <div class="tool-call-copy tool-row-copy">
+                              <div class="tool-row-inline">
                                 <span class="tool-name">{message.tool_call?.name}</span>
-                                <span class="tool-duration">{toolCallDuration(message.tool_call as TimelineToolCall, message.created_at)}</span>
+                                {#if message.tool_call?.status === "running"}
+                                  <span class="tool-inline-loader" aria-label="工具调用进行中">
+                                    <Loader size={13} strokeWidth={2} />
+                                  </span>
+                                {/if}
+                                <span
+                                  class="tool-inline-summary"
+                                  class:tool-inline-error={message.tool_call?.status === "failed"}
+                                >
+                                  {toolCallSummary(message.tool_call as TimelineToolCall)}
+                                </span>
                               </div>
-                              <div class="tool-summary">{toolCallSummary(message.tool_call as TimelineToolCall)}</div>
                             </div>
                           {/if}
                         </div>
                         <div class="tool-call-right">
+                          {#if message.kind === "tool_call" && message.tool_call}
+                            <span class="tool-duration">{toolCallDuration(message.tool_call as TimelineToolCall, message.created_at)}</span>
+                          {/if}
                           <ChevronRight size={14} strokeWidth={2} class="expand-icon {expandedToolCalls.has(message.id) ? 'expanded' : ''}" />
                         </div>
                       </button>
@@ -507,31 +567,41 @@
                         <div class="tool-call-body slide-down">
                           {#if message.kind === "thinking"}
                             <div class="thinking-segment">
-                              <div class="thinking-text">{normalizeThinkingTranscript(message.content ?? "")}</div>
+                              <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                                {@html renderAuxiliaryDetail(normalizeThinkingTranscript(message.content ?? ""))}
+                              </div>
                             </div>
                           {:else}
                             {#if message.tool_call?.rationale}
                               <div class="tool-detail">
                                 <span class="tool-detail-label">原因</span>
-                                <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
+                                <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                                  {@html renderAuxiliaryDetail(message.tool_call.rationale)}
+                                </div>
                               </div>
                             {/if}
                             {#if message.tool_call?.parameters}
                               <div class="tool-detail">
                                 <span class="tool-detail-label">参数</span>
-                                <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
+                                <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                                  {@html renderAuxiliaryDetail(message.tool_call.parameters)}
+                                </div>
                               </div>
                             {/if}
                             {#if message.tool_call?.resultPreview}
                               <div class="tool-detail">
                                 <span class="tool-detail-label">结果</span>
-                                <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
+                                <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                                  {@html renderAuxiliaryDetail(message.tool_call.resultPreview)}
+                                </div>
                               </div>
                             {/if}
                             {#if message.tool_call?.error}
                               <div class="tool-detail error-detail">
                                 <span class="tool-detail-label">错误</span>
-                                <pre class="tool-detail-content">{message.tool_call.error}</pre>
+                                <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                                  {@html renderAuxiliaryDetail(message.tool_call.error)}
+                                </div>
                               </div>
                             {/if}
                           {/if}
@@ -1047,7 +1117,7 @@
     background: var(--bg-surface);
     border: 1px solid var(--border-default);
     overflow: hidden;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   }
 
   .tool-call-card.running {
@@ -1116,6 +1186,11 @@
     animation: spin 1.2s linear infinite;
   }
 
+  .tool-icon {
+    display: flex;
+    flex-shrink: 0;
+  }
+
   .tool-icon.success {
     color: var(--accent-green);
     display: flex;
@@ -1156,6 +1231,8 @@
   .tool-call-right {
     color: var(--text-muted);
     display: flex;
+    align-items: center;
+    gap: 8px;
     transition: transform 0.2s ease;
   }
 
@@ -1198,16 +1275,7 @@
   }
 
   .tool-group-card {
-    padding: 6px 0;
-  }
-
-  .tool-group-summary {
-    padding: 4px 14px 8px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    padding: 0;
   }
 
   .tool-group-row {
@@ -1216,13 +1284,16 @@
   }
 
   .tool-group-row-header {
-    padding-top: 8px;
-    padding-bottom: 8px;
+    border-radius: 0;
+  }
+
+  .tool-group-row-header .tool-call-left {
+    align-items: center;
   }
 
   .tool-group-divider {
     height: 1px;
-    margin: 2px 14px;
+    margin: 0;
     background: var(--border-subtle);
   }
 
@@ -1263,16 +1334,35 @@
     font-size: 12px;
     line-height: 1.5;
     color: var(--text-secondary);
-    font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
-    white-space: pre-wrap;
-    word-break: break-all;
+    white-space: normal;
+    word-break: break-word;
     max-height: 200px;
     overflow-y: auto;
+    transition: background-color 0.18s ease, color 0.18s ease;
   }
 
   .error-detail .tool-detail-content {
     background: var(--accent-danger);
     color: var(--accent-danger-text);
+  }
+
+  .auxiliary-detail {
+    overflow-x: hidden;
+  }
+
+  .detail-enter {
+    animation: detailFadeIn 0.2s ease both;
+  }
+
+  @keyframes detailFadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
   /* Image gallery */
@@ -1463,6 +1553,70 @@
   .aux-scroll-area::-webkit-scrollbar-thumb {
     background-color: var(--border-default);
     border-radius: 4px;
+  }
+
+  .tool-row-copy {
+    display: block;
+  }
+
+  .tool-row-inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .tool-kind-icon {
+    color: var(--text-secondary);
+  }
+
+  .tool-inline-loader {
+    display: inline-flex;
+    color: var(--accent-gold);
+    flex-shrink: 0;
+    animation: spin 1.1s linear infinite;
+  }
+
+  .tool-inline-summary {
+    min-width: 0;
+    flex: 1;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: color 0.18s ease;
+  }
+
+  .tool-inline-summary::before {
+    content: "·";
+    margin-right: 6px;
+    color: var(--text-muted);
+  }
+
+  .live-tool-summary {
+    color: var(--text-primary);
+  }
+
+  .summary-settle {
+    animation: auxiliarySummarySettle 0.26s ease;
+  }
+
+  .tool-inline-error {
+    color: var(--accent-danger-text);
+  }
+
+  @keyframes auxiliarySummarySettle {
+    from {
+      opacity: 0.45;
+      transform: translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
   }
 
 </style>
