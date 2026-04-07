@@ -91,7 +91,12 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                     "parameters": parameters
                 })
             }
-            steward_common::AppEvent::ToolResult { name, tool_call_id, preview, .. } => {
+            steward_common::AppEvent::ToolResult {
+                name,
+                tool_call_id,
+                preview,
+                ..
+            } => {
                 serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "preview": preview })
             }
             steward_common::AppEvent::StreamChunk { content, .. } => {

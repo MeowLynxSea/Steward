@@ -573,6 +573,19 @@ impl Agent {
                     narrative.as_deref(),
                 )
                 .await;
+                if tool_calls.is_empty()
+                    && let Some(narrative) = narrative
+                        .as_deref()
+                        .filter(|value| !value.trim().is_empty())
+                {
+                    self.persist_thinking_message(
+                        thread_id,
+                        &message.channel,
+                        &message.user_id,
+                        narrative,
+                    )
+                    .await;
+                }
                 self.persist_assistant_response(
                     thread_id,
                     &message.channel,
@@ -799,6 +812,35 @@ impl Agent {
         }
     }
 
+    /// Persist a standalone thinking/narrative message when a turn has reasoning
+    /// but no tool-calls wrapper row to carry it.
+    pub(super) async fn persist_thinking_message(
+        &self,
+        thread_id: Uuid,
+        channel: &str,
+        user_id: &str,
+        narrative: &str,
+    ) {
+        let store = match self.store() {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+
+        if !self
+            .ensure_writable_conversation(&store, thread_id, channel, user_id)
+            .await
+        {
+            return;
+        }
+
+        if let Err(e) = store
+            .add_conversation_message(thread_id, "thinking", narrative)
+            .await
+        {
+            tracing::warn!("Failed to persist thinking message: {}", e);
+        }
+    }
+
     async fn generate_follow_up_suggestions(&self, recent_turns: &[Turn]) -> Vec<String> {
         if recent_turns.is_empty() {
             return Vec::new();
@@ -810,10 +852,7 @@ impl Agent {
             .map(|turn| {
                 let mut block = format!("User: {}", truncate_preview(&turn.user_input, 500));
                 if let Some(response) = turn.response.as_ref() {
-                    block.push_str(&format!(
-                        "\nAssistant: {}",
-                        truncate_preview(response, 700)
-                    ));
+                    block.push_str(&format!("\nAssistant: {}", truncate_preview(response, 700)));
                 }
                 block
             })
@@ -883,22 +922,24 @@ impl Agent {
                 });
                 if let Some(ref result) = tc.result {
                     let preview = match result {
-                        serde_json::Value::String(s) => truncate_preview(s, 500),
-                        other => truncate_preview(&other.to_string(), 500),
+                        serde_json::Value::String(s) => s.clone(),
+                        other => serde_json::to_string_pretty(other)
+                            .unwrap_or_else(|_| other.to_string()),
                     };
                     obj["result_preview"] = serde_json::Value::String(preview);
-                    // Store full result (truncated to ~1000 chars) for LLM context rebuild
+                    // Store full result for history/UI rebuild.
                     let full_result = match result {
-                        serde_json::Value::String(s) => truncate_preview(s, 1000),
-                        other => truncate_preview(&other.to_string(), 1000),
+                        serde_json::Value::String(s) => s.clone(),
+                        other => serde_json::to_string_pretty(other)
+                            .unwrap_or_else(|_| other.to_string()),
                     };
                     obj["result"] = serde_json::Value::String(full_result);
                 }
                 if let Some(ref error) = tc.error {
-                    obj["error"] = serde_json::Value::String(truncate_preview(error, 200));
+                    obj["error"] = serde_json::Value::String(error.clone());
                 }
                 if let Some(ref rationale) = tc.rationale {
-                    obj["rationale"] = serde_json::Value::String(truncate_preview(rationale, 500));
+                    obj["rationale"] = serde_json::Value::String(rationale.clone());
                 }
                 if let Some(ref tool_call_id) = tc.tool_call_id {
                     obj["tool_call_id"] =
@@ -912,7 +953,7 @@ impl Agent {
         // safety: no byte-index slicing here; comment describes JSON shape
         let wrapper = if let Some(n) = narrative {
             serde_json::json!({
-                "narrative": truncate_preview(n, 1000),
+                "narrative": n,
                 "calls": summaries,
             })
         } else {
@@ -1322,8 +1363,7 @@ impl Agent {
             // Replay deferred tool calls from the same assistant message so
             // every tool_use ID gets a matching tool_result before the next
             // LLM call.
-            if !deferred_tool_calls.is_empty() {
-            }
+            if !deferred_tool_calls.is_empty() {}
 
             // === Phase 1: Preflight (sequential) ===
             // Walk deferred tools checking approval. Collect runnable
@@ -1679,7 +1719,8 @@ impl Agent {
                 Ok(AgenticLoopResult::Response(response)) => {
                     let response = crate::agent::dispatcher::strip_suggestions(&response);
                     thread.complete_turn(&response);
-                    let recent_turns: Vec<Turn> = thread.turns.iter().rev().take(4).cloned().collect();
+                    let recent_turns: Vec<Turn> =
+                        thread.turns.iter().rev().take(4).cloned().collect();
                     let (turn_number, tool_calls, narrative) = thread
                         .turns
                         .last()
@@ -1695,6 +1736,19 @@ impl Agent {
                         narrative.as_deref(),
                     )
                     .await;
+                    if tool_calls.is_empty()
+                        && let Some(narrative) = narrative
+                            .as_deref()
+                            .filter(|value| !value.trim().is_empty())
+                    {
+                        self.persist_thinking_message(
+                            thread_id,
+                            &message.channel,
+                            &message.user_id,
+                            narrative,
+                        )
+                        .await;
+                    }
                     self.persist_assistant_response(
                         thread_id,
                         &message.channel,
@@ -2017,9 +2071,13 @@ impl Agent {
             .session_manager
             .get_or_create_session(&message.user_id)
             .await;
-        let mut sess = session.lock().await;
-        let thread = sess.create_thread();
-        let thread_id = thread.id;
+        let thread_id = {
+            let mut sess = session.lock().await;
+            sess.create_thread().id
+        };
+        self.session_manager
+            .persist_session_snapshot(&message.user_id, &session)
+            .await;
         Ok(SubmissionResult::ok_with_message(format!(
             "New thread: {}",
             thread_id
@@ -2035,9 +2093,15 @@ impl Agent {
             .session_manager
             .get_or_create_session(&message.user_id)
             .await;
-        let mut sess = session.lock().await;
+        let switched = {
+            let mut sess = session.lock().await;
+            sess.switch_thread(target_thread_id)
+        };
 
-        if sess.switch_thread(target_thread_id) {
+        if switched {
+            self.session_manager
+                .persist_session_snapshot(&message.user_id, &session)
+                .await;
             Ok(SubmissionResult::ok_with_message(format!(
                 "Switched to thread {}",
                 target_thread_id

@@ -8,6 +8,7 @@ use uuid::Uuid;
 use steward_core::agent::session::Session;
 use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
+use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
     CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
@@ -147,12 +148,138 @@ fn normalize_tool_output_text(value: &str) -> String {
 
 fn format_tool_result_preview(result: &serde_json::Value) -> String {
     match result {
-        serde_json::Value::String(value) => {
-            let normalized = normalize_tool_output_text(value);
-            steward_common::truncate_preview(&normalized, 500)
-        }
-        other => steward_common::truncate_preview(&other.to_string(), 500),
+        serde_json::Value::String(value) => normalize_tool_output_text(value),
+        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
     }
+}
+
+fn build_thread_messages_from_db_messages(
+    db_messages: &[ConversationMessage],
+) -> Vec<steward_core::ipc::ThreadMessageResponse> {
+    let mut messages = Vec::new();
+    let mut next_turn_number = 0usize;
+    let mut active_turn_number = 0usize;
+
+    for msg in db_messages {
+        match msg.role.as_str() {
+            "user" => {
+                active_turn_number = next_turn_number;
+                next_turn_number += 1;
+                messages.push(steward_core::ipc::ThreadMessageResponse {
+                    id: msg.id,
+                    kind: "message".to_string(),
+                    role: Some("user".to_string()),
+                    content: Some(msg.content.clone()),
+                    created_at: msg.created_at,
+                    turn_number: active_turn_number,
+                    tool_call: None,
+                });
+            }
+            "thinking" => {
+                messages.push(steward_core::ipc::ThreadMessageResponse {
+                    id: msg.id,
+                    kind: "thinking".to_string(),
+                    role: None,
+                    content: Some(msg.content.clone()),
+                    created_at: msg.created_at,
+                    turn_number: active_turn_number,
+                    tool_call: None,
+                });
+            }
+            "assistant" => {
+                messages.push(steward_core::ipc::ThreadMessageResponse {
+                    id: msg.id,
+                    kind: "message".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: Some(msg.content.clone()),
+                    created_at: msg.created_at,
+                    turn_number: active_turn_number,
+                    tool_call: None,
+                });
+            }
+            "tool_calls" => {
+                let parsed = match serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+
+                let (calls, narrative) = match parsed {
+                    serde_json::Value::Array(arr) => (arr, None),
+                    serde_json::Value::Object(obj) => (
+                        obj.get("calls")
+                            .and_then(|value| value.as_array())
+                            .cloned()
+                            .unwrap_or_default(),
+                        obj.get("narrative")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_owned)
+                            .filter(|value| !value.trim().is_empty()),
+                    ),
+                    _ => continue,
+                };
+
+                if let Some(narrative) = narrative {
+                    messages.push(steward_core::ipc::ThreadMessageResponse {
+                        id: Uuid::new_v4(),
+                        kind: "thinking".to_string(),
+                        role: None,
+                        content: Some(narrative),
+                        created_at: msg.created_at,
+                        turn_number: active_turn_number,
+                        tool_call: None,
+                    });
+                }
+
+                for call in calls {
+                    let parameters = call.get("parameters").and_then(format_tool_parameters);
+                    let result_preview = call
+                        .get("result")
+                        .or_else(|| call.get("result_preview"))
+                        .map(|value| match value {
+                            serde_json::Value::String(text) => normalize_tool_output_text(text),
+                            other => serde_json::to_string_pretty(other)
+                                .unwrap_or_else(|_| other.to_string()),
+                        });
+                    let error = call
+                        .get("error")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned);
+                    let rationale = call
+                        .get("rationale")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned);
+
+                    messages.push(steward_core::ipc::ThreadMessageResponse {
+                        id: Uuid::new_v4(),
+                        kind: "tool_call".to_string(),
+                        role: None,
+                        content: None,
+                        created_at: msg.created_at,
+                        turn_number: active_turn_number,
+                        tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
+                            name: call
+                                .get("name")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                            status: if error.is_some() {
+                                "failed".to_string()
+                            } else {
+                                "completed".to_string()
+                            },
+                            parameters,
+                            result_preview,
+                            error,
+                            rationale,
+                        }),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    messages
 }
 
 fn tool_status(tool_call: &steward_core::agent::session::TurnToolCall) -> String {
@@ -182,7 +309,11 @@ fn build_thread_messages(
                 turn_number: turn.turn_number,
                 tool_call: None,
             });
-            if let Some(narrative) = turn.narrative.as_ref().filter(|value| !value.trim().is_empty()) {
+            if let Some(narrative) = turn
+                .narrative
+                .as_ref()
+                .filter(|value| !value.trim().is_empty())
+            {
                 msgs.push(steward_core::ipc::ThreadMessageResponse {
                     id: Uuid::new_v4(),
                     kind: "thinking".to_string(),
@@ -194,8 +325,7 @@ fn build_thread_messages(
                 });
             }
             for tool_call in &turn.tool_calls {
-                let result_preview =
-                    tool_call.result.as_ref().map(format_tool_result_preview);
+                let result_preview = tool_call.result.as_ref().map(format_tool_result_preview);
                 msgs.push(steward_core::ipc::ThreadMessageResponse {
                     id: Uuid::new_v4(),
                     kind: "tool_call".to_string(),
@@ -299,38 +429,65 @@ pub async fn get_session(
         .ok_or_else(|| "Session not found".to_string())?;
 
     // Get or create a thread if none exists
-    let thread_id = {
+    let (thread_id, created_thread) = {
         let mut sess = session.lock().await;
         let thread_id = sess
             .active_thread
             .or_else(|| sess.threads.keys().copied().next());
 
         match thread_id {
-            Some(tid) => tid,
+            Some(tid) => (tid, false),
             None => {
                 // Create a new thread if none exists
                 let new_thread = sess.create_thread();
                 tracing::debug!("Created new thread {} for session", new_thread.id);
-                new_thread.id
+                (new_thread.id, true)
             }
         }
     };
 
-    let sess = session.lock().await;
-    let thread = sess
-        .threads
-        .get(&thread_id)
-        .ok_or_else(|| "Thread not found".to_string())?;
+    if created_thread {
+        session_manager
+            .persist_session_snapshot(&state.owner_id, &session)
+            .await;
+    }
 
-    let thread_messages = build_thread_messages(thread);
+    let (summary, thread) = {
+        let sess = session.lock().await;
+        let thread = sess
+            .threads
+            .get(&thread_id)
+            .ok_or_else(|| "Thread not found".to_string())?
+            .clone();
 
+        let summary = steward_core::ipc::SessionSummaryResponse {
+            id: sess.id,
+            title: session_title(&sess),
+            turn_count: thread.turns.len() as i64,
+            started_at: sess.created_at,
+            last_activity: sess.last_active_at,
+            active_thread_id: Some(thread_id),
+        };
+
+        (summary, thread)
+    };
+
+    let thread_messages = if let Some(db) = state.db.as_ref() {
+        match db.list_conversation_messages(thread_id).await {
+            Ok(db_messages) if !db_messages.is_empty() => {
+                build_thread_messages_from_db_messages(&db_messages)
+            }
+            _ => build_thread_messages(&thread),
+        }
+    } else {
+        build_thread_messages(&thread)
+    };
     let summary = steward_core::ipc::SessionSummaryResponse {
-        id: sess.id,
-        title: session_title(&sess),
-        turn_count: thread.turns.len() as i64,
-        started_at: sess.created_at,
-        last_activity: sess.last_active_at,
-        active_thread_id: Some(thread_id),
+        turn_count: thread_messages
+            .iter()
+            .filter(|message| message.kind == "message" && message.role.as_deref() == Some("user"))
+            .count() as i64,
+        ..summary
     };
 
     let active_thread_task = state.task_runtime.get_task(thread_id).await;
@@ -371,7 +528,7 @@ pub async fn send_session_message(
     tracing::info!(session_id = %id, "Got session, acquiring lock...");
 
     // Get or create a thread if none exists
-    let thread_id = {
+    let (thread_id, created_thread) = {
         let lock_result =
             tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
         if lock_result.is_err() {
@@ -385,14 +542,20 @@ pub async fn send_session_message(
             .or_else(|| sess.threads.keys().copied().next());
 
         match tid {
-            Some(id) => id,
+            Some(id) => (id, false),
             None => {
                 let new_thread = sess.create_thread();
                 tracing::debug!("Created new thread {} for session", new_thread.id);
-                new_thread.id
+                (new_thread.id, true)
             }
         }
     };
+
+    if created_thread {
+        session_manager
+            .persist_session_snapshot(&state.owner_id, &session)
+            .await;
+    }
 
     let sess_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
     if sess_result.is_err() {

@@ -139,43 +139,50 @@ impl Agent {
 
         // Spawn the Tauri forwarding task (needs owned clones).
         let emitter = self.emitter().cloned();
-        let sse_forwarder = if emitter.is_some() {
-            let user_id = message.user_id.clone();
-            let tid = message.thread_id.clone();
-            Some(tokio::spawn(async move {
-                while let Some(delta) = stream_rx.recv().await {
-                    match delta {
-                        crate::llm::StreamDelta::TextDelta(content) => {
-                            if let Some(ref emitter) = emitter {
-                                emitter.emit_for_user(
-                                    &user_id,
-                                    steward_common::AppEvent::StreamChunk {
-                                        content,
-                                        thread_id: tid.clone(),
-                                    },
-                                );
+        let user_id = message.user_id.clone();
+        let tid = message.thread_id.clone().or(Some(thread_id.to_string()));
+        let thinking_session = Arc::clone(&session);
+        let safety = Arc::clone(self.safety());
+        let sse_forwarder = Some(tokio::spawn(async move {
+            while let Some(delta) = stream_rx.recv().await {
+                match delta {
+                    crate::llm::StreamDelta::TextDelta(content) => {
+                        if let Some(ref emitter) = emitter {
+                            emitter.emit_for_user(
+                                &user_id,
+                                steward_common::AppEvent::StreamChunk {
+                                    content,
+                                    thread_id: tid.clone(),
+                                },
+                            );
+                        }
+                    }
+                    crate::llm::StreamDelta::ThinkingDelta(content) => {
+                        let sanitized = safety
+                            .sanitize_tool_output("agent_narrative", &content)
+                            .content;
+                        if !sanitized.trim().is_empty() {
+                            let mut sess = thinking_session.lock().await;
+                            if let Some(thread) = sess.threads.get_mut(&thread_id)
+                                && let Some(turn) = thread.last_turn_mut()
+                            {
+                                turn.narrative = Some(sanitized.clone());
                             }
                         }
-                        crate::llm::StreamDelta::ThinkingDelta(content) => {
-                            if let Some(ref emitter) = emitter {
-                                emitter.emit_for_user(
-                                    &user_id,
-                                    steward_common::AppEvent::Thinking {
-                                        message: content,
-                                        thread_id: tid.clone(),
-                                    },
-                                );
-                            }
+
+                        if let Some(ref emitter) = emitter {
+                            emitter.emit_for_user(
+                                &user_id,
+                                steward_common::AppEvent::Thinking {
+                                    message: content,
+                                    thread_id: tid.clone(),
+                                },
+                            );
                         }
                     }
                 }
-            }))
-        } else {
-            // No emitter — just drain so the sender never blocks.
-            Some(tokio::spawn(async move {
-                while stream_rx.recv().await.is_some() {}
-            }))
-        };
+            }
+        }));
 
         // Pass channel-specific conversation context to the LLM.
         // This helps the agent know who/group it's talking to.
@@ -739,15 +746,15 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             for (pf_idx, tc) in &runnable {
                 let _ = self
                     .agent
-                        .send_channel_status(
-                            &self.message.channel,
-                            StatusUpdate::ToolStarted {
-                                name: tc.name.clone(),
-                                tool_call_id: tc.id.clone(),
-                                parameters: Some(tc.arguments.to_string()),
-                            },
-                            &self.message.metadata,
-                        )
+                    .send_channel_status(
+                        &self.message.channel,
+                        StatusUpdate::ToolStarted {
+                            name: tc.name.clone(),
+                            tool_call_id: tc.id.clone(),
+                            parameters: Some(tc.arguments.to_string()),
+                        },
+                        &self.message.metadata,
+                    )
                     .await;
 
                 let result = self
@@ -758,14 +765,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
                 let disp_tool = self.agent.tools().get(&tc.name).await;
                 let _ = self
                     .agent
-                        .send_channel_status(
-                            &self.message.channel,
-                            StatusUpdate::tool_completed(
-                                tc.name.clone(),
-                                tc.id.clone(),
-                                &result,
-                                &tc.arguments,
-                                disp_tool.as_deref(),
+                    .send_channel_status(
+                        &self.message.channel,
+                        StatusUpdate::tool_completed(
+                            tc.name.clone(),
+                            tc.id.clone(),
+                            &result,
+                            &tc.arguments,
+                            disp_tool.as_deref(),
                         ),
                         &self.message.metadata,
                     )
@@ -788,15 +795,15 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
                 join_set.spawn(async move {
                     let _ = channels
-                            .send_status(
-                                &channel,
-                                StatusUpdate::ToolStarted {
-                                    name: tc.name.clone(),
-                                    tool_call_id: tc.id.clone(),
-                                    parameters: Some(tc.arguments.to_string()),
-                                },
-                                &metadata,
-                            )
+                        .send_status(
+                            &channel,
+                            StatusUpdate::ToolStarted {
+                                name: tc.name.clone(),
+                                tool_call_id: tc.id.clone(),
+                                parameters: Some(tc.arguments.to_string()),
+                            },
+                            &metadata,
+                        )
                         .await;
 
                     let result = execute_chat_tool_standalone(
@@ -810,14 +817,14 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
                     let par_tool = tools.get(&tc.name).await;
                     let _ = channels
-                            .send_status(
-                                &channel,
-                                StatusUpdate::tool_completed(
-                                    tc.name.clone(),
-                                    tc.id.clone(),
-                                    &result,
-                                    &tc.arguments,
-                                    par_tool.as_deref(),
+                        .send_status(
+                            &channel,
+                            StatusUpdate::tool_completed(
+                                tc.name.clone(),
+                                tc.id.clone(),
+                                &result,
+                                &tc.arguments,
+                                par_tool.as_deref(),
                             ),
                             &metadata,
                         )

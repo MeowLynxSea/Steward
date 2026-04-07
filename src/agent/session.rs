@@ -541,7 +541,8 @@ impl Thread {
                         if let Some(assistant_msg) = iter.next()
                             && let Some(ref tcs) = assistant_msg.tool_calls
                         {
-                            if !assistant_msg.content.trim().is_empty() && turn.narrative.is_none() {
+                            if !assistant_msg.content.trim().is_empty() && turn.narrative.is_none()
+                            {
                                 turn.narrative = Some(assistant_msg.content.clone());
                             }
                             for tc in tcs {

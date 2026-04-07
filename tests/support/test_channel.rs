@@ -190,7 +190,9 @@ impl TestChannel {
         self.captured_status_events()
             .iter()
             .filter_map(|s| match s {
-                StatusUpdate::ToolResult { name, preview, .. } => Some((name.clone(), preview.clone())),
+                StatusUpdate::ToolResult { name, preview, .. } => {
+                    Some((name.clone(), preview.clone()))
+                }
                 _ => None,
             })
             .collect()

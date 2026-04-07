@@ -139,6 +139,12 @@ impl SessionManager {
         }
     }
 
+    /// Persist the current in-memory snapshot for a session.
+    pub async fn persist_session_snapshot(&self, owner_id: &str, session: &Arc<Mutex<Session>>) {
+        let session_data = session.lock().await.clone();
+        self.save_session_to_db(owner_id, &session_data).await;
+    }
+
     /// Delete a session from the database.
     async fn delete_session_from_db(&self, owner_id: &str, session_id: Uuid) {
         let store = self.store.read().await;
@@ -378,6 +384,8 @@ impl SessionManager {
             undo_managers.insert(thread_id, Arc::new(Mutex::new(UndoManager::new())));
         }
 
+        self.persist_session_snapshot(owner_id, &session).await;
+
         (session, thread_id)
     }
 
@@ -419,6 +427,8 @@ impl SessionManager {
                 .or_insert_with(|| Arc::new(Mutex::new(UndoManager::new())));
         }
 
+        self.persist_session_snapshot(owner_id, &session).await;
+
         session
     }
 
@@ -455,8 +465,10 @@ impl SessionManager {
             sessions
                 .entry(owner_id.to_string())
                 .or_insert_with(HashMap::new)
-                .insert(session_id, session);
+                .insert(session_id, Arc::clone(&session));
         }
+
+        self.persist_session_snapshot(owner_id, &session).await;
     }
 
     /// Get undo manager for a thread.
@@ -732,5 +744,28 @@ mod tests {
         let sess = session.lock().await;
         assert!(sess.threads.contains_key(&thread_id));
         assert_eq!(sess.active_thread, Some(thread_id));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_resolve_thread_persists_session_snapshot() {
+        let (db, _dir) = crate::testing::test_db().await;
+        let manager = SessionManager::new();
+        manager.attach_store(Arc::clone(&db), "user-1").await;
+
+        let (session, thread_id) = manager.resolve_thread("user-1", "desktop", None).await;
+        let session_id = session.lock().await.id;
+
+        let reloaded = SessionManager::new();
+        reloaded.attach_store(db, "user-1").await;
+
+        let restored = reloaded
+            .get_session_by_id("user-1", session_id)
+            .await
+            .expect("session should reload from DB");
+        let sess = restored.lock().await;
+
+        assert_eq!(sess.active_thread, Some(thread_id));
+        assert!(sess.threads.contains_key(&thread_id));
     }
 }

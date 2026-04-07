@@ -2385,7 +2385,11 @@ fn status_update_to_app_event(
             parameters: parameters.clone(),
             thread_id,
         }),
-        StatusUpdate::ToolResult { name, tool_call_id, preview } => Some(steward_common::AppEvent::ToolResult {
+        StatusUpdate::ToolResult {
+            name,
+            tool_call_id,
+            preview,
+        } => Some(steward_common::AppEvent::ToolResult {
             name: name.clone(),
             tool_call_id: tool_call_id.clone(),
             preview: preview.clone(),
