@@ -75,8 +75,8 @@ class SessionsState {
     this.#seenEventKeys.clear();
     try {
       this.active = await apiClient.getSession(id);
-      this.#liveTurnNumber = this.#inferLiveTurnNumber();
       await this.refreshActiveTaskDetail();
+      this.#restoreStreamingAnchors();
       this.#streamHandle = createEventStream(
         `/sessions/${id}/stream`,
         this.#handleEvent.bind(this)
@@ -226,6 +226,19 @@ class SessionsState {
     }
   }
 
+  #finishStreamingFromTerminalState() {
+    this.#stopPollFallback();
+    this.#streamingThinkingId = null;
+    this.#liveTurnNumber = null;
+    this.streaming = {
+      ...this.streaming,
+      streamingContent: "",
+      isStreaming: false,
+      thinking: false,
+      thinkingMessage: this.streaming.thinkingMessage
+    };
+  }
+
   async refreshActiveTaskDetail() {
     const taskId = this.active?.active_thread_task?.id;
     if (!taskId || !this.active) {
@@ -242,6 +255,9 @@ class SessionsState {
         ...this.active,
         active_thread_task: detail.task
       };
+      if (["completed", "failed", "cancelled", "rejected"].includes(detail.task.status)) {
+        this.#finishStreamingFromTerminalState();
+      }
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to load active run detail";
     } finally {
@@ -285,14 +301,7 @@ class SessionsState {
         this.#stopPollFallback();
         this.#streamingThinkingId = null;
         this.#finalizeAssistantMessage(content);
-        this.streaming = {
-          ...this.streaming,
-          streamingContent: "",
-          isStreaming: false,
-          thinking: false,
-          thinkingMessage: this.streaming.thinkingMessage
-        };
-        this.#liveTurnNumber = null;
+        this.#finishStreamingFromTerminalState();
         break;
       }
 
@@ -350,7 +359,7 @@ class SessionsState {
           parameters?: string;
         };
         const updatedCalls = [...this.streaming.toolCalls];
-        const nextTool = (tool: ActiveToolCall) => ({
+        const nextTool = (tool: ActiveToolCall): ActiveToolCall => ({
           ...tool,
           status: success ? "completed" : "failed",
           completedAt: new Date().toISOString(),
@@ -441,6 +450,9 @@ class SessionsState {
       case "session.status": {
         const { message } = event.payload as { message: string };
         this.status = message;
+        if (["Done", "Interrupted", "Rejected", "task.completed", "task.rejected", "task.cancelled", "task.failed"].includes(message)) {
+          this.#finishStreamingFromTerminalState();
+        }
         break;
       }
     }
@@ -450,8 +462,11 @@ class SessionsState {
 
   #eventMatchesActiveThread(event: StreamEnvelope) {
     const activeThreadId = this.active?.active_thread_id;
-    if (!activeThreadId || !event.thread_id) {
+    if (!activeThreadId) {
       return true;
+    }
+    if (!event.thread_id) {
+      return false;
     }
     return event.thread_id === activeThreadId;
   }
@@ -467,10 +482,47 @@ class SessionsState {
       return null;
     }
     const lastMessage = messages[messages.length - 1];
+    if (this.#hasActiveTurn()) {
+      return lastMessage.turn_number;
+    }
     if (lastMessage.kind === "message" && lastMessage.role === "assistant") {
       return null;
     }
     return lastMessage.turn_number;
+  }
+
+  #hasActiveTurn() {
+    const status = this.active?.active_thread_task?.status;
+    return !!status && !["completed", "failed", "cancelled", "rejected"].includes(status);
+  }
+
+  #restoreStreamingAnchors() {
+    this.#liveTurnNumber = this.#inferLiveTurnNumber();
+
+    const lastMessage = this.active?.thread_messages.at(-1) ?? null;
+    const isRunning = this.active?.active_thread_task?.status === "running";
+
+    this.streaming = {
+      ...this.streaming,
+      isStreaming: isRunning
+    };
+
+    if (!this.#hasActiveTurn() || !lastMessage) {
+      return;
+    }
+
+    if (lastMessage.kind === "message" && lastMessage.role === "assistant") {
+      this.#streamingAssistantId = lastMessage.id;
+      this.streaming = {
+        ...this.streaming,
+        assistantMessageId: lastMessage.id
+      };
+      return;
+    }
+
+    if (lastMessage.kind === "thinking") {
+      this.#streamingThinkingId = lastMessage.id;
+    }
   }
 
   #ensureLiveTurnNumber() {

@@ -20,7 +20,7 @@ use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
-use crate::llm::{ChatMessage, CompletionRequest, ToolCall};
+use crate::llm::{ChatMessage, CompletionRequest, LlmProvider, ToolCall};
 use crate::tools::redact_params;
 use steward_common::truncate_preview;
 
@@ -66,6 +66,58 @@ fn parse_follow_up_suggestions(text: &str) -> Vec<String> {
         .filter(|s| !s.is_empty() && s.len() <= 80)
         .take(3)
         .collect()
+}
+
+async fn generate_follow_up_suggestions_with_llm(
+    llm: Arc<dyn LlmProvider>,
+    recent_turns: &[Turn],
+) -> Vec<String> {
+    if recent_turns.is_empty() {
+        return Vec::new();
+    }
+
+    let transcript = recent_turns
+        .iter()
+        .rev()
+        .map(|turn| {
+            let mut block = format!("User: {}", truncate_preview(&turn.user_input, 500));
+            if let Some(response) = turn.response.as_ref() {
+                block.push_str(&format!("\nAssistant: {}", truncate_preview(response, 700)));
+            }
+            block
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let request = CompletionRequest::new(vec![
+        ChatMessage::system(
+            "Generate 0-3 short follow-up suggestions for the user.\n\
+             Return JSON only: an array of strings.\n\
+             Each suggestion must be a direct command the user could send next.\n\
+             Do not repeat the assistant's answer.\n\
+             Do not ask meta questions.\n\
+             Keep each suggestion under 80 characters.\n\
+             If nothing useful fits, return [].",
+        ),
+        ChatMessage::user(format!(
+            "Recent conversation:\n\n{}\n\nReturn only the JSON array.",
+            transcript
+        )),
+    ])
+    .with_max_tokens(120)
+    .with_temperature(0.2);
+
+    match tokio::time::timeout(std::time::Duration::from_secs(8), llm.complete(request)).await {
+        Ok(Ok(response)) => parse_follow_up_suggestions(&response.content),
+        Ok(Err(error)) => {
+            tracing::debug!(error = %error, "Failed to generate follow-up suggestions");
+            Vec::new()
+        }
+        Err(_) => {
+            tracing::debug!("Timed out generating follow-up suggestions");
+            Vec::new()
+        }
+    }
 }
 
 fn tool_call_storage_json(
@@ -580,13 +632,18 @@ impl Agent {
                 };
                 let response = crate::agent::dispatcher::sanitize_user_visible_response(&response);
 
-                thread.complete_turn(&response);
-                let recent_turns: Vec<Turn> = thread.turns.iter().rev().take(4).cloned().collect();
-                let (turn_number, tool_calls, narrative) = thread
-                    .turns
-                    .last()
-                    .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
-                    .unwrap_or_default();
+                let (recent_turns, turn_number, tool_calls, narrative) = {
+                    thread.complete_turn(&response);
+                    let recent_turns: Vec<Turn> =
+                        thread.turns.iter().rev().take(4).cloned().collect();
+                    let (turn_number, tool_calls, narrative) = thread
+                        .turns
+                        .last()
+                        .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
+                        .unwrap_or_default();
+                    (recent_turns, turn_number, tool_calls, narrative)
+                };
+                drop(sess);
                 let _ = self
                     .channels
                     .send_status(
@@ -607,26 +664,13 @@ impl Agent {
                 )
                 .await;
                 self.persist_assistant_response(
+                    &session,
                     thread_id,
                     &message.channel,
                     &message.user_id,
                     &response,
                 )
                 .await;
-
-                let suggestions = self.generate_follow_up_suggestions(&recent_turns).await;
-
-                // Send suggestions after response (best-effort, rendered by the desktop UI)
-                if !suggestions.is_empty() {
-                    let _ = self
-                        .channels
-                        .send_status(
-                            &message.channel,
-                            StatusUpdate::Suggestions { suggestions },
-                            &message.metadata,
-                        )
-                        .await;
-                }
 
                 // Emit per-turn cost summary
                 {
@@ -665,6 +709,27 @@ impl Agent {
                         thread_id: Some(thread_id.to_string()),
                     },
                 );
+
+                {
+                    let channels = self.channels.clone();
+                    let llm = self.cheap_llm().clone();
+                    let channel = message.channel.clone();
+                    let metadata = message.metadata.clone();
+                    tokio::spawn(async move {
+                        let suggestions =
+                            generate_follow_up_suggestions_with_llm(llm, &recent_turns).await;
+                        if suggestions.is_empty() {
+                            return;
+                        }
+                        let _ = channels
+                            .send_status(
+                                &channel,
+                                StatusUpdate::Suggestions { suggestions },
+                                &metadata,
+                            )
+                            .await;
+                    });
+                }
 
                 Ok(SubmissionResult::response(response))
             }
@@ -807,6 +872,7 @@ impl Agent {
     /// turn start (e.g. a brief DB blip that resolved before response time).
     pub(super) async fn persist_assistant_response(
         &self,
+        session: &Arc<Mutex<Session>>,
         thread_id: Uuid,
         channel: &str,
         user_id: &str,
@@ -824,55 +890,39 @@ impl Agent {
             return;
         }
 
-        if let Err(e) = store
+        let existing_message_id = {
+            let sess = session.lock().await;
+            sess.threads
+                .get(&thread_id)
+                .and_then(|thread| thread.last_turn())
+                .and_then(|turn| turn.assistant_message_id)
+        };
+
+        if let Some(message_id) = existing_message_id {
+            if let Err(error) = store
+                .update_conversation_message_content(message_id, response)
+                .await
+            {
+                tracing::warn!("Failed to update assistant message: {}", error);
+            }
+            return;
+        }
+
+        match store
             .add_conversation_message(thread_id, "assistant", response)
             .await
         {
-            tracing::warn!("Failed to persist assistant message: {}", e);
-        }
-    }
-
-    async fn generate_follow_up_suggestions(&self, recent_turns: &[Turn]) -> Vec<String> {
-        if recent_turns.is_empty() {
-            return Vec::new();
-        }
-
-        let transcript = recent_turns
-            .iter()
-            .rev()
-            .map(|turn| {
-                let mut block = format!("User: {}", truncate_preview(&turn.user_input, 500));
-                if let Some(response) = turn.response.as_ref() {
-                    block.push_str(&format!("\nAssistant: {}", truncate_preview(response, 700)));
+            Ok(message_id) => {
+                let mut sess = session.lock().await;
+                if let Some(thread) = sess.threads.get_mut(&thread_id)
+                    && let Some(turn) = thread.last_turn_mut()
+                    && turn.assistant_message_id.is_none()
+                {
+                    turn.assistant_message_id = Some(message_id);
                 }
-                block
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-
-        let request = CompletionRequest::new(vec![
-            ChatMessage::system(
-                "Generate 0-3 short follow-up suggestions for the user.\n\
-                 Return JSON only: an array of strings.\n\
-                 Each suggestion must be a direct command the user could send next.\n\
-                 Do not repeat the assistant's answer.\n\
-                 Do not ask meta questions.\n\
-                 Keep each suggestion under 80 characters.\n\
-                 If nothing useful fits, return [].",
-            ),
-            ChatMessage::user(format!(
-                "Recent conversation:\n\n{}\n\nReturn only the JSON array.",
-                transcript
-            )),
-        ])
-        .with_max_tokens(120)
-        .with_temperature(0.2);
-
-        match self.cheap_llm().complete(request).await {
-            Ok(response) => parse_follow_up_suggestions(&response.content),
+            }
             Err(error) => {
-                tracing::debug!(error = %error, "Failed to generate follow-up suggestions");
-                Vec::new()
+                tracing::warn!("Failed to persist assistant message: {}", error);
             }
         }
     }
@@ -1964,14 +2014,18 @@ impl Agent {
             match result {
                 Ok(AgenticLoopResult::Response(response)) => {
                     let response = crate::agent::dispatcher::strip_suggestions(&response);
-                    thread.complete_turn(&response);
-                    let recent_turns: Vec<Turn> =
-                        thread.turns.iter().rev().take(4).cloned().collect();
-                    let (turn_number, tool_calls, narrative) = thread
-                        .turns
-                        .last()
-                        .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
-                        .unwrap_or_default();
+                    let (recent_turns, turn_number, tool_calls, narrative) = {
+                        thread.complete_turn(&response);
+                        let recent_turns: Vec<Turn> =
+                            thread.turns.iter().rev().take(4).cloned().collect();
+                        let (turn_number, tool_calls, narrative) = thread
+                            .turns
+                            .last()
+                            .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
+                            .unwrap_or_default();
+                        (recent_turns, turn_number, tool_calls, narrative)
+                    };
+                    drop(sess);
                     // User message already persisted at turn start; save tool calls then assistant response
                     self.persist_tool_calls(
                         thread_id,
@@ -1983,13 +2037,13 @@ impl Agent {
                     )
                     .await;
                     self.persist_assistant_response(
+                        &session,
                         thread_id,
                         &message.channel,
                         &message.user_id,
                         &response,
                     )
                     .await;
-                    let suggestions = self.generate_follow_up_suggestions(&recent_turns).await;
                     let _ = self
                         .channels
                         .send_status(
@@ -1998,12 +2052,27 @@ impl Agent {
                             &message.metadata,
                         )
                         .await;
-                    if !suggestions.is_empty() {
+                    {
+                        let usage = self.cost_guard().model_usage().await;
+                        let (total_in, total_out, total_cost) =
+                            usage
+                                .values()
+                                .fold((0u64, 0u64, rust_decimal::Decimal::ZERO), |acc, m| {
+                                    (
+                                        acc.0 + m.input_tokens,
+                                        acc.1 + m.output_tokens,
+                                        acc.2 + m.cost,
+                                    )
+                                });
                         let _ = self
                             .channels
                             .send_status(
                                 &message.channel,
-                                StatusUpdate::Suggestions { suggestions },
+                                StatusUpdate::TurnCost {
+                                    input_tokens: total_in,
+                                    output_tokens: total_out,
+                                    cost_usd: format!("${:.4}", total_cost),
+                                },
                                 &message.metadata,
                             )
                             .await;
@@ -2018,6 +2087,26 @@ impl Agent {
                             thread_id: Some(thread_id.to_string()),
                         },
                     );
+                    {
+                        let channels = self.channels.clone();
+                        let llm = self.cheap_llm().clone();
+                        let channel = message.channel.clone();
+                        let metadata = message.metadata.clone();
+                        tokio::spawn(async move {
+                            let suggestions =
+                                generate_follow_up_suggestions_with_llm(llm, &recent_turns).await;
+                            if suggestions.is_empty() {
+                                return;
+                            }
+                            let _ = channels
+                                .send_status(
+                                    &channel,
+                                    StatusUpdate::Suggestions { suggestions },
+                                    &metadata,
+                                )
+                                .await;
+                        });
+                    }
                     Ok(SubmissionResult::response(response))
                 }
                 Ok(AgenticLoopResult::NeedApproval {
@@ -2097,16 +2186,17 @@ impl Agent {
                 if let Some(thread) = sess.threads.get_mut(&thread_id) {
                     thread.clear_pending_approval();
                     thread.complete_turn(&rejection);
-                    // User message already persisted at turn start; save rejection response
-                    self.persist_assistant_response(
-                        thread_id,
-                        &message.channel,
-                        &message.user_id,
-                        &rejection,
-                    )
-                    .await;
                 }
             }
+            // User message already persisted at turn start; save rejection response
+            self.persist_assistant_response(
+                &session,
+                thread_id,
+                &message.channel,
+                &message.user_id,
+                &rejection,
+            )
+            .await;
 
             if let Some(task_runtime) = self.task_runtime() {
                 task_runtime
@@ -2154,16 +2244,17 @@ impl Agent {
             if let Some(thread) = sess.threads.get_mut(&thread_id) {
                 thread.enter_auth_mode(ext_name.clone());
                 thread.complete_turn(&instructions);
-                // User message already persisted at turn start; save auth instructions
-                self.persist_assistant_response(
-                    thread_id,
-                    &message.channel,
-                    &message.user_id,
-                    &instructions,
-                )
-                .await;
             }
         }
+        // User message already persisted at turn start; save auth instructions
+        self.persist_assistant_response(
+            &session,
+            thread_id,
+            &message.channel,
+            &message.user_id,
+            &instructions,
+        )
+        .await;
         let _ = self
             .channels
             .send_status(

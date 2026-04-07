@@ -125,6 +125,14 @@ fn session_title(session: &Session) -> String {
         .to_string()
 }
 
+fn desktop_message_metadata(session_id: Uuid, thread_id: Uuid, owner_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "desktop_session_id": session_id.to_string(),
+        "notify_user": owner_id,
+        "notify_thread_id": thread_id.to_string(),
+    })
+}
+
 fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
     if parameters.is_null() {
         None
@@ -644,35 +652,39 @@ pub async fn send_session_message(
     drop(sess);
 
     match dispatch_plan {
-        DesktopDispatchPlan::QueueOnly => Ok(steward_core::ipc::SendSessionMessageResponse {
-            accepted: true,
-            session_id: id,
-            active_thread_id: thread_id,
-            active_thread_task_id: None,
-            active_thread_task: None,
-        }),
+        DesktopDispatchPlan::QueueOnly => {
+            let active_thread_task = state.task_runtime.get_task(thread_id).await;
+            let active_thread_task_id = active_thread_task.as_ref().map(|task| task.id);
+            Ok(steward_core::ipc::SendSessionMessageResponse {
+                accepted: true,
+                session_id: id,
+                active_thread_id: thread_id,
+                active_thread_task_id,
+                active_thread_task,
+            })
+        }
         DesktopDispatchPlan::InjectOnly => {
             tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, injecting message");
             let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
                 .with_thread(thread_id.to_string())
-                .with_metadata(serde_json::json!({
-                    "desktop_session_id": id.to_string(),
-                }));
+                .with_metadata(desktop_message_metadata(id, thread_id, &state.owner_id));
             tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
             state
                 .message_inject_tx
-                .send(msg)
+                .send(msg.clone())
                 .await
                 .map_err(|e| format!("Failed to inject message: {}", e))?;
             tracing::info!(thread_id = %thread_id, "Message injected successfully");
+            let active_thread_task = state.task_runtime.ensure_task(&msg, thread_id).await;
+            let active_thread_task_id = Some(active_thread_task.id);
 
             tracing::info!(thread_id = %thread_id, "==> send_session_message RETURNING OK");
             Ok(steward_core::ipc::SendSessionMessageResponse {
                 accepted: true,
                 session_id: id,
                 active_thread_id: thread_id,
-                active_thread_task_id: None,
-                active_thread_task: None,
+                active_thread_task_id,
+                active_thread_task: Some(active_thread_task),
             })
         }
     }
@@ -680,7 +692,10 @@ pub async fn send_session_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopDispatchPlan, build_thread_messages, plan_desktop_message_dispatch};
+    use super::{
+        DesktopDispatchPlan, build_thread_messages, desktop_message_metadata,
+        plan_desktop_message_dispatch,
+    };
     use steward_core::agent::session::{Thread, ThreadState};
     use uuid::Uuid;
 
@@ -739,6 +754,43 @@ mod tests {
             Some("search")
         );
         assert_eq!(messages[2].role.as_deref(), Some("assistant"));
+    }
+
+    #[test]
+    fn build_thread_messages_includes_in_progress_assistant_response() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let turn = thread.start_turn("hello");
+        turn.append_response_chunk("partial answer");
+
+        let messages = build_thread_messages(&thread);
+
+        assert_eq!(thread.state, ThreadState::Processing);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role.as_deref(), Some("user"));
+        assert_eq!(messages[1].role.as_deref(), Some("assistant"));
+        assert_eq!(messages[1].content.as_deref(), Some("partial answer"));
+    }
+
+    #[test]
+    fn desktop_message_metadata_includes_runtime_routing_fields() {
+        let session_id = Uuid::new_v4();
+        let thread_id = Uuid::new_v4();
+        let metadata = desktop_message_metadata(session_id, thread_id, "desktop-owner");
+        let session_id_text = session_id.to_string();
+        let thread_id_text = thread_id.to_string();
+
+        assert_eq!(
+            metadata.get("desktop_session_id").and_then(|value| value.as_str()),
+            Some(session_id_text.as_str())
+        );
+        assert_eq!(
+            metadata.get("notify_user").and_then(|value| value.as_str()),
+            Some("desktop-owner")
+        );
+        assert_eq!(
+            metadata.get("notify_thread_id").and_then(|value| value.as_str()),
+            Some(thread_id_text.as_str())
+        );
     }
 }
 

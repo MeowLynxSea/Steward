@@ -1052,8 +1052,16 @@ impl Agent {
                     .await
                     .ok();
                 if let Some(id) = thread_id {
-                    self.persist_assistant_response(id, "desktop", "default", BOOTSTRAP_GREETING)
-                        .await;
+                    if let Err(error) = store
+                        .add_conversation_message(id, "assistant", BOOTSTRAP_GREETING)
+                        .await
+                    {
+                        tracing::warn!(
+                            thread_id = %id,
+                            %error,
+                            "Failed to persist bootstrap greeting"
+                        );
+                    }
                 }
                 thread_id
             } else {

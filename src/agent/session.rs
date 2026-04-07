@@ -635,6 +635,9 @@ pub struct Turn {
     /// Cleaned via `clean_response` and sanitized through `SafetyLayer` before storage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub narrative: Option<String>,
+    /// Persisted conversation row backing the assistant response in history.
+    #[serde(skip)]
+    pub assistant_message_id: Option<Uuid>,
     /// Transient image content parts for multimodal LLM input.
     /// Not serialized — images are only needed for the current LLM call.
     /// The text description in `user_input` persists for compaction/context.
@@ -655,7 +658,19 @@ impl Turn {
             completed_at: None,
             error: None,
             narrative: None,
+            assistant_message_id: None,
             image_content_parts: Vec::new(),
+        }
+    }
+
+    /// Append a streamed assistant chunk to this turn's in-progress response.
+    pub fn append_response_chunk(&mut self, chunk: &str) {
+        if chunk.is_empty() {
+            return;
+        }
+        match self.response.as_mut() {
+            Some(existing) => existing.push_str(chunk),
+            None => self.response = Some(chunk.to_string()),
         }
     }
 
@@ -898,6 +913,15 @@ mod tests {
 
         assert_eq!(turn.tool_calls.len(), 1);
         assert!(turn.tool_calls[0].result.is_some());
+    }
+
+    #[test]
+    fn streamed_chunks_accumulate_on_turn_response() {
+        let mut turn = Turn::new(0, "Test input");
+        turn.append_response_chunk("Hel");
+        turn.append_response_chunk("lo");
+
+        assert_eq!(turn.response.as_deref(), Some("Hello"));
     }
 
     #[test]

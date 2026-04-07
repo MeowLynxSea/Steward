@@ -202,6 +202,7 @@ impl Agent {
         let safety = Arc::clone(self.safety());
         let store = self.store().cloned();
         let channel = message.channel.clone();
+        let stream_session = Arc::clone(&session);
         let thinking_tracker = Arc::new(Mutex::new(ThinkingTracker::default()));
         let forwarder_thinking_tracker = Arc::clone(&thinking_tracker);
         let sse_forwarder = Some(tokio::spawn(async move {
@@ -209,6 +210,59 @@ impl Agent {
                 match delta {
                     crate::llm::StreamDelta::TextDelta(content) => {
                         forwarder_thinking_tracker.lock().await.prefer_new_segment = true;
+                        {
+                            let mut sess = stream_session.lock().await;
+                            if let Some(thread) = sess.threads.get_mut(&thread_id)
+                                && let Some(turn) = thread.last_turn_mut()
+                            {
+                                turn.append_response_chunk(&content);
+                            }
+                        }
+                        if let Some(ref store) = store
+                            && let Ok(true) = store
+                                .ensure_conversation(thread_id, &channel, &user_id, None)
+                                .await
+                        {
+                            let (message_id, response) = {
+                                let sess = stream_session.lock().await;
+                                match sess.threads.get(&thread_id).and_then(|thread| thread.last_turn())
+                                {
+                                    Some(turn) => (turn.assistant_message_id, turn.response.clone()),
+                                    None => (None, None),
+                                }
+                            };
+
+                            if let Some(response) = response {
+                                if let Some(message_id) = message_id {
+                                    if let Err(error) = store
+                                        .update_conversation_message_content(message_id, &response)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            thread_id = %thread_id,
+                                            %error,
+                                            "Failed to update streamed assistant history"
+                                        );
+                                    }
+                                } else if let Ok(message_id) = store
+                                    .add_conversation_message(thread_id, "assistant", &response)
+                                    .await
+                                {
+                                    let mut sess = stream_session.lock().await;
+                                    if let Some(thread) = sess.threads.get_mut(&thread_id)
+                                        && let Some(turn) = thread.last_turn_mut()
+                                        && turn.assistant_message_id.is_none()
+                                    {
+                                        turn.assistant_message_id = Some(message_id);
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        thread_id = %thread_id,
+                                        "Failed to persist streamed assistant history"
+                                    );
+                                }
+                            }
+                        }
                         if let Some(ref emitter) = emitter {
                             emitter.emit_for_user(
                                 &user_id,
