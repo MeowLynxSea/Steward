@@ -1354,7 +1354,7 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    max-height: 280px;
+    max-height: var(--auxiliary-row-max-height, 280px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
@@ -1417,7 +1417,7 @@
     }
     to {
       opacity: 1;
-      max-height: 500px;
+      max-height: var(--auxiliary-row-max-height, 280px);
     }
   }
 
@@ -1658,13 +1658,10 @@
   .aux-group-card {
     display: flex;
     flex-direction: column;
-    max-height: 440px;
   }
   .aux-scroll-area {
-    overflow-y: auto;
-    flex-shrink: 1;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border-default) transparent;
+    overflow: visible;
+    flex-shrink: 0;
   }
   .aux-scroll-area::-webkit-scrollbar {
     width: 6px;
