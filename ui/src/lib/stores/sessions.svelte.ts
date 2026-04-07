@@ -9,6 +9,7 @@ import type {
   StreamEnvelope,
   StreamingState,
   TaskDetail,
+  TurnCostInfo,
   ToolDecision
 } from "../types";
 
@@ -26,6 +27,32 @@ function emptyStreamingState(): StreamingState {
     images: [],
     isStreaming: false
   };
+}
+
+function turnCostFromResultMetadata(metadata: Record<string, unknown> | null | undefined): TurnCostInfo | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+
+  const candidate = metadata.turn_cost;
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const turnCost = candidate as Record<string, unknown>;
+
+  const input_tokens = turnCost.input_tokens;
+  const output_tokens = turnCost.output_tokens;
+  const cost_usd = turnCost.cost_usd;
+
+  if (
+    typeof input_tokens !== "number" ||
+    typeof output_tokens !== "number" ||
+    typeof cost_usd !== "string"
+  ) {
+    return null;
+  }
+
+  return { input_tokens, output_tokens, cost_usd };
 }
 
 class SessionsState {
@@ -255,6 +282,13 @@ class SessionsState {
         ...this.active,
         active_thread_task: detail.task
       };
+      const persistedTurnCost = turnCostFromResultMetadata(detail.task.result_metadata);
+      if (persistedTurnCost) {
+        this.streaming = {
+          ...this.streaming,
+          turnCost: persistedTurnCost
+        };
+      }
       if (["completed", "failed", "cancelled", "rejected"].includes(detail.task.status)) {
         this.#finishStreamingFromTerminalState();
       }
@@ -501,10 +535,12 @@ class SessionsState {
 
     const lastMessage = this.active?.thread_messages.at(-1) ?? null;
     const isRunning = this.active?.active_thread_task?.status === "running";
+    const persistedTurnCost = turnCostFromResultMetadata(this.active?.active_thread_task?.result_metadata);
 
     this.streaming = {
       ...this.streaming,
-      isStreaming: isRunning
+      isStreaming: isRunning,
+      turnCost: persistedTurnCost ?? this.streaming.turnCost
     };
 
     if (!this.#hasActiveTurn() || !lastMessage) {
@@ -621,7 +657,7 @@ class SessionsState {
 
   #finalizeAssistantMessage(content: string) {
     if (!this.active) return;
-    const finalContent = this.streaming.streamingContent || content;
+    const finalContent = content || this.streaming.streamingContent;
     const turnNumber = this.#ensureLiveTurnNumber();
     const assistantMessagesForTurn = this.active.thread_messages.filter(
       (message) =>
@@ -638,7 +674,7 @@ class SessionsState {
         assistantMessageId: this.#streamingAssistantId
       };
 
-      if (!hadStreamedChunks && finalContent) {
+      if (finalContent) {
         this.#updateMessage(this.#streamingAssistantId, (message) => ({
           ...message,
           content: finalContent || message.content

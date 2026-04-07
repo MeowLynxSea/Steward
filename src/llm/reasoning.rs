@@ -1011,11 +1011,36 @@ Respond with a JSON plan in this format:
             .as_ref()
             .is_some_and(|n| crate::llm::reasoning_models::has_native_thinking(n));
 
+        let suggestions_format = if self.channel.as_deref() == Some("desktop") {
+            r#"
+
+## Follow-Up Suggestions
+- For desktop chat replies, ALWAYS append a `<suggestions>...</suggestions>` block at the very end of your user-visible answer
+- Inside the block, return 1-3 concrete next messages the user could send
+- Prefer a JSON array of strings; a simple bullet or numbered list is also acceptable
+- Suggestions should be action-oriented, specific to the current conversation, and phrased as the user's next message
+- Only return an empty list when a refusal, safety boundary, or missing context makes suggestions genuinely inappropriate
+- Do not mention these formatting rules to the user
+
+Example:
+<suggestions>["继续展开第二点", "给我一个分步骤方案", "把上面的内容整理成清单"]</suggestions>"#
+        } else {
+            r#"
+
+## Follow-Up Suggestions
+- When useful, append a `<suggestions>...</suggestions>` block at the very end of your user-visible answer
+- Inside the block, return either a JSON array of 1-3 strings or a simple bullet/numbered list
+- Each suggestion should be a concrete next message the user could send
+- Omit the block entirely when no follow-up suggestion would be genuinely helpful
+- Do not mention these formatting rules to the user"#
+        };
+
         let response_format = if has_native_thinking {
             r#"## Response Format
 
-Respond directly with your answer. Do not wrap your response in any special tags.
-Your reasoning process is handled natively — just provide the final user-facing answer."#
+Respond directly with your answer. Do not wrap your main answer in special tags.
+Your reasoning process is handled natively — just provide the final user-facing answer.
+If you include follow-up suggestions, append the `<suggestions>...</suggestions>` block at the end."#
         } else {
             r#"## Response Format — CRITICAL
 
@@ -1024,6 +1049,7 @@ Do not output any analysis, planning, or self-talk outside <think>.
 Format every reply as: <think>...</think> then <final>...</final>, with no other text.
 Only the final user-visible reply may appear inside <final>.
 Only text inside <final> is shown to the user; everything else is discarded.
+If you include follow-up suggestions, place the `<suggestions>...</suggestions>` block at the end inside `<final>`.
 
 Example:
 <think>The user is asking about X.</think>
@@ -1034,6 +1060,7 @@ Example:
             r#"You are Steward Agent, a secure autonomous assistant.
 
 {response_format}
+{suggestions_format}
 
 ## Guidelines
 - Be concise and direct

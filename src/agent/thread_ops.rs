@@ -12,15 +12,15 @@ use uuid::Uuid;
 use crate::agent::Agent;
 use crate::agent::compaction::ContextCompactor;
 use crate::agent::dispatcher::{
-    AgenticLoopResult, check_auth_required, execute_chat_tool_standalone, parse_auth_result,
-    preflight_rejection_tool_message,
+    AgenticLoopResult, check_auth_required, execute_chat_tool_standalone, extract_suggestions,
+    parse_auth_result, preflight_rejection_tool_message,
 };
-use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState, Turn};
+use crate::agent::session::{MAX_PENDING_MESSAGES, PendingApproval, Session, ThreadState};
 use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
-use crate::llm::{ChatMessage, CompletionRequest, LlmProvider, ToolCall};
+use crate::llm::{ChatMessage, ToolCall};
 use crate::tools::redact_params;
 use steward_common::truncate_preview;
 
@@ -32,92 +32,19 @@ fn requires_preexisting_uuid_thread(channel: &str) -> bool {
     matches!(channel, "desktop" | "test")
 }
 
-fn parse_follow_up_suggestions(text: &str) -> Vec<String> {
-    fn parse_array(raw: &str) -> Option<Vec<String>> {
-        serde_json::from_str::<Vec<String>>(raw).ok()
-    }
-
-    let trimmed = text.trim();
-    let normalized = trimmed
-        .strip_prefix("```json")
-        .or_else(|| trimmed.strip_prefix("```"))
-        .unwrap_or(trimmed)
-        .trim()
-        .strip_suffix("```")
-        .unwrap_or_else(|| {
-            trimmed
-                .strip_prefix("```json")
-                .or_else(|| trimmed.strip_prefix("```"))
-                .unwrap_or(trimmed)
-                .trim()
-        })
-        .trim();
-
-    let parsed = parse_array(normalized).or_else(|| {
-        let start = normalized.find('[')?;
-        let end = normalized.rfind(']')?;
-        parse_array(&normalized[start..=end])
-    });
-
-    parsed
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty() && s.len() <= 80)
-        .take(3)
-        .collect()
-}
-
-async fn generate_follow_up_suggestions_with_llm(
-    llm: Arc<dyn LlmProvider>,
-    recent_turns: &[Turn],
-) -> Vec<String> {
-    if recent_turns.is_empty() {
-        return Vec::new();
-    }
-
-    let transcript = recent_turns
-        .iter()
-        .rev()
-        .map(|turn| {
-            let mut block = format!("User: {}", truncate_preview(&turn.user_input, 500));
-            if let Some(response) = turn.response.as_ref() {
-                block.push_str(&format!("\nAssistant: {}", truncate_preview(response, 700)));
-            }
-            block
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-
-    let request = CompletionRequest::new(vec![
-        ChatMessage::system(
-            "Generate 0-3 short follow-up suggestions for the user.\n\
-             Return JSON only: an array of strings.\n\
-             Each suggestion must be a direct command the user could send next.\n\
-             Do not repeat the assistant's answer.\n\
-             Do not ask meta questions.\n\
-             Keep each suggestion under 80 characters.\n\
-             If nothing useful fits, return [].",
-        ),
-        ChatMessage::user(format!(
-            "Recent conversation:\n\n{}\n\nReturn only the JSON array.",
-            transcript
-        )),
-    ])
-    .with_max_tokens(120)
-    .with_temperature(0.2);
-
-    match tokio::time::timeout(std::time::Duration::from_secs(8), llm.complete(request)).await {
-        Ok(Ok(response)) => parse_follow_up_suggestions(&response.content),
-        Ok(Err(error)) => {
-            tracing::debug!(error = %error, "Failed to generate follow-up suggestions");
-            Vec::new()
+fn turn_cost_metadata(
+    input_tokens: u64,
+    output_tokens: u64,
+    cost_usd: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "outcome": "completed",
+        "turn_cost": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost_usd": cost_usd,
         }
-        Err(_) => {
-            tracing::debug!("Timed out generating follow-up suggestions");
-            Vec::new()
-        }
-    }
+    })
 }
 
 fn tool_call_storage_json(
@@ -608,7 +535,12 @@ impl Agent {
         // Complete, fail, or request approval
         match result {
             Ok(AgenticLoopResult::Response(response)) => {
-                let response = crate::agent::dispatcher::strip_suggestions(&response);
+                let (response, suggestions) = extract_suggestions(&response);
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    suggestions = ?suggestions,
+                    "Extracted inline follow-up suggestions from final response"
+                );
 
                 // Hook: TransformResponse — allow hooks to modify or reject the final response
                 let response = {
@@ -632,16 +564,14 @@ impl Agent {
                 };
                 let response = crate::agent::dispatcher::sanitize_user_visible_response(&response);
 
-                let (recent_turns, turn_number, tool_calls, narrative) = {
+                let (turn_number, tool_calls, narrative) = {
                     thread.complete_turn(&response);
-                    let recent_turns: Vec<Turn> =
-                        thread.turns.iter().rev().take(4).cloned().collect();
                     let (turn_number, tool_calls, narrative) = thread
                         .turns
                         .last()
                         .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
                         .unwrap_or_default();
-                    (recent_turns, turn_number, tool_calls, narrative)
+                    (turn_number, tool_calls, narrative)
                 };
                 drop(sess);
                 let _ = self
@@ -673,7 +603,7 @@ impl Agent {
                 .await;
 
                 // Emit per-turn cost summary
-                {
+                let (total_in, total_out, total_cost_text) = {
                     let usage = self.cost_guard().model_usage().await;
                     let (total_in, total_out, total_cost) =
                         usage
@@ -685,6 +615,7 @@ impl Agent {
                                     acc.2 + m.cost,
                                 )
                             });
+                    let total_cost_text = format!("${:.4}", total_cost);
                     let _ = self
                         .channels
                         .send_status(
@@ -692,15 +623,21 @@ impl Agent {
                             StatusUpdate::TurnCost {
                                 input_tokens: total_in,
                                 output_tokens: total_out,
-                                cost_usd: format!("${:.4}", total_cost),
+                                cost_usd: total_cost_text.clone(),
                             },
                             &message.metadata,
                         )
                         .await;
-                }
+                    (total_in, total_out, total_cost_text)
+                };
 
                 if let Some(task_runtime) = self.task_runtime() {
-                    task_runtime.mark_completed(thread_id).await;
+                    task_runtime
+                        .mark_completed_with_result(
+                            thread_id,
+                            Some(turn_cost_metadata(total_in, total_out, &total_cost_text)),
+                        )
+                        .await;
                 }
                 self.emit_runtime_event_for_message(
                     message,
@@ -710,25 +647,38 @@ impl Agent {
                     },
                 );
 
-                {
-                    let channels = self.channels.clone();
-                    let llm = self.cheap_llm().clone();
-                    let channel = message.channel.clone();
-                    let metadata = message.metadata.clone();
-                    tokio::spawn(async move {
-                        let suggestions =
-                            generate_follow_up_suggestions_with_llm(llm, &recent_turns).await;
-                        if suggestions.is_empty() {
-                            return;
+                if suggestions.is_empty() {
+                    tracing::debug!(
+                        channel = %message.channel,
+                        thread_id = %thread_id,
+                        "No inline follow-up suggestions were emitted"
+                    );
+                } else {
+                    match self
+                        .channels
+                        .send_status(
+                            &message.channel,
+                            StatusUpdate::Suggestions { suggestions },
+                            &message.metadata,
+                        )
+                        .await
+                    {
+                        Ok(()) => {
+                            tracing::debug!(
+                                channel = %message.channel,
+                                thread_id = %thread_id,
+                                "Emitted inline follow-up suggestions"
+                            );
                         }
-                        let _ = channels
-                            .send_status(
-                                &channel,
-                                StatusUpdate::Suggestions { suggestions },
-                                &metadata,
-                            )
-                            .await;
-                    });
+                        Err(error) => {
+                            tracing::debug!(
+                                channel = %message.channel,
+                                thread_id = %thread_id,
+                                error = %error,
+                                "Failed to emit inline follow-up suggestions"
+                            );
+                        }
+                    }
                 }
 
                 Ok(SubmissionResult::response(response))
@@ -2013,17 +1963,20 @@ impl Agent {
 
             match result {
                 Ok(AgenticLoopResult::Response(response)) => {
-                    let response = crate::agent::dispatcher::strip_suggestions(&response);
-                    let (recent_turns, turn_number, tool_calls, narrative) = {
+                    let (response, suggestions) = extract_suggestions(&response);
+                    tracing::debug!(
+                        thread_id = %thread_id,
+                        suggestions = ?suggestions,
+                        "Extracted inline follow-up suggestions from approval-complete response"
+                    );
+                    let (turn_number, tool_calls, narrative) = {
                         thread.complete_turn(&response);
-                        let recent_turns: Vec<Turn> =
-                            thread.turns.iter().rev().take(4).cloned().collect();
                         let (turn_number, tool_calls, narrative) = thread
                             .turns
                             .last()
                             .map(|t| (t.turn_number, t.tool_calls.clone(), t.narrative.clone()))
                             .unwrap_or_default();
-                        (recent_turns, turn_number, tool_calls, narrative)
+                        (turn_number, tool_calls, narrative)
                     };
                     drop(sess);
                     // User message already persisted at turn start; save tool calls then assistant response
@@ -2052,7 +2005,7 @@ impl Agent {
                             &message.metadata,
                         )
                         .await;
-                    {
+                    let (total_in, total_out, total_cost_text) = {
                         let usage = self.cost_guard().model_usage().await;
                         let (total_in, total_out, total_cost) =
                             usage
@@ -2064,6 +2017,7 @@ impl Agent {
                                         acc.2 + m.cost,
                                     )
                                 });
+                        let total_cost_text = format!("${:.4}", total_cost);
                         let _ = self
                             .channels
                             .send_status(
@@ -2071,14 +2025,20 @@ impl Agent {
                                 StatusUpdate::TurnCost {
                                     input_tokens: total_in,
                                     output_tokens: total_out,
-                                    cost_usd: format!("${:.4}", total_cost),
+                                    cost_usd: total_cost_text.clone(),
                                 },
                                 &message.metadata,
                             )
                             .await;
-                    }
+                        (total_in, total_out, total_cost_text)
+                    };
                     if let Some(task_runtime) = self.task_runtime() {
-                        task_runtime.mark_completed(thread_id).await;
+                        task_runtime
+                            .mark_completed_with_result(
+                                thread_id,
+                                Some(turn_cost_metadata(total_in, total_out, &total_cost_text)),
+                            )
+                            .await;
                     }
                     self.emit_runtime_event_for_message(
                         message,
@@ -2087,25 +2047,38 @@ impl Agent {
                             thread_id: Some(thread_id.to_string()),
                         },
                     );
-                    {
-                        let channels = self.channels.clone();
-                        let llm = self.cheap_llm().clone();
-                        let channel = message.channel.clone();
-                        let metadata = message.metadata.clone();
-                        tokio::spawn(async move {
-                            let suggestions =
-                                generate_follow_up_suggestions_with_llm(llm, &recent_turns).await;
-                            if suggestions.is_empty() {
-                                return;
+                    if suggestions.is_empty() {
+                        tracing::debug!(
+                            channel = %message.channel,
+                            thread_id = %thread_id,
+                            "No inline follow-up suggestions were emitted"
+                        );
+                    } else {
+                        match self
+                            .channels
+                            .send_status(
+                                &message.channel,
+                                StatusUpdate::Suggestions { suggestions },
+                                &message.metadata,
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                tracing::debug!(
+                                    channel = %message.channel,
+                                    thread_id = %thread_id,
+                                    "Emitted inline follow-up suggestions"
+                                );
                             }
-                            let _ = channels
-                                .send_status(
-                                    &channel,
-                                    StatusUpdate::Suggestions { suggestions },
-                                    &metadata,
-                                )
-                                .await;
-                        });
+                            Err(error) => {
+                                tracing::debug!(
+                                    channel = %message.channel,
+                                    thread_id = %thread_id,
+                                    error = %error,
+                                    "Failed to emit inline follow-up suggestions"
+                                );
+                            }
+                        }
                     }
                     Ok(SubmissionResult::response(response))
                 }
@@ -2987,6 +2960,37 @@ mod tests {
         assert_ne!(t.state, ThreadState::Processing);
         // Verify nothing was queued — the fall-through path doesn't touch the queue.
         assert!(t.pending_messages.is_empty());
+    }
+
+    #[test]
+    fn test_turn_cost_metadata_shape() {
+        let metadata = super::turn_cost_metadata(1200, 280, "$0.0042");
+
+        assert_eq!(
+            metadata.get("outcome").and_then(|value| value.as_str()),
+            Some("completed")
+        );
+        assert_eq!(
+            metadata
+                .get("turn_cost")
+                .and_then(|value| value.get("input_tokens"))
+                .and_then(|value| value.as_u64()),
+            Some(1200)
+        );
+        assert_eq!(
+            metadata
+                .get("turn_cost")
+                .and_then(|value| value.get("output_tokens"))
+                .and_then(|value| value.as_u64()),
+            Some(280)
+        );
+        assert_eq!(
+            metadata
+                .get("turn_cost")
+                .and_then(|value| value.get("cost_usd"))
+                .and_then(|value| value.as_str()),
+            Some("$0.0042")
+        );
     }
 
     // Helper function to extract the approval message without needing a full Agent instance

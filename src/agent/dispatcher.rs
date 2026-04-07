@@ -30,12 +30,6 @@ fn merge_streamed_thinking_segment(existing: &str, incoming: &str) -> String {
     if incoming.is_empty() {
         return existing.to_string();
     }
-    if incoming.starts_with(existing) {
-        return incoming.to_string();
-    }
-    if existing.starts_with(incoming) {
-        return existing.to_string();
-    }
 
     let mut boundaries: Vec<usize> = incoming.char_indices().map(|(idx, _)| idx).collect();
     boundaries.push(incoming.len());
@@ -54,9 +48,6 @@ fn merge_streamed_thinking_segment(existing: &str, incoming: &str) -> String {
 fn thinking_segment_match_score(existing: &str, incoming: &str) -> usize {
     if existing.is_empty() || incoming.is_empty() {
         return 0;
-    }
-    if incoming.starts_with(existing) || existing.starts_with(incoming) {
-        return existing.len().min(incoming.len()) + 1024;
     }
 
     let mut best_overlap = 0usize;
@@ -1595,7 +1586,89 @@ fn is_tool_call_json(json_str: &str) -> bool {
     false
 }
 
-/// Extract `<suggestions>["...","..."]</suggestions>` from a response string.
+const MAX_SUGGESTION_LEN: usize = 200;
+
+fn parse_suggestions_block(text: &str) -> Vec<String> {
+    fn parse_array(raw: &str) -> Option<Vec<String>> {
+        serde_json::from_str::<Vec<String>>(raw).ok()
+    }
+
+    fn normalize_candidate(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let without_bullet = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("• "))
+            .unwrap_or(trimmed);
+
+        let without_number = if let Some((prefix, rest)) = without_bullet.split_once(". ") {
+            if prefix.chars().all(|ch| ch.is_ascii_digit()) {
+                rest
+            } else {
+                without_bullet
+            }
+        } else if let Some((prefix, rest)) = without_bullet.split_once(") ") {
+            if prefix.chars().all(|ch| ch.is_ascii_digit()) {
+                rest
+            } else {
+                without_bullet
+            }
+        } else {
+            without_bullet
+        };
+
+        let unquoted = without_number
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_matches('`')
+            .trim();
+
+        (!unquoted.is_empty()).then(|| unquoted.to_string())
+    }
+
+    let trimmed = text.trim();
+    let normalized = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim()
+        .strip_suffix("```")
+        .unwrap_or_else(|| {
+            trimmed
+                .strip_prefix("```json")
+                .or_else(|| trimmed.strip_prefix("```"))
+                .unwrap_or(trimmed)
+                .trim()
+        })
+        .trim();
+
+    let parsed = parse_array(normalized).or_else(|| {
+        let start = normalized.find('[')?;
+        let end = normalized.rfind(']')?;
+        parse_array(&normalized[start..=end])
+    });
+
+    let candidates = parsed.unwrap_or_else(|| {
+        normalized
+            .lines()
+            .filter_map(normalize_candidate)
+            .collect::<Vec<_>>()
+    });
+
+    candidates
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s.len() <= MAX_SUGGESTION_LEN)
+        .take(3)
+        .collect()
+}
+
+/// Extract `<suggestions>...</suggestions>` from a response string.
 ///
 /// Returns `(cleaned_text, suggestions)`. The `<suggestions>` block is stripped
 /// from the text regardless of whether the JSON inside parses successfully.
@@ -1639,13 +1712,10 @@ pub(crate) fn extract_suggestions(text: &str) -> (String, Vec<String>) {
     let cleaned = format!("{}{}", &text[..full.start()], &text[full.end()..]); // safety: regex match boundaries are valid UTF-8
     let cleaned = cleaned.trim().to_string();
 
-    // Parse the JSON array
     let suggestions = best_capture
-        .and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok())
+        .map(|block| parse_suggestions_block(&block))
         .unwrap_or_default()
         .into_iter()
-        .filter(|s| !s.trim().is_empty() && s.len() <= 80)
-        .take(3)
         .collect();
 
     (cleaned, suggestions)
@@ -1694,6 +1764,17 @@ mod tests {
         assert_eq!(
             merge_streamed_thinking_segment(existing, incoming),
             "详细介绍你自己（this is the first message）"
+        );
+    }
+
+    #[test]
+    fn merge_streamed_thinking_segment_does_not_treat_shared_prefix_as_same_segment() {
+        let existing = "The user prefers concise answers and dislikes repetition.";
+        let incoming = "The user asked for a summary of the deployment checklist.";
+
+        assert_eq!(
+            merge_streamed_thinking_segment(existing, incoming),
+            format!("{existing}{incoming}")
         );
     }
 
@@ -2993,10 +3074,21 @@ mod tests {
 
     #[test]
     fn test_extract_suggestions_filters_long() {
-        let long = "x".repeat(81);
+        let long = "x".repeat(super::MAX_SUGGESTION_LEN + 1);
         let input = format!("Answer.\n<suggestions>[\"{}\", \"ok\"]</suggestions>", long);
         let (_, suggestions) = super::extract_suggestions(&input);
         assert_eq!(suggestions, vec!["ok"]); // safety: test
+    }
+
+    #[test]
+    fn test_extract_suggestions_accepts_numbered_lines() {
+        let input = "Answer.\n<suggestions>\n1. Summarize the current thread\n2. Explain the last tool call\n</suggestions>";
+        let (text, suggestions) = super::extract_suggestions(input);
+        assert_eq!(text, "Answer."); // safety: test
+        assert_eq!(
+            suggestions,
+            vec!["Summarize the current thread", "Explain the last tool call"]
+        ); // safety: test
     }
 
     #[test]

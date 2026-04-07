@@ -243,9 +243,19 @@ Rules:
       "path": "/Users/alex/report.md"
     }
   ],
-  "notes": "Summary generated from workspace context"
+  "notes": "Summary generated from workspace context",
+  "turn_cost": {
+    "input_tokens": 1200,
+    "output_tokens": 280,
+    "cost_usd": "$0.0042"
+  }
 }
 ```
+
+Rules:
+
+- `result_metadata.turn_cost` stores the latest completed turn usage summary for a thread-backed session task.
+- the desktop UI may restore token usage from `active_thread_task.result_metadata.turn_cost` after reload or restart.
 
 ### 4. Validation And Error Matrix
 
