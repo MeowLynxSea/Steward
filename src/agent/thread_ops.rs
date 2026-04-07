@@ -68,6 +68,39 @@ fn parse_follow_up_suggestions(text: &str) -> Vec<String> {
         .collect()
 }
 
+fn tool_call_storage_json(
+    fallback_call_id: String,
+    tool_call: &crate::agent::session::TurnToolCall,
+) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "name": tool_call.name.clone(),
+        "call_id": tool_call.tool_call_id.clone().unwrap_or(fallback_call_id),
+        "parameters": tool_call.parameters.clone(),
+        "started_at": tool_call.started_at,
+        "completed_at": tool_call.completed_at,
+    });
+
+    if let Some(ref result) = tool_call.result {
+        let preview = match result {
+            serde_json::Value::String(s) => s.clone(),
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+        };
+        obj["result_preview"] = serde_json::Value::String(preview.clone());
+        obj["result"] = serde_json::Value::String(preview);
+    }
+    if let Some(ref error) = tool_call.error {
+        obj["error"] = serde_json::Value::String(error.clone());
+    }
+    if let Some(ref rationale) = tool_call.rationale {
+        obj["rationale"] = serde_json::Value::String(rationale.clone());
+    }
+    if let Some(ref tool_call_id) = tool_call.tool_call_id {
+        obj["tool_call_id"] = serde_json::Value::String(truncate_preview(tool_call_id, 128));
+    }
+
+    obj
+}
+
 impl Agent {
     /// Hydrate a historical thread from DB into memory if not already present.
     ///
@@ -844,14 +877,203 @@ impl Agent {
         }
     }
 
-    /// Persist tool call summaries to the DB as a `role="tool_calls"` message.
+    /// Persist tool call summaries to the DB as individual `role="tool_call"` messages.
     ///
-    /// Stored between the user and assistant messages so that
-    /// `build_turns_from_db_messages` can reconstruct the tool call history.
-    /// Content is a JSON object: `{ "calls": [...] }`.
-    /// The `calls` array contains tool call summaries with optional `rationale`
-    /// and `tool_call_id` fields. Legacy rows may be plain JSON arrays or
-    /// wrapped objects that still include `narrative`.
+    /// Each persisted row represents one tool invocation in timeline order.
+    /// Legacy rows may still exist as `role="tool_calls"` wrappers and are
+    /// handled by DB rebuild compatibility code.
+    pub(super) async fn persist_live_tool_call_started(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        channel: &str,
+        user_id: &str,
+        turn_number: usize,
+        tool_call_id: &str,
+    ) {
+        let store = match self.store() {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+
+        let (tool_call, already_persisted, tool_index) = {
+            let sess = session.lock().await;
+            let Some(thread) = sess.threads.get(&thread_id) else {
+                return;
+            };
+            let Some(turn) = thread
+                .turns
+                .iter()
+                .find(|turn| turn.turn_number == turn_number)
+            else {
+                return;
+            };
+            let Some((idx, tool_call)) = turn
+                .tool_calls
+                .iter()
+                .enumerate()
+                .find(|(_, call)| call.tool_call_id.as_deref() == Some(tool_call_id))
+            else {
+                return;
+            };
+            (
+                tool_call.clone(),
+                tool_call.conversation_message_id.is_some(),
+                idx,
+            )
+        };
+
+        if already_persisted {
+            return;
+        }
+
+        if !self
+            .ensure_writable_conversation(&store, thread_id, channel, user_id)
+            .await
+        {
+            return;
+        }
+
+        let content = match serde_json::to_string(&tool_call_storage_json(
+            format!("turn{}_{}", turn_number, tool_index),
+            &tool_call,
+        )) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!(
+                    tool_call_id = %tool_call_id,
+                    %error,
+                    "Failed to serialize tool call start"
+                );
+                return;
+            }
+        };
+
+        let Ok(message_id) = store
+            .add_conversation_message(thread_id, "tool_call", &content)
+            .await
+        else {
+            tracing::warn!(
+                tool_call_id = %tool_call_id,
+                "Failed to persist tool call start"
+            );
+            return;
+        };
+
+        let mut sess = session.lock().await;
+        if let Some(thread) = sess.threads.get_mut(&thread_id)
+            && let Some(turn) = thread
+                .turns
+                .iter_mut()
+                .find(|turn| turn.turn_number == turn_number)
+            && let Some(tool_call) = turn
+                .tool_calls
+                .iter_mut()
+                .find(|call| call.tool_call_id.as_deref() == Some(tool_call_id))
+        {
+            tool_call.conversation_message_id = Some(message_id);
+        }
+    }
+
+    pub(super) async fn persist_live_tool_call_update(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        channel: &str,
+        user_id: &str,
+        turn_number: usize,
+        tool_call_id: &str,
+    ) {
+        let store = match self.store() {
+            Some(s) => Arc::clone(s),
+            None => return,
+        };
+
+        let (tool_call, message_id, tool_index) = {
+            let sess = session.lock().await;
+            let Some(thread) = sess.threads.get(&thread_id) else {
+                return;
+            };
+            let Some(turn) = thread
+                .turns
+                .iter()
+                .find(|turn| turn.turn_number == turn_number)
+            else {
+                return;
+            };
+            let Some((idx, tool_call)) = turn
+                .tool_calls
+                .iter()
+                .enumerate()
+                .find(|(_, call)| call.tool_call_id.as_deref() == Some(tool_call_id))
+            else {
+                return;
+            };
+            (tool_call.clone(), tool_call.conversation_message_id, idx)
+        };
+
+        if !self
+            .ensure_writable_conversation(&store, thread_id, channel, user_id)
+            .await
+        {
+            return;
+        }
+
+        let content = match serde_json::to_string(&tool_call_storage_json(
+            format!("turn{}_{}", turn_number, tool_index),
+            &tool_call,
+        )) {
+            Ok(content) => content,
+            Err(error) => {
+                tracing::warn!(
+                    tool_call_id = %tool_call_id,
+                    %error,
+                    "Failed to serialize tool call update"
+                );
+                return;
+            }
+        };
+
+        if let Some(message_id) = message_id {
+            if let Err(error) = store
+                .update_conversation_message_content(message_id, &content)
+                .await
+            {
+                tracing::warn!(
+                    tool_call_id = %tool_call_id,
+                    %error,
+                    "Failed to update tool call history row"
+                );
+            }
+            return;
+        }
+
+        let Ok(message_id) = store
+            .add_conversation_message(thread_id, "tool_call", &content)
+            .await
+        else {
+            tracing::warn!(
+                tool_call_id = %tool_call_id,
+                "Failed to backfill missing tool call history row"
+            );
+            return;
+        };
+
+        let mut sess = session.lock().await;
+        if let Some(thread) = sess.threads.get_mut(&thread_id)
+            && let Some(turn) = thread
+                .turns
+                .iter_mut()
+                .find(|turn| turn.turn_number == turn_number)
+            && let Some(tool_call) = turn
+                .tool_calls
+                .iter_mut()
+                .find(|call| call.tool_call_id.as_deref() == Some(tool_call_id))
+        {
+            tool_call.conversation_message_id = Some(message_id);
+        }
+    }
+
     pub(super) async fn persist_tool_calls(
         &self,
         thread_id: Uuid,
@@ -870,55 +1092,6 @@ impl Agent {
             None => return,
         };
 
-        let summaries: Vec<serde_json::Value> = tool_calls
-            .iter()
-            .enumerate()
-            .map(|(i, tc)| {
-                let mut obj = serde_json::json!({
-                    "name": tc.name,
-                    "call_id": format!("turn{}_{}", turn_number, i),
-                    "parameters": tc.parameters,
-                });
-                if let Some(ref result) = tc.result {
-                    let preview = match result {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => serde_json::to_string_pretty(other)
-                            .unwrap_or_else(|_| other.to_string()),
-                    };
-                    obj["result_preview"] = serde_json::Value::String(preview);
-                    // Store full result for history/UI rebuild.
-                    let full_result = match result {
-                        serde_json::Value::String(s) => s.clone(),
-                        other => serde_json::to_string_pretty(other)
-                            .unwrap_or_else(|_| other.to_string()),
-                    };
-                    obj["result"] = serde_json::Value::String(full_result);
-                }
-                if let Some(ref error) = tc.error {
-                    obj["error"] = serde_json::Value::String(error.clone());
-                }
-                if let Some(ref rationale) = tc.rationale {
-                    obj["rationale"] = serde_json::Value::String(rationale.clone());
-                }
-                if let Some(ref tool_call_id) = tc.tool_call_id {
-                    obj["tool_call_id"] =
-                        serde_json::Value::String(truncate_preview(tool_call_id, 128));
-                }
-                obj
-            })
-            .collect();
-
-        let wrapper = serde_json::json!({
-            "calls": summaries,
-        });
-        let content = match serde_json::to_string(&wrapper) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("Failed to serialize tool calls: {}", e);
-                return;
-            }
-        };
-
         if !self
             .ensure_writable_conversation(&store, thread_id, channel, user_id)
             .await
@@ -926,11 +1099,28 @@ impl Agent {
             return;
         }
 
-        if let Err(e) = store
-            .add_conversation_message(thread_id, "tool_calls", &content)
-            .await
-        {
-            tracing::warn!("Failed to persist tool calls: {}", e);
+        for (i, tc) in tool_calls.iter().enumerate() {
+            if tc.conversation_message_id.is_some() {
+                continue;
+            }
+
+            let content = match serde_json::to_string(&tool_call_storage_json(
+                format!("turn{}_{}", turn_number, i),
+                tc,
+            )) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("Failed to serialize tool call: {}", e);
+                    continue;
+                }
+            };
+
+            if let Err(e) = store
+                .add_conversation_message(thread_id, "tool_call", &content)
+                .await
+            {
+                tracing::warn!("Failed to persist tool call: {}", e);
+            }
         }
     }
 
@@ -1190,6 +1380,29 @@ impl Agent {
                 job_ctx.user_timezone = tz.to_string();
             }
 
+            let turn_number = {
+                let mut sess = session.lock().await;
+                if let Some(thread) = sess.threads.get_mut(&thread_id)
+                    && let Some(turn) = thread.last_turn_mut()
+                {
+                    turn.mark_tool_call_started_for(&pending.tool_call_id);
+                    Some(turn.turn_number)
+                } else {
+                    None
+                }
+            };
+            if let Some(turn_number) = turn_number {
+                self.persist_live_tool_call_started(
+                    &session,
+                    thread_id,
+                    &message.channel,
+                    &message.user_id,
+                    turn_number,
+                    &pending.tool_call_id,
+                )
+                .await;
+            }
+
             let _ = self
                 .channels
                 .send_status(
@@ -1272,18 +1485,38 @@ impl Agent {
 
             // Record sanitized result in thread
             {
-                let mut sess = session.lock().await;
-                if let Some(thread) = sess.threads.get_mut(&thread_id)
-                    && let Some(turn) = thread.last_turn_mut()
-                {
-                    if is_tool_error {
-                        turn.record_tool_error_for(&pending.tool_call_id, result_content.clone());
+                let turn_number = {
+                    let mut sess = session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&thread_id)
+                        && let Some(turn) = thread.last_turn_mut()
+                    {
+                        let turn_number = turn.turn_number;
+                        if is_tool_error {
+                            turn.record_tool_error_for(
+                                &pending.tool_call_id,
+                                result_content.clone(),
+                            );
+                        } else {
+                            turn.record_tool_result_for(
+                                &pending.tool_call_id,
+                                serde_json::json!(result_content),
+                            );
+                        }
+                        Some(turn_number)
                     } else {
-                        turn.record_tool_result_for(
-                            &pending.tool_call_id,
-                            serde_json::json!(result_content),
-                        );
+                        None
                     }
+                };
+                if let Some(turn_number) = turn_number {
+                    self.persist_live_tool_call_update(
+                        &session,
+                        thread_id,
+                        &message.channel,
+                        &message.user_id,
+                        turn_number,
+                        &pending.tool_call_id,
+                    )
+                    .await;
                 }
             }
 
@@ -1374,6 +1607,29 @@ impl Agent {
                 // Single tool (or none): execute inline
                 let mut results = Vec::new();
                 for tc in &runnable {
+                    let turn_number = {
+                        let mut sess = session.lock().await;
+                        if let Some(thread) = sess.threads.get_mut(&thread_id)
+                            && let Some(turn) = thread.last_turn_mut()
+                        {
+                            turn.mark_tool_call_started_for(&tc.id);
+                            Some(turn.turn_number)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(turn_number) = turn_number {
+                        self.persist_live_tool_call_started(
+                            &session,
+                            thread_id,
+                            &message.channel,
+                            &message.user_id,
+                            turn_number,
+                            &tc.id,
+                        )
+                        .await;
+                    }
+
                     let _ = self
                         .channels
                         .send_status(
@@ -1416,6 +1672,29 @@ impl Agent {
                 let runnable_count = runnable.len();
 
                 for (spawn_idx, tc) in runnable.iter().enumerate() {
+                    let turn_number = {
+                        let mut sess = session.lock().await;
+                        if let Some(thread) = sess.threads.get_mut(&thread_id)
+                            && let Some(turn) = thread.last_turn_mut()
+                        {
+                            turn.mark_tool_call_started_for(&tc.id);
+                            Some(turn.turn_number)
+                        } else {
+                            None
+                        }
+                    };
+                    if let Some(turn_number) = turn_number {
+                        self.persist_live_tool_call_started(
+                            &session,
+                            thread_id,
+                            &message.channel,
+                            &message.user_id,
+                            turn_number,
+                            &tc.id,
+                        )
+                        .await;
+                    }
+
                     let tools = self.tools().clone();
                     let safety = self.safety().clone();
                     let channels = self.channels.clone();
@@ -1536,18 +1815,35 @@ impl Agent {
 
                 // Record sanitized result in thread
                 {
-                    let mut sess = session.lock().await;
-                    if let Some(thread) = sess.threads.get_mut(&thread_id)
-                        && let Some(turn) = thread.last_turn_mut()
-                    {
-                        if is_deferred_error {
-                            turn.record_tool_error_for(&tc.id, deferred_content.clone());
+                    let turn_number = {
+                        let mut sess = session.lock().await;
+                        if let Some(thread) = sess.threads.get_mut(&thread_id)
+                            && let Some(turn) = thread.last_turn_mut()
+                        {
+                            let turn_number = turn.turn_number;
+                            if is_deferred_error {
+                                turn.record_tool_error_for(&tc.id, deferred_content.clone());
+                            } else {
+                                turn.record_tool_result_for(
+                                    &tc.id,
+                                    serde_json::json!(deferred_content),
+                                );
+                            }
+                            Some(turn_number)
                         } else {
-                            turn.record_tool_result_for(
-                                &tc.id,
-                                serde_json::json!(deferred_content),
-                            );
+                            None
                         }
+                    };
+                    if let Some(turn_number) = turn_number {
+                        self.persist_live_tool_call_update(
+                            &session,
+                            thread_id,
+                            &message.channel,
+                            &message.user_id,
+                            turn_number,
+                            &tc.id,
+                        )
+                        .await;
                     }
                 }
 
@@ -2100,6 +2396,58 @@ fn rebuild_chat_messages_from_db(
             "assistant" => {
                 pending_thinking_segments.clear();
                 result.push(ChatMessage::assistant(&msg.content));
+            }
+            "tool_call" => {
+                let call = match serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+
+                let tool_call = ToolCall {
+                    id: call["call_id"].as_str().unwrap_or("call_0").to_string(),
+                    name: call["name"].as_str().unwrap_or("unknown").to_string(),
+                    arguments: call
+                        .get("parameters")
+                        .cloned()
+                        .unwrap_or(serde_json::json!({})),
+                    reasoning: call
+                        .get("rationale")
+                        .and_then(|v| v.as_str())
+                        .map(String::from),
+                };
+                let narrative = if pending_thinking_segments.is_empty() {
+                    None
+                } else {
+                    Some(pending_thinking_segments.join(""))
+                };
+                pending_thinking_segments.clear();
+                result.push(ChatMessage::assistant_with_tool_calls(
+                    narrative,
+                    vec![tool_call.clone()],
+                ));
+
+                let completed_at = call
+                    .get("completed_at")
+                    .and_then(|v| v.as_str())
+                    .filter(|value| !value.trim().is_empty());
+                let content = if let Some(err) = call.get("error").and_then(|v| v.as_str()) {
+                    Some(err.to_string())
+                } else if let Some(res) = call.get("result").and_then(|v| v.as_str()) {
+                    Some(res.to_string())
+                } else if let Some(preview) = call.get("result_preview").and_then(|v| v.as_str()) {
+                    Some(preview.to_string())
+                } else if completed_at.is_some() {
+                    Some("OK".to_string())
+                } else {
+                    None
+                };
+                if let Some(content) = content {
+                    result.push(ChatMessage::tool_result(
+                        tool_call.id,
+                        tool_call.name,
+                        content,
+                    ));
+                }
             }
             "tool_calls" => {
                 // Try to parse the enriched JSON and rebuild tool messages.

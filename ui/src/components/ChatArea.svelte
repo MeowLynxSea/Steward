@@ -182,6 +182,9 @@
       return tool.status;
     }
     if (!completedAt) {
+      if (tool.status !== "running") {
+        return "";
+      }
       const elapsed = Date.now() - new Date(startedAt).getTime();
       return `${(elapsed / 1000).toFixed(1)}s`;
     }

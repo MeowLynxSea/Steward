@@ -51,6 +51,36 @@ fn merge_streamed_thinking_segment(existing: &str, incoming: &str) -> String {
     format!("{existing}{incoming}")
 }
 
+fn thinking_segment_match_score(existing: &str, incoming: &str) -> usize {
+    if existing.is_empty() || incoming.is_empty() {
+        return 0;
+    }
+    if incoming.starts_with(existing) || existing.starts_with(incoming) {
+        return existing.len().min(incoming.len()) + 1024;
+    }
+
+    let mut best_overlap = 0usize;
+    let mut boundaries: Vec<usize> = incoming.char_indices().map(|(idx, _)| idx).collect();
+    boundaries.push(incoming.len());
+    for overlap in boundaries.into_iter().rev() {
+        if overlap == 0 {
+            continue;
+        }
+        if existing.ends_with(&incoming[..overlap]) {
+            best_overlap = overlap;
+            break;
+        }
+    }
+
+    if best_overlap >= 8 { best_overlap } else { 0 }
+}
+
+#[derive(Default)]
+struct ThinkingTracker {
+    segments: Vec<(Uuid, String)>,
+    prefer_new_segment: bool,
+}
+
 /// Result of the agentic loop execution.
 pub(super) enum AgenticLoopResult {
     /// Completed with a response.
@@ -172,13 +202,13 @@ impl Agent {
         let safety = Arc::clone(self.safety());
         let store = self.store().cloned();
         let channel = message.channel.clone();
-        let current_thinking_message = Arc::new(Mutex::new(None::<(Uuid, String)>));
-        let forwarder_thinking_message = Arc::clone(&current_thinking_message);
+        let thinking_tracker = Arc::new(Mutex::new(ThinkingTracker::default()));
+        let forwarder_thinking_tracker = Arc::clone(&thinking_tracker);
         let sse_forwarder = Some(tokio::spawn(async move {
             while let Some(delta) = stream_rx.recv().await {
                 match delta {
                     crate::llm::StreamDelta::TextDelta(content) => {
-                        *forwarder_thinking_message.lock().await = None;
+                        forwarder_thinking_tracker.lock().await.prefer_new_segment = true;
                         if let Some(ref emitter) = emitter {
                             emitter.emit_for_user(
                                 &user_id,
@@ -193,17 +223,37 @@ impl Agent {
                         let sanitized = safety
                             .sanitize_tool_output("agent_narrative", &content)
                             .content;
+                        let mut persisted_message_id: Option<String> = None;
                         if !sanitized.trim().is_empty() {
                             if let Some(ref store) = store
                                 && let Ok(true) = store
                                     .ensure_conversation(thread_id, &channel, &user_id, None)
                                     .await
                             {
-                                let mut current = forwarder_thinking_message.lock().await;
-                                match current.as_mut() {
-                                    Some((message_id, existing)) => {
+                                let mut tracker = forwarder_thinking_tracker.lock().await;
+                                let best_match = tracker
+                                    .segments
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(idx, (_, existing))| {
+                                        let score =
+                                            thinking_segment_match_score(existing, &sanitized);
+                                        (score > 0).then_some((idx, score))
+                                    })
+                                    .max_by_key(|(idx, score)| (*score, *idx));
+
+                                match best_match.or_else(|| {
+                                    if tracker.segments.is_empty() || tracker.prefer_new_segment {
+                                        None
+                                    } else {
+                                        Some((tracker.segments.len() - 1, 0))
+                                    }
+                                }) {
+                                    Some((idx, _)) => {
+                                        let (message_id, existing) = &mut tracker.segments[idx];
                                         let merged =
                                             merge_streamed_thinking_segment(existing, &sanitized);
+                                        persisted_message_id = Some(message_id.to_string());
                                         if merged != *existing
                                             && store
                                                 .update_conversation_message_content(
@@ -215,6 +265,7 @@ impl Agent {
                                         {
                                             *existing = merged;
                                         }
+                                        tracker.prefer_new_segment = false;
                                     }
                                     None => {
                                         if let Ok(message_id) = store
@@ -223,7 +274,12 @@ impl Agent {
                                             )
                                             .await
                                         {
-                                            *current = Some((message_id, sanitized.clone()));
+                                            persisted_message_id = Some(message_id.to_string());
+                                            tracker.segments.push((message_id, sanitized.clone()));
+                                            if tracker.segments.len() > 16 {
+                                                tracker.segments.remove(0);
+                                            }
+                                            tracker.prefer_new_segment = false;
                                         }
                                     }
                                 }
@@ -231,15 +287,11 @@ impl Agent {
                         }
 
                         if let Some(ref emitter) = emitter {
-                            let message_id = {
-                                let current = forwarder_thinking_message.lock().await;
-                                current.as_ref().map(|(id, _)| id.to_string())
-                            };
                             emitter.emit_for_user(
                                 &user_id,
                                 steward_common::AppEvent::Thinking {
                                     message: content,
-                                    message_id,
+                                    message_id: persisted_message_id,
                                     thread_id: tid.clone(),
                                 },
                             );
@@ -298,7 +350,7 @@ impl Agent {
             nudge_at,
             force_text_at,
             user_tz,
-            current_thinking_message,
+            thinking_tracker,
         };
 
         let mut reason_ctx = ReasoningContext::new()
@@ -386,7 +438,7 @@ struct ChatDelegate<'a> {
     nudge_at: usize,
     force_text_at: usize,
     user_tz: chrono_tz::Tz,
-    current_thinking_message: Arc<Mutex<Option<(Uuid, String)>>>,
+    thinking_tracker: Arc<Mutex<ThinkingTracker>>,
 }
 
 #[async_trait]
@@ -406,7 +458,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         reason_ctx: &mut ReasoningContext,
         iteration: usize,
     ) -> Option<LoopOutcome> {
-        *self.current_thinking_message.lock().await = None;
+        self.thinking_tracker.lock().await.prefer_new_segment = true;
 
         // Inject a nudge message when approaching the iteration limit so the
         // LLM is aware it should produce a final answer on the next turn.
@@ -813,6 +865,30 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
         if runnable.len() <= 1 {
             for (pf_idx, tc) in &runnable {
+                let turn_number = {
+                    let mut sess = self.session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&self.thread_id)
+                        && let Some(turn) = thread.last_turn_mut()
+                    {
+                        turn.mark_tool_call_started_for(&tc.id);
+                        Some(turn.turn_number)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(turn_number) = turn_number {
+                    self.agent
+                        .persist_live_tool_call_started(
+                            &self.session,
+                            self.thread_id,
+                            &self.message.channel,
+                            &self.message.user_id,
+                            turn_number,
+                            &tc.id,
+                        )
+                        .await;
+                }
+
                 let _ = self
                     .agent
                     .send_channel_status(
@@ -853,6 +929,30 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             let mut join_set = JoinSet::new();
 
             for (pf_idx, tc) in &runnable {
+                let turn_number = {
+                    let mut sess = self.session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&self.thread_id)
+                        && let Some(turn) = thread.last_turn_mut()
+                    {
+                        turn.mark_tool_call_started_for(&tc.id);
+                        Some(turn.turn_number)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(turn_number) = turn_number {
+                    self.agent
+                        .persist_live_tool_call_started(
+                            &self.session,
+                            self.thread_id,
+                            &self.message.channel,
+                            &self.message.user_id,
+                            turn_number,
+                            &tc.id,
+                        )
+                        .await;
+                }
+
                 let pf_idx = *pf_idx;
                 let tools = self.agent.tools().clone();
                 let safety = self.agent.safety().clone();
@@ -1070,18 +1170,36 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
                     // Record sanitized result in thread (identity-based matching).
                     {
-                        let mut sess = self.session.lock().await;
-                        if let Some(thread) = sess.threads.get_mut(&self.thread_id)
-                            && let Some(turn) = thread.last_turn_mut()
-                        {
-                            if is_tool_error {
-                                turn.record_tool_error_for(&tc.id, result_content.clone());
+                        let turn_number = {
+                            let mut sess = self.session.lock().await;
+                            if let Some(thread) = sess.threads.get_mut(&self.thread_id)
+                                && let Some(turn) = thread.last_turn_mut()
+                            {
+                                let turn_number = turn.turn_number;
+                                if is_tool_error {
+                                    turn.record_tool_error_for(&tc.id, result_content.clone());
+                                } else {
+                                    turn.record_tool_result_for(
+                                        &tc.id,
+                                        serde_json::json!(result_content),
+                                    );
+                                }
+                                Some(turn_number)
                             } else {
-                                turn.record_tool_result_for(
-                                    &tc.id,
-                                    serde_json::json!(result_content),
-                                );
+                                None
                             }
+                        };
+                        if let Some(turn_number) = turn_number {
+                            self.agent
+                                .persist_live_tool_call_update(
+                                    &self.session,
+                                    self.thread_id,
+                                    &self.message.channel,
+                                    &self.message.user_id,
+                                    turn_number,
+                                    &tc.id,
+                                )
+                                .await;
                         }
                     }
 

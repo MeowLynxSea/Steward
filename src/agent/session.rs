@@ -687,11 +687,14 @@ impl Turn {
     pub fn record_tool_call(&mut self, name: impl Into<String>, params: serde_json::Value) {
         self.tool_calls.push(TurnToolCall {
             name: name.into(),
+            started_at: Utc::now(),
+            completed_at: None,
             parameters: params,
             result: None,
             error: None,
             rationale: None,
             tool_call_id: None,
+            conversation_message_id: None,
         });
     }
 
@@ -705,18 +708,51 @@ impl Turn {
     ) {
         self.tool_calls.push(TurnToolCall {
             name: name.into(),
+            started_at: Utc::now(),
+            completed_at: None,
             parameters: params,
             result: None,
             error: None,
             rationale,
             tool_call_id,
+            conversation_message_id: None,
         });
+    }
+
+    /// Mark a tool call as actually started.
+    pub fn mark_tool_call_started_for(&mut self, tool_call_id: &str) {
+        if let Some(call) = self
+            .tool_calls
+            .iter_mut()
+            .find(|c| c.tool_call_id.as_deref() == Some(tool_call_id))
+        {
+            call.started_at = Utc::now();
+            call.completed_at = None;
+        } else if let Some(call) = self
+            .tool_calls
+            .iter_mut()
+            .find(|c| c.result.is_none() && c.error.is_none())
+        {
+            tracing::debug!(
+                tool_call_id = %tool_call_id,
+                fallback_tool = %call.name,
+                "tool_call_id not found for start, falling back to first pending call"
+            );
+            call.started_at = Utc::now();
+            call.completed_at = None;
+        } else {
+            tracing::warn!(
+                tool_call_id = %tool_call_id,
+                "Tool start dropped: no matching or pending tool call"
+            );
+        }
     }
 
     /// Record tool call result.
     pub fn record_tool_result(&mut self, result: serde_json::Value) {
         if let Some(call) = self.tool_calls.last_mut() {
             call.result = Some(result);
+            call.completed_at = Some(Utc::now());
         }
     }
 
@@ -724,6 +760,7 @@ impl Turn {
     pub fn record_tool_error(&mut self, error: impl Into<String>) {
         if let Some(call) = self.tool_calls.last_mut() {
             call.error = Some(error.into());
+            call.completed_at = Some(Utc::now());
         }
     }
 
@@ -735,6 +772,7 @@ impl Turn {
             .find(|c| c.tool_call_id.as_deref() == Some(tool_call_id))
         {
             call.result = Some(result);
+            call.completed_at = Some(Utc::now());
         } else if let Some(call) = self
             .tool_calls
             .iter_mut()
@@ -746,6 +784,7 @@ impl Turn {
                 "tool_call_id not found, falling back to first pending call"
             );
             call.result = Some(result);
+            call.completed_at = Some(Utc::now());
         } else {
             tracing::warn!(
                 tool_call_id = %tool_call_id,
@@ -762,6 +801,7 @@ impl Turn {
             .find(|c| c.tool_call_id.as_deref() == Some(tool_call_id))
         {
             call.error = Some(error.into());
+            call.completed_at = Some(Utc::now());
         } else if let Some(call) = self
             .tool_calls
             .iter_mut()
@@ -773,6 +813,7 @@ impl Turn {
                 "tool_call_id not found, falling back to first pending call"
             );
             call.error = Some(error.into());
+            call.completed_at = Some(Utc::now());
         } else {
             tracing::warn!(
                 tool_call_id = %tool_call_id,
@@ -787,6 +828,12 @@ impl Turn {
 pub struct TurnToolCall {
     /// Tool name.
     pub name: String,
+    /// When the tool call started.
+    #[serde(default = "Utc::now")]
+    pub started_at: DateTime<Utc>,
+    /// When the tool call completed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
     /// Parameters passed to the tool.
     pub parameters: serde_json::Value,
     /// Result from the tool (if successful).
@@ -799,6 +846,9 @@ pub struct TurnToolCall {
     /// The tool_call_id from the LLM, for identity-based result matching.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Persisted conversation row backing this tool call in history.
+    #[serde(skip)]
+    pub conversation_message_id: Option<Uuid>,
 }
 
 #[cfg(test)]

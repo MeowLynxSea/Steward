@@ -70,6 +70,8 @@ export type ToolCallStatus = "running" | "completed" | "failed";
 export interface TimelineToolCall {
   name: string;
   status: ToolCallStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
   parameters: string | null;
   resultPreview: string | null;
   error: string | null;

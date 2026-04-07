@@ -153,6 +153,15 @@ fn format_tool_result_preview(result: &serde_json::Value) -> String {
     }
 }
 
+fn parse_optional_timestamp(
+    value: Option<&serde_json::Value>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .and_then(|raw| raw.as_str())
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 fn build_thread_messages_from_db_messages(
     db_messages: &[ConversationMessage],
 ) -> Vec<steward_core::ipc::ThreadMessageResponse> {
@@ -198,6 +207,60 @@ fn build_thread_messages_from_db_messages(
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     tool_call: None,
+                });
+            }
+            "tool_call" => {
+                let call = match serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                };
+                let parameters = call.get("parameters").and_then(format_tool_parameters);
+                let result_preview = call
+                    .get("result")
+                    .or_else(|| call.get("result_preview"))
+                    .map(|value| match value {
+                        serde_json::Value::String(text) => normalize_tool_output_text(text),
+                        other => serde_json::to_string_pretty(other)
+                            .unwrap_or_else(|_| other.to_string()),
+                    });
+                let error = call
+                    .get("error")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                let rationale = call
+                    .get("rationale")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
+                let started_at = parse_optional_timestamp(call.get("started_at"));
+                let completed_at = parse_optional_timestamp(call.get("completed_at"));
+
+                messages.push(steward_core::ipc::ThreadMessageResponse {
+                    id: msg.id,
+                    kind: "tool_call".to_string(),
+                    role: None,
+                    content: None,
+                    created_at: msg.created_at,
+                    turn_number: active_turn_number,
+                    tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
+                        name: call
+                            .get("name")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("unknown")
+                            .to_string(),
+                        status: if error.is_some() {
+                            "failed".to_string()
+                        } else if completed_at.is_some() || result_preview.is_some() {
+                            "completed".to_string()
+                        } else {
+                            "running".to_string()
+                        },
+                        started_at,
+                        completed_at,
+                        parameters,
+                        result_preview,
+                        error,
+                        rationale,
+                    }),
                 });
             }
             "tool_calls" => {
@@ -270,6 +333,8 @@ fn build_thread_messages_from_db_messages(
                             } else {
                                 "completed".to_string()
                             },
+                            started_at: parse_optional_timestamp(call.get("started_at")),
+                            completed_at: parse_optional_timestamp(call.get("completed_at")),
                             parameters,
                             result_preview,
                             error,
@@ -339,6 +404,8 @@ fn build_thread_messages(
                     tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
                         name: tool_call.name.clone(),
                         status: tool_status(tool_call),
+                        started_at: Some(tool_call.started_at),
+                        completed_at: tool_call.completed_at,
                         parameters: format_tool_parameters(&tool_call.parameters),
                         result_preview,
                         error: tool_call.error.clone(),

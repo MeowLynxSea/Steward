@@ -61,6 +61,8 @@ pub struct SessionListResponse {
 pub struct ThreadToolCallResponse {
     pub name: String,
     pub status: String,
+    pub started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub parameters: Option<String>,
     pub result_preview: Option<String>,
     pub error: Option<String>,
