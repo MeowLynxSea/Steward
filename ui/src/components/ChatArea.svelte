@@ -46,8 +46,7 @@
 
   type DisplayEntry =
     | { kind: "message"; message: ThreadMessage }
-    | { kind: "tool_group"; id: string; messages: ThreadMessage[] }
-    | { kind: "thinking_group"; id: string; messages: ThreadMessage[] };
+    | { kind: "auxiliary_group"; id: string; messages: ThreadMessage[] };
 
   let {
     session,
@@ -86,65 +85,31 @@
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
     const messages = session?.thread_messages ?? [];
     const entries: DisplayEntry[] = [];
-    let toolBuffer: ThreadMessage[] = [];
-    let thinkingBuffer: ThreadMessage[] = [];
+    let auxBuffer: ThreadMessage[] = [];
 
-    const flushTools = () => {
-      if (toolBuffer.length === 0) {
+    const flushAux = () => {
+      if (auxBuffer.length === 0) {
         return;
       }
       entries.push({
-        kind: "tool_group",
-        id: `tool-group-${toolBuffer[0].id}`,
-        messages: toolBuffer
+        kind: "auxiliary_group",
+        id: `aux-group-${auxBuffer[0].id}`,
+        messages: auxBuffer
       });
-      toolBuffer = [];
-    };
-
-    const flushThinking = () => {
-      if (thinkingBuffer.length === 0) {
-        return;
-      }
-      entries.push({
-        kind: "thinking_group",
-        id: `thinking-group-${thinkingBuffer[0].id}`,
-        messages: thinkingBuffer
-      });
-      thinkingBuffer = [];
+      auxBuffer = [];
     };
 
     for (const message of messages) {
-      if (message.kind === "thinking") {
-        flushTools();
-        const currentTurn = thinkingBuffer[0]?.turn_number;
-        if (thinkingBuffer.length === 0 || currentTurn === message.turn_number) {
-          thinkingBuffer.push(message);
-        } else {
-          flushThinking();
-          thinkingBuffer.push(message);
-        }
+      if (message.kind === "thinking" || (message.kind === "tool_call" && message.tool_call)) {
+        auxBuffer.push(message);
         continue;
       }
 
-      if (message.kind === "tool_call" && message.tool_call) {
-        flushThinking();
-        const currentTurn = toolBuffer[0]?.turn_number;
-        if (toolBuffer.length === 0 || currentTurn === message.turn_number) {
-          toolBuffer.push(message);
-        } else {
-          flushTools();
-          toolBuffer.push(message);
-        }
-        continue;
-      }
-
-      flushTools();
-      flushThinking();
+      flushAux();
       entries.push({ kind: "message", message });
     }
 
-    flushTools();
-    flushThinking();
+    flushAux();
     return entries;
   });
   const reasoningSummary = $derived(buildCompactSummary(streaming.reasoning ?? "", 110));
@@ -483,68 +448,92 @@
     <div class="message-list" bind:this={messageListRef}>
       {#each displayEntries as entry, idx (entry.kind === "message" ? entry.message.id : entry.id)}
         <div
-          class="message {(entry.kind === 'tool_group' || entry.kind === 'thinking_group') ? 'assistant' : (entry.message.role ?? entry.message.kind)} fade-in"
+          class="message {(entry.kind === 'auxiliary_group') ? 'assistant' : (entry.message.role ?? entry.message.kind)} fade-in"
           style="animation-delay: {Math.min(idx * 30, 300)}ms"
         >
-          {#if entry.kind === "tool_group"}
+                    {#if entry.kind === "auxiliary_group"}
             <div class="assistant-text">
               <div class="tool-calls-container inline-tool-call">
-                <div class="tool-call-card tool-group-card">
-                  <div class="tool-group-summary">{toolGroupSummary(entry.messages)}</div>
+                <div class="tool-call-card tool-group-card aux-group-card">
+                  <div class="tool-group-summary">{entry.messages.length} 个执行步骤</div>
+                  <div class="aux-scroll-area">
                   {#each entry.messages as message, groupIndex}
                     <div class="tool-group-row">
                       <button class="tool-call-header tool-group-row-header" onclick={() => toggleToolCallExpand(message.id)}>
                         <div class="tool-call-left">
-                          {#if message.tool_call?.status === "running"}
-                            <div class="tool-spinner">
-                              <Loader size={14} strokeWidth={2} />
+                          {#if message.kind === "thinking"}
+                            <div class="tool-icon thinking">
+                              <Brain size={14} strokeWidth={2} />
                             </div>
-                          {:else if message.tool_call?.status === "completed"}
-                            <div class="tool-icon success">
-                              <CheckCircle2 size={14} strokeWidth={2} />
+                            <div class="tool-call-copy">
+                              <div class="tool-call-title-row">
+                                <span class="tool-name">思考过程</span>
+                              </div>
+                              <div class="tool-summary">
+                                {buildThinkingSummary(
+                                  [normalizeThinkingTranscript(message.content ?? "")].filter(Boolean),
+                                  false
+                                )}
+                              </div>
                             </div>
                           {:else}
-                            <div class="tool-icon error">
-                              <AlertCircle size={14} strokeWidth={2} />
+                            {#if message.tool_call?.status === "running"}
+                              <div class="tool-spinner">
+                                <Loader size={14} strokeWidth={2} />
+                              </div>
+                            {:else if message.tool_call?.status === "completed"}
+                              <div class="tool-icon success">
+                                <CheckCircle2 size={14} strokeWidth={2} />
+                              </div>
+                            {:else}
+                              <div class="tool-icon error">
+                                <AlertCircle size={14} strokeWidth={2} />
+                              </div>
+                            {/if}
+                            <div class="tool-call-copy">
+                              <div class="tool-call-title-row">
+                                <span class="tool-name">{message.tool_call?.name}</span>
+                                <span class="tool-duration">{toolCallDuration(message.tool_call as TimelineToolCall, message.created_at)}</span>
+                              </div>
+                              <div class="tool-summary">{toolCallSummary(message.tool_call as TimelineToolCall)}</div>
                             </div>
                           {/if}
-                          <div class="tool-call-copy">
-                            <div class="tool-call-title-row">
-                              <span class="tool-name">{message.tool_call?.name}</span>
-                              <span class="tool-duration">{toolCallDuration(message.tool_call as TimelineToolCall, message.created_at)}</span>
-                            </div>
-                            <div class="tool-summary">{toolCallSummary(message.tool_call as TimelineToolCall)}</div>
-                          </div>
                         </div>
                         <div class="tool-call-right">
-                          <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
+                          <ChevronRight size={14} strokeWidth={2} class="expand-icon {expandedToolCalls.has(message.id) ? 'expanded' : ''}" />
                         </div>
                       </button>
                       {#if expandedToolCalls.has(message.id)}
                         <div class="tool-call-body slide-down">
-                          {#if message.tool_call?.rationale}
-                            <div class="tool-detail">
-                              <span class="tool-detail-label">原因</span>
-                              <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
+                          {#if message.kind === "thinking"}
+                            <div class="thinking-segment">
+                              <div class="thinking-text">{normalizeThinkingTranscript(message.content ?? "")}</div>
                             </div>
-                          {/if}
-                          {#if message.tool_call?.parameters}
-                            <div class="tool-detail">
-                              <span class="tool-detail-label">参数</span>
-                              <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
-                            </div>
-                          {/if}
-                          {#if message.tool_call?.resultPreview}
-                            <div class="tool-detail">
-                              <span class="tool-detail-label">结果</span>
-                              <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
-                            </div>
-                          {/if}
-                          {#if message.tool_call?.error}
-                            <div class="tool-detail error-detail">
-                              <span class="tool-detail-label">错误</span>
-                              <pre class="tool-detail-content">{message.tool_call.error}</pre>
-                            </div>
+                          {:else}
+                            {#if message.tool_call?.rationale}
+                              <div class="tool-detail">
+                                <span class="tool-detail-label">原因</span>
+                                <pre class="tool-detail-content">{message.tool_call.rationale}</pre>
+                              </div>
+                            {/if}
+                            {#if message.tool_call?.parameters}
+                              <div class="tool-detail">
+                                <span class="tool-detail-label">参数</span>
+                                <pre class="tool-detail-content">{message.tool_call.parameters}</pre>
+                              </div>
+                            {/if}
+                            {#if message.tool_call?.resultPreview}
+                              <div class="tool-detail">
+                                <span class="tool-detail-label">结果</span>
+                                <pre class="tool-detail-content">{message.tool_call.resultPreview}</pre>
+                              </div>
+                            {/if}
+                            {#if message.tool_call?.error}
+                              <div class="tool-detail error-detail">
+                                <span class="tool-detail-label">错误</span>
+                                <pre class="tool-detail-content">{message.tool_call.error}</pre>
+                              </div>
+                            {/if}
                           {/if}
                         </div>
                       {/if}
@@ -553,47 +542,7 @@
                       <div class="tool-group-divider"></div>
                     {/if}
                   {/each}
-                </div>
-              </div>
-            </div>
-          {:else if entry.kind === "thinking_group"}
-            <div class="assistant-text">
-              <div class="tool-calls-container inline-tool-call">
-                <div class="tool-call-card thinking-card" class:expanded={expandedThinkingGroups.has(entry.id)}>
-                  <button class="tool-call-header" onclick={() => toggleThinkingGroupExpand(entry.id)}>
-                    <div class="tool-call-left">
-                      <div class="tool-icon thinking">
-                        <Brain size={14} strokeWidth={2} />
-                      </div>
-                      <div class="tool-call-copy">
-                        <div class="tool-call-title-row">
-                          <span class="tool-name">思考过程</span>
-                        </div>
-                        <div class="tool-summary">
-                          {buildThinkingSummary(
-                            entry.messages
-                              .map((message) => normalizeThinkingTranscript(message.content ?? ""))
-                              .filter((segment) => segment.length > 0),
-                            false
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div class="tool-call-right">
-                      <ChevronRight size={14} strokeWidth={2} class="expand-icon" />
-                    </div>
-                  </button>
-                  {#if expandedThinkingGroups.has(entry.id)}
-                    <div class="tool-call-body slide-down auxiliary-card-body">
-                      {#each entry.messages as message}
-                        {#if normalizeThinkingTranscript(message.content ?? "")}
-                          <div class="thinking-segment">
-                            <div class="thinking-text">{normalizeThinkingTranscript(message.content ?? "")}</div>
-                          </div>
-                        {/if}
-                      {/each}
-                    </div>
-                  {/if}
+                  </div>
                 </div>
               </div>
             </div>
@@ -1494,4 +1443,26 @@
   .send-btn.active {
     background: var(--accent-primary);
   }
+  .aux-group-card {
+    display: flex;
+    flex-direction: column;
+    max-height: 440px;
+  }
+  .aux-scroll-area {
+    overflow-y: auto;
+    flex-shrink: 1;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-default) transparent;
+  }
+  .aux-scroll-area::-webkit-scrollbar {
+    width: 6px;
+  }
+  .aux-scroll-area::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .aux-scroll-area::-webkit-scrollbar-thumb {
+    background-color: var(--border-default);
+    border-radius: 4px;
+  }
+
 </style>
