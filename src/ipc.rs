@@ -16,6 +16,8 @@ pub use crate::desktop_runtime::AppState;
 pub struct SettingsResponse {
     pub llm_backend: Option<String>,
     pub selected_model: Option<String>,
+    pub cheap_model: Option<String>,
+    pub cheap_model_uses_primary: bool,
     pub ollama_base_url: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub llm_custom_providers: Vec<crate::settings::CustomLlmProviderSettings>,
@@ -30,6 +32,8 @@ pub struct SettingsResponse {
 pub struct PatchSettingsRequest {
     pub llm_backend: Option<String>,
     pub selected_model: Option<String>,
+    pub cheap_model: Option<String>,
+    pub cheap_model_uses_primary: Option<bool>,
     pub ollama_base_url: Option<String>,
     pub openai_compatible_base_url: Option<String>,
     pub llm_custom_providers: Option<Vec<crate::settings::CustomLlmProviderSettings>>,
@@ -45,6 +49,8 @@ pub struct PatchSettingsRequest {
 pub struct SessionSummaryResponse {
     pub id: Uuid,
     pub title: String,
+    pub title_emoji: Option<String>,
+    pub title_pending: bool,
     pub turn_count: i64,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub last_activity: chrono::DateTime<chrono::Utc>,

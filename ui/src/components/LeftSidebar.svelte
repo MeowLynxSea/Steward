@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { List, Plus, Search, Settings, Trash2, Zap } from "lucide-svelte";
+  import { List, LoaderCircle, Plus, Search, Settings, Trash2, Zap } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
 
   interface Props {
@@ -28,7 +28,13 @@
           onclick={() => onSelect(session.id)}
           title={session.title}
         >
-          <Zap size={14} strokeWidth={2} />
+          {#if session.title_pending}
+            <span class="loading-icon"><LoaderCircle size={14} strokeWidth={2} /></span>
+          {:else if session.title_emoji}
+            <span class="collapsed-emoji" aria-hidden="true">{session.title_emoji}</span>
+          {:else}
+            <Zap size={14} strokeWidth={2} />
+          {/if}
         </button>
       {/each}
 
@@ -68,8 +74,20 @@
             class="session-item {session.id === activeId ? 'active' : ''}"
             onclick={() => onSelect(session.id)}
           >
-            <span class="session-icon"><Zap size={14} strokeWidth={2} /></span>
-            <span class="session-name">{session.title}</span>
+            <span class="session-icon">
+              {#if session.title_pending}
+                <span class="loading-icon"><LoaderCircle size={14} strokeWidth={2} /></span>
+              {:else if session.title_emoji}
+                <span class="session-emoji" aria-hidden="true">{session.title_emoji}</span>
+              {:else}
+                <Zap size={14} strokeWidth={2} />
+              {/if}
+            </span>
+            {#if session.title_pending}
+              <span class="session-name-skeleton" aria-hidden="true"></span>
+            {:else}
+              <span class="session-name">{session.title}</span>
+            {/if}
           </button>
           <button
             class="session-delete"
@@ -142,6 +160,11 @@
 
   .collapsed-spacer {
     flex: 1;
+  }
+
+  .collapsed-emoji {
+    font-size: 14px;
+    line-height: 1;
   }
 
   .sidebar-brand {
@@ -295,6 +318,7 @@
     align-items: center;
     justify-content: center;
     color: var(--accent-gold);
+    width: 18px;
   }
 
   .session-name {
@@ -302,6 +326,30 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .session-emoji {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .loading-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    animation: session-spin 0.85s linear infinite;
+  }
+
+  .session-name-skeleton {
+    display: inline-flex;
+    width: 84px;
+    height: 12px;
+    border-radius: 999px;
+    background:
+      linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.55) 48%, rgba(255, 255, 255, 0) 100%),
+      var(--bg-elevated);
+    background-size: 180px 100%, auto;
+    animation: title-shimmer 1.2s linear infinite;
   }
 
   .bottom-actions {
@@ -328,5 +376,25 @@
 
   .settings-btn:hover {
     background: var(--bg-hover);
+  }
+
+  @keyframes title-shimmer {
+    from {
+      background-position: -180px 0, 0 0;
+    }
+
+    to {
+      background-position: 180px 0, 0 0;
+    }
+  }
+
+  @keyframes session-spin {
+    from {
+      transform: rotate(0deg);
+    }
+
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

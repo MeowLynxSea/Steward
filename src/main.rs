@@ -57,6 +57,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Suggestions { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::TurnCost { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ReasoningUpdate { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::TitleUpdated { thread_id, .. } => thread_id.clone(),
             _ => None,
         };
 
@@ -234,6 +235,20 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                 ..
             } => {
                 serde_json::json!({ "narrative": narrative, "decisions": decisions })
+            }
+            steward_common::AppEvent::TitleUpdated {
+                session_id,
+                title,
+                emoji,
+                pending,
+                ..
+            } => {
+                serde_json::json!({
+                    "session_id": session_id,
+                    "title": title,
+                    "emoji": emoji,
+                    "pending": pending
+                })
             }
             steward_common::AppEvent::JobReasoning {
                 job_id,

@@ -15,6 +15,7 @@ const STREAM_EVENT_TYPES = [
   "session:suggestions",
   "session:turn_cost",
   "session:image_generated",
+  "session:title_updated",
   "task:created",
   "task:updated",
   "task:waiting_approval",

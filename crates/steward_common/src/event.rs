@@ -206,6 +206,18 @@ pub enum AppEvent {
         thread_id: Option<String>,
     },
 
+    /// Session title/summary metadata changed.
+    #[serde(rename = "title_updated")]
+    TitleUpdated {
+        session_id: String,
+        title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        emoji: Option<String>,
+        pending: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+    },
+
     /// Reasoning update for a sandbox job.
     #[serde(rename = "job_reasoning")]
     JobReasoning {
@@ -242,6 +254,7 @@ impl AppEvent {
             Self::TurnCost { .. } => "turn_cost",
             Self::ExtensionStatus { .. } => "extension_status",
             Self::ReasoningUpdate { .. } => "reasoning_update",
+            Self::TitleUpdated { .. } => "title_updated",
             Self::JobReasoning { .. } => "job_reasoning",
         }
     }
@@ -371,6 +384,13 @@ mod tests {
             AppEvent::ReasoningUpdate {
                 narrative: String::new(),
                 decisions: vec![],
+                thread_id: None,
+            },
+            AppEvent::TitleUpdated {
+                session_id: String::new(),
+                title: String::new(),
+                emoji: None,
+                pending: false,
                 thread_id: None,
             },
             AppEvent::JobReasoning {

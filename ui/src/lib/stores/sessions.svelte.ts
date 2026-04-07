@@ -4,6 +4,7 @@ import { createEventStream, type StreamHandle } from "../stream";
 import type {
   ActiveToolCall,
   SessionDetail,
+  SessionTitleUpdatePayload,
   ThreadMessage,
   SessionSummary,
   StreamEnvelope,
@@ -167,6 +168,12 @@ class SessionsState {
       ...this.active,
       thread_messages: [...this.active.thread_messages, optimistic]
     };
+    this.#applySessionTitleUpdate({
+      session_id: this.activeId,
+      title: this.active.session.title,
+      emoji: this.active.session.title_emoji,
+      pending: true
+    });
 
     // Reset streaming state for new message — immediately show thinking
     this.streaming = {
@@ -195,6 +202,12 @@ class SessionsState {
       this.#startPollFallback();
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to send message";
+      this.#applySessionTitleUpdate({
+        session_id: this.activeId,
+        title: this.active.session.title,
+        emoji: this.active.session.title_emoji,
+        pending: false
+      });
       // Stop the thinking indicator on error
       this.streaming = {
         ...this.streaming,
@@ -302,6 +315,11 @@ class SessionsState {
   }
 
   #handleEvent(event: StreamEnvelope) {
+    if (event.event === "session.title_updated") {
+      this.#applySessionTitleUpdate(event.payload as SessionTitleUpdatePayload);
+      return;
+    }
+
     if (!this.active || !this.#eventMatchesActiveThread(event)) return;
 
     const eventKey = `${event.thread_id}:${event.sequence}:${event.event}`;
@@ -826,6 +844,27 @@ class SessionsState {
         tool_call: mutate(entry.tool_call as ActiveToolCall)
       };
       this.active = { ...this.active, thread_messages: messages };
+    }
+  }
+
+  #applySessionTitleUpdate(update: SessionTitleUpdatePayload) {
+    const apply = (session: SessionSummary): SessionSummary =>
+      session.id === update.session_id
+        ? {
+            ...session,
+            title: update.title,
+            title_emoji: update.emoji,
+            title_pending: update.pending
+          }
+        : session;
+
+    this.list = this.list.map(apply);
+
+    if (this.active?.session.id === update.session_id) {
+      this.active = {
+        ...this.active,
+        session: apply(this.active.session)
+      };
     }
   }
 }

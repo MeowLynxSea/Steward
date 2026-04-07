@@ -216,9 +216,14 @@ impl Agent {
                         {
                             let (message_id, response) = {
                                 let sess = stream_session.lock().await;
-                                match sess.threads.get(&thread_id).and_then(|thread| thread.last_turn())
+                                match sess
+                                    .threads
+                                    .get(&thread_id)
+                                    .and_then(|thread| thread.last_turn())
                                 {
-                                    Some(turn) => (turn.assistant_message_id, turn.response.clone()),
+                                    Some(turn) => {
+                                        (turn.assistant_message_id, turn.response.clone())
+                                    }
                                     None => (None, None),
                                 }
                             };

@@ -28,6 +28,8 @@ export interface CustomLlmProviderSettings {
 export interface SettingsResponse {
   llm_backend: string | null;
   selected_model: string | null;
+  cheap_model: string | null;
+  cheap_model_uses_primary: boolean;
   ollama_base_url: string | null;
   openai_compatible_base_url: string | null;
   llm_custom_providers: CustomLlmProviderSettings[];
@@ -40,6 +42,8 @@ export interface SettingsResponse {
 export interface PatchSettingsRequest {
   llm_backend?: string | null;
   selected_model?: string | null;
+  cheap_model?: string | null;
+  cheap_model_uses_primary?: boolean;
   ollama_base_url?: string | null;
   openai_compatible_base_url?: string | null;
   llm_custom_providers?: CustomLlmProviderSettings[];
@@ -49,6 +53,8 @@ export interface PatchSettingsRequest {
 export interface SessionSummary {
   id: string;
   title: string;
+  title_emoji: string | null;
+  title_pending: boolean;
   turn_count: number;
   started_at: string;
   last_activity: string;
@@ -309,4 +315,11 @@ export interface StreamingState {
   images: Array<{ dataUrl: string; path: string | null }>;
   /** Whether a response is actively streaming */
   isStreaming: boolean;
+}
+
+export interface SessionTitleUpdatePayload {
+  session_id: string;
+  title: string;
+  emoji: string | null;
+  pending: boolean;
 }

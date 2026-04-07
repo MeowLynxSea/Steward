@@ -4,6 +4,8 @@ import type { LlmBuiltinOverride, PatchSettingsRequest, SettingsResponse } from 
 const DEFAULT_SETTINGS: SettingsResponse = {
   llm_backend: null,
   selected_model: null,
+  cheap_model: null,
+  cheap_model_uses_primary: true,
   ollama_base_url: null,
   openai_compatible_base_url: null,
   llm_custom_providers: [],
@@ -41,6 +43,10 @@ class SettingsState {
     this.data = { ...this.data, [key]: normalizeText(value) as SettingsResponse[K] };
   }
 
+  setCheapModelUsesPrimary(value: boolean) {
+    this.data = { ...this.data, cheap_model_uses_primary: value };
+  }
+
   setBuiltinOverride(providerId: string, patch: Partial<LlmBuiltinOverride>) {
     const current = this.data.llm_builtin_overrides[providerId] ?? {
       api_key: null,
@@ -73,6 +79,8 @@ class SettingsState {
     const payload: PatchSettingsRequest = {
       llm_backend: this.data.llm_backend,
       selected_model: this.data.selected_model,
+      cheap_model: this.data.cheap_model,
+      cheap_model_uses_primary: this.data.cheap_model_uses_primary,
       ollama_base_url: this.data.ollama_base_url,
       openai_compatible_base_url: this.data.openai_compatible_base_url,
       llm_custom_providers: this.data.llm_custom_providers,

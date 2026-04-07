@@ -9,6 +9,7 @@
   import { router } from "./lib/router.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { sessionsStore } from "./lib/stores/sessions.svelte";
+  import { themeStore } from "./lib/stores/theme.svelte";
   import { tasksStore } from "./lib/stores/tasks.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
   import { workbenchStore } from "./lib/stores/workbench.svelte";
@@ -158,6 +159,7 @@
   }
 
   onMount(async () => {
+    themeStore.init();
     await bootstrap();
 
     const taskInterval = window.setInterval(() => {
@@ -214,6 +216,7 @@
   <div class="app-container">
     <TitleBar
       title="Steward"
+      session={sessionsStore.active?.session ?? null}
       leftSidebarCollapsed={leftSidebarCollapsed}
       rightSidebarCollapsed={rightSidebarCollapsed}
       onToggleLeft={() => leftSidebarCollapsed = !leftSidebarCollapsed}

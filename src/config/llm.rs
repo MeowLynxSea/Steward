@@ -247,7 +247,14 @@ impl LlmConfig {
 
         // Generic cheap model (works with any backend).
         // Falls back to NearAI-specific cheap_model in provider chain logic.
-        let cheap_model = None;
+        let cheap_model = if settings.cheap_model_uses_primary {
+            None
+        } else {
+            settings
+                .cheap_model
+                .clone()
+                .or_else(|| optional_env("LLM_CHEAP_MODEL").ok().flatten())
+        };
 
         // Generic smart routing cascade flag.
         // Defaults to true. Overrides NearAI-specific smart_routing_cascade.

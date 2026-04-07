@@ -136,15 +136,11 @@
     return value?.trim().toLowerCase() ?? providerPresets[0].id;
   }
 
-  function normalizeOptionalText(value: string | null | undefined) {
-    const trimmed = value?.trim() ?? "";
-    return trimmed.length > 0 ? trimmed : null;
-  }
-
   const selectedProvider = $derived(
     providerPresets.find((provider) => provider.id === normalizeBackendId(settingsStore.data.llm_backend))
       ?? providerPresets[0]
   );
+  const isSettingsMode = $derived(mode === "settings");
 
   const selectedOverride = $derived(
     settingsStore.data.llm_builtin_overrides[selectedProvider.id] ?? {
@@ -163,6 +159,7 @@
   });
 
   const currentApiFormat = $derived(selectedOverride.request_format ?? "chat_completions");
+  const cheapModelDisabled = $derived(settingsStore.data.cheap_model_uses_primary);
 
   function selectProvider(provider: ProviderPreset) {
     const isSameProvider = normalizeBackendId(settingsStore.data.llm_backend) === provider.id;
@@ -267,7 +264,7 @@
 
 <svelte:window onbeforeunload={stopCodexPolling} />
 
-<section class:fullscreen={mode === "onboarding"} class="configuration-shell">
+<section class:fullscreen={mode === "onboarding"} class:settings-mode={mode === "settings"} class="configuration-shell">
   <div class:configuration-card-onboarding={mode === "onboarding"} class="configuration-card">
     <div class="configuration-scroll">
       <div class="hero-copy">
@@ -287,7 +284,9 @@
             <provider.icon size={20} strokeWidth={2} />
             <div>
               <strong>{provider.label}</strong>
-              <p>{provider.description}</p>
+              {#if !isSettingsMode}
+                <p>{provider.description}</p>
+              {/if}
             </div>
           </button>
         {/each}
@@ -295,7 +294,7 @@
 
       <div class="form-grid">
         <label class="field">
-          <span>Model</span>
+          <span>{isSettingsMode ? "主模型" : "Model"}</span>
           <input
             value={settingsStore.data.selected_model ?? ""}
             placeholder={selectedProvider.defaultModel}
@@ -303,6 +302,35 @@
               settingsStore.updateField("selected_model", (event.currentTarget as HTMLInputElement).value)}
           />
         </label>
+
+        {#if isSettingsMode}
+          <div class="cheap-model-panel field-wide">
+            <div class="cheap-model-header">
+              <div class="cheap-model-copy">
+                <span>Cheap LLM</span>
+                <p>用于轻量路由、快速判断和低成本推理。</p>
+              </div>
+
+              <label class="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={settingsStore.data.cheap_model_uses_primary}
+                  onchange={(event) =>
+                    settingsStore.setCheapModelUsesPrimary((event.currentTarget as HTMLInputElement).checked)}
+                />
+                <span>使用主模型</span>
+              </label>
+            </div>
+
+            <input
+              value={settingsStore.data.cheap_model ?? ""}
+              placeholder="例如 gpt-5-mini / gemini-2.5-flash-lite"
+              disabled={cheapModelDisabled}
+              oninput={(event) =>
+                settingsStore.updateField("cheap_model", (event.currentTarget as HTMLInputElement).value)}
+            />
+          </div>
+        {/if}
 
         {#if selectedProvider.supportsFormat}
           <label class="field">
@@ -605,6 +633,63 @@
     outline: none;
   }
 
+  .cheap-model-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 16px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-surface);
+  }
+
+  .cheap-model-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .cheap-model-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .cheap-model-copy span {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .cheap-model-copy p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.45;
+    color: var(--text-tertiary);
+  }
+
+  .cheap-model-panel input:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .checkbox-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .checkbox-row input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+  }
+
   .segmented-control {
     display: inline-grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -762,6 +847,67 @@
     margin-top: 16px;
     background: var(--bg-elevated);
     color: var(--text-primary);
+  }
+
+  .settings-mode .configuration-card {
+    width: 100%;
+    padding: 0;
+    border: none;
+    box-shadow: none;
+    background: transparent;
+    backdrop-filter: none;
+  }
+
+  .settings-mode .hero-copy {
+    margin-bottom: 16px;
+  }
+
+  .settings-mode h2 {
+    font-size: 24px;
+  }
+
+  .settings-mode .description {
+    margin-top: 6px;
+    font-size: 13px;
+    line-height: 1.45;
+    max-width: none;
+  }
+
+  .settings-mode .provider-grid {
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+
+  .settings-mode .provider-card {
+    align-items: center;
+    padding: 10px 12px;
+    border-radius: 14px;
+  }
+
+  .settings-mode .provider-card strong {
+    margin-bottom: 0;
+    font-size: 14px;
+  }
+
+  .settings-mode .form-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .settings-mode .field input {
+    min-height: 42px;
+    border-radius: 12px;
+  }
+
+  .settings-mode .status-row {
+    margin-top: 16px;
+  }
+
+  .settings-mode .submit-button {
+    min-width: 132px;
+    min-height: 42px;
+    border-radius: 12px;
   }
 
   @media (max-width: 720px) {

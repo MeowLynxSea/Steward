@@ -651,14 +651,12 @@ impl Agent {
                         .await;
                     turn_cost
                 };
-                self.persist_turn_cost(&session, thread_id, &turn_cost).await;
+                self.persist_turn_cost(&session, thread_id, &turn_cost)
+                    .await;
 
                 if let Some(task_runtime) = self.task_runtime() {
                     task_runtime
-                        .mark_completed_with_result(
-                            thread_id,
-                            Some(turn_cost_metadata(&turn_cost)),
-                        )
+                        .mark_completed_with_result(thread_id, Some(turn_cost_metadata(&turn_cost)))
                         .await;
                 }
                 self.emit_runtime_event_for_message(
@@ -907,8 +905,15 @@ impl Agent {
     ) {
         let (message_id, should_update_turn) = {
             let sess = session.lock().await;
-            match sess.threads.get(&thread_id).and_then(|thread| thread.last_turn()) {
-                Some(turn) => (turn.assistant_message_id, turn.turn_cost.as_ref() != Some(turn_cost)),
+            match sess
+                .threads
+                .get(&thread_id)
+                .and_then(|thread| thread.last_turn())
+            {
+                Some(turn) => (
+                    turn.assistant_message_id,
+                    turn.turn_cost.as_ref() != Some(turn_cost),
+                ),
                 None => (None, false),
             }
         };
@@ -934,7 +939,10 @@ impl Agent {
         };
 
         if let Err(error) = store
-            .update_conversation_message_metadata(message_id, &serde_json::json!({ "turn_cost": turn_cost }))
+            .update_conversation_message_metadata(
+                message_id,
+                &serde_json::json!({ "turn_cost": turn_cost }),
+            )
             .await
         {
             tracing::warn!(
@@ -2098,7 +2106,8 @@ impl Agent {
                             .await;
                         turn_cost
                     };
-                    self.persist_turn_cost(&session, thread_id, &turn_cost).await;
+                    self.persist_turn_cost(&session, thread_id, &turn_cost)
+                        .await;
                     if let Some(task_runtime) = self.task_runtime() {
                         task_runtime
                             .mark_completed_with_result(

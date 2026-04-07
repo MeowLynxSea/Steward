@@ -23,6 +23,7 @@
     TimelineToolCall
   } from "../lib/types";
   import { renderMarkdown } from "../lib/markdown";
+  import { themeStore } from "../lib/stores/theme.svelte";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { onDestroy } from "svelte";
 
@@ -65,7 +66,6 @@
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let messageListRef: HTMLDivElement | null = $state(null);
   let showModelDropdown = $state(false);
-  let darkMode = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
   let imagesExpanded = $state(false);
   let animatedAssistantId = $state<string | null>(null);
@@ -83,6 +83,7 @@
   const hasStreamingContent = $derived(
     streaming.images.length > 0
   );
+  const darkMode = $derived(themeStore.mode === "dark");
   const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
     const messages = session?.thread_messages ?? [];
@@ -247,8 +248,7 @@
   }
 
   function toggleTheme() {
-    darkMode = !darkMode;
-    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    themeStore.toggle();
   }
 
   function handleGlobalClick(event: MouseEvent) {

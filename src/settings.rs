@@ -141,6 +141,14 @@ pub struct Settings {
     #[serde(default)]
     pub selected_model: Option<String>,
 
+    /// Optional cheap model used by smart routing.
+    #[serde(default)]
+    pub cheap_model: Option<String>,
+
+    /// When true, reuse the primary model instead of a separate cheap model.
+    #[serde(default = "default_true")]
+    pub cheap_model_uses_primary: bool,
+
     // === Step 5: Embeddings ===
     /// Embeddings configuration.
     #[serde(default)]
@@ -195,6 +203,10 @@ pub struct Settings {
     /// Transcription configuration.
     #[serde(default)]
     pub transcription: Option<TranscriptionSettings>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Source for the secrets master key.
@@ -461,10 +473,6 @@ fn default_max_tool_iterations() -> usize {
 
 fn default_timezone() -> String {
     "UTC".to_string()
-}
-
-fn default_true() -> bool {
-    true
 }
 
 impl Default for AgentSettings {

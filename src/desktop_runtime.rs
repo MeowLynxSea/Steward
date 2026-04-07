@@ -27,9 +27,11 @@ pub struct AppState {
     pub db: Option<Arc<dyn Database>>,
     pub workspace: Option<Arc<Workspace>>,
     pub agent_session_manager: Arc<AgentSessionManager>,
+    pub title_llm: Arc<dyn crate::llm::LlmProvider>,
     pub task_runtime: Arc<TaskRuntime>,
     pub tools: Arc<crate::tools::ToolRegistry>,
     pub mcp_session_manager: Arc<McpSessionManager>,
+    pub emitter: Option<TauriEventEmitterHandle>,
     /// Sender to inject messages into the agent's message stream.
     /// Used by Tauri IPC commands to trigger agent processing.
     pub message_inject_tx: tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>,
@@ -41,9 +43,11 @@ impl AppState {
         db: Option<Arc<dyn Database>>,
         workspace: Option<Arc<Workspace>>,
         agent_session_manager: Arc<AgentSessionManager>,
+        title_llm: Arc<dyn crate::llm::LlmProvider>,
         task_runtime: Arc<TaskRuntime>,
         tools: Arc<crate::tools::ToolRegistry>,
         mcp_session_manager: Arc<McpSessionManager>,
+        emitter: Option<TauriEventEmitterHandle>,
         message_inject_tx: tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>,
     ) -> Self {
         Self {
@@ -51,9 +55,11 @@ impl AppState {
             db,
             workspace,
             agent_session_manager,
+            title_llm,
             task_runtime,
             tools,
             mcp_session_manager,
+            emitter,
             message_inject_tx,
         }
     }
@@ -164,8 +170,8 @@ pub async fn start_embedded_runtime(
     let deps = AgentDeps {
         owner_id: config.owner_id.clone(),
         store: components.db,
-        llm: app_llm,
-        cheap_llm: Some(app_cheap_llm),
+        llm: app_llm.clone(),
+        cheap_llm: Some(app_cheap_llm.clone()),
         safety: components.safety,
         tools: components.tools,
         workspace: components.workspace,
@@ -227,9 +233,11 @@ pub async fn start_embedded_runtime(
         app_state_db,
         app_state_workspace,
         app_state_session_manager,
+        app_llm.clone(),
         app_state_task_runtime,
         app_state_tools,
         app_state_mcp,
+        tauri_emitter,
         inject_tx.clone(),
     ))
 }

@@ -1,9 +1,11 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { AlignJustify, Minus, Square, X } from "lucide-svelte";
+  import type { SessionSummary } from "../lib/types";
 
   interface Props {
     title?: string;
+    session?: SessionSummary | null;
     leftSidebarCollapsed?: boolean;
     rightSidebarCollapsed?: boolean;
     onToggleLeft?: () => void;
@@ -12,6 +14,7 @@
 
   let {
     title = "Steward",
+    session = null,
     leftSidebarCollapsed = false,
     rightSidebarCollapsed = false,
     onToggleLeft,
@@ -50,7 +53,20 @@
   </div>
 
   <div class="titlebar-center">
-    <span class="app-title">{title}</span>
+    {#if session}
+      <div class="session-titlebar">
+        {#if !session.title_pending && session.title_emoji}
+          <span class="session-emoji" aria-hidden="true">{session.title_emoji}</span>
+        {/if}
+        {#if session.title_pending}
+          <span class="title-skeleton" aria-hidden="true"></span>
+        {:else}
+          <span class="app-title">{session.title}</span>
+        {/if}
+      </div>
+    {:else}
+      <span class="app-title">{title}</span>
+    {/if}
   </div>
 
   <div class="titlebar-side titlebar-side-right">
@@ -85,7 +101,6 @@
     border-bottom: 1px solid var(--border-default);
     user-select: none;
     -webkit-user-select: none;
-    app-region: drag;
   }
 
   .titlebar-side {
@@ -105,11 +120,39 @@
     padding: 0 16px;
   }
 
+  .session-titlebar {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    max-width: 320px;
+  }
+
   .app-title {
     font-size: 13px;
     font-weight: 600;
     letter-spacing: 0.02em;
     color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .session-emoji {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .title-skeleton {
+    display: inline-flex;
+    width: 104px;
+    height: 12px;
+    border-radius: 999px;
+    background:
+      linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.52) 48%, rgba(255, 255, 255, 0) 100%),
+      var(--bg-elevated);
+    background-size: 180px 100%, auto;
+    animation: title-shimmer 1.25s linear infinite;
   }
 
   .traffic-lights,
@@ -133,7 +176,6 @@
     font-size: 14px;
     font-weight: 600;
     transition: background 0.15s ease, color 0.15s ease;
-    app-region: no-drag;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -142,10 +184,6 @@
   .sidebar-toggle:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
-  }
-
-  .window-control {
-    app-region: no-drag;
   }
 
   .traffic-light {
@@ -223,5 +261,15 @@
   .close-btn:hover {
     background: #e81123;
     color: white;
+  }
+
+  @keyframes title-shimmer {
+    from {
+      background-position: -180px 0, 0 0;
+    }
+
+    to {
+      background-position: 180px 0, 0 0;
+    }
   }
 </style>
