@@ -141,6 +141,26 @@
 
     return null;
   });
+  const streamingSkeletonLayout = $derived.by(() => {
+    const signalWeight =
+      streaming.streamingContent.length +
+      (streaming.thinking ? 23 : 0) +
+      streaming.toolCalls.length * 19 +
+      (streaming.reasoning ? 29 : 0) +
+      streaming.images.length * 13;
+    const variant = signalWeight % 4;
+
+    if (variant === 0) {
+      return ["78%", "61%", "70%"];
+    }
+    if (variant === 1) {
+      return ["68%", "84%", "52%", "64%"];
+    }
+    if (variant === 2) {
+      return ["86%", "58%", "74%"];
+    }
+    return ["72%", "49%", "81%", "57%"];
+  });
 
   function scrollToBottom() {
     if (messageListRef) {
@@ -406,16 +426,6 @@
       return animatedAssistantText;
     }
     return message.content ?? "";
-  }
-
-  function showTypingCursor(message: ThreadMessage) {
-    if (message.id !== animatedAssistantId) {
-      return false;
-    }
-    const targetText = activeStreamingAssistant?.id === message.id
-      ? (activeStreamingAssistant.content ?? "")
-      : (message.content ?? "");
-    return streaming.isStreaming || animatedAssistantText.length < targetText.length;
   }
 
   $effect(() => {
@@ -704,18 +714,29 @@
             </div>
           {:else}
             <div class="assistant-text">
-              <div class="assistant-content markdown-body" class:streaming-text={showTypingCursor(entry.message)}>
+              <div class="assistant-content markdown-body">
                 {@html renderMarkdown(displayedAssistantContent(entry.message))}
-                {#if showTypingCursor(entry.message)}
-                  <span class="typing-cursor"></span>
-                {/if}
               </div>
             </div>
           {/if}
         </div>
       {/each}
 
-      <!-- Live streaming area -->
+      {#if streaming.isStreaming}
+        <div class="message assistant pending-request-message fade-in">
+          <div class="assistant-text">
+            <div class="pending-inline-skeleton" aria-hidden="true">
+              {#each streamingSkeletonLayout as width, skeletonIndex}
+                <span
+                  class="pending-line"
+                  style={`width: ${width}; animation-delay: ${skeletonIndex * 0.12}s;`}
+                ></span>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+
       {#if hasStreamingContent}
         <div class="message assistant streaming-message fade-in">
           <div class="assistant-text">
@@ -1119,26 +1140,6 @@
   .assistant-content :global(pre),
   .assistant-content :global(table) {
     margin: 0.68em 0;
-  }
-
-  /* Streaming text with cursor */
-  .streaming-text {
-    position: relative;
-  }
-
-  .typing-cursor {
-    display: inline-block;
-    width: 2px;
-    height: 1.1em;
-    background: var(--accent-primary);
-    margin-left: 2px;
-    vertical-align: text-bottom;
-    animation: cursorBlink 1s step-end infinite;
-  }
-
-  @keyframes cursorBlink {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0; }
   }
 
   .thinking-text {
@@ -1724,6 +1725,48 @@
 
   .tool-inline-error {
     color: var(--accent-danger-text);
+  }
+
+  .pending-request-message {
+    width: 100%;
+  }
+
+  .pending-inline-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    padding: 6px 0 2px;
+  }
+
+  .pending-line {
+    display: block;
+    height: 11px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg-elevated) 82%, transparent),
+      color-mix(in srgb, white 74%, var(--accent-primary) 26%),
+      color-mix(in srgb, var(--bg-elevated) 82%, transparent)
+    );
+    background-size: 220% 100%;
+    animation: pendingLineShimmer 1.55s ease-in-out infinite;
+    opacity: 0.82;
+  }
+
+  @keyframes pendingLineShimmer {
+    0% {
+      background-position: 0% 50%;
+      opacity: 0.52;
+    }
+    50% {
+      background-position: 100% 50%;
+      opacity: 0.95;
+    }
+    100% {
+      background-position: 0% 50%;
+      opacity: 0.52;
+    }
   }
 
   @keyframes auxiliarySummarySettle {
