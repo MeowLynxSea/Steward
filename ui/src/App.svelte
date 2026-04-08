@@ -111,14 +111,7 @@
   }
 
   function handleSelectModel(backendId: string) {
-    const backend = settingsStore.data.backends.find((item) => item.id === backendId);
-    if (!backend) {
-      return;
-    }
-
-    settingsStore.setMajorBackend(backend.id);
-    settingsStore.data.llm_backend = backend.provider;
-    settingsStore.data.selected_model = backend.model;
+    settingsStore.setMajorBackend(backendId);
     void settingsStore.save();
   }
 
@@ -127,29 +120,27 @@
   );
 
   const currentModelName = $derived.by(
-    () => currentMajorBackend?.model ?? settingsStore.data.selected_model ?? null
+    () => currentMajorBackend?.model ?? null
   );
 
-  const availableModels = $derived.by<ModelOption[]>(() => {
-    if (settingsStore.data.backends.length > 0) {
-      return settingsStore.data.backends.map((backend) => ({
-        value: backend.id,
-        label: `${providerLabels[backend.provider] ?? backend.provider} / ${backend.model}`,
-        model: backend.model
-      }));
-    }
+  const availableModels = $derived.by<ModelOption[]>(() =>
+    settingsStore.data.backends.map((backend) => ({
+      value: backend.id,
+      label: `${providerLabels[backend.provider] ?? backend.provider} / ${backend.model}`,
+      model: backend.model
+    }))
+  );
 
-    const current = settingsStore.data.selected_model?.trim();
-    if (!current) {
-      return [];
+  // Auto-select the sole remaining backend when backends.length drops to 1.
+  $effect(() => {
+    const backends = settingsStore.data.backends;
+    if (backends.length === 1 && !settingsStore.data.major_backend_id) {
+      settingsStore.setMajorBackend(backends[0].id);
+      void settingsStore.save();
     }
-
-    return [{
-      value: current,
-      label: current,
-      model: current
-    }];
   });
+
+  const noBackend = $derived(settingsStore.data.backends.length === 0);
 
   function handleApproveTask(task: TaskRecord) {
     void tasksStore.approve(task);
@@ -265,6 +256,7 @@
       availableModels={availableModels}
       selectedModelValue={settingsStore.data.major_backend_id ?? currentModelName ?? ""}
       onSelectModel={handleSelectModel}
+      onOpenSettings={openSettings}
     />
 
     <div class="main-layout">
@@ -284,6 +276,7 @@
           task={sessionsStore.active?.active_thread_task ?? null}
           streaming={sessionsStore.streaming}
           loading={sessionsStore.loading}
+          noBackend={noBackend}
           onSendMessage={handleSendMessage}
           onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}

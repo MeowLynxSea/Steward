@@ -1,35 +1,21 @@
 import { apiClient } from "../api";
-import type { BackendInstance, LlmBuiltinOverride, PatchSettingsRequest, SettingsResponse } from "../types";
+import type { BackendInstance, PatchSettingsRequest, SettingsResponse } from "../types";
 
 const DEFAULT_SETTINGS: SettingsResponse = {
   backends: [],
   major_backend_id: null,
   cheap_backend_id: null,
   cheap_model_uses_primary: true,
-  llm_backend: null,
-  selected_model: null,
-  cheap_model: null,
-  ollama_base_url: null,
-  openai_compatible_base_url: null,
-  llm_custom_providers: [],
-  llm_builtin_overrides: {},
   llm_ready: false,
   llm_onboarding_required: true,
   llm_readiness_error: null
 };
 
-function normalizeText(value: string) {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function normalizeSettingsResponse(value: Partial<SettingsResponse> | null | undefined): SettingsResponse {
   return {
     ...structuredClone(DEFAULT_SETTINGS),
     ...value,
-    backends: Array.isArray(value?.backends) ? value!.backends : [],
-    llm_custom_providers: Array.isArray(value?.llm_custom_providers) ? value!.llm_custom_providers : [],
-    llm_builtin_overrides: value?.llm_builtin_overrides ?? {}
+    backends: Array.isArray(value?.backends) ? value!.backends : []
   };
 }
 
@@ -52,38 +38,8 @@ class SettingsState {
     }
   }
 
-  updateField<K extends keyof SettingsResponse>(key: K, value: string) {
-    this.data = { ...this.data, [key]: normalizeText(value) as SettingsResponse[K] };
-  }
-
   setCheapModelUsesPrimary(value: boolean) {
     this.data = { ...this.data, cheap_model_uses_primary: value };
-  }
-
-  setBuiltinOverride(providerId: string, patch: Partial<LlmBuiltinOverride>) {
-    const current = this.data.llm_builtin_overrides[providerId] ?? {
-      api_key: null,
-      model: null,
-      base_url: null,
-      request_format: null
-    };
-
-    this.data = {
-      ...this.data,
-      llm_builtin_overrides: {
-        ...this.data.llm_builtin_overrides,
-        [providerId]: {
-          ...current,
-          ...patch
-        }
-      }
-    };
-  }
-
-  updateBuiltinOverride(providerId: string, key: keyof LlmBuiltinOverride, value: string) {
-    this.setBuiltinOverride(providerId, {
-      [key]: normalizeText(value)
-    });
   }
 
   // Backend management
@@ -117,14 +73,7 @@ class SettingsState {
       backends: this.data.backends,
       major_backend_id: this.data.major_backend_id,
       cheap_backend_id: this.data.cheap_backend_id,
-      cheap_model_uses_primary: this.data.cheap_model_uses_primary,
-      llm_backend: this.data.llm_backend,
-      selected_model: this.data.selected_model,
-      cheap_model: this.data.cheap_model,
-      ollama_base_url: this.data.ollama_base_url,
-      openai_compatible_base_url: this.data.openai_compatible_base_url,
-      llm_custom_providers: this.data.llm_custom_providers,
-      llm_builtin_overrides: this.data.llm_builtin_overrides
+      cheap_model_uses_primary: this.data.cheap_model_uses_primary
     };
 
     try {

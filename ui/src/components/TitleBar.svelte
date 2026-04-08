@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { AlignJustify, Check, ChevronDown, Minus, Square, X } from "lucide-svelte";
+  import { AlignJustify, Check, ChevronDown, Minus, Settings, Square, X } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
 
   type ModelOption = {
@@ -19,6 +19,7 @@
     availableModels?: ModelOption[];
     selectedModelValue?: string;
     onSelectModel?: (model: string) => void;
+    onOpenSettings?: () => void;
   }
 
   let {
@@ -30,7 +31,8 @@
     onToggleRight,
     availableModels = [],
     selectedModelValue = "",
-    onSelectModel
+    onSelectModel,
+    onOpenSettings
   }: Props = $props();
 
   const appWindow = getCurrentWindow();
@@ -101,23 +103,32 @@
         <div class="model-dropdown">
           <div class="dropdown-header">选择模型</div>
           {#if availableModels.length > 0}
-            {#each availableModels as model}
-              <button
-                class="dropdown-item {model.value === selectedModelValue ? 'active' : ''}"
-                onclick={() => selectModel(model.value)}
-              >
-                <span>{model.label}</span>
-                {#if model.value === selectedModelValue}
-                  <Check size={14} strokeWidth={2} />
-                {/if}
-              </button>
-            {/each}
-          {:else}
-            <div class="dropdown-item disabled">
-              <span>{displayModelName}</span>
-              <Check size={14} strokeWidth={2} />
+            <div class="dropdown-scroll">
+              {#each availableModels as model}
+                <button
+                  class="dropdown-item {model.value === selectedModelValue ? 'active' : ''}"
+                  onclick={() => selectModel(model.value)}
+                >
+                  <span>{model.label}</span>
+                  {#if model.value === selectedModelValue}
+                    <Check size={14} strokeWidth={2} />
+                  {/if}
+                </button>
+              {/each}
             </div>
-            <div class="dropdown-hint">在设置中配置更多模型</div>
+            <div class="dropdown-divider"></div>
+            <button class="dropdown-item settings-item" onclick={() => { showModelDropdown = false; onOpenSettings?.(); }}>
+              <Settings size={14} strokeWidth={2} />
+              <span>配置模型</span>
+            </button>
+          {:else}
+            <div class="dropdown-empty-hint">
+              <span>暂无可用模型</span>
+              <button class="dropdown-item settings-item" onclick={() => { showModelDropdown = false; onOpenSettings?.(); }}>
+                <Settings size={14} strokeWidth={2} />
+                <span>去配置</span>
+              </button>
+            </div>
           {/if}
         </div>
       {/if}
@@ -363,9 +374,14 @@
     cursor: pointer;
     transition: all 0.15s ease;
     white-space: nowrap;
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: 180px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .model-badge::-webkit-scrollbar {
+    display: none;
   }
 
   .model-badge:hover {
@@ -396,6 +412,25 @@
     color: var(--text-muted);
   }
 
+  .dropdown-scroll {
+    max-height: 260px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .dropdown-scroll::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  .dropdown-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .dropdown-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-default);
+    border-radius: 4px;
+  }
+
   .dropdown-item {
     display: flex;
     align-items: center;
@@ -424,18 +459,30 @@
     font-weight: 600;
   }
 
-  .dropdown-item.disabled {
-    color: var(--text-tertiary);
-    cursor: default;
+  .dropdown-divider {
+    height: 1px;
+    margin: 4px 10px;
+    background: var(--border-default);
   }
 
-  .dropdown-item.disabled:hover {
-    background: transparent;
+  .dropdown-empty-hint {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
   }
 
-  .dropdown-hint {
-    padding: 6px 10px 4px;
-    font-size: 11px;
-    color: var(--text-tertiary);
+  .settings-item {
+    justify-content: flex-start;
+    gap: 8px;
+    color: var(--accent-primary);
+    font-weight: 500;
+  }
+
+  .settings-item:hover {
+    background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    color: var(--accent-primary);
   }
 </style>

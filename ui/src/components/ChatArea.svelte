@@ -30,6 +30,7 @@
     task: TaskRecord | null;
     streaming: StreamingState;
     loading: boolean;
+    noBackend?: boolean;
     onSendMessage: (content: string) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
@@ -50,7 +51,8 @@
     onSuggestionClick,
     onApproveTask,
     onApproveTaskAlways,
-    onRejectTask
+    onRejectTask,
+    noBackend = false
   }: Props = $props();
 
   let draftMessage = $state("");
@@ -762,33 +764,39 @@
   <!-- Input Area -->
   <div class="input-container">
     <div class="input-box">
-      <textarea
-        bind:this={textareaRef}
-        bind:value={draftMessage}
-        onkeydown={handleKeydown}
-        oninput={autoResize}
-        class="input-textarea"
-        placeholder="发送消息..."
-        rows="1"
-      ></textarea>
-
-      <div class="input-toolbar">
-        <div class="input-actions-left">
-          <button class="input-chip icon-only" aria-label="添加">
-            <Plus size={15} strokeWidth={2} />
-          </button>
-          <button class="input-chip">
-            <Shield size={15} strokeWidth={2} />
-            <span>权限 · 全自动</span>
-          </button>
+      {#if noBackend}
+        <div class="input-no-backend-hint">
+          请先在设置中配置模型
         </div>
+      {:else}
+        <textarea
+          bind:this={textareaRef}
+          bind:value={draftMessage}
+          onkeydown={handleKeydown}
+          oninput={autoResize}
+          class="input-textarea"
+          placeholder="发送消息..."
+          rows="1"
+        ></textarea>
 
-        <div class="input-actions-right">
-          <button class="send-btn {draftMessage.trim() ? 'active' : ''}" onclick={handleSubmit}>
-            ↑
-          </button>
+        <div class="input-toolbar">
+          <div class="input-actions-left">
+            <button class="input-chip icon-only" aria-label="添加">
+              <Plus size={15} strokeWidth={2} />
+            </button>
+            <button class="input-chip">
+              <Shield size={15} strokeWidth={2} />
+              <span>权限 · 全自动</span>
+            </button>
+          </div>
+
+          <div class="input-actions-right">
+            <button class="send-btn {draftMessage.trim() ? 'active' : ''}" onclick={handleSubmit}>
+              ↑
+            </button>
+          </div>
         </div>
-      </div>
+      {/if}
     </div>
   </div>
 </div>
@@ -1515,6 +1523,15 @@
     border-radius: 20px;
     padding: 16px;
     box-shadow: var(--shadow-card);
+  }
+
+  .input-no-backend-hint {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    font-size: 14px;
+    color: var(--text-tertiary);
   }
 
   .input-textarea {

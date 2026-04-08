@@ -32,6 +32,9 @@
   };
 
   type Mode = "onboarding" | "settings";
+  // Both modes now use Backend management exclusively.
+  // onboarding: local form state → creates a single Backend on submit.
+  // settings: Backend CRUD through the Backend form.
 
   const providerPresets: ProviderPreset[] = [
     {
@@ -139,6 +142,14 @@
   let formModel = $state("");
   let formRequestFormat = $state("chat_completions");
 
+  // Onboarding state: local form values backed by a single Backend entry.
+  // All onboarding input writes to these locals; on submit we upsert the Backend.
+  let onboardingProvider = $state(providerPresets[0].id);
+  let onboardingModel = $state("");
+  let onboardingApiKey = $state("");
+  let onboardingBaseUrl = $state("");
+  let onboardingRequestFormat = $state("chat_completions");
+
   // Legacy state (for mode="onboarding")
   let codexLoginId = $state<string | null>(null);
   let codexVerificationUri = $state("");
@@ -220,67 +231,39 @@
     await settingsStore.save();
   }
 
-  // Legacy functions (for onboarding mode)
-  function normalizeBackendId(value: string | null) {
-    return value?.trim().toLowerCase() ?? providerPresets[0].id;
-  }
-
-  const selectedProvider = $derived(
-    providerPresets.find((provider) => provider.id === normalizeBackendId(settingsStore.data.llm_backend))
-      ?? providerPresets[0]
+  const selectedOnboardingProvider = $derived(
+    providerPresets.find((p) => p.id === onboardingProvider) ?? providerPresets[0]
   );
 
-  const selectedOverride = $derived(
-    settingsStore.data.llm_builtin_overrides[selectedProvider.id] ?? {
-      api_key: null,
-      model: null,
-      base_url: null,
-      request_format: null
-    }
-  );
-
-  const currentBaseUrl = $derived.by(() => {
-    if (selectedProvider.id === "ollama") {
-      return settingsStore.data.ollama_base_url ?? "";
-    }
-    return selectedOverride.base_url ?? "";
-  });
-
-  const currentApiFormat = $derived(selectedOverride.request_format ?? "chat_completions");
-  const cheapModelDisabled = $derived(settingsStore.data.cheap_model_uses_primary);
-
-  function selectProvider(provider: ProviderPreset) {
-    const isSameProvider = normalizeBackendId(settingsStore.data.llm_backend) === provider.id;
-    const providerOverride = settingsStore.data.llm_builtin_overrides[provider.id];
-    settingsStore.updateField("llm_backend", provider.id);
-    settingsStore.updateField(
-      "selected_model",
-      isSameProvider ? (settingsStore.data.selected_model ?? provider.defaultModel) : provider.defaultModel
-    );
-
-    if (provider.supportsBaseUrl && provider.defaultBaseUrl) {
-      if (provider.id === "ollama") {
-        settingsStore.updateField("ollama_base_url", settingsStore.data.ollama_base_url ?? provider.defaultBaseUrl);
-      } else {
-        settingsStore.setBuiltinOverride(provider.id, {
-          base_url: providerOverride?.base_url ?? provider.defaultBaseUrl
-        });
-      }
-    }
-
-    if (provider.id === "openai") {
-      settingsStore.setBuiltinOverride("openai", {
-        request_format: settingsStore.data.llm_builtin_overrides.openai?.request_format ?? "chat_completions"
-      });
-    }
+  function selectOnboardingProvider(provider: ProviderPreset) {
+    onboardingProvider = provider.id;
+    onboardingModel = provider.defaultModel;
+    onboardingBaseUrl = provider.defaultBaseUrl ?? "";
+    onboardingRequestFormat = "chat_completions";
+    onboardingApiKey = "";
   }
 
-  function updateBaseUrl(value: string) {
-    if (selectedProvider.id === "ollama") {
-      settingsStore.updateField("ollama_base_url", value);
-      return;
+  function updateOnboardingBaseUrl(value: string) {
+    onboardingBaseUrl = value;
+  }
+
+  async function handleSubmit() {
+    const provider = selectedOnboardingProvider;
+    const model = onboardingModel.trim() || provider.defaultModel;
+    const newBackend: BackendInstance = {
+      id: crypto.randomUUID(),
+      provider: provider.id,
+      model,
+      api_key: onboardingApiKey.trim() || null,
+      base_url: onboardingBaseUrl.trim() || null,
+      request_format: provider.supportsFormat ? onboardingRequestFormat : null
+    };
+    settingsStore.addBackend(newBackend);
+    settingsStore.setMajorBackend(newBackend.id);
+    const saved = await settingsStore.save();
+    if (saved && onComplete) {
+      await onComplete();
     }
-    settingsStore.updateBuiltinOverride(selectedProvider.id, "base_url", value);
   }
 
   function stopCodexPolling() {
@@ -342,12 +325,6 @@
     }
   }
 
-  async function handleSubmit() {
-    const saved = await settingsStore.save();
-    if (saved && onComplete) {
-      await onComplete();
-    }
-  }
 </script>
 
 <svelte:window onbeforeunload={stopCodexPolling} />
@@ -506,10 +483,10 @@
         <div class="provider-grid">
           {#each providerPresets as provider (provider.id)}
             <button
-              class:selected={selectedProvider.id === provider.id}
+              class:selected={onboardingProvider === provider.id}
               class="provider-card"
               type="button"
-              onclick={() => selectProvider(provider)}
+              onclick={() => selectOnboardingProvider(provider)}
             >
               <provider.icon size={20} strokeWidth={2} />
               <div>
@@ -524,30 +501,29 @@
           <label class="field">
             <span>Model</span>
             <input
-              value={settingsStore.data.selected_model ?? ""}
-              placeholder={selectedProvider.defaultModel}
-              oninput={(event) =>
-                settingsStore.updateField("selected_model", (event.currentTarget as HTMLInputElement).value)}
+              value={onboardingModel}
+              placeholder={selectedOnboardingProvider.defaultModel}
+              oninput={(event) => onboardingModel = (event.currentTarget as HTMLInputElement).value}
             />
           </label>
 
-          {#if selectedProvider.supportsFormat}
+          {#if selectedOnboardingProvider.supportsFormat}
             <label class="field">
               <span>API Format</span>
               <div class="segmented-control">
                 <button
-                  class:active={currentApiFormat === "chat_completions"}
+                  class:active={onboardingRequestFormat === "chat_completions"}
                   class="segment-button"
                   type="button"
-                  onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "chat_completions")}
+                  onclick={() => onboardingRequestFormat = "chat_completions"}
                 >
                   Chat
                 </button>
                 <button
-                  class:active={currentApiFormat === "responses"}
+                  class:active={onboardingRequestFormat === "responses"}
                   class="segment-button"
                   type="button"
-                  onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "responses")}
+                  onclick={() => onboardingRequestFormat = "responses"}
                 >
                   Responses
                 </button>
@@ -555,41 +531,36 @@
             </label>
           {/if}
 
-          {#if selectedProvider.supportsApiKey}
+          {#if selectedOnboardingProvider.supportsApiKey}
             <label class="field">
               <span>API Key</span>
               <div class="input-with-icon">
                 <KeyRound size={16} strokeWidth={2} />
                 <input
-                  value={selectedOverride.api_key ?? ""}
+                  value={onboardingApiKey}
                   placeholder="Paste API key"
-                  oninput={(event) =>
-                    settingsStore.updateBuiltinOverride(
-                      selectedProvider.id,
-                      "api_key",
-                      (event.currentTarget as HTMLInputElement).value
-                    )}
+                  oninput={(event) => onboardingApiKey = (event.currentTarget as HTMLInputElement).value}
                 />
               </div>
             </label>
           {/if}
 
-          {#if selectedProvider.supportsBaseUrl}
+          {#if selectedOnboardingProvider.supportsBaseUrl}
             <label class="field field-wide">
               <span>Base URL</span>
               <div class="input-with-icon">
                 <Server size={16} strokeWidth={2} />
                 <input
-                  value={currentBaseUrl}
-                  placeholder={selectedProvider.baseUrlPlaceholder}
-                  oninput={(event) => updateBaseUrl((event.currentTarget as HTMLInputElement).value)}
+                  value={onboardingBaseUrl}
+                  placeholder={selectedOnboardingProvider.baseUrlPlaceholder}
+                  oninput={(event) => updateOnboardingBaseUrl((event.currentTarget as HTMLInputElement).value)}
                 />
               </div>
             </label>
           {/if}
         </div>
 
-        {#if selectedProvider.requiresOauth}
+        {#if selectedOnboardingProvider.requiresOauth}
           <div class="oauth-panel">
             <div>
               <p class="oauth-title">ChatGPT OAuth</p>
@@ -630,7 +601,7 @@
             {/if}
           </div>
 
-          {#if !selectedProvider.requiresOauth}
+          {#if !selectedOnboardingProvider.requiresOauth}
             <button class="submit-button" type="button" onclick={() => void handleSubmit()}>
               {submitLabel}
             </button>
