@@ -262,6 +262,9 @@
       rightSidebarCollapsed={rightSidebarCollapsed}
       onToggleLeft={() => leftSidebarCollapsed = !leftSidebarCollapsed}
       onToggleRight={() => rightSidebarCollapsed = !rightSidebarCollapsed}
+      availableModels={availableModels}
+      selectedModelValue={settingsStore.data.major_backend_id ?? currentModelName ?? ""}
+      onSelectModel={handleSelectModel}
     />
 
     <div class="main-layout">
@@ -280,16 +283,12 @@
           session={sessionsStore.active}
           task={sessionsStore.active?.active_thread_task ?? null}
           streaming={sessionsStore.streaming}
-          modelName={currentModelName}
-          selectedModelValue={settingsStore.data.major_backend_id ?? currentModelName ?? ""}
-          availableModels={availableModels}
           loading={sessionsStore.loading}
           onSendMessage={handleSendMessage}
           onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}
           onApproveTaskAlways={handleApproveTaskAlways}
           onRejectTask={handleRejectTask}
-          onSelectModel={handleSelectModel}
         />
       </div>
 

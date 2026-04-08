@@ -1,7 +1,13 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { AlignJustify, Minus, Square, X } from "lucide-svelte";
+  import { AlignJustify, Check, ChevronDown, Minus, Square, X } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
+
+  type ModelOption = {
+    value: string;
+    label: string;
+    model: string;
+  };
 
   interface Props {
     title?: string;
@@ -10,6 +16,9 @@
     rightSidebarCollapsed?: boolean;
     onToggleLeft?: () => void;
     onToggleRight?: () => void;
+    availableModels?: ModelOption[];
+    selectedModelValue?: string;
+    onSelectModel?: (model: string) => void;
   }
 
   let {
@@ -18,11 +27,15 @@
     leftSidebarCollapsed = false,
     rightSidebarCollapsed = false,
     onToggleLeft,
-    onToggleRight
+    onToggleRight,
+    availableModels = [],
+    selectedModelValue = "",
+    onSelectModel
   }: Props = $props();
 
   const appWindow = getCurrentWindow();
   const isMac = navigator.platform.toLowerCase().includes("mac");
+  let showModelDropdown = $state(false);
 
   async function minimize() {
     await appWindow.minimize();
@@ -35,6 +48,34 @@
   async function close() {
     await appWindow.close();
   }
+
+  function toggleModelDropdown() {
+    showModelDropdown = !showModelDropdown;
+  }
+
+  function selectModel(modelValue: string) {
+    showModelDropdown = false;
+    onSelectModel?.(modelValue);
+  }
+
+  const displayModelName = $derived(
+    availableModels.find((m) => m.value === selectedModelValue)?.label
+    ?? selectedModelValue
+    ?? "选择模型"
+  );
+
+  // Close dropdown when clicking outside
+  $effect(() => {
+    if (!showModelDropdown) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(".model-selector")) {
+        showModelDropdown = false;
+      }
+    };
+    document.addEventListener("click", handler);
+    return () => document.removeEventListener("click", handler);
+  });
 </script>
 
 <header class="titlebar">
@@ -50,6 +91,37 @@
     <button class="sidebar-toggle" onclick={onToggleLeft} aria-label={leftSidebarCollapsed ? "展开左侧边栏" : "收起左侧边栏"}>
       <AlignJustify size={16} strokeWidth={2} />
     </button>
+
+    <div class="model-selector">
+      <button class="model-badge" onclick={toggleModelDropdown}>
+        {displayModelName}
+        <ChevronDown size={13} strokeWidth={2} />
+      </button>
+      {#if showModelDropdown}
+        <div class="model-dropdown">
+          <div class="dropdown-header">选择模型</div>
+          {#if availableModels.length > 0}
+            {#each availableModels as model}
+              <button
+                class="dropdown-item {model.value === selectedModelValue ? 'active' : ''}"
+                onclick={() => selectModel(model.value)}
+              >
+                <span>{model.label}</span>
+                {#if model.value === selectedModelValue}
+                  <Check size={14} strokeWidth={2} />
+                {/if}
+              </button>
+            {/each}
+          {:else}
+            <div class="dropdown-item disabled">
+              <span>{displayModelName}</span>
+              <Check size={14} strokeWidth={2} />
+            </div>
+            <div class="dropdown-hint">在设置中配置更多模型</div>
+          {/if}
+        </div>
+      {/if}
+    </div>
   </div>
 
   <div class="titlebar-center">
@@ -271,5 +343,99 @@
     to {
       background-position: 180px 0, 0 0;
     }
+  }
+
+  .model-selector {
+    position: relative;
+  }
+
+  .model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .model-badge:hover {
+    background: var(--bg-hover);
+    transform: translateY(-1px);
+  }
+
+  .model-dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 100;
+    min-width: 200px;
+    max-width: 280px;
+    padding: 6px;
+    border-radius: 14px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-dropdown);
+  }
+
+  .dropdown-header {
+    padding: 8px 10px 6px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .dropdown-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease;
+  }
+
+  .dropdown-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .dropdown-item.active {
+    background: var(--bg-elevated);
+    font-weight: 600;
+  }
+
+  .dropdown-item.disabled {
+    color: var(--text-tertiary);
+    cursor: default;
+  }
+
+  .dropdown-item.disabled:hover {
+    background: transparent;
+  }
+
+  .dropdown-hint {
+    padding: 6px 10px 4px;
+    font-size: 11px;
+    color: var(--text-tertiary);
   }
 </style>

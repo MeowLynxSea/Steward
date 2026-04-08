@@ -1,7 +1,5 @@
 <script lang="ts">
   import {
-    Check,
-    ChevronDown,
     ChevronRight,
     Circle,
     Loader,
@@ -27,26 +25,16 @@
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { onDestroy } from "svelte";
 
-  type ModelOption = {
-    value: string;
-    label: string;
-    model: string;
-  };
-
   interface Props {
     session: SessionDetail | null;
     task: TaskRecord | null;
     streaming: StreamingState;
-    modelName?: string | null;
-    selectedModelValue?: string;
-    availableModels?: ModelOption[];
     loading: boolean;
     onSendMessage: (content: string) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
     onApproveTaskAlways: (task: TaskRecord) => void;
     onRejectTask: (task: TaskRecord, reason: string) => void;
-    onSelectModel?: (model: string) => void;
   }
 
   type DisplayEntry =
@@ -57,23 +45,18 @@
     session,
     task,
     streaming,
-    modelName = null,
-    selectedModelValue = "",
-    availableModels = [],
     loading,
     onSendMessage,
     onSuggestionClick,
     onApproveTask,
     onApproveTaskAlways,
-    onRejectTask,
-    onSelectModel
+    onRejectTask
   }: Props = $props();
 
   let draftMessage = $state("");
   let rejectReason = $state("Rejected by user");
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let messageListRef: HTMLDivElement | null = $state(null);
-  let showModelDropdown = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
   let imagesExpanded = $state(false);
   let animatedAssistantId = $state<string | null>(null);
@@ -92,7 +75,6 @@
     streaming.images.length > 0
   );
   const darkMode = $derived(themeStore.mode === "dark");
-  const displayModelName = $derived(modelName?.trim() || "MiniMax-M2.7");
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
     const messages = session?.thread_messages ?? [];
     const entries: DisplayEntry[] = [];
@@ -246,24 +228,8 @@
     }
   }
 
-  function toggleModelDropdown() {
-    showModelDropdown = !showModelDropdown;
-  }
-
-  function selectModel(modelValue: string) {
-    showModelDropdown = false;
-    onSelectModel?.(modelValue);
-  }
-
   function toggleTheme() {
     themeStore.toggle();
-  }
-
-  function handleGlobalClick(event: MouseEvent) {
-    const target = event.target as HTMLElement;
-    if (showModelDropdown && !target.closest(".model-selector")) {
-      showModelDropdown = false;
-    }
   }
 
   function normalizeThinkingTranscript(value: string) {
@@ -533,42 +499,10 @@
   });
 </script>
 
-<svelte:window onclick={handleGlobalClick} />
-
 <div class="chat-area">
   <!-- Top Navigation Bar -->
   <div class="chat-topbar">
     <div class="topbar-left">
-      <div class="model-selector">
-        <button class="model-badge" onclick={toggleModelDropdown}>
-          {displayModelName}
-          <ChevronDown size={13} strokeWidth={2} />
-        </button>
-        {#if showModelDropdown}
-          <div class="model-dropdown">
-            <div class="dropdown-header">选择模型</div>
-            {#if availableModels.length > 0}
-              {#each availableModels as model}
-                <button
-                  class="dropdown-item {model.value === selectedModelValue ? 'active' : ''}"
-                  onclick={() => selectModel(model.value)}
-                >
-                  <span>{model.label}</span>
-                  {#if model.value === selectedModelValue}
-                    <Check size={14} strokeWidth={2} />
-                  {/if}
-                </button>
-              {/each}
-            {:else}
-              <div class="dropdown-item disabled">
-                <span>{displayModelName}</span>
-                <Check size={14} strokeWidth={2} />
-              </div>
-              <div class="dropdown-hint">在设置中配置更多模型</div>
-            {/if}
-          </div>
-        {/if}
-      </div>
       {#if session}
         <span class="session-title">{session.session.title}</span>
       {/if}
@@ -834,7 +768,7 @@
         onkeydown={handleKeydown}
         oninput={autoResize}
         class="input-textarea"
-        placeholder="发送消息到 {displayModelName}"
+        placeholder="发送消息..."
         rows="1"
       ></textarea>
 
