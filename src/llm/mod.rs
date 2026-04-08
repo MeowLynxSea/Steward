@@ -558,6 +558,13 @@ pub async fn build_provider_chain(
     };
     tracing::debug!("LLM provider initialized: {}", llm.model_name());
 
+    tracing::info!(
+        backend = %config.backend,
+        cheap_model_name = ?config.cheap_model_name(),
+        cheap_model_uses_primary = %config.cheap_model.is_none(),
+        "LLM provider chain config"
+    );
+
     // 1. Retry
     let retry_config = RetryConfig {
         max_retries: config.nearai.max_retries,

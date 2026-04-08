@@ -578,11 +578,33 @@ impl LlmProvider for NearAiChatProvider {
 
         // Fall back to reasoning_content when content is null (same as
         // complete_with_tools — reasoning models may put the answer there).
-        let content = choice
-            .message
-            .content
-            .or(choice.message.reasoning_content)
+        let raw_content = choice.message.content.clone();
+        let raw_reasoning = choice.message.reasoning_content.clone();
+        let content = raw_content
+            .clone()
+            .or(raw_reasoning.clone())
             .unwrap_or_default();
+
+        let (input_tokens, output_tokens) = parse_usage(response.usage.as_ref());
+
+        tracing::trace!(
+            content_len = %content.len(),
+            raw_content = ?raw_content,
+            raw_reasoning = ?raw_reasoning,
+            output_tokens = output_tokens,
+            "nearai_chat complete: content extraction"
+        );
+
+        if content.is_empty() && output_tokens > 0 {
+            tracing::warn!(
+                response_content = ?raw_content,
+                reasoning_content = ?raw_reasoning,
+                finish_reason = ?choice.finish_reason,
+                output_tokens = output_tokens,
+                "LLM returned empty content despite generating tokens"
+            );
+        }
+
         let finish_reason = match choice.finish_reason.as_deref() {
             Some("stop") => FinishReason::Stop,
             Some("length") => FinishReason::Length,
@@ -590,8 +612,6 @@ impl LlmProvider for NearAiChatProvider {
             Some("content_filter") => FinishReason::ContentFilter,
             _ => FinishReason::Unknown,
         };
-
-        let (input_tokens, output_tokens) = parse_usage(response.usage.as_ref());
 
         Ok(CompletionResponse {
             content,

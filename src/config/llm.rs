@@ -180,6 +180,13 @@ impl LlmConfig {
 
         let request_timeout_secs = parse_optional_env("LLM_REQUEST_TIMEOUT_SECS", 120)?;
 
+        tracing::info!(
+            major_provider = %major_provider,
+            cheap_model_uses_primary = settings.cheap_model_uses_primary,
+            cheap_model = ?cheap_model,
+            "resolve_multi_backend: LLM config resolved"
+        );
+
         Ok(Self {
             backend: major_provider,
             session,
