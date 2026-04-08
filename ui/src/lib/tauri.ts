@@ -1,7 +1,9 @@
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+
 export async function notify(title: string, body: string): Promise<void> {
   try {
-    const core = await import("@tauri-apps/api/core");
-    await core.invoke("notify", { title, body });
+    await invoke("notify", { title, body });
   } catch {
     // Browser mode: no native notification bridge.
   }
@@ -28,13 +30,11 @@ export type CodexLoginStatus =
     };
 
 export async function startOpenAiCodexLogin(): Promise<CodexLoginStartResponse> {
-  const core = await import("@tauri-apps/api/core");
-  return core.invoke<CodexLoginStartResponse>("start_openai_codex_login");
+  return invoke<CodexLoginStartResponse>("start_openai_codex_login");
 }
 
 export async function getOpenAiCodexLoginStatus(loginId: string): Promise<CodexLoginStatus> {
-  const core = await import("@tauri-apps/api/core");
-  return core.invoke<CodexLoginStatus>("get_openai_codex_login_status", {
+  return invoke<CodexLoginStatus>("get_openai_codex_login_status", {
     loginId
   });
 }
@@ -43,8 +43,7 @@ export async function listenForFolderDrops(
   onDrop: (path: string) => Promise<void> | void
 ): Promise<() => Promise<void>> {
   try {
-    const webviewWindow = await import("@tauri-apps/api/webviewWindow");
-    const current = webviewWindow.getCurrentWebviewWindow?.();
+    const current = getCurrentWebviewWindow?.();
     if (!current?.onDragDropEvent) {
       return async () => {};
     }
@@ -71,8 +70,7 @@ export async function listenForFolderDrops(
 
 export async function pickDirectory(): Promise<string | null> {
   try {
-    const core = await import("@tauri-apps/api/core");
-    const selection = await core.invoke<string | null>("pick_mount_directory");
+    const selection = await invoke<string | null>("pick_mount_directory");
     return selection ?? null;
   } catch {
     return null;

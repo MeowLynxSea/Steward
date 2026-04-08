@@ -43,6 +43,7 @@ impl LlmConfig {
             request_timeout_secs: 120,
             cheap_model: None,
             smart_routing_cascade: false,
+            cheap_backend_instance: None,
         }
     }
 
@@ -54,8 +55,157 @@ impl LlmConfig {
             .unwrap_or_else(|| default.to_string())
     }
 
+    /// Resolve LLM config using the multi-backend format.
+    ///
+    /// For MVP, the major backend must be a registry-based provider (openai, anthropic,
+    /// ollama, groq, openrouter). Returns error for nearai, bedrock, gemini_oauth,
+    /// openai_codex as major backend since these require special handling.
+    fn resolve_multi_backend(
+        settings: &Settings,
+        registry: &ProviderRegistry,
+    ) -> Result<Self, ConfigError> {
+        // Get the major (primary) backend instance
+        let major = settings
+            .major_backend()
+            .ok_or_else(|| ConfigError::MissingRequired {
+                key: "major_backend_id".to_string(),
+                hint: "No major backend configured. Set major_backend_id in settings."
+                    .to_string(),
+            })?;
+
+        // Validate major backend is a registry-based provider (not nearai, bedrock, etc.)
+        let major_provider = major.provider.to_lowercase();
+        match major_provider.as_str() {
+            "nearai" | "bedrock" | "gemini_oauth" | "openai_codex" => {
+                return Err(ConfigError::InvalidValue {
+                    key: "major_backend_id".to_string(),
+                    message: format!(
+                        "Major backend cannot be '{}' for multi-backend mode. \
+                         Use openai, anthropic, ollama, groq, or openrouter.",
+                        major_provider
+                    ),
+                });
+            }
+            _ => {}
+        }
+
+        // Look up provider definition from registry for defaults
+        let def = registry
+            .find(&major_provider)
+            .ok_or_else(|| ConfigError::InvalidValue {
+                key: "major_backend_id".to_string(),
+                message: format!(
+                    "Unknown provider '{}'. Not found in registry.",
+                    major_provider
+                ),
+            })?;
+
+        // Build RegistryProviderConfig from the backend instance
+        let api_key = major
+            .api_key
+            .as_ref()
+            .filter(|k| !k.is_empty())
+            .map(|k| SecretString::from(k.clone()));
+
+        let base_url = major
+            .base_url
+            .clone()
+            .or_else(|| optional_env("LLM_BASE_URL").ok().flatten())
+            .or_else(|| def.default_base_url.clone())
+            .unwrap_or_default();
+
+        let model = major
+            .model
+            .clone()
+            .or_else(|| Some(def.default_model.clone()))
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
+        let api_format = if major_provider == "openai" {
+            OpenAiApiFormat::from_settings(major.request_format.as_deref())
+        } else {
+            OpenAiApiFormat::ChatCompletions
+        };
+
+        let provider = RegistryProviderConfig {
+            protocol: def.protocol,
+            provider_id: def.id.clone(),
+            api_key,
+            base_url,
+            model,
+            extra_headers: Vec::new(),
+            oauth_token: None,
+            is_codex_chatgpt: false,
+            refresh_token: None,
+            auth_path: None,
+            cache_retention: CacheRetention::default(),
+            unsupported_params: def.unsupported_params.clone(),
+            api_format,
+        };
+
+        // Get cheap backend instance
+        let cheap_backend = settings.cheap_backend().cloned();
+
+        // Build session config (needed for nearai even if not used as major)
+        let session = SessionConfig {
+            auth_base_url: "https://private.near.ai".to_string(),
+            session_path: default_session_path(),
+        };
+
+        // Build nearai config (used for embeddings even when not major backend)
+        let nearai = NearAiConfig {
+            model: major
+                .model
+                .clone()
+                .unwrap_or_else(|| crate::llm::DEFAULT_MODEL.to_string()),
+            cheap_model: None,
+            base_url: "https://private.near.ai".to_string(),
+            api_key: None,
+            fallback_model: None,
+            max_retries: 3,
+            circuit_breaker_threshold: None,
+            circuit_breaker_recovery_secs: 30,
+            response_cache_enabled: false,
+            response_cache_ttl_secs: 3600,
+            response_cache_max_entries: 1000,
+            failover_cooldown_secs: 300,
+            failover_cooldown_threshold: 3,
+            smart_routing_cascade: true,
+        };
+
+        let cheap_model = if settings.cheap_model_uses_primary {
+            None
+        } else {
+            settings.cheap_model.clone()
+        };
+
+        let request_timeout_secs = parse_optional_env("LLM_REQUEST_TIMEOUT_SECS", 120)?;
+
+        Ok(Self {
+            backend: major_provider,
+            session,
+            nearai,
+            provider: Some(provider),
+            bedrock: None,
+            gemini_oauth: None,
+            openai_codex: None,
+            request_timeout_secs,
+            cheap_model,
+            smart_routing_cascade: true,
+            cheap_backend_instance: cheap_backend,
+        })
+    }
+
     pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
         let registry = ProviderRegistry::load();
+
+        // Migrate from legacy single-backend format if needed
+        let mut migrated_settings = settings.clone();
+        migrated_settings.migrate_from_legacy();
+
+        // If multi-backend is configured, use the new resolution path
+        if !migrated_settings.backends.is_empty() {
+            return Self::resolve_multi_backend(&migrated_settings, &registry);
+        }
 
         // Runtime routing is primarily driven by persisted settings, but env vars
         // still provide local/operator overrides for tests, scripted installs, and
@@ -283,6 +433,7 @@ impl LlmConfig {
             request_timeout_secs,
             cheap_model,
             smart_routing_cascade,
+            cheap_backend_instance: None,
         })
     }
 

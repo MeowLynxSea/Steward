@@ -18,6 +18,21 @@
   import OnboardingView from "./views/OnboardingView.svelte";
   import SettingsView from "./views/SettingsView.svelte";
 
+  const providerLabels: Record<string, string> = {
+    openai: "OpenAI",
+    openai_codex: "Codex",
+    anthropic: "Anthropic",
+    groq: "Groq",
+    openrouter: "OpenRouter",
+    ollama: "Ollama"
+  };
+
+  type ModelOption = {
+    value: string;
+    label: string;
+    model: string;
+  };
+
   let appLoading = $state(true);
   let appError = $state("");
   let leftSidebarCollapsed = $state(false);
@@ -30,8 +45,11 @@
   }
 
   function closeSettings() {
-    showSettings = false;
-    router.navigate("sessions");
+    // Delay to allow fly out animation (220ms) to complete before removing from DOM
+    setTimeout(() => {
+      showSettings = false;
+      router.navigate("sessions");
+    }, 250);
   }
 
   // Sync settings modal state with router
@@ -92,22 +110,45 @@
     void sessionsStore.sendMessage(suggestion);
   }
 
-  function handleSelectModel(model: string) {
-    settingsStore.updateField("selected_model", model);
+  function handleSelectModel(backendId: string) {
+    const backend = settingsStore.data.backends.find((item) => item.id === backendId);
+    if (!backend) {
+      return;
+    }
+
+    settingsStore.setMajorBackend(backend.id);
+    settingsStore.data.llm_backend = backend.provider;
+    settingsStore.data.selected_model = backend.model;
     void settingsStore.save();
   }
 
-  const availableModels = $derived.by(() => {
-    const models: string[] = [];
-    const current = settingsStore.data.selected_model;
-    if (current) models.push(current);
+  const currentMajorBackend = $derived.by(
+    () => settingsStore.data.backends.find((backend) => backend.id === settingsStore.data.major_backend_id) ?? null
+  );
 
-    for (const provider of settingsStore.data.llm_custom_providers) {
-      if (provider.default_model && !models.includes(provider.default_model)) {
-        models.push(provider.default_model);
-      }
+  const currentModelName = $derived.by(
+    () => currentMajorBackend?.model ?? settingsStore.data.selected_model ?? null
+  );
+
+  const availableModels = $derived.by<ModelOption[]>(() => {
+    if (settingsStore.data.backends.length > 0) {
+      return settingsStore.data.backends.map((backend) => ({
+        value: backend.id,
+        label: `${providerLabels[backend.provider] ?? backend.provider} / ${backend.model}`,
+        model: backend.model
+      }));
     }
-    return models;
+
+    const current = settingsStore.data.selected_model?.trim();
+    if (!current) {
+      return [];
+    }
+
+    return [{
+      value: current,
+      label: current,
+      model: current
+    }];
   });
 
   function handleApproveTask(task: TaskRecord) {
@@ -239,7 +280,8 @@
           session={sessionsStore.active}
           task={sessionsStore.active?.active_thread_task ?? null}
           streaming={sessionsStore.streaming}
-          modelName={settingsStore.data.selected_model}
+          modelName={currentModelName}
+          selectedModelValue={settingsStore.data.major_backend_id ?? currentModelName ?? ""}
           availableModels={availableModels}
           loading={sessionsStore.loading}
           onSendMessage={handleSendMessage}

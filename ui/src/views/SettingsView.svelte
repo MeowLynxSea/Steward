@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { ChevronRight, Moon, Palette, Sparkles, Sun, X } from "lucide-svelte";
+  import { ChevronLeft, Moon, Palette, Sparkles, Sun, X } from "lucide-svelte";
+  import { fade, fly } from "svelte/transition";
   import LlmConfigurationPanel from "../components/LlmConfigurationPanel.svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { themeStore } from "../lib/stores/theme.svelte";
 
-  type SettingsSection = "general";
+  type SettingsSection = "general" | "models";
 
   const providerLabels: Record<string, string> = {
     openai: "OpenAI",
@@ -18,239 +19,255 @@
   let { onClose }: { onClose: () => void } = $props();
 
   let activeSection = $state<SettingsSection>("general");
-  let showModelSettings = $state(false);
+  let showBackendDrawer = $state(false);
 
-  const currentProviderLabel = $derived.by(() => {
-    const backend = settingsStore.data.llm_backend?.trim().toLowerCase();
-    if (!backend) {
-      return "未选择";
-    }
-    return providerLabels[backend] ?? backend;
-  });
-
-  const cheapModelSummary = $derived.by(() => {
-    if (settingsStore.data.cheap_model_uses_primary) {
-      return "使用主模型";
-    }
-    return settingsStore.data.cheap_model?.trim() || "未设置";
-  });
+  const backendOptions = $derived(
+    settingsStore.data.backends.map((b) => ({
+      value: b.id,
+      label: `${providerLabels[b.provider] ?? b.provider} / ${b.model}`
+    }))
+  );
 
   function handleKeydown(event: KeyboardEvent) {
-    if (event.key !== "Escape") {
-      return;
-    }
-
-    if (showModelSettings) {
-      showModelSettings = false;
-      return;
-    }
-
-    onClose();
-  }
-
-  function handleMainBackdropClick(event: MouseEvent) {
-    if ((event.target as HTMLElement).classList.contains("settings-backdrop")) {
+    if (event.key === "Escape") {
+      if (showBackendDrawer) {
+        showBackendDrawer = false;
+        return;
+      }
       onClose();
     }
   }
 
-  function handleNestedBackdropClick(event: MouseEvent) {
-    if ((event.target as HTMLElement).classList.contains("model-settings-layer")) {
-      showModelSettings = false;
-    }
+  function openBackendDrawer() {
+    showBackendDrawer = true;
   }
 
-  function openModelSettings() {
-    showModelSettings = true;
+  function closeBackendDrawer() {
+    showBackendDrawer = false;
+  }
+
+  function selectSection(section: SettingsSection) {
+    activeSection = section;
   }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="settings-backdrop" onclick={handleMainBackdropClick}>
-  <div class:layered={showModelSettings} class="settings-modal" role="dialog" aria-modal="true" aria-label="设置">
-    <div class="settings-modal-header">
-      <div class="settings-modal-copy">
-        <p class="settings-modal-eyebrow">Settings</p>
-        <h3 class="settings-modal-title">设置</h3>
-      </div>
+<!-- Backdrop -->
+<div
+  class="drawer-backdrop"
+  transition:fade={{ duration: 200 }}
+  role="presentation"
+  onclick={onClose}
+></div>
 
-      <button class="settings-close-btn" onclick={onClose} aria-label="关闭设置">
-        <X size={18} strokeWidth={2} />
-      </button>
+<!-- Settings Drawer -->
+<div
+  class="settings-drawer"
+  in:fly={{ x: -420, duration: 280, easing: (t) => 1 - Math.pow(1 - t, 3) }}
+  out:fly={{ x: -420, duration: 220, easing: (t) => t * t }}
+>
+  <!-- Header -->
+  <div class="drawer-header">
+    <div class="header-left">
+      <p class="header-eyebrow">Settings</p>
+      <h3>设置</h3>
     </div>
-
-    <div class="settings-layout">
-      <aside class="settings-sidebar" aria-label="设置分组">
-        <button
-          class:selected={activeSection === "general"}
-          class="settings-nav-button"
-          type="button"
-          onclick={() => activeSection = "general"}
-        >
-          <Palette size={16} strokeWidth={2} />
-          <span>常规</span>
-        </button>
-
-        <button class="settings-nav-button" type="button" onclick={openModelSettings}>
-          <Sparkles size={16} strokeWidth={2} />
-          <span>模型</span>
-        </button>
-      </aside>
-
-      <div class="settings-content">
-        {#if activeSection === "general"}
-          <section class="settings-section">
-            <div class="section-header">
-              <p class="section-eyebrow">General</p>
-              <h4>常规设置</h4>
-              <p>简单项直接在这里修改，复杂模型配置单独打开新的模态框。</p>
-            </div>
-
-            <div class="settings-card">
-              <div class="card-copy">
-                <h5>外观</h5>
-                <p>选择应用主题。这个设置仅保存在当前设备。</p>
-              </div>
-
-              <div class="theme-toggle-group" role="group" aria-label="主题">
-                <button
-                  class:active={themeStore.mode === "light"}
-                  class="theme-option"
-                  type="button"
-                  onclick={() => themeStore.setMode("light")}
-                >
-                  <Sun size={16} strokeWidth={2} />
-                  <span>浅色</span>
-                </button>
-
-                <button
-                  class:active={themeStore.mode === "dark"}
-                  class="theme-option"
-                  type="button"
-                  onclick={() => themeStore.setMode("dark")}
-                >
-                  <Moon size={16} strokeWidth={2} />
-                  <span>深色</span>
-                </button>
-              </div>
-            </div>
-
-            <button class="settings-card settings-card-button" type="button" onclick={openModelSettings}>
-              <div class="card-copy">
-                <span class="card-kicker">Model Configuration</span>
-                <h5>打开模型设置</h5>
-                <p>主模型、Cheap LLM、API Key、Base URL 等详细选项都在二级模态框里处理。</p>
-                <div class="card-meta">
-                  <span>当前提供商：{currentProviderLabel}</span>
-                  <span>Cheap LLM：{cheapModelSummary}</span>
-                </div>
-              </div>
-
-              <ChevronRight size={18} strokeWidth={2} />
-            </button>
-          </section>
-        {/if}
-      </div>
-    </div>
+    <button class="close-btn" onclick={onClose} aria-label="关闭">
+      <X size={18} strokeWidth={2} />
+    </button>
   </div>
 
-  {#if showModelSettings}
-    <!-- svelte-ignore a11y_click_events_have_key_events -->
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="model-settings-layer" onclick={handleNestedBackdropClick}>
-      <div class="nested-settings-modal" role="dialog" aria-modal="true" aria-label="模型设置">
-        <div class="nested-settings-header">
-          <div>
-            <p class="nested-settings-eyebrow">Models</p>
-            <h4>模型设置</h4>
-          </div>
+  <!-- Navigation Tabs -->
+  <div class="nav-tabs" role="tablist">
+    <button
+      class:selected={activeSection === "general"}
+      class="nav-tab"
+      role="tab"
+      aria-selected={activeSection === "general"}
+      onclick={() => selectSection("general")}
+    >
+      <Palette size={15} strokeWidth={2} />
+      <span>常规</span>
+    </button>
+    <button
+      class:selected={activeSection === "models"}
+      class="nav-tab"
+      role="tab"
+      aria-selected={activeSection === "models"}
+      onclick={() => selectSection("models")}
+    >
+      <Sparkles size={15} strokeWidth={2} />
+      <span>模型</span>
+    </button>
+  </div>
 
-          <button class="settings-close-btn" type="button" onclick={() => showModelSettings = false} aria-label="关闭模型设置">
-            <X size={18} strokeWidth={2} />
+  <!-- Content -->
+  <div class="drawer-content">
+    {#if activeSection === "general"}
+      <section class="settings-section">
+        <div class="section-header">
+          <h4>外观</h4>
+          <p>选择应用主题，仅保存在当前设备。</p>
+        </div>
+
+        <div class="theme-toggle-group" role="group" aria-label="主题">
+          <button
+            class:active={themeStore.mode === "light"}
+            class="theme-option"
+            type="button"
+            onclick={() => themeStore.setMode("light")}
+          >
+            <Sun size={15} strokeWidth={2} />
+            <span>浅色</span>
+          </button>
+          <button
+            class:active={themeStore.mode === "dark"}
+            class="theme-option"
+            type="button"
+            onclick={() => themeStore.setMode("dark")}
+          >
+            <Moon size={15} strokeWidth={2} />
+            <span>深色</span>
           </button>
         </div>
-
-        <div class="nested-settings-body">
-          <LlmConfigurationPanel
-            mode="settings"
-            eyebrow="模型设置"
-            title="模型与提供商"
-            description="详细模型参数放在这里，避免主设置页塞入过多内容。Cheap LLM 默认可跟随主模型。"
-            submitLabel="保存更改"
-          />
+      </section>
+    {:else}
+      <section class="settings-section">
+        <div class="section-header">
+          <h4>模型设置</h4>
+          <p>配置多个后端，Major 和 Cheap 模型各选一个。</p>
         </div>
+
+        <button class="settings-card settings-card-button" type="button" onclick={openBackendDrawer}>
+          <div class="card-copy">
+            <span class="card-kicker">Backend 管理</span>
+            <h3>管理可用模型</h3>
+            <p>添加、编辑、删除后端配置。</p>
+          </div>
+          <ChevronLeft size={18} strokeWidth={2} class="chevron-left" />
+        </button>
+
+        <div class="settings-card model-selectors">
+          <label class="model-select">
+            <span class="model-select-label">主模型</span>
+            <select
+              class="model-select-input"
+              value={settingsStore.data.major_backend_id ?? ""}
+              onchange={(e) => settingsStore.setMajorBackend((e.currentTarget as HTMLSelectElement).value || null)}
+            >
+              <option value="">选择主模型...</option>
+              {#each backendOptions as opt (opt.value)}
+                <option value={opt.value}>{opt.label}</option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="model-select">
+            <span class="model-select-label">Cheap 模型</span>
+            <div class="cheap-toggle-row">
+              <label class="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={settingsStore.data.cheap_model_uses_primary}
+                  onchange={(e) => {
+                    settingsStore.data.cheap_model_uses_primary = (e.currentTarget as HTMLInputElement).checked;
+                  }}
+                />
+                <span>使用主模型</span>
+              </label>
+            </div>
+            {#if !settingsStore.data.cheap_model_uses_primary}
+              <select
+                class="model-select-input"
+                value={settingsStore.data.cheap_backend_id ?? ""}
+                onchange={(e) => settingsStore.setCheapBackend((e.currentTarget as HTMLSelectElement).value || null)}
+              >
+                <option value="">选择 Cheap 模型...</option>
+                {#each backendOptions as opt (opt.value)}
+                  <option value={opt.value}>{opt.label}</option>
+                {/each}
+              </select>
+            {/if}
+          </label>
+        </div>
+      </section>
+    {/if}
+  </div>
+
+  <!-- Backend Drawer (nested) -->
+  {#if showBackendDrawer}
+    <!-- Nested Backdrop -->
+    <div
+      class="nested-backdrop"
+      transition:fade={{ duration: 180 }}
+      role="presentation"
+      onclick={closeBackendDrawer}
+    ></div>
+
+    <!-- Nested Drawer -->
+    <div
+      class="backend-drawer"
+      in:fly={{ x: -420, duration: 280, easing: (t) => 1 - Math.pow(1 - t, 3) }}
+      out:fly={{ x: -420, duration: 220, easing: (t) => t * t }}
+    >
+      <div class="drawer-header nested-header">
+        <button class="back-btn" onclick={closeBackendDrawer} aria-label="返回">
+          <ChevronLeft size={18} strokeWidth={2} />
+        </button>
+        <div class="header-center">
+          <p class="header-eyebrow">Backend</p>
+          <h3>管理可用模型</h3>
+        </div>
+        <div style="width: 36px;"></div>
+      </div>
+
+      <div class="drawer-content nested-content">
+        <LlmConfigurationPanel mode="settings" />
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  .settings-backdrop {
+  .drawer-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 100;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 24px;
-    background: rgba(0, 0, 0, 0.35);
+    z-index: 40;
+    background: rgba(0, 0, 0, 0.2);
     backdrop-filter: blur(12px);
-    animation: fadeIn 0.2s ease;
   }
 
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
-    }
-
-    to {
-      opacity: 1;
-    }
-  }
-
-  .settings-modal {
-    position: relative;
-    z-index: 100;
-    width: min(100%, 940px);
-    max-height: calc(100vh - 48px);
-    border-radius: 26px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    box-shadow: var(--shadow-dropdown);
+  .settings-drawer {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 41;
+    width: min(420px, 100vw);
     display: flex;
     flex-direction: column;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border-default);
+    box-shadow: var(--shadow-dropdown);
     overflow: hidden;
-    transition: transform 0.2s ease, opacity 0.2s ease, filter 0.2s ease;
   }
 
-  .settings-modal.layered {
-    transform: scale(0.975) translateY(12px);
-    opacity: 0.56;
-    filter: blur(1.5px);
-    pointer-events: none;
-  }
-
-  .settings-modal-header {
+  .drawer-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
-    padding: 20px 22px 18px;
+    gap: 12px;
+    padding: 18px 16px 14px;
     border-bottom: 1px solid var(--border-default);
   }
 
-  .settings-modal-copy {
+  .header-left {
     min-width: 0;
   }
 
-  .settings-modal-eyebrow,
-  .section-eyebrow,
-  .nested-settings-eyebrow,
-  .card-kicker {
-    margin: 0 0 6px;
+  .header-eyebrow {
+    margin: 0 0 4px;
     font-size: 11px;
     font-weight: 700;
     letter-spacing: 0.12em;
@@ -258,86 +275,72 @@
     color: var(--text-muted);
   }
 
-  .settings-modal-title,
-  .section-header h4,
-  .nested-settings-header h4,
-  .card-copy h5 {
+  .drawer-header h3 {
     margin: 0;
+    font-size: 18px;
+    font-weight: 700;
     color: var(--text-primary);
   }
 
-  .settings-modal-title {
-    font-size: 20px;
-    font-weight: 700;
-  }
-
-  .settings-close-btn {
+  .close-btn {
     width: 36px;
     height: 36px;
     border-radius: 10px;
-    background: transparent;
     border: none;
-    color: var(--text-tertiary);
+    background: var(--bg-hover);
+    color: var(--text-secondary);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
   }
 
-  .settings-close-btn:hover {
-    background: var(--bg-hover);
+  .close-btn:hover {
+    background: var(--bg-active);
     color: var(--text-primary);
+    transform: translateY(-1px);
   }
 
-  .settings-layout {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-  }
-
-  .settings-sidebar {
-    padding: 18px;
-    border-right: 1px solid var(--border-default);
-    background: color-mix(in srgb, var(--bg-sidebar) 72%, transparent);
+  .nav-tabs {
     display: flex;
-    flex-direction: column;
-    gap: 10px;
+    gap: 8px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-default);
   }
 
-  .settings-nav-button {
+  .nav-tab {
     display: inline-flex;
     align-items: center;
-    gap: 10px;
-    width: 100%;
-    min-height: 42px;
-    padding: 0 14px;
-    border-radius: 14px;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 12px;
     border: 1px solid transparent;
     background: transparent;
     color: var(--text-secondary);
     font: inherit;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    transition: all 0.15s ease;
   }
 
-  .settings-nav-button:hover {
+  .nav-tab:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
   }
 
-  .settings-nav-button.selected {
+  .nav-tab.selected {
     background: var(--bg-elevated);
     border-color: var(--border-default);
     color: var(--text-primary);
   }
 
-  .settings-content {
+  .drawer-content {
+    flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 26px;
+    padding: 18px 16px;
   }
 
   .settings-section {
@@ -346,23 +349,29 @@
     gap: 16px;
   }
 
-  .section-header p,
-  .card-copy p {
-    margin: 8px 0 0;
+  .section-header h4 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .section-header p {
+    margin: 6px 0 0;
     color: var(--text-secondary);
-    font-size: 14px;
-    line-height: 1.55;
+    font-size: 13px;
+    line-height: 1.5;
   }
 
   .settings-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 18px;
-    padding: 18px;
-    border-radius: 20px;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 18px;
     border: 1px solid var(--border-default);
-    background: color-mix(in srgb, var(--bg-surface) 88%, var(--bg-elevated) 12%);
+    background: var(--bg-surface);
   }
 
   .settings-card-button {
@@ -370,44 +379,53 @@
     text-align: left;
     cursor: pointer;
     color: inherit;
+    transition: all 0.15s ease;
   }
 
   .settings-card-button:hover {
-    border-color: color-mix(in srgb, var(--accent-primary) 28%, var(--border-default));
-    background: color-mix(in srgb, var(--bg-surface) 82%, var(--bg-elevated) 18%);
+    border-color: color-mix(in srgb, var(--accent-gold) 30%, var(--border-default));
+    background: color-mix(in srgb, var(--bg-surface) 95%, var(--bg-elevated) 5%);
+    transform: translateY(-1px);
   }
 
   .card-copy {
     min-width: 0;
+    flex: 1;
   }
 
   .card-kicker {
     display: inline-block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
   }
 
-  .card-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    margin-top: 14px;
+  .card-copy h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
   }
 
-  .card-meta span {
-    display: inline-flex;
-    align-items: center;
-    min-height: 28px;
-    padding: 0 10px;
-    border-radius: 999px;
-    background: var(--bg-elevated);
+  .card-copy p {
+    margin: 4px 0 0;
     color: var(--text-secondary);
     font-size: 12px;
-    font-weight: 600;
+    line-height: 1.45;
+  }
+
+  :global(.chevron-left) {
+    color: var(--text-tertiary);
+    transform: rotate(180deg);
+    flex-shrink: 0;
   }
 
   .theme-toggle-group {
-    display: inline-grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
+    display: inline-flex;
+    gap: 6px;
     padding: 6px;
     border-radius: 16px;
     background: var(--bg-input);
@@ -417,19 +435,21 @@
   .theme-option {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    min-width: 110px;
-    min-height: 40px;
-    padding: 0 14px;
+    gap: 6px;
+    padding: 8px 14px;
     border: none;
     border-radius: 12px;
     background: transparent;
     color: var(--text-secondary);
     font: inherit;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+    transition: all 0.15s ease;
+  }
+
+  .theme-option:hover {
+    color: var(--text-primary);
   }
 
   .theme-option.active {
@@ -438,84 +458,138 @@
     box-shadow: var(--shadow-card);
   }
 
-  .model-settings-layer {
-    position: fixed;
-    inset: 0;
-    z-index: 120;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 36px;
-    background: rgba(8, 10, 16, 0.32);
-    backdrop-filter: blur(6px);
+  .model-selectors {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
   }
 
-  .nested-settings-modal {
-    width: min(100%, 860px);
-    max-height: calc(100vh - 96px);
-    border-radius: 24px;
-    border: 1px solid var(--border-default);
-    background: var(--bg-surface);
-    box-shadow: var(--shadow-dropdown);
+  .model-select {
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    gap: 8px;
   }
 
-  .nested-settings-header {
-    display: flex;
+  .model-select-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+  }
+
+  .model-select-input {
+    width: 100%;
+    height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 38px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .model-select-input:hover {
+    border-color: var(--border-focus, var(--text-tertiary));
+  }
+
+  .model-select-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  }
+
+  .cheap-toggle-row {
+    margin-bottom: 4px;
+  }
+
+  .checkbox-row {
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 18px 20px 16px;
-    border-bottom: 1px solid var(--border-default);
+    gap: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
   }
 
-  .nested-settings-body {
+  .checkbox-row input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    cursor: pointer;
+    accent-color: var(--accent-primary);
+  }
+
+  /* Nested Backend Drawer */
+  .nested-backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 42;
+    background: rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(8px);
+  }
+
+  .backend-drawer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 43;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-surface);
+    box-shadow: 2px 0 20px rgba(0, 0, 0, 0.15);
+  }
+
+  .nested-header {
+    padding: 18px 16px 14px;
+  }
+
+  .back-btn {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    border: none;
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+  }
+
+  .back-btn:hover {
+    background: var(--bg-active);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+  }
+
+  .header-center {
     flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 18px 20px 20px;
+    text-align: center;
+    min-width: 0;
   }
 
-  @media (max-width: 840px) {
-    .settings-backdrop,
-    .model-settings-layer {
-      padding: 14px;
-    }
+  .nested-content {
+    padding: 16px;
+  }
 
-    .settings-layout {
-      grid-template-columns: 1fr;
-    }
-
-    .settings-sidebar {
-      flex-direction: row;
-      border-right: none;
-      border-bottom: 1px solid var(--border-default);
-      overflow-x: auto;
-    }
-
-    .settings-nav-button {
-      width: auto;
-      min-width: 120px;
-      justify-content: center;
-    }
-
-    .settings-content {
-      padding: 18px;
-    }
-
-    .settings-card {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .theme-toggle-group {
-      width: 100%;
-    }
-
-    .theme-option {
-      min-width: 0;
+  @media (max-width: 640px) {
+    .settings-drawer {
+      width: 100vw;
     }
   }
 </style>

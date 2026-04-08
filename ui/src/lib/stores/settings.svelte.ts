@@ -1,11 +1,14 @@
 import { apiClient } from "../api";
-import type { LlmBuiltinOverride, PatchSettingsRequest, SettingsResponse } from "../types";
+import type { BackendInstance, LlmBuiltinOverride, PatchSettingsRequest, SettingsResponse } from "../types";
 
 const DEFAULT_SETTINGS: SettingsResponse = {
+  backends: [],
+  major_backend_id: null,
+  cheap_backend_id: null,
+  cheap_model_uses_primary: true,
   llm_backend: null,
   selected_model: null,
   cheap_model: null,
-  cheap_model_uses_primary: true,
   ollama_base_url: null,
   openai_compatible_base_url: null,
   llm_custom_providers: [],
@@ -20,6 +23,16 @@ function normalizeText(value: string) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeSettingsResponse(value: Partial<SettingsResponse> | null | undefined): SettingsResponse {
+  return {
+    ...structuredClone(DEFAULT_SETTINGS),
+    ...value,
+    backends: Array.isArray(value?.backends) ? value!.backends : [],
+    llm_custom_providers: Array.isArray(value?.llm_custom_providers) ? value!.llm_custom_providers : [],
+    llm_builtin_overrides: value?.llm_builtin_overrides ?? {}
+  };
+}
+
 class SettingsState {
   data = $state<SettingsResponse>(structuredClone(DEFAULT_SETTINGS));
   loading = $state(false);
@@ -30,7 +43,7 @@ class SettingsState {
     this.loading = true;
     this.error = null;
     try {
-      this.data = await apiClient.getSettings();
+      this.data = normalizeSettingsResponse(await apiClient.getSettings());
       this.status = "";
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to load settings";
@@ -73,14 +86,41 @@ class SettingsState {
     });
   }
 
+  // Backend management
+  addBackend(backend: BackendInstance) {
+    this.data = { ...this.data, backends: [...this.data.backends, backend] };
+  }
+
+  updateBackend(id: string, patch: Partial<BackendInstance>) {
+    this.data = {
+      ...this.data,
+      backends: this.data.backends.map((b) => (b.id === id ? { ...b, ...patch } : b))
+    };
+  }
+
+  removeBackend(id: string) {
+    this.data = { ...this.data, backends: this.data.backends.filter((b) => b.id !== id) };
+  }
+
+  setMajorBackend(id: string | null) {
+    this.data = { ...this.data, major_backend_id: id };
+  }
+
+  setCheapBackend(id: string | null) {
+    this.data = { ...this.data, cheap_backend_id: id };
+  }
+
   async save() {
     this.error = null;
     this.status = "";
     const payload: PatchSettingsRequest = {
+      backends: this.data.backends,
+      major_backend_id: this.data.major_backend_id,
+      cheap_backend_id: this.data.cheap_backend_id,
+      cheap_model_uses_primary: this.data.cheap_model_uses_primary,
       llm_backend: this.data.llm_backend,
       selected_model: this.data.selected_model,
       cheap_model: this.data.cheap_model,
-      cheap_model_uses_primary: this.data.cheap_model_uses_primary,
       ollama_base_url: this.data.ollama_base_url,
       openai_compatible_base_url: this.data.openai_compatible_base_url,
       llm_custom_providers: this.data.llm_custom_providers,
@@ -88,7 +128,7 @@ class SettingsState {
     };
 
     try {
-      this.data = await apiClient.patchSettings(payload);
+      this.data = normalizeSettingsResponse(await apiClient.patchSettings(payload));
       this.status = this.data.llm_ready ? "Provider ready" : "Settings saved";
       return true;
     } catch (e) {

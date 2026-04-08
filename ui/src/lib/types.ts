@@ -25,11 +25,25 @@ export interface CustomLlmProviderSettings {
   builtin: boolean;
 }
 
+export interface BackendInstance {
+  id: string;
+  provider: string;
+  api_key: string | null;
+  base_url: string | null;
+  model: string;
+  request_format: string | null;
+}
+
 export interface SettingsResponse {
+  // Multi-backend fields (new)
+  backends: BackendInstance[];
+  major_backend_id: string | null;
+  cheap_backend_id: string | null;
+  cheap_model_uses_primary: boolean;
+  // Legacy fields (kept for migration)
   llm_backend: string | null;
   selected_model: string | null;
   cheap_model: string | null;
-  cheap_model_uses_primary: boolean;
   ollama_base_url: string | null;
   openai_compatible_base_url: string | null;
   llm_custom_providers: CustomLlmProviderSettings[];
@@ -40,10 +54,15 @@ export interface SettingsResponse {
 }
 
 export interface PatchSettingsRequest {
+  // Multi-backend fields (new)
+  backends?: BackendInstance[];
+  major_backend_id?: string | null;
+  cheap_backend_id?: string | null;
+  cheap_model_uses_primary?: boolean;
+  // Legacy fields (kept for migration)
   llm_backend?: string | null;
   selected_model?: string | null;
   cheap_model?: string | null;
-  cheap_model_uses_primary?: boolean;
   ollama_base_url?: string | null;
   openai_compatible_base_url?: string | null;
   llm_custom_providers?: CustomLlmProviderSettings[];

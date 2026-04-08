@@ -740,6 +740,7 @@ mod tests {
             cheap_model: None,
             smart_routing_cascade: true,
             openai_codex: None,
+            cheap_backend_instance: None,
         }
     }
 

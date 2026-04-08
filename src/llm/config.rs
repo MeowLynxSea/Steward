@@ -204,6 +204,10 @@ pub struct LlmConfig {
     /// Enable cascade mode for smart routing (retry with primary if cheap model
     /// response seems uncertain). Default: true. Set via `SMART_ROUTING_CASCADE`.
     pub smart_routing_cascade: bool,
+    /// Resolved cheap backend instance (populated when cheap_backend_id is set
+    /// in settings and the backend is different from the major backend).
+    /// Used by build_provider_chain() to create a separate provider for the cheap path.
+    pub cheap_backend_instance: Option<crate::settings::BackendInstance>,
 }
 
 impl LlmConfig {

@@ -27,12 +27,19 @@
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { onDestroy } from "svelte";
 
+  type ModelOption = {
+    value: string;
+    label: string;
+    model: string;
+  };
+
   interface Props {
     session: SessionDetail | null;
     task: TaskRecord | null;
     streaming: StreamingState;
     modelName?: string | null;
-    availableModels?: string[];
+    selectedModelValue?: string;
+    availableModels?: ModelOption[];
     loading: boolean;
     onSendMessage: (content: string) => void;
     onSuggestionClick?: (suggestion: string) => void;
@@ -51,6 +58,7 @@
     task,
     streaming,
     modelName = null,
+    selectedModelValue = "",
     availableModels = [],
     loading,
     onSendMessage,
@@ -242,9 +250,9 @@
     showModelDropdown = !showModelDropdown;
   }
 
-  function selectModel(model: string) {
+  function selectModel(modelValue: string) {
     showModelDropdown = false;
-    onSelectModel?.(model);
+    onSelectModel?.(modelValue);
   }
 
   function toggleTheme() {
@@ -542,11 +550,11 @@
             {#if availableModels.length > 0}
               {#each availableModels as model}
                 <button
-                  class="dropdown-item {model === modelName ? 'active' : ''}"
-                  onclick={() => selectModel(model)}
+                  class="dropdown-item {model.value === selectedModelValue ? 'active' : ''}"
+                  onclick={() => selectModel(model.value)}
                 >
-                  <span>{model}</span>
-                  {#if model === modelName}
+                  <span>{model.label}</span>
+                  {#if model.value === selectedModelValue}
                     <Check size={14} strokeWidth={2} />
                   {/if}
                 </button>

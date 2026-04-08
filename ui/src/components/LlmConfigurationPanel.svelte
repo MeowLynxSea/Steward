@@ -7,10 +7,15 @@
     Cpu,
     KeyRound,
     Server,
-    Sparkles
+    Sparkles,
+    Plus,
+    Pencil,
+    Trash2,
+    X
   } from "lucide-svelte";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { getOpenAiCodexLoginStatus, startOpenAiCodexLogin } from "../lib/tauri";
+  import type { BackendInstance } from "../lib/types";
 
   type ProviderPreset = {
     id: string;
@@ -125,6 +130,16 @@
     onComplete?: (() => void | Promise<void>) | undefined;
   } = $props();
 
+  // Backend management state (for mode="settings")
+  let showBackendForm = $state(false);
+  let editingBackendId = $state<string | null>(null); // null = new backend
+  let formProvider = $state("");
+  let formApiKey = $state("");
+  let formBaseUrl = $state("");
+  let formModel = $state("");
+  let formRequestFormat = $state("chat_completions");
+
+  // Legacy state (for mode="onboarding")
   let codexLoginId = $state<string | null>(null);
   let codexVerificationUri = $state("");
   let codexUserCode = $state("");
@@ -132,6 +147,80 @@
   let codexLoginError = $state<string | null>(null);
   let codexPollTimer: number | null = null;
 
+  const isSettingsMode = $derived(mode === "settings");
+  const isOnboardingMode = $derived(mode === "onboarding");
+
+  // Provider preset lookup
+  function getProviderPreset(providerId: string): ProviderPreset | undefined {
+    return providerPresets.find((p) => p.id === providerId);
+  }
+
+  // Backend form helpers
+  function openAddBackend() {
+    editingBackendId = null;
+    formProvider = "openai";
+    formApiKey = "";
+    formBaseUrl = "";
+    formModel = "";
+    formRequestFormat = "chat_completions";
+    showBackendForm = true;
+  }
+
+  function openEditBackend(backend: BackendInstance) {
+    editingBackendId = backend.id;
+    formProvider = backend.provider;
+    formApiKey = backend.api_key ?? "";
+    formBaseUrl = backend.base_url ?? "";
+    formModel = backend.model;
+    formRequestFormat = backend.request_format ?? "chat_completions";
+    showBackendForm = true;
+  }
+
+  function closeBackendForm() {
+    showBackendForm = false;
+    editingBackendId = null;
+  }
+
+  function getSelectedProviderPreset(): ProviderPreset | undefined {
+    return getProviderPreset(formProvider);
+  }
+
+  async function saveBackendForm() {
+    const provider = getProviderPreset(formProvider);
+    if (!provider || !formModel.trim()) {
+      return;
+    }
+
+    const backendData: Partial<BackendInstance> = {
+      provider: formProvider,
+      model: formModel.trim(),
+      api_key: formApiKey.trim() || null,
+      base_url: formBaseUrl.trim() || null,
+      request_format: provider.supportsFormat ? formRequestFormat : null
+    };
+
+    if (editingBackendId === null) {
+      // New backend
+      const newBackend: BackendInstance = {
+        id: crypto.randomUUID(),
+        ...backendData
+      } as BackendInstance;
+      settingsStore.addBackend(newBackend);
+    } else {
+      // Existing backend
+      settingsStore.updateBackend(editingBackendId, backendData);
+    }
+
+    await settingsStore.save();
+    closeBackendForm();
+  }
+
+  async function deleteBackend(id: string) {
+    settingsStore.removeBackend(id);
+    await settingsStore.save();
+  }
+
+  // Legacy functions (for onboarding mode)
   function normalizeBackendId(value: string | null) {
     return value?.trim().toLowerCase() ?? providerPresets[0].id;
   }
@@ -140,7 +229,6 @@
     providerPresets.find((provider) => provider.id === normalizeBackendId(settingsStore.data.llm_backend))
       ?? providerPresets[0]
   );
-  const isSettingsMode = $derived(mode === "settings");
 
   const selectedOverride = $derived(
     settingsStore.data.llm_builtin_overrides[selectedProvider.id] ?? {
@@ -264,184 +352,508 @@
 
 <svelte:window onbeforeunload={stopCodexPolling} />
 
-<section class:fullscreen={mode === "onboarding"} class:settings-mode={mode === "settings"} class="configuration-shell">
-  <div class:configuration-card-onboarding={mode === "onboarding"} class="configuration-card">
-    <div class="configuration-scroll">
-      <div class="hero-copy">
-        <p class="eyebrow">{eyebrow}</p>
-        <h2>{title}</h2>
-        <p class="description">{description}</p>
-      </div>
-
-      <div class="provider-grid">
-        {#each providerPresets as provider (provider.id)}
-          <button
-            class:selected={selectedProvider.id === provider.id}
-            class="provider-card"
-            type="button"
-            onclick={() => selectProvider(provider)}
-          >
-            <provider.icon size={20} strokeWidth={2} />
-            <div>
-              <strong>{provider.label}</strong>
-              {#if !isSettingsMode}
-                <p>{provider.description}</p>
-              {/if}
-            </div>
+{#if isSettingsMode}
+  <!-- Settings mode: Backend management UI -->
+  <div class="backend-management">
+    {#if showBackendForm}
+      <!-- Backend form -->
+      <div class="backend-form">
+        <div class="form-header">
+          <h4>{editingBackendId === null ? "添加 Backend" : "编辑 Backend"}</h4>
+          <button class="icon-btn" type="button" onclick={closeBackendForm} aria-label="取消">
+            <X size={18} strokeWidth={2} />
           </button>
-        {/each}
-      </div>
+        </div>
 
-      <div class="form-grid">
-        <label class="field">
-          <span>{isSettingsMode ? "主模型" : "Model"}</span>
-          <input
-            value={settingsStore.data.selected_model ?? ""}
-            placeholder={selectedProvider.defaultModel}
-            oninput={(event) =>
-              settingsStore.updateField("selected_model", (event.currentTarget as HTMLInputElement).value)}
-          />
-        </label>
+        <div class="form-body">
+          <label class="field">
+            <span>Provider</span>
+            <select
+              class="field-input"
+              bind:value={formProvider}
+            >
+              {#each providerPresets as provider (provider.id)}
+                <option value={provider.id}>{provider.label}</option>
+              {/each}
+            </select>
+          </label>
 
-        {#if isSettingsMode}
-          <div class="cheap-model-panel field-wide">
-            <div class="cheap-model-header">
-              <div class="cheap-model-copy">
-                <span>Cheap LLM</span>
-                <p>用于轻量路由、快速判断和低成本推理。</p>
-              </div>
-
-              <label class="checkbox-row">
+          {#if getSelectedProviderPreset()?.supportsApiKey}
+            <label class="field">
+              <span>API Key</span>
+              <div class="input-with-icon">
+                <KeyRound size={16} strokeWidth={2} />
                 <input
-                  type="checkbox"
-                  checked={settingsStore.data.cheap_model_uses_primary}
-                  onchange={(event) =>
-                    settingsStore.setCheapModelUsesPrimary((event.currentTarget as HTMLInputElement).checked)}
+                  class="field-input"
+                  type="password"
+                  placeholder="Paste API key"
+                  bind:value={formApiKey}
                 />
-                <span>使用主模型</span>
-              </label>
-            </div>
+              </div>
+            </label>
+          {/if}
 
+          {#if getSelectedProviderPreset()?.supportsBaseUrl}
+            <label class="field">
+              <span>Base URL</span>
+              <div class="input-with-icon">
+                <Server size={16} strokeWidth={2} />
+                <input
+                  class="field-input"
+                  type="text"
+                  placeholder={getSelectedProviderPreset()?.baseUrlPlaceholder ?? ""}
+                  bind:value={formBaseUrl}
+                />
+              </div>
+            </label>
+          {/if}
+
+          <label class="field">
+            <span>Model</span>
             <input
-              value={settingsStore.data.cheap_model ?? ""}
-              placeholder="例如 gpt-5-mini / gemini-2.5-flash-lite"
-              disabled={cheapModelDisabled}
-              oninput={(event) =>
-                settingsStore.updateField("cheap_model", (event.currentTarget as HTMLInputElement).value)}
+              class="field-input"
+              type="text"
+              placeholder={getSelectedProviderPreset()?.defaultModel ?? ""}
+              bind:value={formModel}
             />
+          </label>
+
+          {#if getSelectedProviderPreset()?.supportsFormat}
+            <label class="field">
+              <span>Request Format</span>
+              <div class="segmented-control">
+                <button
+                  class:active={formRequestFormat === "chat_completions"}
+                  class="segment-button"
+                  type="button"
+                  onclick={() => formRequestFormat = "chat_completions"}
+                >
+                  Chat
+                </button>
+                <button
+                  class:active={formRequestFormat === "responses"}
+                  class="segment-button"
+                  type="button"
+                  onclick={() => formRequestFormat = "responses"}
+                >
+                  Responses
+                </button>
+              </div>
+            </label>
+          {/if}
+        </div>
+
+        <div class="form-actions">
+          <button class="submit-button small" type="button" onclick={() => void saveBackendForm()}>
+            保存
+          </button>
+        </div>
+      </div>
+    {:else}
+      <!-- Backend list -->
+      <div class="backend-list">
+        {#if settingsStore.data.backends.length === 0}
+          <div class="empty-state">
+            <p>暂无配置的 Backend</p>
+            <button class="add-backend-btn" type="button" onclick={openAddBackend}>
+              <Plus size={16} strokeWidth={2} />
+              <span>添加第一个 Backend</span>
+            </button>
           </div>
-        {/if}
+        {:else}
+          <div class="backend-grid">
+            {#each settingsStore.data.backends as backend (backend.id)}
+              {@const preset = getProviderPreset(backend.provider)}
+              <div class="backend-card">
+                <div class="backend-card-header">
+                  {#if preset}
+                    <preset.icon size={18} strokeWidth={2} />
+                  {/if}
+                  <span class="backend-provider">{preset?.label ?? backend.provider}</span>
+                </div>
+                <div class="backend-model">{backend.model}</div>
+                <div class="backend-actions">
+                  <button class="icon-btn" type="button" onclick={() => openEditBackend(backend)} aria-label="编辑">
+                    <Pencil size={15} strokeWidth={2} />
+                  </button>
+                  <button class="icon-btn danger" type="button" onclick={() => deleteBackend(backend.id)} aria-label="删除">
+                    <Trash2 size={15} strokeWidth={2} />
+                  </button>
+                </div>
+              </div>
+            {/each}
 
-        {#if selectedProvider.supportsFormat}
-          <label class="field">
-            <span>API Format</span>
-            <div class="segmented-control">
-              <button
-                class:active={currentApiFormat === "chat_completions"}
-                class="segment-button"
-                type="button"
-                onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "chat_completions")}
-              >
-                Chat
-              </button>
-              <button
-                class:active={currentApiFormat === "responses"}
-                class="segment-button"
-                type="button"
-                onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "responses")}
-              >
-                Responses
-              </button>
-            </div>
-          </label>
-        {/if}
-
-        {#if selectedProvider.supportsApiKey}
-          <label class="field">
-            <span>API Key</span>
-            <div class="input-with-icon">
-              <KeyRound size={16} strokeWidth={2} />
-              <input
-                value={selectedOverride.api_key ?? ""}
-                placeholder="Paste API key"
-                oninput={(event) =>
-                  settingsStore.updateBuiltinOverride(
-                    selectedProvider.id,
-                    "api_key",
-                    (event.currentTarget as HTMLInputElement).value
-                  )}
-              />
-            </div>
-          </label>
-        {/if}
-
-        {#if selectedProvider.supportsBaseUrl}
-          <label class="field field-wide">
-            <span>Base URL</span>
-            <div class="input-with-icon">
-              <Server size={16} strokeWidth={2} />
-              <input
-                value={currentBaseUrl}
-                placeholder={selectedProvider.baseUrlPlaceholder}
-                oninput={(event) => updateBaseUrl((event.currentTarget as HTMLInputElement).value)}
-              />
-            </div>
-          </label>
+            <button class="add-backend-card" type="button" onclick={openAddBackend}>
+              <Plus size={20} strokeWidth={2} />
+              <span>添加 Backend</span>
+            </button>
+          </div>
         {/if}
       </div>
+    {/if}
+  </div>
+{:else}
+  <!-- Onboarding mode: Original provider selection UI -->
+  <section class:fullscreen={mode === "onboarding"} class="configuration-shell">
+    <div class:configuration-card-onboarding={mode === "onboarding"} class="configuration-card">
+      <div class="configuration-scroll">
+        <div class="hero-copy">
+          <p class="eyebrow">{eyebrow}</p>
+          <h2>{title}</h2>
+          <p class="description">{description}</p>
+        </div>
 
-      {#if selectedProvider.requiresOauth}
-        <div class="oauth-panel">
-          <div>
-            <p class="oauth-title">ChatGPT OAuth</p>
-            <p class="oauth-copy">Start the existing Codex OAuth flow directly inside the desktop app.</p>
+        <div class="provider-grid">
+          {#each providerPresets as provider (provider.id)}
+            <button
+              class:selected={selectedProvider.id === provider.id}
+              class="provider-card"
+              type="button"
+              onclick={() => selectProvider(provider)}
+            >
+              <provider.icon size={20} strokeWidth={2} />
+              <div>
+                <strong>{provider.label}</strong>
+                <p>{provider.description}</p>
+              </div>
+            </button>
+          {/each}
+        </div>
+
+        <div class="form-grid">
+          <label class="field">
+            <span>Model</span>
+            <input
+              value={settingsStore.data.selected_model ?? ""}
+              placeholder={selectedProvider.defaultModel}
+              oninput={(event) =>
+                settingsStore.updateField("selected_model", (event.currentTarget as HTMLInputElement).value)}
+            />
+          </label>
+
+          {#if selectedProvider.supportsFormat}
+            <label class="field">
+              <span>API Format</span>
+              <div class="segmented-control">
+                <button
+                  class:active={currentApiFormat === "chat_completions"}
+                  class="segment-button"
+                  type="button"
+                  onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "chat_completions")}
+                >
+                  Chat
+                </button>
+                <button
+                  class:active={currentApiFormat === "responses"}
+                  class="segment-button"
+                  type="button"
+                  onclick={() => settingsStore.updateBuiltinOverride("openai", "request_format", "responses")}
+                >
+                  Responses
+                </button>
+              </div>
+            </label>
+          {/if}
+
+          {#if selectedProvider.supportsApiKey}
+            <label class="field">
+              <span>API Key</span>
+              <div class="input-with-icon">
+                <KeyRound size={16} strokeWidth={2} />
+                <input
+                  value={selectedOverride.api_key ?? ""}
+                  placeholder="Paste API key"
+                  oninput={(event) =>
+                    settingsStore.updateBuiltinOverride(
+                      selectedProvider.id,
+                      "api_key",
+                      (event.currentTarget as HTMLInputElement).value
+                    )}
+                />
+              </div>
+            </label>
+          {/if}
+
+          {#if selectedProvider.supportsBaseUrl}
+            <label class="field field-wide">
+              <span>Base URL</span>
+              <div class="input-with-icon">
+                <Server size={16} strokeWidth={2} />
+                <input
+                  value={currentBaseUrl}
+                  placeholder={selectedProvider.baseUrlPlaceholder}
+                  oninput={(event) => updateBaseUrl((event.currentTarget as HTMLInputElement).value)}
+                />
+              </div>
+            </label>
+          {/if}
+        </div>
+
+        {#if selectedProvider.requiresOauth}
+          <div class="oauth-panel">
+            <div>
+              <p class="oauth-title">ChatGPT OAuth</p>
+              <p class="oauth-copy">Start the existing Codex OAuth flow directly inside the desktop app.</p>
+            </div>
+
+            <button class="submit-button secondary" type="button" onclick={() => void beginCodexLogin()}>
+              {codexLoginPending ? "Waiting for authorization..." : "Start login"}
+            </button>
+
+            {#if codexVerificationUri && codexUserCode}
+              <div class="oauth-card">
+                <p>Open <strong>{codexVerificationUri}</strong> and enter this code:</p>
+                <div class="oauth-code">{codexUserCode}</div>
+              </div>
+            {/if}
+
+            {#if codexLoginError}
+              <p class="status error">{codexLoginError}</p>
+            {/if}
+          </div>
+        {/if}
+
+        <div class="status-row">
+          <div class="status-copy">
+            {#if settingsStore.data.llm_ready}
+              <p class="status ready">Provider ready</p>
+            {:else if settingsStore.error}
+              <p class="status error">{settingsStore.error}</p>
+            {:else if settingsStore.data.llm_readiness_error}
+              <p class="status pending">{settingsStore.data.llm_readiness_error}</p>
+            {:else}
+              <p class="status pending">Complete the provider setup to continue.</p>
+            {/if}
+
+            {#if settingsStore.status}
+              <p class="subtle">{settingsStore.status}</p>
+            {/if}
           </div>
 
-          <button class="submit-button secondary" type="button" onclick={() => void beginCodexLogin()}>
-            {codexLoginPending ? "Waiting for authorization..." : "Start login"}
-          </button>
-
-          {#if codexVerificationUri && codexUserCode}
-            <div class="oauth-card">
-              <p>Open <strong>{codexVerificationUri}</strong> and enter this code:</p>
-              <div class="oauth-code">{codexUserCode}</div>
-            </div>
-          {/if}
-
-          {#if codexLoginError}
-            <p class="status error">{codexLoginError}</p>
+          {#if !selectedProvider.requiresOauth}
+            <button class="submit-button" type="button" onclick={() => void handleSubmit()}>
+              {submitLabel}
+            </button>
           {/if}
         </div>
-      {/if}
-
-      <div class="status-row">
-        <div class="status-copy">
-          {#if settingsStore.data.llm_ready}
-            <p class="status ready">Provider ready</p>
-          {:else if settingsStore.error}
-            <p class="status error">{settingsStore.error}</p>
-          {:else if settingsStore.data.llm_readiness_error}
-            <p class="status pending">{settingsStore.data.llm_readiness_error}</p>
-          {:else}
-            <p class="status pending">Complete the provider setup to continue.</p>
-          {/if}
-
-          {#if settingsStore.status}
-            <p class="subtle">{settingsStore.status}</p>
-          {/if}
-        </div>
-
-        {#if !selectedProvider.requiresOauth}
-          <button class="submit-button" type="button" onclick={() => void handleSubmit()}>
-            {submitLabel}
-          </button>
-        {/if}
       </div>
     </div>
-  </div>
-</section>
+  </section>
+{/if}
 
 <style>
+  /* Backend management UI (settings mode) */
+  .backend-management {
+    width: 100%;
+  }
+
+  .backend-list {
+    width: 100%;
+  }
+
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 32px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  .add-backend-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 10px 16px;
+    border-radius: 14px;
+    border: 1px dashed var(--border-default);
+    background: transparent;
+    color: var(--text-secondary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .add-backend-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .backend-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .backend-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    position: relative;
+    transition: all 0.15s ease;
+  }
+
+  .backend-card:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-card);
+  }
+
+  .backend-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-primary);
+  }
+
+  .backend-provider {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .backend-model {
+    font-size: 13px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .backend-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .add-backend-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px dashed var(--border-default);
+    background: transparent;
+    color: var(--text-tertiary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .add-backend-card:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 6%, transparent);
+    transform: translateY(-1px);
+  }
+
+  .backend-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .form-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .form-header h4 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+
+  .form-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .form-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 8px;
+  }
+
+  .submit-button.small {
+    min-width: auto;
+    min-height: 36px;
+    padding: 0 16px;
+    font-size: 13px;
+    border-radius: 10px;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .icon-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    transform: translateY(-1px);
+  }
+
+  .icon-btn.danger:hover {
+    background: color-mix(in srgb, var(--accent-danger-text) 12%, transparent);
+    color: var(--accent-danger-text);
+  }
+
+  .field-input {
+    width: 100%;
+    min-height: 42px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: all 0.15s ease;
+    box-sizing: border-box;
+  }
+
+  .field-input:focus {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
+  }
+
+  .field-input:is(select) {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 14px center;
+    padding-right: 38px;
+    cursor: pointer;
+  }
+
   .configuration-shell {
     width: 100%;
     min-height: 0;
@@ -633,63 +1045,6 @@
     outline: none;
   }
 
-  .cheap-model-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 14px;
-    border-radius: 16px;
-    border: 1px solid var(--border-input);
-    background: var(--bg-surface);
-  }
-
-  .cheap-model-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  .cheap-model-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .cheap-model-copy span {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-  }
-
-  .cheap-model-copy p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--text-tertiary);
-  }
-
-  .cheap-model-panel input:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .checkbox-row {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    white-space: nowrap;
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 600;
-  }
-
-  .checkbox-row input {
-    width: 16px;
-    height: 16px;
-    margin: 0;
-  }
-
   .segmented-control {
     display: inline-grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -847,67 +1202,6 @@
     margin-top: 16px;
     background: var(--bg-elevated);
     color: var(--text-primary);
-  }
-
-  .settings-mode .configuration-card {
-    width: 100%;
-    padding: 0;
-    border: none;
-    box-shadow: none;
-    background: transparent;
-    backdrop-filter: none;
-  }
-
-  .settings-mode .hero-copy {
-    margin-bottom: 16px;
-  }
-
-  .settings-mode h2 {
-    font-size: 24px;
-  }
-
-  .settings-mode .description {
-    margin-top: 6px;
-    font-size: 13px;
-    line-height: 1.45;
-    max-width: none;
-  }
-
-  .settings-mode .provider-grid {
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 8px;
-    margin-bottom: 14px;
-  }
-
-  .settings-mode .provider-card {
-    align-items: center;
-    padding: 10px 12px;
-    border-radius: 14px;
-  }
-
-  .settings-mode .provider-card strong {
-    margin-bottom: 0;
-    font-size: 14px;
-  }
-
-  .settings-mode .form-grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-
-  .settings-mode .field input {
-    min-height: 42px;
-    border-radius: 12px;
-  }
-
-  .settings-mode .status-row {
-    margin-top: 16px;
-  }
-
-  .settings-mode .submit-button {
-    min-width: 132px;
-    min-height: 42px;
-    border-radius: 12px;
   }
 
   @media (max-width: 720px) {

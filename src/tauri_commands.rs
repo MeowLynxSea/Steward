@@ -56,6 +56,9 @@ fn plan_desktop_message_dispatch(
 
 fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsResponse {
     steward_core::ipc::SettingsResponse {
+        backends: settings.backends.clone(),
+        major_backend_id: settings.major_backend_id.clone(),
+        cheap_backend_id: settings.cheap_backend_id.clone(),
         llm_backend: settings.llm_backend.clone(),
         selected_model: settings.selected_model.clone(),
         cheap_model: settings.cheap_model.clone(),
@@ -89,6 +92,15 @@ pub async fn patch_settings(
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
 
+    if let Some(backends) = payload.backends {
+        settings.backends = backends;
+    }
+    if let Some(major_backend_id) = payload.major_backend_id {
+        settings.major_backend_id = Some(major_backend_id);
+    }
+    if let Some(cheap_backend_id) = payload.cheap_backend_id {
+        settings.cheap_backend_id = Some(cheap_backend_id);
+    }
     if let Some(llm_backend) = payload.llm_backend {
         settings.llm_backend = Some(llm_backend);
         settings.onboard_completed = true;

@@ -14,6 +14,9 @@ pub use crate::desktop_runtime::AppState;
 
 #[derive(Debug, Serialize)]
 pub struct SettingsResponse {
+    pub backends: Vec<crate::settings::BackendInstance>,
+    pub major_backend_id: Option<String>,
+    pub cheap_backend_id: Option<String>,
     pub llm_backend: Option<String>,
     pub selected_model: Option<String>,
     pub cheap_model: Option<String>,
@@ -30,6 +33,9 @@ pub struct SettingsResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct PatchSettingsRequest {
+    pub backends: Option<Vec<crate::settings::BackendInstance>>,
+    pub major_backend_id: Option<String>,
+    pub cheap_backend_id: Option<String>,
     pub llm_backend: Option<String>,
     pub selected_model: Option<String>,
     pub cheap_model: Option<String>,

@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::bootstrap::steward_base_dir;
+use uuid::Uuid;
 
 /// A custom LLM provider defined by the user through the web UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +71,34 @@ pub fn custom_secret_name(provider_id: &str) -> String {
     format!("llm_custom_{provider_id}_api_key")
 }
 
+/// A configured LLM backend instance.
+///
+/// Each instance is a self-contained configuration unit containing the provider
+/// type and all credentials/endpoints needed to make requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackendInstance {
+    /// Unique identifier (UUID).
+    pub id: String,
+    /// Provider ID: "openai", "anthropic", "ollama", "groq", "openrouter", "openai_codex".
+    pub provider: String,
+    /// API protocol (derived from provider during migration).
+    #[serde(skip)]
+    #[doc(hidden)]
+    pub protocol: Option<crate::llm::registry::ProviderProtocol>,
+    /// API key (required for providers that need it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// Base URL (required for providers like Ollama or OpenAI-compatible endpoints).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// Model identifier for this backend instance (None = use registry default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Request format override (only OpenAI supports "chat_completions" vs "responses").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_format: Option<String>,
+}
+
 /// User settings persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
@@ -78,129 +107,115 @@ pub struct Settings {
     pub onboard_completed: bool,
 
     /// Stable owner scope for this Steward instance.
-    ///
-    /// This is bootstrap configuration loaded from env / disk / TOML. We do
-    /// not persist it in the per-user DB settings table because the DB lookup
-    /// itself already requires the owner scope to be known.
     #[serde(default)]
     pub owner_id: Option<String>,
 
     // === Step 1: Local Storage ===
-    /// Path to local libSQL database file.
     #[serde(default)]
     pub libsql_path: Option<String>,
 
-    /// Turso cloud URL for remote replica sync.
     #[serde(default)]
     pub libsql_url: Option<String>,
 
     // === Step 2: Security ===
-    /// Source for the secrets master key.
     #[serde(default)]
     pub secrets_master_key_source: KeySource,
 
-    /// Generated master key hex (env var mode only, written to .env by wizard).
     #[serde(default, skip_serializing)]
     pub secrets_master_key_hex: Option<String>,
 
-    // === Step 3: Inference Provider ===
-    /// LLM backend: "nearai", "anthropic", "openai", "github_copilot", "ollama", "openai_compatible", "tinfoil", "bedrock".
+    // === Step 3: Inference Provider (Multi-Backend) ===
+    /// All configured backend instances.
     #[serde(default)]
-    pub llm_backend: Option<String>,
+    pub backends: Vec<BackendInstance>,
 
-    /// Custom LLM providers defined by the user through the web UI.
+    /// ID of the backend instance used for the major (primary) model.
     #[serde(default)]
-    pub llm_custom_providers: Vec<CustomLlmProviderSettings>,
+    pub major_backend_id: Option<String>,
 
-    /// Per-provider overrides for built-in providers (API key and/or model).
+    /// ID of the backend instance used for the cheap model.
     #[serde(default)]
-    pub llm_builtin_overrides: HashMap<String, LlmBuiltinOverride>,
+    pub cheap_backend_id: Option<String>,
 
-    /// Ollama base URL (when llm_backend = "ollama").
-    #[serde(default)]
-    pub ollama_base_url: Option<String>,
-
-    /// OpenAI-compatible endpoint base URL (when llm_backend = "openai_compatible").
-    #[serde(default)]
-    pub openai_compatible_base_url: Option<String>,
-
-    /// Bedrock region (when llm_backend = "bedrock").
-    #[serde(default)]
-    pub bedrock_region: Option<String>,
-
-    /// Bedrock cross-region inference prefix (when llm_backend = "bedrock").
-    #[serde(default)]
-    pub bedrock_cross_region: Option<String>,
-
-    /// AWS profile name for Bedrock (when llm_backend = "bedrock").
-    #[serde(default)]
-    pub bedrock_profile: Option<String>,
-
-    // === Step 4: Model Selection ===
-    /// Currently selected model.
-    #[serde(default)]
-    pub selected_model: Option<String>,
-
-    /// Optional cheap model used by smart routing.
-    #[serde(default)]
-    pub cheap_model: Option<String>,
-
-    /// When true, reuse the primary model instead of a separate cheap model.
+    /// When true, reuse the major model instead of a separate cheap model.
     #[serde(default = "default_true")]
     pub cheap_model_uses_primary: bool,
 
+    // === Legacy (kept for migration) ===
+    /// @deprecated Use `backends` instead. Kept for migration from old settings format.
+    #[serde(default)]
+    pub llm_backend: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub llm_builtin_overrides: HashMap<String, LlmBuiltinOverride>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub llm_custom_providers: Vec<CustomLlmProviderSettings>,
+
+    /// @deprecated Use `backends[].model` instead. Kept for migration.
+    #[serde(default)]
+    pub selected_model: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub cheap_model: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub ollama_base_url: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub openai_compatible_base_url: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub bedrock_region: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub bedrock_cross_region: Option<String>,
+
+    /// @deprecated Use `backends` instead. Kept for migration.
+    #[serde(default)]
+    pub bedrock_profile: Option<String>,
+
     // === Step 5: Embeddings ===
-    /// Embeddings configuration.
     #[serde(default)]
     pub embeddings: EmbeddingsSettings,
 
     // === Step 6: Desktop Transport ===
-    /// Tunnel configuration for optional tool/webhook integrations.
     #[serde(default)]
     pub tunnel: TunnelSettings,
 
-    /// Desktop transport configuration.
     #[serde(default)]
     pub channels: ChannelSettings,
 
     // === Step 7: Heartbeat ===
-    /// Heartbeat configuration.
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
 
-    // === Conversational Profile Onboarding ===
-    /// Whether the conversational profile onboarding has been completed.
-    ///
-    /// Set during the user's first interaction with the running assistant
-    /// (not during the setup wizard), after the agent builds a psychographic
-    /// profile via `memory_write`. Used by the agent loop (via workspace
-    /// system-prompt wiring) to suppress BOOTSTRAP.md injection once
-    /// onboarding is complete.
     #[serde(default, alias = "personal_onboarding_completed")]
     pub profile_onboarding_completed: bool,
 
-    // === Advanced Settings (not asked during setup, editable via CLI) ===
-    /// Agent behavior configuration.
+    // === Advanced Settings ===
     #[serde(default)]
     pub agent: AgentSettings,
 
-    /// WASM sandbox configuration.
     #[serde(default)]
     pub wasm: WasmSettings,
 
-    /// Local Claude Code execution configuration.
     #[serde(default)]
     pub claude_code: ClaudeCodeSettings,
 
-    /// Safety configuration.
     #[serde(default)]
     pub safety: SafetySettings,
 
-    /// Builder configuration.
     #[serde(default)]
     pub builder: BuilderSettings,
 
-    /// Transcription configuration.
     #[serde(default)]
     pub transcription: Option<TranscriptionSettings>,
 }
@@ -644,6 +659,123 @@ pub struct TranscriptionSettings {
 }
 
 impl Settings {
+    /// Migrate from legacy single-backend format to new multi-backend format.
+    ///
+    /// When `backends` is empty but legacy fields exist (`llm_backend`, `selected_model`,
+    /// `llm_builtin_overrides`), creates a single `BackendInstance` from those values.
+    pub fn migrate_from_legacy(&mut self) {
+        if !self.backends.is_empty() {
+            return; // Already migrated
+        }
+
+        let Some(backend_id) = self.llm_backend.clone() else {
+            return; // Nothing to migrate
+        };
+
+        // Skip migration for providers that don't support multi-backend mode
+        let backend_lower = backend_id.to_lowercase();
+        if matches!(
+            backend_lower.as_str(),
+            "nearai" | "near_ai" | "near"
+                | "bedrock" | "aws_bedrock" | "aws"
+                | "gemini_oauth" | "gemini-oauth"
+                | "openai_codex" | "openai-codex" | "codex"
+        ) {
+            return;
+        }
+
+        let backend_lower = backend_id.to_lowercase();
+
+        // Look up provider definition from registry FIRST to get canonical ID
+        let registry = crate::llm::registry::ProviderRegistry::load();
+        let provider_def = registry.find(&backend_lower);
+
+        // Only migrate registry-based providers. Custom providers (not in registry)
+        // should use the legacy resolution path.
+        if provider_def.is_none() {
+            return;
+        }
+
+        // Skip providers with OAuth or other special handling that the multi-backend
+        // path doesn't yet support.
+        if backend_lower == "anthropic" {
+            // Anthropic has OAuth token handling that requires special env var logic.
+            // Keep using the legacy path.
+            return;
+        }
+
+        // Use canonical provider ID from registry (handles aliases like "bigmodel" -> "zai")
+        let provider = provider_def.map(|def| def.id.clone()).unwrap_or_else(|| backend_id.clone());
+        let protocol = provider_def.and_then(|def| Some(def.protocol));
+
+        let override_config = self.llm_builtin_overrides.get(&backend_id);
+
+        let model = self
+            .selected_model
+            .clone()
+            .or_else(|| override_config.and_then(|o| o.model.clone()));
+
+        let api_key = override_config
+            .and_then(|o| o.api_key.clone())
+            .or_else(|| {
+                self.llm_custom_providers
+                    .iter()
+                    .find(|p| p.id.to_lowercase() == backend_lower)
+                    .and_then(|p| p.api_key.clone())
+            });
+
+        let base_url = override_config
+            .and_then(|o| o.base_url.clone())
+            .or_else(|| {
+                if backend_lower == "ollama" {
+                    self.ollama_base_url.clone()
+                } else if backend_lower == "openai_compatible" || backend_lower == "openrouter" {
+                    self.openai_compatible_base_url.clone()
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                self.llm_custom_providers
+                    .iter()
+                    .find(|p| p.id.to_lowercase() == backend_lower)
+                    .and_then(|p| p.base_url.clone())
+            });
+
+        let request_format = override_config.and_then(|o| o.request_format.clone());
+
+        let instance = BackendInstance {
+            id: Uuid::new_v4().to_string(),
+            provider,
+            protocol,
+            api_key,
+            base_url,
+            model,
+            request_format,
+        };
+
+        self.backends.push(instance);
+        self.major_backend_id = self.backends.first().map(|b| b.id.clone());
+    }
+
+    /// Get a backend instance by its ID.
+    pub fn get_backend(&self, id: &str) -> Option<&BackendInstance> {
+        self.backends.iter().find(|b| b.id == id)
+    }
+
+    /// Get the major backend instance.
+    pub fn major_backend(&self) -> Option<&BackendInstance> {
+        self.major_backend_id.as_ref().and_then(|id| self.get_backend(id))
+    }
+
+    /// Get the cheap backend instance.
+    pub fn cheap_backend(&self) -> Option<&BackendInstance> {
+        if self.cheap_model_uses_primary {
+            return self.major_backend();
+        }
+        self.cheap_backend_id.as_ref().and_then(|id| self.get_backend(id))
+    }
+
     /// Reconstruct Settings from a flat key-value map (as stored in the DB).
     ///
     /// Each key is a dotted path (e.g., "agent.name"), value is a JSONB value.
