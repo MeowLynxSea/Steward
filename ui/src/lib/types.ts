@@ -283,6 +283,8 @@ export interface StreamingState {
   assistantMessageId: string | null;
   /** Whether the agent is currently "thinking" */
   thinking: boolean;
+  /** Persisted thinking message currently receiving chunks */
+  thinkingMessageId: string | null;
   /** The thinking message text */
   thinkingMessage: string;
   /** Tool calls in progress or recently completed */

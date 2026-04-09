@@ -131,18 +131,13 @@
     );
   });
   const liveThinkingMessageId = $derived.by(() => {
-    if (!streaming.thinking || !session) {
+    if (!streaming.thinking || !session || !streaming.thinkingMessageId) {
       return null;
     }
-
-    for (let i = session.thread_messages.length - 1; i >= 0; i--) {
-      const message = session.thread_messages[i];
-      if (message.kind === "thinking") {
-        return message.id;
-      }
-    }
-
-    return null;
+    const message = session.thread_messages.find(
+      (entry) => entry.id === streaming.thinkingMessageId && entry.kind === "thinking"
+    );
+    return message?.id ?? null;
   });
   const transientThinkingContent = $derived.by(() => {
     if (liveThinkingMessageId || !streaming.thinking) {

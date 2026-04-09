@@ -253,6 +253,7 @@ impl TaskRuntime {
 
     pub async fn ensure_task(&self, message: &IncomingMessage, thread_id: Uuid) -> TaskRecord {
         let mut created = false;
+        let mut reset_existing = false;
         let task = {
             let mut tasks = self.tasks.write().await;
             match tasks.entry(thread_id) {
@@ -261,7 +262,17 @@ impl TaskRuntime {
                     task.title = crate::agent::truncate_for_preview(&message.content, 80);
                     task.route = TaskRoute::from_message(message, thread_id);
                     task.correlation_id = thread_id.to_string();
+                    task.status = TaskStatus::Queued;
+                    task.current_step = Some(TaskCurrentStep {
+                        id: format!("task-{thread_id}"),
+                        kind: "log".to_string(),
+                        title: "Queued".to_string(),
+                    });
+                    task.pending_approval = None;
+                    task.last_error = None;
+                    task.result_metadata = None;
                     task.updated_at = Utc::now();
+                    reset_existing = true;
                     task.clone()
                 }
                 Entry::Vacant(entry) => {
@@ -287,6 +298,9 @@ impl TaskRuntime {
                 task.result_metadata.clone().unwrap_or_else(|| json!({})),
             )
             .await;
+        } else if reset_existing {
+            self.append_timeline(&task, "task.queued", json!({ "title": "Queued" }))
+                .await;
         }
 
         task
@@ -766,6 +780,29 @@ mod tests {
         assert_eq!(task.correlation_id, task_id.to_string());
         assert_eq!(task.mode, TaskMode::Ask);
         assert_eq!(task.status, TaskStatus::Queued);
+    }
+
+    #[tokio::test]
+    async fn ensure_task_resets_terminal_state_for_new_turn() {
+        let runtime = TaskRuntime::new();
+        let task_id = Uuid::new_v4();
+        let first = IncomingMessage::new("test", "user-1", "first request");
+        runtime.ensure_task(&first, task_id).await;
+        runtime.mark_completed(task_id).await;
+
+        let second = IncomingMessage::new("test", "user-1", "second request");
+        let task = runtime.ensure_task(&second, task_id).await;
+
+        assert_eq!(task.id, task_id);
+        assert_eq!(task.status, TaskStatus::Queued);
+        assert_eq!(task.title, "second request");
+        assert!(task.pending_approval.is_none());
+        assert!(task.last_error.is_none());
+        assert!(task.result_metadata.is_none());
+        assert_eq!(
+            task.current_step.as_ref().map(|step| step.title.as_str()),
+            Some("Queued")
+        );
     }
 
     #[tokio::test]

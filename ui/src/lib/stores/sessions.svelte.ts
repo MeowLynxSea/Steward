@@ -19,6 +19,7 @@ function emptyStreamingState(): StreamingState {
     streamingContent: "",
     assistantMessageId: null,
     thinking: false,
+    thinkingMessageId: null,
     thinkingMessage: "",
     toolCalls: [],
     reasoning: null,
@@ -245,6 +246,7 @@ class SessionsState {
         ...this.streaming,
         isStreaming: false,
         thinking: false,
+        thinkingMessageId: null,
         thinkingMessage: ""
       };
     }
@@ -308,6 +310,7 @@ class SessionsState {
       streamingContent: "",
       isStreaming: false,
       thinking: false,
+      thinkingMessageId: null,
       thinkingMessage: this.streaming.thinkingMessage
     };
   }
@@ -377,6 +380,7 @@ class SessionsState {
           assistantMessageId: this.streaming.assistantMessageId ?? this.#streamingAssistantId,
           isStreaming: true,
           thinking: false,
+          thinkingMessageId: null,
           thinkingMessage: this.streaming.thinkingMessage
         };
         break;
@@ -400,6 +404,7 @@ class SessionsState {
         this.streaming = {
           ...this.streaming,
           thinking: true,
+          thinkingMessageId: message_id ?? this.streaming.thinkingMessageId,
           thinkingMessage: mergeStreamingChunk(this.streaming.thinkingMessage, message),
           isStreaming: true
         };
@@ -431,6 +436,7 @@ class SessionsState {
           toolCalls: [...this.streaming.toolCalls, newTool],
           isStreaming: true,
           thinking: false,
+          thinkingMessageId: null,
           thinkingMessage: this.streaming.thinkingMessage
         };
         break;
@@ -534,7 +540,8 @@ class SessionsState {
         this.streaming = {
           ...this.streaming,
           isStreaming: false,
-          thinking: false
+          thinking: false,
+          thinkingMessageId: null
         };
         break;
       }
@@ -616,6 +623,12 @@ class SessionsState {
 
     if (lastMessage.kind === "thinking") {
       this.#streamingThinkingId = lastMessage.id;
+      this.streaming = {
+        ...this.streaming,
+        thinking: true,
+        thinkingMessageId: lastMessage.id,
+        thinkingMessage: lastMessage.content ?? this.streaming.thinkingMessage
+      };
     }
   }
 
