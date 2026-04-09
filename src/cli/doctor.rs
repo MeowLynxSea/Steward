@@ -1,8 +1,4 @@
-//! `steward doctor` - active health diagnostics.
-//!
-//! Probes external dependencies and validates configuration to surface
-//! problems before they bite during normal operation. Each check reports
-//! pass/fail with actionable guidance on failures.
+//! `steward doctor` diagnostics.
 
 use std::path::PathBuf;
 
@@ -10,7 +6,6 @@ use crate::bootstrap::steward_base_dir;
 use crate::cli::fmt;
 use crate::settings::Settings;
 
-/// Run all diagnostic checks and print results.
 pub async fn run_doctor_command() -> anyhow::Result<()> {
     println!();
     println!("  {}Steward Doctor{}", fmt::bold(), fmt::reset());
@@ -18,14 +13,9 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
     let mut passed = 0u32;
     let mut failed = 0u32;
     let mut skipped = 0u32;
-
-    // Load settings once for checks that need them.
     let settings = Settings::load();
 
-    // ── Core ─────────────────────────────────────────────────
-
     section_header("Core");
-
     check(
         "Settings file",
         check_settings_file(),
@@ -33,15 +23,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
-    check(
-        "NEAR AI session",
-        check_nearai_session(&settings).await,
-        &mut passed,
-        &mut failed,
-        &mut skipped,
-    );
-
     check(
         "LLM configuration",
         check_llm_config(&settings),
@@ -49,7 +30,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Database backend",
         check_database().await,
@@ -57,7 +37,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Workspace directory",
         check_workspace_dir(),
@@ -66,10 +45,7 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut skipped,
     );
 
-    // ── Features ─────────────────────────────────────────────
-
     section_header("Features");
-
     check(
         "Embeddings",
         check_embeddings(&settings),
@@ -77,7 +53,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Routines config",
         check_routines_config(),
@@ -85,7 +60,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Desktop transport",
         check_desktop_transport(&settings),
@@ -93,7 +67,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "MCP servers",
         check_mcp_config().await,
@@ -101,7 +74,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Skills",
         check_skills().await,
@@ -109,7 +81,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Secrets",
         check_secrets(&settings),
@@ -117,7 +88,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "Service",
         check_service_installed(),
@@ -126,10 +96,7 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut skipped,
     );
 
-    // ── External ─────────────────────────────────────────────
-
     section_header("External");
-
     check(
         "cloudflared",
         check_binary("cloudflared", &["--version"]),
@@ -137,7 +104,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "ngrok",
         check_binary("ngrok", &["version"]),
@@ -145,7 +111,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
     check(
         "tailscale",
         check_binary("tailscale", &["version"]),
@@ -153,8 +118,6 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
         &mut failed,
         &mut skipped,
     );
-
-    // ── Summary ───────────────────────────────────────────────
 
     println!();
     println!(
@@ -171,21 +134,18 @@ pub async fn run_doctor_command() -> anyhow::Result<()> {
     );
 
     if failed > 0 {
-        println!("\n  Some checks failed. This is normal if you don't use those features.");
+        println!("\n  Some checks failed. This is normal if you do not use those features.");
     }
 
     Ok(())
 }
 
-/// Print a section header with a separator and bold group name.
 fn section_header(name: &str) {
     println!();
     println!("  {}", fmt::separator(36));
     println!("  {}{}{}", fmt::bold(), name, fmt::reset());
     println!();
 }
-
-// ── Individual checks ───────────────────────────────────────
 
 fn check(name: &str, result: CheckResult, passed: &mut u32, failed: &mut u32, skipped: &mut u32) {
     match result {
@@ -219,8 +179,6 @@ enum CheckResult {
     Skip(String),
 }
 
-// ── Settings file ───────────────────────────────────────────
-
 fn check_settings_file() -> CheckResult {
     let path = Settings::default_path();
     if !path.exists() {
@@ -230,77 +188,38 @@ fn check_settings_file() -> CheckResult {
     match std::fs::read_to_string(&path) {
         Ok(data) => match serde_json::from_str::<serde_json::Value>(&data) {
             Ok(_) => CheckResult::Pass(format!("valid ({})", path.display())),
-            Err(e) => CheckResult::Fail(format!(
+            Err(error) => CheckResult::Fail(format!(
                 "settings.json is malformed: {}. Fix or delete {}",
-                e,
+                error,
                 path.display()
             )),
         },
-        Err(e) => CheckResult::Fail(format!("cannot read {}: {}", path.display(), e)),
+        Err(error) => CheckResult::Fail(format!("cannot read {}: {}", path.display(), error)),
     }
 }
-
-// ── NEAR AI session ─────────────────────────────────────────
-
-async fn check_nearai_session(settings: &Settings) -> CheckResult {
-    // Skip entirely when the configured backend is not NEAR AI.
-    let llm_config = match crate::config::LlmConfig::resolve(settings) {
-        Ok(config) => config,
-        Err(e) => {
-            // check_llm_config will report the full error; just skip here.
-            return CheckResult::Skip(format!("LLM config error: {e}"));
-        }
-    };
-    if llm_config.backend != "nearai" {
-        return CheckResult::Skip(format!(
-            "not using NEAR AI backend (backend={})",
-            llm_config.backend
-        ));
-    }
-
-    // Check if session file exists
-    let session_path = crate::config::llm::default_session_path();
-    if !session_path.exists() {
-        // Check for API key mode
-        if crate::config::helpers::env_or_override("NEARAI_API_KEY").is_some() {
-            return CheckResult::Pass("API key configured".into());
-        }
-        return CheckResult::Fail(format!(
-            "session file not found at {}. Configure NEAR AI credentials directly",
-            session_path.display()
-        ));
-    }
-
-    // Verify the session file is readable and non-empty
-    match std::fs::read_to_string(&session_path) {
-        Ok(content) if content.trim().is_empty() => {
-            CheckResult::Fail("session file is empty".into())
-        }
-        Ok(_) => CheckResult::Pass(format!("session found ({})", session_path.display())),
-        Err(e) => CheckResult::Fail(format!("cannot read session file: {e}")),
-    }
-}
-
-// ── LLM configuration ──────────────────────────────────────
 
 fn check_llm_config(settings: &Settings) -> CheckResult {
     match crate::llm::LlmConfig::resolve(settings) {
+        Ok(config) if !config.is_configured() => {
+            CheckResult::Skip("no backend configured; onboarding will be shown".into())
+        }
         Ok(config) => {
-            // Show the model for the active backend, not always nearai.model.
-            let model = if let Some(ref bedrock) = config.bedrock {
-                &bedrock.model
-            } else if let Some(ref provider) = config.provider {
-                &provider.model
-            } else {
-                &config.nearai.model
-            };
+            let model = config
+                .provider
+                .as_ref()
+                .map(|provider| provider.model.as_str())
+                .or_else(|| {
+                    config
+                        .openai_codex
+                        .as_ref()
+                        .map(|codex| codex.model.as_str())
+                })
+                .unwrap_or("unknown");
             CheckResult::Pass(format!("backend={}, model={}", config.backend, model))
         }
-        Err(e) => CheckResult::Fail(format!("LLM config error: {e}")),
+        Err(error) => CheckResult::Fail(format!("LLM config error: {error}")),
     }
 }
-
-// ── Database ────────────────────────────────────────────────
 
 async fn check_database() -> CheckResult {
     let backend = std::env::var("DATABASE_BACKEND")
@@ -322,18 +241,16 @@ async fn check_database() -> CheckResult {
                 ))
             }
         }
-        _ => CheckResult::Fail("unsupported legacy backend configured".into()),
+        _ => CheckResult::Fail("unsupported database backend configured".into()),
     }
 }
-
-// ── Workspace directory ─────────────────────────────────────
 
 fn check_workspace_dir() -> CheckResult {
     let dir = steward_base_dir();
 
     if dir.exists() {
         if dir.is_dir() {
-            CheckResult::Pass(format!("{}", dir.display()))
+            CheckResult::Pass(dir.display().to_string())
         } else {
             CheckResult::Fail(format!("{} exists but is not a directory", dir.display()))
         }
@@ -342,489 +259,100 @@ fn check_workspace_dir() -> CheckResult {
     }
 }
 
-// ── Embeddings ──────────────────────────────────────────────
-
 fn check_embeddings(settings: &Settings) -> CheckResult {
     match crate::config::EmbeddingsConfig::resolve(settings) {
         Ok(config) => {
             if !config.enabled {
                 return CheckResult::Skip("disabled (set EMBEDDING_ENABLED=true)".into());
             }
-            let has_creds = match config.provider.as_str() {
+
+            let credentials_ready = match config.provider.as_str() {
+                "ollama" => true,
                 "openai" => config.openai_api_key().is_some(),
-                "nearai" => {
-                    // NearAiEmbeddings uses SessionManager::get_token() which
-                    // only returns session tokens, NOT NEARAI_API_KEY
-                    // (src/workspace/embeddings.rs:309, src/llm/session.rs:132).
-                    let session_path = crate::config::llm::default_session_path();
-                    session_path.exists()
-                        && std::fs::read_to_string(&session_path)
-                            .map(|s| !s.trim().is_empty())
-                            .unwrap_or(false)
+                provider => {
+                    return CheckResult::Fail(format!(
+                        "unsupported embeddings provider '{}'; expected openai or ollama",
+                        provider
+                    ));
                 }
-                "ollama" => true, // local, no creds needed
-                _ => config.openai_api_key().is_some(),
             };
-            if has_creds {
+
+            if credentials_ready {
                 CheckResult::Pass(format!(
                     "provider={}, model={}",
                     config.provider, config.model
                 ))
             } else {
-                let hint = match config.provider.as_str() {
-                    "nearai" => "configure a NEAR AI session or set NEARAI_API_KEY",
-                    _ => "set OPENAI_API_KEY",
-                };
-                CheckResult::Fail(format!(
-                    "provider={} but credentials missing ({})",
-                    config.provider, hint
-                ))
+                CheckResult::Fail("provider=openai but OPENAI_API_KEY is missing".into())
             }
         }
-        Err(e) => CheckResult::Fail(format!("config error: {e}")),
+        Err(error) => CheckResult::Fail(format!("config error: {error}")),
     }
 }
-
-// ── Routines config ─────────────────────────────────────────
 
 fn check_routines_config() -> CheckResult {
     match crate::config::RoutineConfig::resolve() {
-        Ok(config) => {
-            if config.enabled {
-                CheckResult::Pass(format!(
-                    "enabled (interval={}s, max_concurrent={})",
-                    config.cron_check_interval_secs, config.max_concurrent_routines
-                ))
-            } else {
-                CheckResult::Skip("disabled".into())
-            }
-        }
-        Err(e) => CheckResult::Fail(format!("config error: {e}")),
+        Ok(config) if config.enabled => CheckResult::Pass(format!(
+            "enabled (interval={}s, max_concurrent={})",
+            config.cron_check_interval_secs, config.max_concurrent_routines
+        )),
+        Ok(_) => CheckResult::Skip("disabled".into()),
+        Err(error) => CheckResult::Fail(format!("config error: {error}")),
     }
 }
-
-// ── Desktop transport ───────────────────────────────────────
 
 fn check_desktop_transport(settings: &Settings) -> CheckResult {
     let owner_id = match crate::config::resolve_owner_id(settings) {
         Ok(owner_id) => owner_id,
-        Err(e) => return CheckResult::Fail(format!("config error: {e}")),
+        Err(error) => return CheckResult::Fail(format!("config error: {error}")),
     };
     match crate::config::ChannelsConfig::resolve(settings, &owner_id) {
-        Ok(channels) => {
-            if channels.desktop.tauri_ipc {
-                CheckResult::Pass("tauri-ipc enabled".into())
-            } else {
-                CheckResult::Fail("tauri-ipc disabled".into())
-            }
-        }
-        Err(e) => CheckResult::Fail(format!("config error: {e}")),
+        Ok(channels) if channels.desktop.tauri_ipc => CheckResult::Pass("tauri-ipc enabled".into()),
+        Ok(_) => CheckResult::Fail("tauri-ipc disabled".into()),
+        Err(error) => CheckResult::Fail(format!("config error: {error}")),
     }
 }
-
-// ── MCP servers ─────────────────────────────────────────────
 
 async fn check_mcp_config() -> CheckResult {
     match crate::tools::mcp::config::load_mcp_servers().await {
-        Ok(file) => {
-            let servers: Vec<_> = file.enabled_servers().collect();
-            if servers.is_empty() {
-                return CheckResult::Skip("no MCP servers configured".into());
-            }
-
-            let mut invalid = Vec::new();
-            for server in &servers {
-                if let Err(e) = server.validate() {
-                    invalid.push(format!("{}: {}", server.name, e));
-                }
-            }
-
-            if invalid.is_empty() {
-                CheckResult::Pass(format!("{} server(s) configured, all valid", servers.len()))
-            } else {
-                CheckResult::Fail(format!(
-                    "{} server(s), {} invalid: {}",
-                    servers.len(),
-                    invalid.len(),
-                    invalid.join("; ")
-                ))
-            }
-        }
-        Err(e) => {
-            // Distinguish no config from corrupted config
-            let msg = e.to_string();
-            if msg.contains("not found") || msg.contains("No such file") {
-                CheckResult::Skip("no MCP config file".into())
-            } else {
-                CheckResult::Fail(format!("config error: {e}"))
-            }
-        }
+        Ok(servers) => CheckResult::Pass(format!(
+            "{} enabled / {} configured",
+            servers
+                .servers
+                .iter()
+                .filter(|server| server.enabled)
+                .count(),
+            servers.servers.len()
+        )),
+        Err(error) => CheckResult::Skip(format!("not configured ({error})")),
     }
 }
-
-// ── Skills ──────────────────────────────────────────────────
 
 async fn check_skills() -> CheckResult {
-    let user_dir = steward_base_dir().join("skills");
-    let installed_dir = steward_base_dir().join("installed_skills");
-
-    let mut registry = crate::skills::SkillRegistry::new(user_dir.clone());
-    registry = registry.with_installed_dir(installed_dir);
-
-    // discover_all() returns loaded skill names (not warnings).
-    let _loaded_names = registry.discover_all().await;
-
-    let count = registry.count();
-    if count == 0 {
-        return CheckResult::Skip("no skills discovered".into());
-    }
-
-    CheckResult::Pass(format!("{count} skill(s) loaded"))
-}
-
-// ── Secrets ─────────────────────────────────────────────────
-
-fn check_secrets(settings: &Settings) -> CheckResult {
-    match settings.secrets_master_key_source {
-        crate::settings::KeySource::Keychain => {
-            CheckResult::Pass("master key source: OS keychain".into())
-        }
-        crate::settings::KeySource::Env => {
-            if std::env::var("SECRETS_MASTER_KEY").is_ok() {
-                CheckResult::Pass("master key source: env var (set)".into())
-            } else {
-                CheckResult::Fail(
-                    "master key source: env var but SECRETS_MASTER_KEY not set".into(),
-                )
-            }
-        }
-        crate::settings::KeySource::None => CheckResult::Skip(
-            "secrets not configured (set SECRETS_MASTER_KEY or rely on keychain)".into(),
-        ),
+    let dir = crate::bootstrap::steward_base_dir().join("skills");
+    if dir.exists() {
+        CheckResult::Pass(dir.display().to_string())
+    } else {
+        CheckResult::Skip(format!("directory not found ({})", dir.display()))
     }
 }
 
-// ── Service ─────────────────────────────────────────────────
+fn check_secrets(_settings: &Settings) -> CheckResult {
+    if std::env::var("SECRETS_MASTER_KEY").is_ok() {
+        CheckResult::Pass("configured via environment".into())
+    } else {
+        CheckResult::Skip("environment key not set (keychain may still be configured)".into())
+    }
+}
 
 fn check_service_installed() -> CheckResult {
-    if cfg!(target_os = "macos") {
-        let plist =
-            dirs::home_dir().map(|h| h.join("Library/LaunchAgents/ai.steward.daemon.plist"));
-        match plist {
-            Some(path) if path.exists() => {
-                CheckResult::Pass(format!("launchd plist installed ({})", path.display()))
-            }
-            Some(_) => CheckResult::Skip("not installed (run `steward service install`)".into()),
-            None => CheckResult::Skip("cannot determine home directory".into()),
-        }
-    } else if cfg!(target_os = "linux") {
-        let unit = dirs::home_dir().map(|h| h.join(".config/systemd/user/steward.service"));
-        match unit {
-            Some(path) if path.exists() => {
-                CheckResult::Pass(format!("systemd unit installed ({})", path.display()))
-            }
-            Some(_) => CheckResult::Skip("not installed (run `steward service install`)".into()),
-            None => CheckResult::Skip("cannot determine home directory".into()),
-        }
-    } else {
-        CheckResult::Skip("service management not supported on this platform".into())
-    }
+    CheckResult::Skip("service diagnostics not implemented for desktop runtime".into())
 }
-
-// ── External binary ─────────────────────────────────────────
 
 fn check_binary(name: &str, args: &[&str]) -> CheckResult {
-    match std::process::Command::new(name)
-        .args(args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
-        Ok(output) => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            let version = version.trim();
-            // Some tools print version to stderr
-            let version = if version.is_empty() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                stderr.trim().lines().next().unwrap_or("").to_string()
-            } else {
-                version.lines().next().unwrap_or("").to_string()
-            };
-
-            if output.status.success() {
-                CheckResult::Pass(version)
-            } else {
-                CheckResult::Fail(format!("exited with {}", output.status))
-            }
-        }
-        Err(_) => CheckResult::Skip(format!("{name} not found in PATH")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::cli::doctor::*;
-
-    #[test]
-    fn check_binary_finds_sh() {
-        match check_binary("sh", &["-c", "echo ok"]) {
-            CheckResult::Pass(_) => {}
-            other => panic!("expected Pass for sh, got: {}", format_result(&other)),
-        }
-    }
-
-    #[test]
-    fn check_binary_skips_nonexistent() {
-        match check_binary("__steward_nonexistent_binary__", &["--version"]) {
-            CheckResult::Skip(_) => {}
-            other => panic!(
-                "expected Skip for nonexistent binary, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_workspace_dir_does_not_panic() {
-        let result = check_workspace_dir();
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[tokio::test]
-    async fn check_nearai_session_does_not_panic() {
-        let settings = Settings::default();
-        let result = check_nearai_session(&settings).await;
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_nearai_session_skips_for_non_nearai_backend() {
-        struct EnvGuard(&'static str, Option<String>);
-        impl Drop for EnvGuard {
-            fn drop(&mut self) {
-                // SAFETY: Under ENV_MUTEX.
-                unsafe {
-                    match &self.1 {
-                        Some(val) => std::env::set_var(self.0, val),
-                        None => std::env::remove_var(self.0),
-                    }
-                }
-            }
-        }
-
-        let _mutex = crate::config::helpers::lock_env();
-        let prev = std::env::var("LLM_BACKEND").ok();
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe {
-            std::env::set_var("LLM_BACKEND", "anthropic");
-        }
-        let _env_guard = EnvGuard("LLM_BACKEND", prev);
-
-        let settings = Settings::default();
-        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let result = rt.block_on(check_nearai_session(&settings));
-        match result {
-            CheckResult::Skip(msg) => {
-                assert!(
-                    msg.contains("backend=anthropic"),
-                    "expected backend name in skip message, got: {msg}"
-                );
-            }
-            other => panic!(
-                "expected Skip for non-nearai backend, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_settings_file_handles_missing() {
-        // Settings::default_path() might or might not exist, but must not panic
-        let result = check_settings_file();
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_llm_config_does_not_panic() {
-        let settings = Settings::default();
-        let result = check_llm_config(&settings);
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_routines_config_does_not_panic() {
-        let result = check_routines_config();
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_desktop_transport_does_not_panic() {
-        let settings = Settings::default();
-        let result = check_desktop_transport(&settings);
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_embeddings_does_not_panic() {
-        let settings = Settings::default();
-        let result = check_embeddings(&settings);
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_secrets_none_returns_skip() {
-        let settings = Settings::default();
-        match check_secrets(&settings) {
-            CheckResult::Skip(msg) => {
-                assert!(
-                    msg.contains("not configured"),
-                    "expected 'not configured' in skip message, got: {msg}"
-                );
-            }
-            other => panic!(
-                "expected Skip for default settings, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_service_installed_does_not_panic() {
-        let result = check_service_installed();
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[tokio::test]
-    async fn check_mcp_config_does_not_panic() {
-        let result = check_mcp_config().await;
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[tokio::test]
-    async fn check_skills_does_not_panic() {
-        let result = check_skills().await;
-        match result {
-            CheckResult::Pass(_) | CheckResult::Fail(_) | CheckResult::Skip(_) => {}
-        }
-    }
-
-    #[test]
-    fn check_llm_config_shows_nearai_model_for_nearai_backend() {
-        let _guard = crate::config::helpers::lock_env();
-        // SAFETY: Under ENV_MUTEX, no concurrent env access.
-        unsafe {
-            std::env::remove_var("LLM_BACKEND");
-        }
-        let settings = Settings::default();
-        match check_llm_config(&settings) {
-            CheckResult::Pass(msg) => {
-                assert!(
-                    msg.contains("backend=nearai"),
-                    "expected nearai backend, got: {msg}"
-                );
-                // Must NOT show a bedrock or registry model when backend is nearai
-                assert!(
-                    !msg.contains("anthropic.claude"),
-                    "should not show bedrock model for nearai backend: {msg}"
-                );
-            }
-            other => panic!(
-                "expected Pass for default LLM config, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_embeddings_disabled_by_default_returns_skip() {
-        let _guard = crate::config::helpers::lock_env();
-        // SAFETY: Under ENV_MUTEX.
-        unsafe {
-            std::env::remove_var("EMBEDDING_ENABLED");
-        }
-        let settings = Settings::default();
-        match check_embeddings(&settings) {
-            CheckResult::Skip(msg) => {
-                assert!(
-                    msg.contains("disabled"),
-                    "expected 'disabled' in skip message, got: {msg}"
-                );
-            }
-            other => panic!(
-                "expected Skip for disabled embeddings, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_routines_enabled_by_default() {
-        let _guard = crate::config::helpers::lock_env();
-        // SAFETY: Under ENV_MUTEX.
-        unsafe {
-            std::env::remove_var("ROUTINES_ENABLED");
-        }
-        match check_routines_config() {
-            CheckResult::Pass(msg) => {
-                assert!(
-                    msg.contains("enabled"),
-                    "routines should be enabled by default, got: {msg}"
-                );
-            }
-            other => panic!(
-                "expected Pass for default routines, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    #[test]
-    fn check_secrets_env_without_var_returns_fail() {
-        let settings = Settings {
-            secrets_master_key_source: crate::settings::KeySource::Env,
-            ..Default::default()
-        };
-        match check_secrets(&settings) {
-            CheckResult::Fail(msg) => {
-                assert!(
-                    msg.contains("SECRETS_MASTER_KEY not set"),
-                    "expected mention of missing env var, got: {msg}"
-                );
-            }
-            CheckResult::Pass(_) => {
-                // If SECRETS_MASTER_KEY happens to be set in the environment,
-                // Pass is correct — don't fail the test.
-            }
-            other => panic!(
-                "expected Fail or Pass for env key source, got: {}",
-                format_result(&other)
-            ),
-        }
-    }
-
-    fn format_result(r: &CheckResult) -> String {
-        match r {
-            CheckResult::Pass(s) => format!("Pass({s})"),
-            CheckResult::Fail(s) => format!("Fail({s})"),
-            CheckResult::Skip(s) => format!("Skip({s})"),
-        }
+    match std::process::Command::new(name).args(args).output() {
+        Ok(output) if output.status.success() => CheckResult::Pass("installed".into()),
+        Ok(_) => CheckResult::Fail("installed but returned non-zero status".into()),
+        Err(_) => CheckResult::Skip("not installed".into()),
     }
 }

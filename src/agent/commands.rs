@@ -702,8 +702,8 @@ impl Agent {
                         // Do NOT call set_model() on the shared provider — that
                         // would change the default for all users. The per-request
                         // model_override in the dispatcher reads from the same
-                        // "selected_model" setting and applies it per-user.
-                        self.persist_selected_model(tenant, requested).await;
+                        // Persist the active major backend model choice.
+                        self.persist_active_model(tenant, requested).await;
                         Ok(SubmissionResult::response(format!(
                             "Model preference set to: {} (per-user)",
                             requested
@@ -712,7 +712,7 @@ impl Agent {
                         match self.llm().set_model(requested) {
                             Ok(()) => {
                                 // Persist the model choice so it survives restarts.
-                                self.persist_selected_model(tenant, requested).await;
+                                self.persist_active_model(tenant, requested).await;
                                 Ok(SubmissionResult::response(format!(
                                     "Switched model to: {}",
                                     requested
@@ -882,7 +882,7 @@ impl Agent {
         }
     }
 
-    /// Persist the selected model to the settings store (DB and/or TOML config).
+    /// Persist the selected model to the active major backend in DB/TOML settings.
     ///
     /// Best-effort: logs warnings on failure but does not propagate errors,
     /// since the in-memory model switch already succeeded.
@@ -895,18 +895,35 @@ impl Agent {
     ///
     /// In multi-tenant mode, only the per-user DB setting is written — global
     /// .env and TOML files are shared across users and must not be mutated.
-    async fn persist_selected_model(&self, tenant: &crate::tenant::TenantCtx, model: &str) {
+    async fn persist_active_model(&self, tenant: &crate::tenant::TenantCtx, model: &str) {
+        let model_owned = model.to_string();
+
         // 1. Persist to DB if available (per-user scoped via TenantScope).
         if let Some(store) = tenant.store() {
-            let value = serde_json::Value::String(model.to_string());
-            if let Err(e) = store.set_setting("selected_model", &value).await {
-                tracing::warn!("Failed to persist model to DB: {}", e);
-            } else {
-                tracing::debug!(
-                    user_id = tenant.user_id(),
-                    "Persisted selected_model to DB: {}",
-                    model
-                );
+            match store.get_all_settings().await {
+                Ok(map) => {
+                    let mut settings = crate::settings::Settings::from_db_map(&map);
+                    if let Some(major) = settings.major_backend_id.clone() {
+                        if let Some(backend) = settings
+                            .backends
+                            .iter_mut()
+                            .find(|backend| backend.id == major)
+                        {
+                            backend.model = model_owned.clone();
+                            let value = serde_json::to_value(&settings.backends)
+                                .unwrap_or(serde_json::Value::Array(Vec::new()));
+                            if let Err(e) = store.set_setting("backends", &value).await {
+                                tracing::warn!("Failed to persist model to DB: {}", e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to load settings from DB for model persistence: {}",
+                        e
+                    );
+                }
             }
         } else {
             tracing::warn!("No database store available — model choice will not persist to DB");
@@ -921,7 +938,6 @@ impl Agent {
         // 3. Best-effort update of .env and TOML if they already contain a
         //    model var. DB is authoritative (DB > env > TOML), but keeping
         //    these in sync avoids confusion when users inspect the files.
-        let model_owned = model.to_string();
         let backend = self.deps.llm_backend.clone();
         if let Err(e) = tokio::task::spawn_blocking(move || {
             // 3a. Update the backend-specific model env var in ~/.steward/.env
@@ -952,7 +968,15 @@ impl Agent {
             let toml_path = crate::settings::Settings::default_toml_path();
             match crate::settings::Settings::load_toml(&toml_path) {
                 Ok(Some(mut settings)) => {
-                    settings.selected_model = Some(model_owned);
+                    let major = settings.major_backend_id.clone();
+                    if let Some(major) = major
+                        && let Some(configured) = settings
+                            .backends
+                            .iter_mut()
+                            .find(|configured| configured.id == major)
+                    {
+                        configured.model = model_owned.clone();
+                    }
                     if let Err(e) = settings.save_toml(&toml_path) {
                         tracing::warn!("Failed to persist model to config.toml: {}", e);
                     }

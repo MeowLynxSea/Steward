@@ -4,7 +4,7 @@
 //! `x-api-key` header, which is rejected by Anthropic's OAuth tokens from
 //! `claude login`. OAuth tokens require `Authorization: Bearer <token>` instead.
 //!
-//! Pattern follows `nearai_chat.rs`: direct HTTP calls via `reqwest::Client`.
+//! Uses direct HTTP calls via `reqwest::Client`.
 
 use std::collections::HashSet;
 

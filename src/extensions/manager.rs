@@ -39,10 +39,10 @@ pub struct ExtensionSetupSchema {
 }
 
 const ALLOWED_GLOBAL_SETUP_SETTING_PATHS: &[&str] = &[
-    "llm_backend",
-    "selected_model",
-    "ollama_base_url",
-    "openai_compatible_base_url",
+    "backends",
+    "major_backend_id",
+    "cheap_backend_id",
+    "cheap_model_uses_primary",
 ];
 
 pub struct ExtensionManager {

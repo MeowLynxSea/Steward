@@ -356,36 +356,7 @@ pub async fn migrate_disk_to_db(
         }
     }
 
-    // 4. Migrate session.json if it exists
-    let session_path = steward_dir.join("session.json");
-    if session_path.exists() {
-        match std::fs::read_to_string(&session_path) {
-            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
-                Ok(value) => {
-                    store
-                        .set_setting(user_id, "nearai.session_token", &value)
-                        .await
-                        .map_err(|e| {
-                            MigrationError::Database(format!(
-                                "Failed to write session to DB: {}",
-                                e
-                            ))
-                        })?;
-                    tracing::info!("Migrated session.json to database");
-
-                    rename_to_migrated(&session_path);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to parse session.json: {}", e);
-                }
-            },
-            Err(e) => {
-                tracing::warn!("Failed to read session.json: {}", e);
-            }
-        }
-    }
-
-    // 5. Rename settings.json to .migrated (don't delete, safety net)
+    // 4. Rename settings.json to .migrated (don't delete, safety net)
     rename_to_migrated(&legacy_settings_path);
 
     tracing::info!("Disk-to-DB migration complete");
@@ -873,7 +844,7 @@ INJECTED="pwned"#;
         let vars = [
             ("DATABASE_BACKEND", "libsql"),
             ("LIBSQL_PATH", "/home/user/.steward/steward.db"),
-            ("LLM_BACKEND", "nearai"),
+            ("LLM_BACKEND", "openai"),
             ("ONBOARD_COMPLETED", "true"),
             ("EMBEDDING_ENABLED", "false"),
         ];

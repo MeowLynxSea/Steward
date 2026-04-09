@@ -688,8 +688,14 @@ mod tests {
         assert!(Arc::ptr_eq(&session1, &session2));
         assert_eq!(thread1, thread2);
 
-        // Different channel gets different thread
-        let (_, thread3) = manager.resolve_thread("user-1", "routine", None).await;
+        // Different external thread IDs get different threads.
+        let (_, thread3) = manager
+            .resolve_thread(
+                "user-1",
+                "desktop",
+                Some("11111111-1111-1111-1111-111111111111"),
+            )
+            .await;
         assert_ne!(thread1, thread3);
     }
 

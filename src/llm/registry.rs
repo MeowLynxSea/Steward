@@ -158,7 +158,7 @@ pub struct ProviderDefinition {
     /// Env var for base URL override (e.g., "OPENAI_BASE_URL").
     #[serde(default)]
     pub base_url_env: Option<String>,
-    /// Whether a base URL is required (for generic openai_compatible).
+    /// Whether a base URL is required for this provider.
     #[serde(default)]
     pub base_url_required: bool,
     /// Env var for the API key (e.g., "GROQ_API_KEY").
@@ -272,7 +272,6 @@ impl ProviderRegistry {
     /// Providers that should appear in the setup wizard's selection menu.
     ///
     /// Returns all providers that have a `setup` hint, in registry order.
-    /// NearAI is not in the registry (handled specially) so it won't appear here.
     pub fn selectable(&self) -> Vec<&ProviderDefinition> {
         // Deduplicate: only keep the last definition for each ID
         let mut seen = HashMap::new();
@@ -295,22 +294,13 @@ impl ProviderRegistry {
         result
     }
 
-    /// Check whether a backend string is a known provider (NearAI or registry).
+    /// Check whether a backend string is a known provider.
     pub fn is_known(&self, backend: &str) -> bool {
-        backend == "nearai"
-            || backend == "near_ai"
-            || backend == "near"
-            || self.find(backend).is_some()
+        self.find(backend).is_some()
     }
 
     /// Get the model env var for a backend string.
-    ///
-    /// Returns the registry provider's `model_env` if found,
-    /// or `"NEARAI_MODEL"` for the NearAI backend.
     pub fn model_env_var(&self, backend: &str) -> &str {
-        if backend == "nearai" || backend == "near_ai" || backend == "near" {
-            return "NEARAI_MODEL";
-        }
         self.find(backend)
             .map(|def| def.model_env.as_str())
             .unwrap_or("LLM_MODEL")
@@ -364,7 +354,7 @@ mod tests {
         );
         assert!(registry.find("OpenAI").is_some());
         assert!(registry.find("GROQ").is_some());
-        assert!(registry.find("Tinfoil").is_some());
+        assert!(registry.find("OpenRouter").is_some());
     }
 
     #[test]
@@ -419,12 +409,11 @@ mod tests {
     }
 
     #[test]
-    fn test_model_env_var_nearai() {
+    fn test_unknown_model_env_var_falls_back() {
         let registry = ProviderRegistry::new(
             serde_json::from_str(include_str!("../../providers.json")).unwrap(),
         );
-        assert_eq!(registry.model_env_var("nearai"), "NEARAI_MODEL");
-        assert_eq!(registry.model_env_var("near_ai"), "NEARAI_MODEL");
+        assert_eq!(registry.model_env_var("unknown"), "LLM_MODEL");
     }
 
     #[test]
@@ -433,7 +422,7 @@ mod tests {
             serde_json::from_str(include_str!("../../providers.json")).unwrap(),
         );
         assert_eq!(registry.model_env_var("groq"), "GROQ_MODEL");
-        assert_eq!(registry.model_env_var("tinfoil"), "TINFOIL_MODEL");
+        assert_eq!(registry.model_env_var("openrouter"), "OPENROUTER_MODEL");
         assert_eq!(registry.model_env_var("openai"), "OPENAI_MODEL");
     }
 
@@ -450,7 +439,6 @@ mod tests {
         let registry = ProviderRegistry::new(
             serde_json::from_str(include_str!("../../providers.json")).unwrap(),
         );
-        assert!(registry.is_known("nearai"));
         assert!(registry.is_known("openai"));
         assert!(registry.is_known("groq"));
         assert!(!registry.is_known("nonexistent"));
@@ -477,15 +465,13 @@ mod tests {
     }
 
     #[test]
-    fn test_openai_compatible_providers_have_base_url() {
+    fn test_non_openai_openai_protocol_providers_have_base_url() {
         let providers: Vec<ProviderDefinition> =
             serde_json::from_str(include_str!("../../providers.json")).unwrap();
         for def in &providers {
             if def.protocol == ProviderProtocol::OpenAiCompletions
                 && def.id != "openai"
-                && def.id != "openai_compatible"
-                && def.id != "bedrock"
-                && def.id != "cloudflare"
+                && def.id != "openai"
             {
                 assert!(
                     def.default_base_url.is_some(),
@@ -755,16 +741,7 @@ mod tests {
         let providers: Vec<ProviderDefinition> =
             serde_json::from_str(include_str!("../../providers.json")).unwrap();
 
-        // Tinfoil should have temperature in unsupported_params
-        let tinfoil = providers.iter().find(|p| p.id == "tinfoil").unwrap();
-        assert!(
-            tinfoil
-                .unsupported_params
-                .contains(&"temperature".to_string()),
-            "tinfoil should have 'temperature' in unsupported_params"
-        );
-
-        // OpenAI should also have temperature in unsupported_params
+        // OpenAI should have temperature in unsupported_params
         let openai = providers.iter().find(|p| p.id == "openai").unwrap();
         assert!(
             openai

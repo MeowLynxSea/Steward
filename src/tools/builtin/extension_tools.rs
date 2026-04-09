@@ -32,7 +32,7 @@ impl Tool for ToolSearchTool {
 
     fn description(&self) -> &str {
         "Search for available extensions to add new capabilities. Extensions include \
-         channels, tools, and MCP servers. Use discover:true to search online if the built-in registry \
+         channels, tools and MCP servers. Use discover:true to search online if the built-in registry \
          has no results."
     }
 

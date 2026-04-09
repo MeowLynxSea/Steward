@@ -55,20 +55,14 @@ fn plan_desktop_message_dispatch(
 // =============================================================================
 
 fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsResponse {
+    let llm_ready = settings.major_backend().is_some();
     steward_core::ipc::SettingsResponse {
         backends: settings.backends.clone(),
         major_backend_id: settings.major_backend_id.clone(),
         cheap_backend_id: settings.cheap_backend_id.clone(),
-        llm_backend: settings.llm_backend.clone(),
-        selected_model: settings.selected_model.clone(),
-        cheap_model: settings.cheap_model.clone(),
         cheap_model_uses_primary: settings.cheap_model_uses_primary,
-        ollama_base_url: settings.ollama_base_url.clone(),
-        openai_compatible_base_url: settings.openai_compatible_base_url.clone(),
-        llm_custom_providers: settings.llm_custom_providers.clone(),
-        llm_builtin_overrides: settings.llm_builtin_overrides.clone(),
-        llm_ready: settings.llm_backend.is_some(),
-        llm_onboarding_required: !settings.onboard_completed,
+        llm_ready,
+        llm_onboarding_required: !llm_ready,
         llm_readiness_error: None,
     }
 }
@@ -101,31 +95,36 @@ pub async fn patch_settings(
     if let Some(cheap_backend_id) = payload.cheap_backend_id {
         settings.cheap_backend_id = Some(cheap_backend_id);
     }
-    if let Some(llm_backend) = payload.llm_backend {
-        settings.llm_backend = Some(llm_backend);
-        settings.onboard_completed = true;
-    }
-    if let Some(selected_model) = payload.selected_model {
-        settings.selected_model = Some(selected_model);
-    }
-    if let Some(cheap_model) = payload.cheap_model {
-        settings.cheap_model = Some(cheap_model);
-    }
     if let Some(cheap_model_uses_primary) = payload.cheap_model_uses_primary {
         settings.cheap_model_uses_primary = cheap_model_uses_primary;
     }
-    if let Some(ollama_base_url) = payload.ollama_base_url {
-        settings.ollama_base_url = Some(ollama_base_url);
+
+    settings
+        .backends
+        .retain(|backend| !backend.id.trim().is_empty());
+
+    if settings.backends.is_empty() {
+        settings.major_backend_id = None;
+        settings.cheap_backend_id = None;
+    } else {
+        let major_valid = settings
+            .major_backend_id
+            .as_ref()
+            .is_some_and(|id| settings.get_backend(id).is_some());
+        if !major_valid {
+            settings.major_backend_id = Some(settings.backends[0].id.clone());
+        }
+
+        let cheap_valid = settings
+            .cheap_backend_id
+            .as_ref()
+            .is_some_and(|id| settings.get_backend(id).is_some());
+        if !cheap_valid {
+            settings.cheap_backend_id = None;
+        }
     }
-    if let Some(openai_compatible_base_url) = payload.openai_compatible_base_url {
-        settings.openai_compatible_base_url = Some(openai_compatible_base_url);
-    }
-    if let Some(llm_custom_providers) = payload.llm_custom_providers {
-        settings.llm_custom_providers = llm_custom_providers;
-    }
-    if let Some(llm_builtin_overrides) = payload.llm_builtin_overrides {
-        settings.llm_builtin_overrides = llm_builtin_overrides;
-    }
+
+    settings.onboard_completed = settings.major_backend().is_some();
 
     settings
         .save_toml(&Settings::default_toml_path())

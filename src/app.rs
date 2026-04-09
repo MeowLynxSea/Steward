@@ -314,10 +314,7 @@ impl AppBuilder {
         }
 
         // Create embeddings provider using the unified method
-        let embeddings = self
-            .config
-            .embeddings
-            .create_provider(&self.config.llm.nearai.base_url, self.session.clone());
+        let embeddings = self.config.embeddings.create_provider();
 
         // Register memory tools if database is available
         let workspace_user_id = self.config.owner_id.as_str();
@@ -352,34 +349,17 @@ impl AppBuilder {
         };
 
         // Register image/vision tools if we have a workspace and LLM API credentials
-        if workspace.is_some() {
-            let (api_base, api_key_opt) = if let Some(ref provider) = self.config.llm.provider {
-                (
-                    provider.base_url.clone(),
-                    provider.api_key.as_ref().map(|s| {
-                        use secrecy::ExposeSecret;
-                        s.expose_secret().to_string()
-                    }),
-                )
-            } else {
-                (
-                    self.config.llm.nearai.base_url.clone(),
-                    self.config.llm.nearai.api_key.as_ref().map(|s| {
-                        use secrecy::ExposeSecret;
-                        s.expose_secret().to_string()
-                    }),
-                )
-            };
-
-            if let Some(api_key) = api_key_opt {
+        if workspace.is_some()
+            && let Some(ref provider) = self.config.llm.provider
+            && let Some(api_key) = provider.api_key.as_ref().map(|value| {
+                use secrecy::ExposeSecret;
+                value.expose_secret().to_string()
+            })
+        {
+            let api_base = provider.base_url.clone();
+            let model_name = provider.model.clone();
+            if !model_name.trim().is_empty() {
                 // Check for image generation models
-                let model_name = self
-                    .config
-                    .llm
-                    .provider
-                    .as_ref()
-                    .map(|p| p.model.clone())
-                    .unwrap_or_else(|| self.config.llm.nearai.model.clone());
                 let models = vec![model_name.clone()];
                 let gen_model = crate::llm::image_models::suggest_image_model(&models)
                     .unwrap_or("flux-1.1-pro")
@@ -741,12 +721,12 @@ impl AppBuilder {
         self.init_database().await?;
         self.init_secrets().await?;
 
-        // Post-init validation: backends with dedicated config (nearai, gemini_oauth,
-        // bedrock, openai_codex) handle their own credential resolution. For registry-based
-        // backends, fail early if no provider config was resolved.
+        // `unconfigured` is allowed so the desktop app can enter onboarding.
+        // OpenAI Codex has its own dedicated config path. Registry backends
+        // must resolve to a provider config before startup continues.
         if !matches!(
             self.config.llm.backend.as_str(),
-            "nearai" | "gemini_oauth" | "bedrock" | "openai_codex"
+            "unconfigured" | "openai_codex"
         ) && self.config.llm.provider.is_none()
         {
             let backend = &self.config.llm.backend;

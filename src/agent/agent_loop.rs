@@ -193,7 +193,7 @@ pub struct AgentDeps {
     pub claude_code_config: crate::config::ClaudeCodeConfig,
     /// Software builder for self-repair tool rebuilding.
     pub builder: Option<Arc<dyn crate::tools::SoftwareBuilder>>,
-    /// Resolved LLM backend identifier (e.g., "nearai", "openai", "groq").
+    /// Resolved LLM backend identifier (e.g., "openai", "anthropic", "groq").
     /// Used by `/model` persistence to determine which env var to update.
     pub llm_backend: String,
     /// Per-tenant rate limiting registry (lazily creates rate state per user).
@@ -2559,7 +2559,7 @@ mod tests {
             document_extraction: None,
             claude_code_config: crate::config::ClaudeCodeConfig::default(),
             builder: None,
-            llm_backend: "nearai".to_string(),
+            llm_backend: "openai".to_string(),
             tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
             task_runtime: None,
         };

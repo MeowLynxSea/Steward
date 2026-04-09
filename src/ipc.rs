@@ -17,15 +17,7 @@ pub struct SettingsResponse {
     pub backends: Vec<crate::settings::BackendInstance>,
     pub major_backend_id: Option<String>,
     pub cheap_backend_id: Option<String>,
-    pub llm_backend: Option<String>,
-    pub selected_model: Option<String>,
-    pub cheap_model: Option<String>,
     pub cheap_model_uses_primary: bool,
-    pub ollama_base_url: Option<String>,
-    pub openai_compatible_base_url: Option<String>,
-    pub llm_custom_providers: Vec<crate::settings::CustomLlmProviderSettings>,
-    pub llm_builtin_overrides:
-        std::collections::HashMap<String, crate::settings::LlmBuiltinOverride>,
     pub llm_ready: bool,
     pub llm_onboarding_required: bool,
     pub llm_readiness_error: Option<String>,
@@ -36,15 +28,7 @@ pub struct PatchSettingsRequest {
     pub backends: Option<Vec<crate::settings::BackendInstance>>,
     pub major_backend_id: Option<String>,
     pub cheap_backend_id: Option<String>,
-    pub llm_backend: Option<String>,
-    pub selected_model: Option<String>,
-    pub cheap_model: Option<String>,
     pub cheap_model_uses_primary: Option<bool>,
-    pub ollama_base_url: Option<String>,
-    pub openai_compatible_base_url: Option<String>,
-    pub llm_custom_providers: Option<Vec<crate::settings::CustomLlmProviderSettings>>,
-    pub llm_builtin_overrides:
-        Option<std::collections::HashMap<String, crate::settings::LlmBuiltinOverride>>,
 }
 
 // =============================================================================

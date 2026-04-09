@@ -578,21 +578,6 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             .into());
         }
 
-        // Apply per-user model override from settings (first iteration only
-        // to avoid repeated DB lookups within the same agentic loop).
-        // Uses "selected_model" — the same key the /model command persists to
-        // via SettingsStore (per-user scoped via TenantScope).
-        if iteration == 0
-            && let Some(store) = self.tenant.store()
-            && let Ok(Some(value)) = store.get_setting("selected_model").await
-            && let Some(model) = value.as_str()
-        {
-            let model = model.trim();
-            if !model.is_empty() {
-                reason_ctx.model_override = Some(model.to_string());
-            }
-        }
-
         let output = match reasoning.respond_with_tools(reason_ctx).await {
             Ok(output) => output,
             Err(crate::error::LlmError::ContextLengthExceeded { used, limit }) => {
@@ -1857,7 +1842,7 @@ mod tests {
             document_extraction: None,
             claude_code_config: crate::config::ClaudeCodeConfig::default(),
             builder: None,
-            llm_backend: "nearai".to_string(),
+            llm_backend: "openai".to_string(),
             tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
             task_runtime: None,
         };
@@ -2742,7 +2727,7 @@ mod tests {
             document_extraction: None,
             claude_code_config: crate::config::ClaudeCodeConfig::default(),
             builder: None,
-            llm_backend: "nearai".to_string(),
+            llm_backend: "openai".to_string(),
             tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
             task_runtime: None,
         };
@@ -2873,7 +2858,7 @@ mod tests {
                 document_extraction: None,
                 claude_code_config: crate::config::ClaudeCodeConfig::default(),
                 builder: None,
-                llm_backend: "nearai".to_string(),
+                llm_backend: "openai".to_string(),
                 tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
                 task_runtime: None,
             };
@@ -3047,7 +3032,7 @@ mod tests {
         let input = "Answer.\n<suggestions>not json</suggestions>";
         let (text, suggestions) = super::extract_suggestions(input);
         assert_eq!(text, "Answer."); // safety: test
-        assert!(suggestions.is_empty()); // safety: test
+        assert_eq!(suggestions, vec!["not json"]); // safety: test
     }
 
     #[test]

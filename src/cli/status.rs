@@ -73,18 +73,28 @@ pub async fn run_status_command() -> anyhow::Result<()> {
                 format!("libSQL (file missing: {})", path.display())
             }
         }
-        _ => "unsupported legacy backend configured".to_string(),
+        _ => "unsupported database backend configured".to_string(),
     };
     println!("{}", fmt::kv_line("Database", &db_value, 12));
 
-    // Session / Auth
-    let session_path = crate::config::llm::default_session_path();
-    let session_value = if session_path.exists() {
-        format!("found ({})", session_path.display())
+    let llm_value = if let Some(backend) = settings.major_backend() {
+        let mut value = format!(
+            "{} ({})",
+            backend.provider,
+            if backend.model.trim().is_empty() {
+                "provider default"
+            } else {
+                backend.model.as_str()
+            }
+        );
+        if let Some(request_format) = backend.request_format.as_deref() {
+            value.push_str(&format!(" [{}]", request_format));
+        }
+        value
     } else {
-        "not found (configure the selected provider directly)".to_string()
+        "unconfigured (onboarding required)".to_string()
     };
-    println!("{}", fmt::kv_line("Session", &session_value, 12));
+    println!("{}", fmt::kv_line("LLM", &llm_value, 12));
 
     // Secrets (auto-detect from env only; skip keychain probe to avoid
     // triggering macOS system password dialogs on a simple status check)
@@ -101,7 +111,6 @@ pub async fn run_status_command() -> anyhow::Result<()> {
 
     // Embeddings
     let emb_enabled = settings.embeddings.enabled
-        || std::env::var("OPENAI_API_KEY").is_ok()
         || std::env::var("EMBEDDING_ENABLED")
             .map(|v| v == "true")
             .unwrap_or(false);

@@ -56,9 +56,7 @@ pub use document::{
     merge_workspace_entries, paths,
 };
 pub use embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
-pub use embeddings::{
-    EmbeddingProvider, MockEmbeddings, NearAiEmbeddings, OllamaEmbeddings, OpenAiEmbeddings,
-};
+pub use embeddings::{EmbeddingProvider, MockEmbeddings, OllamaEmbeddings, OpenAiEmbeddings};
 pub use mounts::{
     ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
     MountedFileDiff, MountedFileStatus, WorkspaceMount, WorkspaceMountCheckpoint,

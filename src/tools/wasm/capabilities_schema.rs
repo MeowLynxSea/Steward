@@ -728,8 +728,8 @@ pub struct ToolFieldSetupSchema {
     /// Restricted by the host to extension-owned namespaces and a small
     /// allowlist of approved global settings.
     ///
-    /// Example: `extensions.switch-llm.provider`, `llm_backend`, or
-    /// `selected_model`.
+    /// Example: `extensions.switch-llm.provider`, `major_backend_id`, or
+    /// `cheap_backend_id`.
     #[serde(default)]
     pub setting_path: Option<String>,
     /// Whether changing this field requires a restart to fully apply.
@@ -1251,16 +1251,16 @@ mod tests {
                 ],
                 "required_fields": [
                     {
-                        "name": "llm_backend",
+                        "name": "major_backend_id",
                         "prompt": "LLM Provider",
-                        "setting_path": "llm_backend",
+                        "setting_path": "major_backend_id",
                         "restart_required": true
                     },
                     {
-                        "name": "selected_model",
-                        "prompt": "Model Name",
+                        "name": "cheap_backend_id",
+                        "prompt": "Cheap Provider",
                         "input_type": "text",
-                        "setting_path": "selected_model"
+                        "setting_path": "cheap_backend_id"
                     }
                 ]
             }
@@ -1275,17 +1275,17 @@ mod tests {
         assert_eq!(setup.required_secrets[1].name, "google_oauth_client_secret");
         assert!(setup.required_secrets[1].optional);
         assert_eq!(setup.required_fields.len(), 2);
-        assert_eq!(setup.required_fields[0].name, "llm_backend");
+        assert_eq!(setup.required_fields[0].name, "major_backend_id");
         assert_eq!(
             setup.required_fields[0].setting_path.as_deref(),
-            Some("llm_backend")
+            Some("major_backend_id")
         );
         assert!(setup.required_fields[0].restart_required);
         assert_eq!(
             setup.required_fields[0].input_type,
             crate::tools::wasm::capabilities_schema::ToolSetupFieldInputType::Text
         );
-        assert_eq!(setup.required_fields[1].name, "selected_model");
+        assert_eq!(setup.required_fields[1].name, "cheap_backend_id");
     }
 
     #[test]

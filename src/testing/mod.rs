@@ -532,7 +532,7 @@ impl TestHarnessBuilder {
             document_extraction: None,
             claude_code_config: crate::config::ClaudeCodeConfig::default(),
             builder: None,
-            llm_backend: "nearai".to_string(),
+            llm_backend: "openai".to_string(),
             tenant_rates: std::sync::Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
             task_runtime: None,
         };

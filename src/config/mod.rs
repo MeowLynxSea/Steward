@@ -56,8 +56,7 @@ pub use self::tunnel::TunnelConfig;
 pub use self::wasm::WasmConfig;
 pub use self::workspace::WorkspaceConfig;
 pub use crate::llm::config::{
-    BedrockConfig, CacheRetention, GeminiOauthConfig, LlmConfig, NearAiConfig, OAUTH_PLACEHOLDER,
-    OpenAiCodexConfig, RegistryProviderConfig,
+    CacheRetention, LlmConfig, OAUTH_PLACEHOLDER, OpenAiCodexConfig, RegistryProviderConfig,
 };
 pub use crate::llm::session::SessionConfig;
 
@@ -411,43 +410,37 @@ pub async fn inject_llm_keys_from_secrets(
     secrets: &dyn crate::secrets::SecretsStore,
     user_id: &str,
 ) {
-    // Static mappings for well-known providers.
-    // The registry's setup hints define secret_name -> env_var mappings,
-    // so new providers added to providers.json get injection automatically.
-    let mut mappings: Vec<(&str, &str)> = vec![
-        ("llm_nearai_api_key", "NEARAI_API_KEY"),
-        ("llm_anthropic_oauth_token", "ANTHROPIC_OAUTH_TOKEN"),
-    ];
+    let mut mappings: Vec<(String, String)> = vec![(
+        "llm_anthropic_oauth_token".to_string(),
+        "ANTHROPIC_OAUTH_TOKEN".to_string(),
+    )];
 
-    // Dynamically discover secret->env mappings from the provider registry.
-    // Uses selectable() which deduplicates user overrides correctly.
     let registry = crate::llm::ProviderRegistry::load();
-    let dynamic_mappings: Vec<(String, String)> = registry
-        .selectable()
-        .iter()
-        .filter_map(|def| {
-            def.api_key_env.as_ref().and_then(|env_var| {
-                def.setup
-                    .as_ref()
-                    .and_then(|s| s.secret_name())
-                    .map(|secret_name| (secret_name.to_string(), env_var.clone()))
+    mappings.extend(
+        registry
+            .selectable()
+            .iter()
+            .filter_map(|def| {
+                def.api_key_env.as_ref().and_then(|env_var| {
+                    def.setup
+                        .as_ref()
+                        .and_then(|s| s.secret_name())
+                        .map(|secret_name| (secret_name.to_string(), env_var.clone()))
+                })
             })
-        })
-        .collect();
-    for (secret, env_var) in &dynamic_mappings {
-        mappings.push((secret, env_var));
-    }
+            .collect::<Vec<_>>(),
+    );
 
     let mut injected = HashMap::new();
 
-    for (secret_name, env_var) in mappings {
+    for (secret_name, env_var) in &mappings {
         match std::env::var(env_var) {
             Ok(val) if !val.is_empty() => continue,
             _ => {}
         }
         match secrets.get_decrypted(user_id, secret_name).await {
             Ok(decrypted) => {
-                injected.insert(env_var.to_string(), decrypted.expose().to_string());
+                injected.insert(env_var.clone(), decrypted.expose().to_string());
                 tracing::debug!("Loaded secret '{}' for env var '{}'", secret_name, env_var);
             }
             Err(_) => {
@@ -526,25 +519,13 @@ pub async fn hydrate_llm_keys_from_secrets(
     secrets: &(dyn crate::secrets::SecretsStore + Send + Sync),
     user_id: &str,
 ) {
-    // Hydrate builtin overrides
-    for (provider_id, override_val) in settings.llm_builtin_overrides.iter_mut() {
-        if override_val.api_key.is_some() {
-            continue; // Already has a key (legacy plaintext or TOML)
-        }
-        let secret_name = crate::settings::builtin_secret_name(provider_id);
-        if let Ok(decrypted) = secrets.get_decrypted(user_id, &secret_name).await {
-            override_val.api_key = Some(decrypted.expose().to_string());
-        }
-    }
-
-    // Hydrate custom providers
-    for provider in settings.llm_custom_providers.iter_mut() {
-        if provider.api_key.is_some() {
+    for backend in &mut settings.backends {
+        if backend.api_key.is_some() {
             continue;
         }
-        let secret_name = crate::settings::custom_secret_name(&provider.id);
+        let secret_name = crate::settings::builtin_secret_name(&backend.provider);
         if let Ok(decrypted) = secrets.get_decrypted(user_id, &secret_name).await {
-            provider.api_key = Some(decrypted.expose().to_string());
+            backend.api_key = Some(decrypted.expose().to_string());
         }
     }
 }
@@ -565,74 +546,22 @@ pub async fn migrate_plaintext_llm_keys(
 
     let mut migrated = 0u32;
 
-    // Migrate builtin overrides
-    if let Some(obj) = settings_map
-        .get("llm_builtin_overrides")
-        .and_then(|v| v.as_object())
-    {
-        let mut sanitized = obj.clone();
-        for (provider_id, override_val) in obj {
-            if let Some(api_key) = override_val.get("api_key").and_then(|v| v.as_str()) {
-                if api_key.is_empty() {
-                    continue;
-                }
-                let secret_name = crate::settings::builtin_secret_name(provider_id);
-                if !secrets.exists(user_id, &secret_name).await.unwrap_or(false)
-                    && let Err(e) = secrets
-                        .create(
-                            user_id,
-                            crate::secrets::CreateSecretParams {
-                                name: secret_name.clone(),
-                                value: secrecy::SecretString::from(api_key.to_string()),
-                                provider: Some(provider_id.clone()),
-                                expires_at: None,
-                            },
-                        )
-                        .await
-                {
-                    tracing::warn!("Failed to migrate key for builtin '{}': {}", provider_id, e);
-                    continue;
-                }
-                if let Some(o) = sanitized
-                    .get_mut(provider_id)
-                    .and_then(|v| v.as_object_mut())
-                {
-                    o.remove("api_key");
-                }
-                migrated += 1;
-            }
-        }
-        if migrated > 0 {
-            let _ = settings_store
-                .set_setting(
-                    user_id,
-                    "llm_builtin_overrides",
-                    &serde_json::Value::Object(sanitized),
-                )
-                .await;
-        }
-    }
-
-    // Migrate custom providers
-    let before = migrated;
-    if let Some(arr) = settings_map
-        .get("llm_custom_providers")
-        .and_then(|v| v.as_array())
-    {
+    if let Some(arr) = settings_map.get("backends").and_then(|v| v.as_array()) {
         let mut sanitized = arr.clone();
-        for (idx, provider_val) in arr.iter().enumerate() {
-            let provider_id = provider_val
-                .get("id")
+        for (idx, backend_val) in arr.iter().enumerate() {
+            let provider_id = backend_val
+                .get("provider")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if provider_id.is_empty() {
                 continue;
             }
-            if let Some(api_key) = provider_val.get("api_key").and_then(|v| v.as_str()) {
+
+            if let Some(api_key) = backend_val.get("api_key").and_then(|v| v.as_str()) {
                 if api_key.is_empty() {
                     continue;
                 }
-                let secret_name = crate::settings::custom_secret_name(provider_id);
+                let secret_name = crate::settings::builtin_secret_name(provider_id);
                 if !secrets.exists(user_id, &secret_name).await.unwrap_or(false)
                     && let Err(e) = secrets
                         .create(
@@ -646,7 +575,7 @@ pub async fn migrate_plaintext_llm_keys(
                         )
                         .await
                 {
-                    tracing::warn!("Failed to migrate key for custom '{}': {}", provider_id, e);
+                    tracing::warn!("Failed to migrate key for backend '{}': {}", provider_id, e);
                     continue;
                 }
                 if let Some(o) = sanitized[idx].as_object_mut() {
@@ -655,13 +584,9 @@ pub async fn migrate_plaintext_llm_keys(
                 migrated += 1;
             }
         }
-        if migrated > before {
+        if migrated > 0 {
             let _ = settings_store
-                .set_setting(
-                    user_id,
-                    "llm_custom_providers",
-                    &serde_json::Value::Array(sanitized),
-                )
+                .set_setting(user_id, "backends", &serde_json::Value::Array(sanitized))
                 .await;
         }
     }
@@ -690,7 +615,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hydrate_populates_builtin_override_keys_from_secrets() {
+    async fn hydrate_populates_backend_keys_from_secrets() {
         let secrets = test_secrets_store();
         secrets
             .create(
@@ -706,61 +631,13 @@ mod tests {
             .unwrap();
 
         let mut settings = Settings {
-            llm_builtin_overrides: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "openai".to_string(),
-                    crate::settings::LlmBuiltinOverride {
-                        api_key: None, // stripped during write
-                        model: Some("gpt-4o".to_string()),
-                        base_url: None,
-                        request_format: None,
-                    },
-                );
-                m
-            },
-            ..Default::default()
-        };
-
-        hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), "test").await;
-
-        assert_eq!(
-            settings.llm_builtin_overrides["openai"].api_key.as_deref(),
-            Some("sk-from-vault"),
-            "api_key should be hydrated from secrets store"
-        );
-        assert_eq!(
-            settings.llm_builtin_overrides["openai"].model.as_deref(),
-            Some("gpt-4o"),
-            "model should remain unchanged"
-        );
-    }
-
-    #[tokio::test]
-    async fn hydrate_populates_custom_provider_keys_from_secrets() {
-        let secrets = test_secrets_store();
-        secrets
-            .create(
-                "test",
-                crate::secrets::CreateSecretParams {
-                    name: "llm_custom_my-llm_api_key".to_string(),
-                    value: secrecy::SecretString::from("gsk-custom".to_string()),
-                    provider: Some("my-llm".to_string()),
-                    expires_at: None,
-                },
-            )
-            .await
-            .unwrap();
-
-        let mut settings = Settings {
-            llm_custom_providers: vec![crate::settings::CustomLlmProviderSettings {
-                id: "my-llm".to_string(),
-                name: "My LLM".to_string(),
-                adapter: "open_ai_completions".to_string(),
-                base_url: Some("http://localhost:8080".to_string()),
-                default_model: Some("model-1".to_string()),
-                api_key: None, // stripped during write
-                builtin: false,
+            backends: vec![crate::settings::BackendInstance {
+                id: "major".to_string(),
+                provider: "openai".to_string(),
+                api_key: None,
+                base_url: None,
+                model: "gpt-4o".to_string(),
+                request_format: Some("chat_completions".to_string()),
             }],
             ..Default::default()
         };
@@ -768,9 +645,14 @@ mod tests {
         hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), "test").await;
 
         assert_eq!(
-            settings.llm_custom_providers[0].api_key.as_deref(),
-            Some("gsk-custom"),
-            "custom provider api_key should be hydrated from secrets store"
+            settings.backends[0].api_key.as_deref(),
+            Some("sk-from-vault"),
+            "api_key should be hydrated from secrets store"
+        );
+        assert_eq!(
+            settings.backends[0].model.as_str(),
+            "gpt-4o",
+            "model should remain unchanged"
         );
     }
 
@@ -791,26 +673,21 @@ mod tests {
             .unwrap();
 
         let mut settings = Settings {
-            llm_builtin_overrides: {
-                let mut m = std::collections::HashMap::new();
-                m.insert(
-                    "openai".to_string(),
-                    crate::settings::LlmBuiltinOverride {
-                        api_key: Some("sk-existing".to_string()),
-                        model: None,
-                        base_url: None,
-                        request_format: None,
-                    },
-                );
-                m
-            },
+            backends: vec![crate::settings::BackendInstance {
+                id: "major".to_string(),
+                provider: "openai".to_string(),
+                api_key: Some("sk-existing".to_string()),
+                base_url: None,
+                model: "gpt-5-mini".to_string(),
+                request_format: Some("chat_completions".to_string()),
+            }],
             ..Default::default()
         };
 
         hydrate_llm_keys_from_secrets(&mut settings, secrets.as_ref(), "test").await;
 
         assert_eq!(
-            settings.llm_builtin_overrides["openai"].api_key.as_deref(),
+            settings.backends[0].api_key.as_deref(),
             Some("sk-existing"),
             "existing key should not be overwritten"
         );

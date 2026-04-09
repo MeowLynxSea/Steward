@@ -14,23 +14,29 @@ pub fn map_openclaw_config_to_settings(
     // Map LLM configuration
     if let Some(ref llm) = config.llm {
         if let Some(ref provider) = llm.provider {
+            let backend_id = "openclaw-imported-primary".to_string();
             settings.insert(
-                "llm.backend".to_string(),
-                serde_json::Value::String(provider.clone()),
+                "backends".to_string(),
+                serde_json::json!([{
+                    "id": backend_id,
+                    "provider": provider,
+                    "api_key": serde_json::Value::Null,
+                    "base_url": llm.base_url,
+                    "model": llm.model.clone().unwrap_or_default(),
+                    "request_format": if provider == "openai" {
+                        serde_json::Value::String("chat_completions".to_string())
+                    } else {
+                        serde_json::Value::Null
+                    }
+                }]),
             );
-        }
-
-        if let Some(ref model) = llm.model {
             settings.insert(
-                "llm.selected_model".to_string(),
-                serde_json::Value::String(model.clone()),
+                "major_backend_id".to_string(),
+                serde_json::Value::String("openclaw-imported-primary".to_string()),
             );
-        }
-
-        if let Some(ref base_url) = llm.base_url {
             settings.insert(
-                "llm.base_url".to_string(),
-                serde_json::Value::String(base_url.clone()),
+                "onboard_completed".to_string(),
+                serde_json::Value::Bool(true),
             );
         }
     }
@@ -72,7 +78,11 @@ pub fn extract_credentials(config: &OpenClawConfig) -> Vec<(String, SecretString
     if let Some(ref llm) = config.llm
         && let Some(ref api_key) = llm.api_key
     {
-        credentials.push(("llm_api_key".to_string(), api_key.clone()));
+        let provider = llm.provider.as_deref().unwrap_or("openai");
+        credentials.push((
+            crate::settings::builtin_secret_name(provider),
+            api_key.clone(),
+        ));
     }
 
     // Extract embeddings API key if present
@@ -108,11 +118,17 @@ mod tests {
         let settings = map_openclaw_config_to_settings(&config);
 
         assert_eq!(
-            settings.get("llm.backend"),
-            Some(&serde_json::Value::String("openai".to_string()))
+            settings.get("major_backend_id"),
+            Some(&serde_json::Value::String(
+                "openclaw-imported-primary".to_string()
+            ))
         );
         assert_eq!(
-            settings.get("llm.selected_model"),
+            settings
+                .get("backends")
+                .and_then(|value| value.as_array())
+                .and_then(|items| items.first())
+                .and_then(|backend| backend.get("model")),
             Some(&serde_json::Value::String("gpt-4".to_string()))
         );
     }
@@ -136,7 +152,7 @@ mod tests {
 
         let creds = extract_credentials(&config);
         assert_eq!(creds.len(), 1);
-        assert_eq!(creds[0].0, "llm_api_key");
+        assert_eq!(creds[0].0, "llm_builtin_anthropic_api_key");
         // Verify the value is wrapped in SecretString (never exposed in Debug output)
         assert!(!format!("{:?}", creds[0].1).contains("secret-key-value"));
     }
