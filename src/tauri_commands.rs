@@ -332,7 +332,6 @@ async fn generate_session_title(
     llm: Arc<dyn steward_core::llm::LlmProvider>,
     content: &str,
 ) -> Option<GeneratedSessionTitle> {
-    let model_name = llm.active_model_name();
     for attempt in 1..=2 {
         let retry_mode = attempt == 2;
         let request = build_session_title_request(content, retry_mode);
@@ -342,7 +341,6 @@ async fn generate_session_title(
                 tracing::info!(
                     attempt,
                     retry_mode,
-                    model = %model_name,
                     prompt_preview = %content.chars().take(120).collect::<String>(),
                     raw_output = %response.content,
                     finish_reason = ?response.finish_reason,
@@ -366,7 +364,6 @@ async fn generate_session_title(
                         tracing::warn!(
                             attempt,
                             retry_mode,
-                            model = %model_name,
                             raw_output = %response.content,
                             finish_reason = ?response.finish_reason,
                             "session title summarizer output could not be parsed"
@@ -378,7 +375,6 @@ async fn generate_session_title(
                 tracing::warn!(
                     attempt,
                     retry_mode,
-                    model = %model_name,
                     %error,
                     "session title summarizer request failed"
                 );

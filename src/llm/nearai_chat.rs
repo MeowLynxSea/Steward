@@ -587,14 +587,6 @@ impl LlmProvider for NearAiChatProvider {
 
         let (input_tokens, output_tokens) = parse_usage(response.usage.as_ref());
 
-        tracing::trace!(
-            content_len = %content.len(),
-            raw_content = ?raw_content,
-            raw_reasoning = ?raw_reasoning,
-            output_tokens = output_tokens,
-            "nearai_chat complete: content extraction"
-        );
-
         if content.is_empty() && output_tokens > 0 {
             tracing::warn!(
                 response_content = ?raw_content,

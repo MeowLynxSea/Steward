@@ -125,8 +125,6 @@ pub async fn start_embedded_runtime(
         .cheap_llm
         .clone()
         .unwrap_or_else(|| primary_llm.clone());
-    let primary_model_name = primary_llm.active_model_name();
-    let cheap_model_name = cheap_llm.active_model_name();
     let reloadable_llm_state = Arc::new(ReloadableLlmState::new(primary_llm, cheap_llm));
     let app_llm: Arc<dyn crate::llm::LlmProvider> = Arc::new(ReloadableLlmProvider::new(
         Arc::clone(&reloadable_llm_state),
@@ -136,13 +134,6 @@ pub async fn start_embedded_runtime(
         Arc::clone(&reloadable_llm_state),
         ReloadableSlot::Cheap,
     ));
-
-    tracing::info!(
-        primary_model = %primary_model_name,
-        cheap_model = %cheap_model_name,
-        title_llm_model = %app_llm.active_model_name(),
-        "LLM providers initialized"
-    );
 
     // Clone values needed for AppState BEFORE moving components into AgentDeps
     let app_state_db = components.db.clone();
