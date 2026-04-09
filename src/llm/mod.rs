@@ -1,6 +1,7 @@
 //! LLM integration for the agent.
 
 mod anthropic_oauth;
+pub mod circuit_breaker;
 pub mod config;
 pub mod costs;
 mod disabled;
@@ -33,8 +34,10 @@ pub use config::{
     CacheRetention, LlmConfig, OAUTH_PLACEHOLDER, OpenAiApiFormat, OpenAiCodexConfig,
     RegistryProviderConfig,
 };
+pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerProvider, CircuitState};
 pub use disabled::DisabledLlmProvider;
 pub use error::LlmError;
+pub use failover::{CooldownConfig, FailoverProvider};
 pub use openai_codex_provider::OpenAiCodexProvider;
 pub use openai_codex_session::{
     OpenAiCodexDeviceCode, OpenAiCodexSession, OpenAiCodexSessionManager,
@@ -71,7 +74,7 @@ pub async fn create_llm_provider(
     _session: Arc<SessionManager>,
 ) -> Result<Arc<dyn LlmProvider>, LlmError> {
     if !config.is_configured() {
-        return Ok(Arc::new(DisabledLlmProvider::new()));
+        return Ok(Arc::new(DisabledLlmProvider::new()) as Arc<dyn LlmProvider>);
     }
 
     if config.backend == "openai_codex" {
