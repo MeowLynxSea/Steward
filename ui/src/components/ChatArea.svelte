@@ -76,6 +76,16 @@
   const hasStreamingContent = $derived(
     streaming.images.length > 0
   );
+  const normalizedStreamingThinking = $derived.by(() => normalizeThinkingTranscript(streaming.thinkingMessage));
+  const hasLiveStreamingSignal = $derived.by(() => {
+    return Boolean(
+      streaming.streamingContent.trim() ||
+      normalizedStreamingThinking.trim() ||
+      streaming.toolCalls.length > 0 ||
+      streaming.reasoning ||
+      streaming.images.length > 0
+    );
+  });
   const darkMode = $derived(themeStore.mode === "dark");
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
     const messages = session?.thread_messages ?? [];
@@ -134,6 +144,12 @@
 
     return null;
   });
+  const transientThinkingContent = $derived.by(() => {
+    if (liveThinkingMessageId || !streaming.thinking) {
+      return "";
+    }
+    return normalizedStreamingThinking;
+  });
   const streamingSkeletonLayout = $derived.by(() => {
     const signalWeight =
       streaming.streamingContent.length +
@@ -168,6 +184,7 @@
     // Touch reactive deps
     void streaming.streamingContent;
     void streaming.thinking;
+    void streaming.thinkingMessage;
     void session?.thread_messages.length;
     scrollToBottom();
   });
@@ -678,7 +695,44 @@
         </div>
       {/each}
 
-      {#if streaming.isStreaming}
+      {#if transientThinkingContent}
+        <div class="message assistant fade-in">
+          <div class="assistant-text">
+            <div class="tool-calls-container inline-tool-call">
+              <div class="tool-call-card tool-group-card aux-group-card">
+                <div class="aux-scroll-area">
+                  <div class="tool-group-row">
+                    <button class="tool-call-header tool-group-row-header" disabled>
+                      <div class="tool-call-left">
+                        <div class="tool-icon thinking">
+                          <Brain size={14} strokeWidth={2} />
+                        </div>
+                        <div class="tool-call-copy tool-row-copy">
+                          <div class="tool-row-inline">
+                            <span class="tool-name">思考</span>
+                            <span class="tool-inline-summary live-tool-summary">
+                              {buildTrailingSummary(transientThinkingContent, 92) || "思考中..."}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                    <div class="tool-call-body">
+                      <div class="thinking-segment">
+                        <div class="tool-detail-content auxiliary-detail markdown-body detail-enter">
+                          {@html renderAuxiliaryDetail(transientThinkingContent)}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if streaming.isStreaming && !hasLiveStreamingSignal}
         <div class="message assistant pending-request-message fade-in">
           <div class="assistant-text">
             <div class="pending-inline-skeleton" aria-hidden="true">

@@ -30,11 +30,11 @@ pub mod image_models;
 pub mod reasoning_models;
 pub mod vision_models;
 
+pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerProvider, CircuitState};
 pub use config::{
     CacheRetention, LlmConfig, OAUTH_PLACEHOLDER, OpenAiApiFormat, OpenAiCodexConfig,
     RegistryProviderConfig,
 };
-pub use circuit_breaker::{CircuitBreakerConfig, CircuitBreakerProvider, CircuitState};
 pub use disabled::DisabledLlmProvider;
 pub use error::LlmError;
 pub use failover::{CooldownConfig, FailoverProvider};

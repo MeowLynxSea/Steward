@@ -56,6 +56,38 @@ function turnCostFromResultMetadata(metadata: Record<string, unknown> | null | u
   return { input_tokens, output_tokens, cost_usd };
 }
 
+function mergeStreamingChunk(existing: string, incoming: string): string {
+  if (!existing) {
+    return incoming;
+  }
+  if (!incoming) {
+    return existing;
+  }
+
+  const boundaries: number[] = [];
+  for (let i = 0; i < incoming.length; i++) {
+    if ((incoming.codePointAt(i) ?? 0) > 0xffff) {
+      boundaries.push(i);
+      i += 1;
+    } else {
+      boundaries.push(i);
+    }
+  }
+  boundaries.push(incoming.length);
+
+  for (let i = boundaries.length - 1; i >= 0; i -= 1) {
+    const overlap = boundaries[i];
+    if (overlap === 0) {
+      continue;
+    }
+    if (existing.endsWith(incoming.slice(0, overlap))) {
+      return `${existing}${incoming.slice(overlap)}`;
+    }
+  }
+
+  return `${existing}${incoming}`;
+}
+
 class SessionsState {
   list = $state<SessionSummary[]>([]);
   activeId = $state<string>("");
@@ -368,7 +400,7 @@ class SessionsState {
         this.streaming = {
           ...this.streaming,
           thinking: true,
-          thinkingMessage: message,
+          thinkingMessage: mergeStreamingChunk(this.streaming.thinkingMessage, message),
           isStreaming: true
         };
         break;
@@ -610,9 +642,8 @@ class SessionsState {
   }
 
   #appendThinkingMessage(content: string, messageId: string | null) {
-    if (!content.trim()) return;
+    if (!content) return;
     const now = new Date().toISOString();
-    const normalized = content.trim();
     if (!messageId) {
       this.#streamingThinkingId = null;
       return;
@@ -627,7 +658,7 @@ class SessionsState {
         id: messageId,
         kind: "thinking",
         role: null,
-        content: normalized,
+        content,
         created_at: now,
         turn_number: turnNumber,
         turn_cost: null,
@@ -639,7 +670,7 @@ class SessionsState {
     this.#streamingThinkingId = messageId;
     this.#updateMessage(messageId, (message) => ({
       ...message,
-      content: normalized
+      content: mergeStreamingChunk(message.content ?? "", content)
     }));
   }
 

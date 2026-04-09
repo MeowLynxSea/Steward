@@ -32,6 +32,14 @@ fn requires_preexisting_uuid_thread(channel: &str) -> bool {
     matches!(channel, "desktop" | "test")
 }
 
+fn preferred_desktop_session_id(message: &IncomingMessage) -> Option<Uuid> {
+    message
+        .metadata
+        .get("desktop_session_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
 fn decimal_to_cost_text(cost: rust_decimal::Decimal) -> String {
     format!("${:.4}", cost)
 }
@@ -123,11 +131,25 @@ impl Agent {
             Err(_) => return None,
         };
 
-        // Check if already in memory
-        let session = self
-            .session_manager
-            .get_or_create_session(&message.user_id)
-            .await;
+        // Prefer the UI-selected desktop session on restart so historical
+        // threads are restored back into the same session the user opened.
+        let session = if let Some(session_id) = preferred_desktop_session_id(message) {
+            if let Some(session) = self
+                .session_manager
+                .get_session_by_id(&message.user_id, session_id)
+                .await
+            {
+                session
+            } else {
+                self.session_manager
+                    .get_or_create_session(&message.user_id)
+                    .await
+            }
+        } else {
+            self.session_manager
+                .get_or_create_session(&message.user_id)
+                .await
+        };
         {
             let sess = session.lock().await;
             if sess.threads.contains_key(&thread_uuid) {
@@ -784,15 +806,41 @@ impl Agent {
             .await
         {
             Ok(true) => true,
-            Ok(false) => {
-                tracing::warn!(
-                    user = %user_id,
-                    channel = %channel,
-                    thread_id = %thread_id,
-                    "Rejected write for unavailable thread id"
-                );
-                false
-            }
+            Ok(false) => match store.conversation_belongs_to_user(thread_id, user_id).await {
+                Ok(true) => {
+                    tracing::info!(
+                        user = %user_id,
+                        requested_channel = %channel,
+                        thread_id = %thread_id,
+                        "Allowing write to owned legacy conversation with channel mismatch"
+                    );
+                    if let Err(error) = store.touch_conversation(thread_id).await {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            %error,
+                            "Failed to touch owned legacy conversation before write"
+                        );
+                    }
+                    true
+                }
+                Ok(false) => {
+                    tracing::warn!(
+                        user = %user_id,
+                        channel = %channel,
+                        thread_id = %thread_id,
+                        "Rejected write for unavailable thread id"
+                    );
+                    false
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        %error,
+                        "Failed to verify conversation ownership for write"
+                    );
+                    false
+                }
+            },
             Err(e) => {
                 tracing::warn!(
                     "Failed to ensure writable conversation {}: {}",
@@ -2689,6 +2737,31 @@ fn rebuild_chat_messages_from_db(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "libsql")]
+    use std::{sync::Arc, time::Duration};
+
+    #[cfg(feature = "libsql")]
+    use crate::agent::agent_loop::AgentDeps;
+    #[cfg(feature = "libsql")]
+    use crate::agent::session_manager::SessionManager;
+    #[cfg(feature = "libsql")]
+    use crate::config::{AgentConfig, SkillsConfig};
+    #[cfg(feature = "libsql")]
+    use crate::context::ContextManager;
+    #[cfg(feature = "libsql")]
+    use crate::db::Database;
+    #[cfg(feature = "libsql")]
+    use crate::hooks::HookRegistry;
+    #[cfg(feature = "libsql")]
+    use crate::safety::{SafetyConfig, SafetyLayer};
+    #[cfg(feature = "libsql")]
+    use crate::testing::{StubLlm, test_db};
+    #[cfg(feature = "libsql")]
+    use crate::tools::ToolRegistry;
+    #[cfg(feature = "libsql")]
+    use tokio::sync::mpsc;
+    #[cfg(feature = "libsql")]
+    use tokio_stream::wrappers::ReceiverStream;
 
     #[test]
     fn test_rebuild_chat_messages_user_assistant_only() {
@@ -2859,6 +2932,180 @@ mod tests {
             metadata: serde_json::json!({}),
             created_at: chrono::Utc::now(),
         }
+    }
+
+    #[cfg(feature = "libsql")]
+    fn make_empty_message_stream() -> crate::channels::MessageStream {
+        let (_tx, rx) = mpsc::channel(1);
+        Box::pin(ReceiverStream::new(rx))
+    }
+
+    #[cfg(feature = "libsql")]
+    fn make_test_agent_with_db(db: Arc<dyn Database>) -> Agent {
+        let deps = AgentDeps {
+            owner_id: "default".to_string(),
+            store: Some(db),
+            llm: Arc::new(StubLlm::default()),
+            cheap_llm: None,
+            safety: Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+            tools: Arc::new(ToolRegistry::new()),
+            workspace: None,
+            extension_manager: None,
+            skill_registry: None,
+            skill_catalog: None,
+            skills_config: SkillsConfig::default(),
+            hooks: Arc::new(HookRegistry::new()),
+            cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
+                crate::agent::cost_guard::CostGuardConfig::default(),
+            )),
+            sse_tx: None,
+            emitter: None,
+            http_interceptor: None,
+            transcription: None,
+            document_extraction: None,
+            claude_code_config: crate::config::ClaudeCodeConfig::default(),
+            builder: None,
+            llm_backend: "openai".to_string(),
+            tenant_rates: Arc::new(crate::tenant::TenantRateRegistry::new(4, 3)),
+            task_runtime: None,
+        };
+
+        Agent::new_with_message_stream(
+            AgentConfig {
+                name: "test-agent".to_string(),
+                max_parallel_jobs: 1,
+                job_timeout: Duration::from_secs(60),
+                stuck_threshold: Duration::from_secs(60),
+                repair_check_interval: Duration::from_secs(30),
+                max_repair_attempts: 1,
+                use_planning: false,
+                session_idle_timeout: Duration::from_secs(300),
+                allow_local_tools: false,
+                max_cost_per_day_cents: None,
+                max_actions_per_hour: None,
+                max_cost_per_user_per_day_cents: None,
+                max_tool_iterations: 8,
+                auto_approve_tools: false,
+                default_timezone: "UTC".to_string(),
+                max_jobs_per_user: None,
+                max_tokens_per_job: 0,
+                multi_tenant: false,
+                max_llm_concurrent_per_user: None,
+                max_jobs_concurrent_per_user: None,
+            },
+            deps,
+            make_empty_message_stream(),
+            None,
+            None,
+            None,
+            None,
+            Some(Arc::new(ContextManager::new(1))),
+            Some(Arc::new(SessionManager::new())),
+        )
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_maybe_hydrate_thread_uses_preferred_desktop_session() {
+        let (db, _db_dir) = test_db().await;
+        let agent = make_test_agent_with_db(Arc::clone(&db));
+        let user_id = "desktop-user";
+
+        agent
+            .session_manager
+            .attach_store(Arc::clone(&db), user_id)
+            .await;
+
+        let session_a = agent.session_manager.create_new_session(user_id).await;
+        let session_b = agent.session_manager.create_new_session(user_id).await;
+        let session_a_id = session_a.lock().await.id;
+        let session_b_id = session_b.lock().await.id;
+
+        let default_session_id = agent
+            .session_manager
+            .get_or_create_session(user_id)
+            .await
+            .lock()
+            .await
+            .id;
+        let preferred_session_id = if default_session_id == session_a_id {
+            session_b_id
+        } else {
+            session_a_id
+        };
+
+        let thread_id = Uuid::new_v4();
+        db.ensure_conversation(thread_id, "desktop", user_id, Some(&thread_id.to_string()))
+            .await
+            .expect("ensure conversation");
+        db.add_conversation_message(thread_id, "user", "Earlier message")
+            .await
+            .expect("seed conversation");
+
+        let message = IncomingMessage::new("desktop", user_id, "Continue this session")
+            .with_thread(thread_id.to_string())
+            .with_metadata(serde_json::json!({
+                "desktop_session_id": preferred_session_id.to_string()
+            }));
+
+        let rejection = agent
+            .maybe_hydrate_thread(&message, &thread_id.to_string())
+            .await;
+
+        assert_eq!(rejection, None);
+
+        let preferred_session = agent
+            .session_manager
+            .get_session_by_id(user_id, preferred_session_id)
+            .await
+            .expect("preferred session should exist");
+        let preferred = preferred_session.lock().await;
+        assert!(
+            preferred.threads.contains_key(&thread_id),
+            "hydrated thread should be restored into the selected desktop session"
+        );
+        assert_eq!(preferred.active_thread, Some(thread_id));
+
+        let default_session = agent
+            .session_manager
+            .get_session_by_id(user_id, default_session_id)
+            .await
+            .expect("default session should exist");
+        let default = default_session.lock().await;
+        assert!(
+            !default.threads.contains_key(&thread_id),
+            "historical thread should not be attached to a different session"
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_persist_user_message_allows_owned_legacy_channel_conversation() {
+        let (db, _db_dir) = test_db().await;
+        let agent = make_test_agent_with_db(Arc::clone(&db));
+        let user_id = "desktop-user";
+        let conversation_id = db
+            .create_conversation("legacy-desktop", user_id, None)
+            .await
+            .expect("create legacy conversation");
+
+        agent
+            .persist_user_message(conversation_id, "desktop", user_id, "resume after restart")
+            .await;
+
+        let messages = db
+            .list_conversation_messages(conversation_id)
+            .await
+            .expect("list conversation messages");
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.content == "resume after restart"),
+            "owned legacy conversation should still accept new desktop messages"
+        );
     }
 
     #[tokio::test]

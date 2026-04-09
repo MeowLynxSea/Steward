@@ -28,6 +28,30 @@ struct ThreadKey {
     external_thread_id: Option<String>,
 }
 
+fn normalize_loaded_session(session: &mut Session) -> bool {
+    let mut changed = false;
+
+    for thread in session.threads.values_mut() {
+        if thread.state == crate::agent::session::ThreadState::Processing {
+            // A persisted "Processing" thread cannot still be executing after a
+            // full app restart. Mark it interrupted so new desktop messages are
+            // injected immediately instead of being queued forever.
+            thread.interrupt();
+            changed = true;
+        }
+    }
+
+    if let Some(active_thread) = session.active_thread
+        && !session.threads.contains_key(&active_thread)
+    {
+        session.active_thread = session.threads.keys().copied().next();
+        session.last_active_at = chrono::Utc::now();
+        changed = true;
+    }
+
+    changed
+}
+
 /// Manages sessions, threads, and undo state for all users.
 ///
 /// Sessions are indexed by owner_id, allowing each user to have multiple
@@ -74,19 +98,43 @@ impl SessionManager {
 
     /// Load sessions from the database for the given owner.
     async fn load_sessions_from_db(&self, owner_id: &str) {
-        let store = self.store.read().await;
-        let Some(ref db) = *store else {
+        let db = {
+            let store = self.store.read().await;
+            store.clone()
+        };
+        let Some(db) = db else {
             return;
         };
 
         let key = format!("agent_sessions:{}", owner_id);
         match db.get_setting(owner_id, &key).await {
             Ok(Some(value)) => match serde_json::from_value::<HashMap<Uuid, Session>>(value) {
-                Ok(sessions_map) => {
+                Ok(mut sessions_map) => {
                     if sessions_map.is_empty() {
                         tracing::debug!("No sessions found in DB for owner {}", owner_id);
                         return;
                     }
+
+                    let normalized = sessions_map.values_mut().fold(false, |changed, session| {
+                        normalize_loaded_session(session) || changed
+                    });
+
+                    if normalized
+                        && let Err(error) = db
+                            .set_setting(
+                                owner_id,
+                                &key,
+                                &serde_json::to_value(&sessions_map).unwrap(),
+                            )
+                            .await
+                    {
+                        tracing::warn!(
+                            owner_id,
+                            %error,
+                            "Failed to persist normalized session snapshot"
+                        );
+                    }
+
                     let mut all_sessions = self.sessions.write().await;
                     for (session_id, session) in sessions_map {
                         let session = Arc::new(Mutex::new(session));
@@ -773,5 +821,51 @@ mod tests {
 
         assert_eq!(sess.active_thread, Some(thread_id));
         assert!(sess.threads.contains_key(&thread_id));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_load_sessions_from_db_interrupts_stale_processing_threads() {
+        let (db, _dir) = crate::testing::test_db().await;
+        let manager = SessionManager::new();
+        manager.attach_store(Arc::clone(&db), "user-1").await;
+
+        let session = manager.create_new_session("user-1").await;
+        let session_id = session.lock().await.id;
+        let thread_id = {
+            let mut sess = session.lock().await;
+            let thread_id = sess.create_thread().id;
+            let thread = sess
+                .threads
+                .get_mut(&thread_id)
+                .expect("thread should exist");
+            thread.start_turn("message before restart");
+            assert!(thread.queue_message("queued while processing".to_string()));
+            thread_id
+        };
+        manager.persist_session_snapshot("user-1", &session).await;
+
+        let reloaded = SessionManager::new();
+        reloaded.attach_store(db, "user-1").await;
+
+        let restored = reloaded
+            .get_session_by_id("user-1", session_id)
+            .await
+            .expect("session should reload from DB");
+        let sess = restored.lock().await;
+        let thread = sess
+            .threads
+            .get(&thread_id)
+            .expect("thread should be present after reload");
+
+        assert_eq!(
+            thread.state,
+            crate::agent::session::ThreadState::Interrupted
+        );
+        assert!(thread.pending_messages.is_empty());
+        assert_eq!(
+            thread.last_turn().map(|turn| turn.state),
+            Some(crate::agent::session::TurnState::Interrupted)
+        );
     }
 }
