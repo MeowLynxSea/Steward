@@ -17,31 +17,13 @@ use crate::tools::tool::{
 };
 use crate::workspace::paths as ws_paths;
 
-/// Well-known workspace filenames that must go through workspace_write, not write_file.
-///
-/// If the LLM tries to write one of these via the filesystem tool we reject
-/// immediately and point it at the correct tool.
-const WORKSPACE_FILES: &[&str] = &[
-    ws_paths::HEARTBEAT,
-    ws_paths::MEMORY,
-    ws_paths::IDENTITY,
-    ws_paths::SOUL,
-    ws_paths::AGENTS,
-    ws_paths::USER,
-    ws_paths::README,
-];
-
-/// Check whether `path` resolves to a workspace file that should be written
-/// through `workspace_write` instead of `write_file`.
-fn is_workspace_path(path: &str) -> bool {
+fn is_legacy_memory_workspace_path(path: &str) -> bool {
     let filename = std::path::Path::new(path)
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or(path);
 
-    WORKSPACE_FILES.contains(&filename)
-        || path.starts_with("daily/")
-        || path.starts_with("context/")
+    matches!(filename, ws_paths::HEARTBEAT | ws_paths::MEMORY) || path.starts_with("daily/")
 }
 
 /// Maximum file size for reading (1MB).
@@ -236,11 +218,10 @@ impl Tool for WriteFileTool {
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
-        // Reject workspace paths: these live in the database, not on disk.
-        if is_workspace_path(path_str) {
+        if is_legacy_memory_workspace_path(path_str) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is a workspace document path. Use the workspace_write tool instead of write_file. \
-                 For HEARTBEAT.md use target='heartbeat', for MEMORY.md use target='memory'.",
+                "'{}' is a legacy workspace memory path and should not be edited as a file. \
+                 Use memory_create or memory_update so the change lands in Steward's native memory graph instead of daily/*.md, MEMORY.md, or HEARTBEAT.md.",
                 path_str
             )));
         }
@@ -850,15 +831,7 @@ mod tests {
         let tool = WriteFileTool::new().with_base_dir(dir.path().to_path_buf());
         let ctx = JobContext::default();
 
-        let workspace_files = &[
-            "HEARTBEAT.md",
-            "MEMORY.md",
-            "IDENTITY.md",
-            "SOUL.md",
-            "AGENTS.md",
-            "USER.md",
-            "README.md",
-        ];
+        let workspace_files = &["HEARTBEAT.md", "MEMORY.md"];
 
         for filename in workspace_files {
             let path = dir.path().join(filename);
@@ -875,15 +848,15 @@ mod tests {
 
             let msg = err.to_string();
             assert!(
-                msg.contains("workspace_write"),
-                "Rejection for {} should mention workspace_write, got: {}",
+                msg.contains("memory_"),
+                "Rejection for {} should mention native memory tools, got: {}",
                 filename,
                 msg
             );
         }
 
-        // daily/ and context/ prefixes should also be rejected
-        for prefix_path in &["daily/2024-01-15.md", "context/vision.md"] {
+        // daily/ prefixes should also be rejected
+        for prefix_path in &["daily/2024-01-15.md"] {
             let err = tool
                 .execute(
                     serde_json::json!({
@@ -896,11 +869,23 @@ mod tests {
                 .unwrap_err();
 
             assert!(
-                err.to_string().contains("workspace_write"),
-                "Rejection for {} should mention workspace_write",
+                err.to_string().contains("memory_"),
+                "Rejection for {} should mention native memory tools",
                 prefix_path
             );
         }
+
+        // Non-legacy relative files should still work
+        let relative_result = tool
+            .execute(
+                serde_json::json!({
+                    "path": "context/vision.md",
+                    "content": "fine"
+                }),
+                &ctx,
+            )
+            .await;
+        assert!(relative_result.is_ok());
 
         // Regular files should still work
         let regular_path = dir.path().join("normal.txt");

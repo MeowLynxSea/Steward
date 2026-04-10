@@ -1,26 +1,19 @@
-//! Workspace and memory system (OpenClaw-inspired).
+//! Workspace file-context system (OpenClaw-inspired).
 //!
-//! The workspace provides persistent memory for agents with a flexible
-//! filesystem-like structure. Agents can create arbitrary markdown file
-//! hierarchies that get indexed for full-text and semantic search.
+//! The workspace is responsible for mounted files, workspace indexing, and
+//! file-context retrieval. Steward's long-term memory no longer lives here;
+//! that runtime truth is modeled in `src/memory/`.
 //!
 //! # Filesystem-like API
 //!
 //! ```text
 //! workspace/
-//! ├── README.md              <- Root runbook/index
-//! ├── MEMORY.md              <- Long-term curated memory
-//! ├── HEARTBEAT.md           <- Periodic checklist
-//! ├── context/               <- Identity and context
-//! │   ├── vision.md
-//! │   └── priorities.md
-//! ├── daily/                 <- Daily logs
-//! │   ├── 2024-01-15.md
-//! │   └── 2024-01-16.md
-//! ├── projects/              <- Arbitrary structure
-//! │   └── alpha/
-//! │       ├── README.md
-//! │       └── notes.md
+//! ├── workspace://mount-a/   <- Mounted project tree
+//! │   ├── src/
+//! │   ├── README.md
+//! │   └── Cargo.toml
+//! ├── workspace://mount-b/   <- Another mounted tree
+//! │   └── ...
 //! └── ...
 //! ```
 //!
@@ -35,9 +28,9 @@
 //!
 //! # Key Patterns
 //!
-//! 1. **Memory is persistence**: If you want to remember something, write it
-//! 2. **Flexible structure**: Create any directory/file hierarchy you need
-//! 3. **Self-documenting**: Use README.md files to describe directory structure
+//! 1. **Workspace means mounted files**: Use `workspace://...` URIs for mounted content
+//! 2. **Memory is separate**: Use `src/memory/` and graph-native tools for long-term recall
+//! 3. **Search is derived**: Workspace indexing supports discovery, not agent identity
 //! 4. **Hybrid search**: Vector similarity + BM25 full-text via RRF
 
 mod chunker;

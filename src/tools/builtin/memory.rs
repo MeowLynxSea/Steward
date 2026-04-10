@@ -136,6 +136,17 @@ fn looks_like_filesystem_path(path: &str) -> bool {
         && (bytes[2] == b'\\' || bytes[2] == b'/')
 }
 
+fn is_legacy_memory_target(target: &str) -> bool {
+    matches!(target, "memory" | "daily_log" | "heartbeat")
+        || target == paths::MEMORY
+        || target == paths::HEARTBEAT
+        || target.starts_with("daily/")
+}
+
+fn is_workspace_mount_uri(path: &str) -> bool {
+    path.starts_with("workspace://")
+}
+
 /// Map workspace write errors to tool errors, using `NotAuthorized` for
 /// injection rejections so the LLM gets a clear signal to stop.
 fn map_write_err(e: crate::error::WorkspaceError) -> ToolError {
@@ -149,9 +160,9 @@ fn map_write_err(e: crate::error::WorkspaceError) -> ToolError {
     }
 }
 
-/// Tool for searching workspace documents.
+/// Tool for searching mounted workspace content.
 ///
-/// Performs hybrid search (FTS + semantic) across indexed workspace content.
+/// Performs hybrid search (FTS + semantic) across indexed mounted workspace content.
 pub struct WorkspaceSearchTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -177,8 +188,8 @@ impl Tool for WorkspaceSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search indexed workspace documents and mounted content. Use this when you need \
-         project context from the workspace rather than graph-native long-term memory. \
+        "Search indexed mounted workspace content. Use this when you need \
+         project context from mounted files rather than graph-native long-term memory. \
          Returns relevant snippets with relevance scores."
     }
 
@@ -244,10 +255,9 @@ impl Tool for WorkspaceSearchTool {
     }
 }
 
-/// Tool for writing workspace documents.
+/// Tool for writing mounted workspace files.
 ///
-/// Use this to create or update workspace-local documents that live alongside
-/// mounted project content.
+/// Use this to create or update mounted workspace files via `workspace://` URIs.
 pub struct WorkspaceWriteTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -273,12 +283,11 @@ impl Tool for WorkspaceWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write to workspace documents (database-backed, NOT the raw local filesystem). \
-         Use this for workspace notes, imported context files, mounted workspace edits, \
-         and other document content that belongs to the workspace layer rather than the \
-         graph-native memory system. Mounted working-tree files use paths like \
-         'workspace://<mount-id>/src/main.rs'. Never pass absolute filesystem paths \
-         like '/Users/...' or 'C:\\...'."
+        "Write to mounted workspace files via `workspace://` URIs. \
+         Use this only for real mounted project files such as `workspace://<mount-id>/src/main.rs`. \
+         Do NOT use this for Steward memory, episodic recall, heartbeat procedures, or legacy \
+         memory-file paths like MEMORY.md, HEARTBEAT.md, or daily/*.md; use memory_create or \
+         memory_update for agent memory. Use write_file for raw local filesystem paths."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -287,12 +296,11 @@ impl Tool for WorkspaceWriteTool {
             "properties": {
                 "content": {
                     "type": "string",
-                    "description": "The content to write to memory. Be concise but include relevant context."
+                    "description": "The content to write to a workspace document."
                 },
                 "target": {
                     "type": "string",
-                    "description": "Where to write: 'memory' for the legacy curated document during migration, 'daily_log' for today's workspace log, 'heartbeat' for the legacy heartbeat checklist import path, 'bootstrap' to clear BOOTSTRAP.md (content is ignored; the file is always cleared), a global workspace document path like 'projects/alpha/notes.md', or a mounted path like 'workspace://<mount-id>/src/main.rs'",
-                    "default": "daily_log"
+                    "description": "Mounted workspace file target, always as a `workspace://<mount-id>/...` URI. Do not pass legacy memory-file paths such as 'memory', 'daily_log', 'heartbeat', 'MEMORY.md', 'HEARTBEAT.md', or 'daily/...'."
                 },
                 "append": {
                     "type": "boolean",
@@ -309,7 +317,7 @@ impl Tool for WorkspaceWriteTool {
                     "default": false
                 }
             },
-            "required": ["content"]
+            "required": ["content", "target"]
         })
     }
 
@@ -322,10 +330,7 @@ impl Tool for WorkspaceWriteTool {
 
         let content = require_str(&params, "content")?;
 
-        let target = params
-            .get("target")
-            .and_then(|v| v.as_str())
-            .unwrap_or("daily_log");
+        let target = require_str(&params, "target")?;
 
         if looks_like_filesystem_path(target) {
             return Err(ToolError::InvalidParameters(format!(
@@ -335,30 +340,23 @@ impl Tool for WorkspaceWriteTool {
             )));
         }
 
-        let workspace = self.resolver.resolve(&ctx.user_id).await;
-
-        // Bootstrap target: clear BOOTSTRAP.md to mark first-run ritual complete.
-        // Handled early because it accepts empty content (unlike other targets).
-        if target == "bootstrap" {
-            // Write empty content to effectively disable the bootstrap injection.
-            // system_prompt_for_context() skips empty files.
-            workspace
-                .write(paths::BOOTSTRAP, "")
-                .await
-                .map_err(map_write_err)?;
-
-            // Also set the in-memory flag so BOOTSTRAP.md injection stops
-            // immediately without waiting for a restart.
-            workspace.mark_bootstrap_completed();
-
-            let output = serde_json::json!({
-                "status": "cleared",
-                "path": paths::BOOTSTRAP,
-                "message": "BOOTSTRAP.md cleared. First-run ritual will not repeat.",
-            });
-
-            return Ok(ToolOutput::success(output, start.elapsed()));
+        if is_legacy_memory_target(target) {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{}' is a legacy workspace memory target and is no longer Steward's runtime memory source. \
+                 Use memory_create for new durable/episodic/procedural memory, or memory_update to modify an existing memory node.",
+                target
+            )));
         }
+
+        if !is_workspace_mount_uri(target) {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{}' is not a mounted workspace URI. workspace_write only operates on mounted files via `workspace://<mount-id>/...`. \
+                 Use write_file for raw local filesystem writes, or memory_create/memory_update for Steward memory.",
+                target
+            )));
+        }
+
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
 
         if content.trim().is_empty() {
             return Err(ToolError::InvalidParameters(
@@ -377,19 +375,7 @@ impl Tool for WorkspaceWriteTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Parse timezone once for targets that need it (daily_log).
-        let tz = crate::timezone::parse_timezone(&ctx.user_timezone).unwrap_or(chrono_tz::Tz::UTC);
-
-        // Resolve the target to a workspace path
-        let resolved_path = match target {
-            "memory" => paths::MEMORY.to_string(),
-            "daily_log" => {
-                let now = chrono::Utc::now().with_timezone(&tz);
-                format!("daily/{}.md", now.format("%Y-%m-%d"))
-            }
-            "heartbeat" => paths::HEARTBEAT.to_string(),
-            path => path.to_string(),
-        };
+        let resolved_path = target.to_string();
 
         // When a layer is specified, route through layer-aware methods for ALL targets.
         // Otherwise, use default workspace methods (which include injection scanning).
@@ -410,41 +396,16 @@ impl Tool for WorkspaceWriteTool {
             // No layer specified — use default workspace methods.
             // Prompt injection scanning for system-prompt files is handled by
             // Workspace::write() / Workspace::append().
-            match target {
-                "memory" => {
-                    if append {
-                        workspace
-                            .append_memory(content)
-                            .await
-                            .map_err(map_write_err)?;
-                    } else {
-                        workspace
-                            .write(paths::MEMORY, content)
-                            .await
-                            .map_err(map_write_err)?;
-                    }
-                }
-                "daily_log" => {
-                    let tz = crate::timezone::parse_timezone(&ctx.user_timezone)
-                        .unwrap_or(chrono_tz::Tz::UTC);
-                    workspace
-                        .append_daily_log_tz(content, tz)
-                        .await
-                        .map_err(map_write_err)?;
-                }
-                _ => {
-                    if append {
-                        workspace
-                            .append(&resolved_path, content)
-                            .await
-                            .map_err(map_write_err)?;
-                    } else {
-                        workspace
-                            .write(&resolved_path, content)
-                            .await
-                            .map_err(map_write_err)?;
-                    }
-                }
+            if append {
+                workspace
+                    .append(&resolved_path, content)
+                    .await
+                    .map_err(map_write_err)?;
+            } else {
+                workspace
+                    .write(&resolved_path, content)
+                    .await
+                    .map_err(map_write_err)?;
             }
             None
         };
@@ -520,9 +481,9 @@ impl Tool for WorkspaceWriteTool {
     }
 }
 
-/// Tool for reading workspace documents.
+/// Tool for reading mounted workspace files.
 ///
-/// Use this to read the full content of any workspace document.
+/// Use this to read the full content of a mounted workspace file.
 pub struct WorkspaceReadTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -548,12 +509,10 @@ impl Tool for WorkspaceReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a document from the workspace layer (database-backed storage). \
+        "Read a mounted workspace file via a `workspace://` URI. \
          Use this to read files shown by workspace_tree. NOT for local filesystem files \
-         (use read_file for those). Do not pass absolute paths like '/Users/...' or 'C:\\...'. \
-         Works with imported workspace docs, legacy migration files, other global \
-         workspace paths like `projects/alpha/notes.md`, or mounted \
-         files at `workspace://<mount-id>/...`."
+         (use read_file for those) and NOT for Steward memory (use memory_open or memory_recall). \
+         Do not pass absolute paths like '/Users/...' or 'C:\\...'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -562,7 +521,7 @@ impl Tool for WorkspaceReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file (e.g., 'MEMORY.md', 'daily/2024-01-15.md', 'projects/alpha/notes.md', or 'workspace://<mount-id>/src/main.rs')"
+                    "description": "Mounted workspace URI to read, e.g. `workspace://<mount-id>/src/main.rs`"
                 }
             },
             "required": ["path"]
@@ -580,8 +539,16 @@ impl Tool for WorkspaceReadTool {
 
         if looks_like_filesystem_path(path) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' looks like a local filesystem path. workspace_read only works with workspace document paths. \
+                "'{}' looks like a local filesystem path. workspace_read only works with mounted workspace URIs. \
                  Use read_file for filesystem reads. For opening files in an editor, use shell with: open \"<absolute_path>\".",
+                path
+            )));
+        }
+
+        if !is_workspace_mount_uri(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{}' is not a mounted workspace URI. workspace_read only operates on `workspace://<mount-id>/...` paths. \
+                 Use read_file for raw local filesystem access, or memory_open for graph-native Steward memory.",
                 path
             )));
         }
@@ -683,8 +650,7 @@ impl Tool for WorkspaceTreeTool {
     }
 
     fn description(&self) -> &str {
-        "View mounted workspace trees. Workspace documents are not nested under `workspace://`; \
-         read them directly via paths like `projects/...` or migrated legacy docs. \
+        "View mounted workspace trees under `workspace://`. \
          Use workspace_read to read files shown here, NOT read_file. \
          The workspace tree is separate from the local filesystem and represents \
          mounted working directories."
@@ -722,6 +688,13 @@ impl Tool for WorkspaceTreeTool {
             .and_then(|v| v.as_str())
             .unwrap_or("workspace://");
 
+        if !is_workspace_mount_uri(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{}' is not a mounted workspace URI. workspace_tree only operates on `workspace://` roots and mount paths.",
+                path
+            )));
+        }
+
         let depth = params
             .get("depth")
             .and_then(|v| v.as_u64())
@@ -758,10 +731,23 @@ mod tests {
     }
 
     #[test]
-    fn allows_workspace_memory_paths() {
+    fn allows_workspace_document_paths() {
         assert!(!looks_like_filesystem_path("MEMORY.md"));
         assert!(!looks_like_filesystem_path("daily/2026-03-11.md"));
         assert!(!looks_like_filesystem_path("projects/alpha/notes.md"));
+    }
+
+    #[test]
+    fn detects_legacy_memory_targets() {
+        assert!(is_legacy_memory_target("memory"));
+        assert!(is_legacy_memory_target("daily_log"));
+        assert!(is_legacy_memory_target("heartbeat"));
+        assert!(is_legacy_memory_target("MEMORY.md"));
+        assert!(is_legacy_memory_target("HEARTBEAT.md"));
+        assert!(is_legacy_memory_target("daily/2026-03-11.md"));
+        assert!(!is_legacy_memory_target("projects/alpha/notes.md"));
+        assert!(!is_legacy_memory_target("context/vision.md"));
+        assert!(!is_legacy_memory_target("workspace://mount/src/main.rs"));
     }
 
     #[cfg(feature = "libsql")]

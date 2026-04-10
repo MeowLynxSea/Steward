@@ -758,10 +758,10 @@ mod tests {
                     "type": "object",
                     "properties": {
                         "content": { "type": "string", "description": "Content to write" },
-                        "target": { "type": "string", "description": "Where to write", "default": "daily_log" },
+                        "target": { "type": "string", "description": "Explicit workspace path to write" },
                         "append": { "type": "boolean", "description": "Append or replace", "default": true }
                     },
-                    "required": ["content"]
+                    "required": ["content", "target"]
                 }),
             ),
             (

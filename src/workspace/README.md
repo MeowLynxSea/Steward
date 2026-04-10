@@ -1,6 +1,6 @@
 # Workspace & File Context System
 
-Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace provides persistent memory for agents with a flexible filesystem-like structure.
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace provides mounted-file context and indexing for agents.
 
 ## Current Scope
 
@@ -12,34 +12,21 @@ Legacy files like `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, and `daily/*.md` a
 
 ## Key Principles
 
-1. **"Memory is database, not RAM"** - If you want to remember something, write it explicitly
-2. **Flexible structure** - Create any directory/file hierarchy you need
-3. **Self-documenting** - Use README.md files to describe directory structure
-4. **Hybrid search** - Combines FTS (keyword) + vector (semantic) via Reciprocal Rank Fusion
+1. **Workspace means mounted files** - `workspace://...` points at real mounted project content
+2. **Agent memory is separate** - long-term memory lives in `src/memory/`, not here
+3. **Hybrid search is discovery** - workspace search helps find mounted file context
+4. **No workspace memory truth** - legacy markdown memory files are migration inputs only
 
-## Filesystem Structure
+## Workspace Shape
 
 ```
 workspace/
-├── README.md              <- Root runbook/index
-├── MEMORY.md              <- Long-term curated memory
-├── HEARTBEAT.md           <- Periodic checklist
-├── IDENTITY.md            <- Agent name, nature, vibe
-├── SOUL.md                <- Core values
-├── AGENTS.md              <- Behavior instructions
-├── USER.md                <- User context
-├── TOOLS.md               <- Environment-specific tool notes
-├── BOOTSTRAP.md           <- First-run ritual (deleted after onboarding)
-├── context/               <- Identity-related docs
-│   ├── vision.md
-│   └── priorities.md
-├── daily/                 <- Daily logs
-│   ├── 2024-01-15.md
-│   └── 2024-01-16.md
-├── projects/              <- Arbitrary structure
-│   └── alpha/
-│       ├── README.md
-│       └── notes.md
+├── workspace://mount-a/   <- Mounted project tree
+│   ├── src/
+│   ├── README.md
+│   └── Cargo.toml
+├── workspace://mount-b/   <- Another mounted tree
+│   └── ...
 └── ...
 ```
 
@@ -57,14 +44,9 @@ let workspace = Workspace::new("user_123", pool)
 // let workspace = Workspace::new("user_123", pool)
 //     .with_embeddings_uncached(Arc::new(MockEmbeddings::new(1536)));
 
-// Read/write any path
-let doc = workspace.read("projects/alpha/notes.md").await?;
-workspace.write("context/priorities.md", "# Priorities\n\n1. Feature X").await?;
-workspace.append("daily/2024-01-15.md", "Completed task X").await?;
-
-// Convenience methods for well-known files
-workspace.append_memory("User prefers dark mode").await?;
-workspace.append_daily_log("Session note").await?;
+// Read/write mounted files via workspace:// URIs
+let doc = workspace.read("workspace://mount-a/README.md").await?;
+workspace.write("workspace://mount-a/src/lib.rs", "pub fn run() {}").await?;
 
 // List directory contents
 let entries = workspace.list("projects/").await?;
@@ -72,18 +54,16 @@ let entries = workspace.list("projects/").await?;
 // Search (hybrid FTS + vector)
 let results = workspace.search("dark mode preference", 5).await?;
 
-// Get system prompt from identity files
-let prompt = workspace.system_prompt().await?;
 ```
 
-## Legacy Workspace Memory Tools
+## Workspace Tools
 
-Four tools for LLM use:
+Current LLM-facing workspace tools are mount-oriented:
 
-- **`memory_search`** - Hybrid search, MUST be called before answering questions about prior work
-- **`memory_write`** - Write to any path (memory, daily_log, or custom paths)
-- **`memory_read`** - Read any file by path
-- **`memory_tree`** - View workspace structure as a tree (depth parameter, default 1)
+- **`workspace_search`** - Search indexed mounted workspace content
+- **`workspace_read`** - Read a mounted file via `workspace://...`
+- **`workspace_write`** - Write a mounted file via `workspace://...`
+- **`workspace_tree`** - Browse mounted workspace trees
 
 ## Hybrid Search (RRF)
 
@@ -98,11 +78,15 @@ Default k=60. Results from both methods are combined, with documents appearing i
 **Current backend:**
 - **libSQL:** FTS5 for keyword search + vector search via `libsql_vector_idx` (dimension set dynamically by `ensure_vector_index()` during startup)
 
+## Legacy Import Helpers
+
+Some legacy workspace-document helpers still exist in the Rust module to support migration, seeding, profile sync, and hygiene routines. They are not the runtime truth for agent memory and should not be treated as the active memory architecture.
+
 ## Multi-Scope Reads & Identity Isolation
 
 When a workspace has additional read scopes (via `with_additional_read_scopes`), read operations can span multiple user scopes — a user with scopes `["alice", "shared"]` can read documents from both.
 
-**Identity files are exempt from multi-scope reads.** The system prompt reads identity and configuration files from the **primary scope only** (`read_primary()`), never from secondary scopes:
+**Legacy identity-file import helpers are exempt from multi-scope reads.** When the workspace layer reads identity/config documents during migration or profile sync, it reads them from the **primary scope only** (`read_primary()`), never from secondary scopes:
 
 | File | Read method | Rationale |
 |------|------------|-----------|
@@ -112,8 +96,8 @@ When a workspace has additional read scopes (via `with_additional_read_scopes`),
 | IDENTITY.md | `read_primary()` | Identity is per-user |
 | TOOLS.md | `read_primary()` | Tool config is per-user |
 | BOOTSTRAP.md | `read_primary()` | Onboarding is per-user |
-| MEMORY.md | `read()` | Shared memory is a feature |
-| daily/*.md | `read()` | Shared daily logs are a feature |
+| MEMORY.md | `read()` | Legacy import content, not runtime truth |
+| daily/*.md | `read()` | Legacy episodic import content |
 
 **Why:** Without this, a user with read access to another scope could silently inherit that scope's identity if their own copy is missing. The agent would present itself as the wrong user — a correctness and security issue.
 

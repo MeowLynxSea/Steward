@@ -147,7 +147,7 @@ impl Tool for MemoryRecallTool {
     }
 
     fn description(&self) -> &str {
-        "Recall relevant graph-native long-term memory nodes by query. Use this for Steward's durable memory graph, not workspace files."
+        "Recall relevant graph-native long-term memory nodes by query. Use this for Steward's durable memory graph, not workspace files or legacy MEMORY.md/daily logs."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -285,7 +285,7 @@ impl Tool for MemoryCreateTool {
     }
 
     fn description(&self) -> &str {
-        "Create a new graph-native memory node under a parent route. This writes directly to Steward's native memory graph and records a pending review changeset."
+        "Create a new graph-native memory node under a parent route. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. This writes directly to Steward's native memory graph and records a pending review changeset."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -392,7 +392,7 @@ impl Tool for MemoryUpdateTool {
     }
 
     fn description(&self) -> &str {
-        "Update an existing graph-native memory node or route metadata and record the change in a pending review changeset."
+        "Update an existing graph-native memory node or route metadata. Use this instead of editing legacy workspace memory files such as MEMORY.md, HEARTBEAT.md, or daily/*.md. Records the change in a pending review changeset."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
