@@ -4,6 +4,7 @@ mod echo;
 pub mod extension_tools;
 mod file;
 mod graph_memory;
+mod nocturne_memory;
 mod http;
 mod job;
 mod json;
@@ -25,6 +26,10 @@ pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFil
 pub use graph_memory::{
     MemoryAliasTool, MemoryCreateTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool,
     MemoryReviewTool, MemoryUpdateTool,
+};
+pub use nocturne_memory::{
+    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ManageTriggersTool, ReadMemoryTool,
+    SearchMemoryTool, UpdateMemoryTool,
 };
 pub use http::HttpTool;
 pub use job::{

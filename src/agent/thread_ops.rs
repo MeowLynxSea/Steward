@@ -23,6 +23,7 @@ use crate::error::Error;
 use crate::llm::{ChatMessage, ToolCall};
 use crate::tools::redact_params;
 use steward_common::truncate_preview;
+use chrono::Utc;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 
@@ -111,6 +112,28 @@ fn tool_call_storage_json(
 }
 
 impl Agent {
+    async fn emit_turn_completed_memory_event(
+        &self,
+        user_id: &str,
+        thread_id: Uuid,
+        user_input: &str,
+        assistant_output: &str,
+    ) {
+        let Some(engine) = self.routine_engine().await else {
+            return;
+        };
+        let payload = serde_json::json!({
+            "thread_id": thread_id.to_string(),
+            "user_input": user_input,
+            "assistant_output": assistant_output,
+            "timestamp": Utc::now().to_rfc3339(),
+        });
+        let fired = engine
+            .emit_system_event("agent", "turn_completed", &payload, Some(user_id))
+            .await;
+        tracing::debug!(thread_id = %thread_id, fired, "Emitted turn_completed system event");
+    }
+
     /// Hydrate a historical thread from DB into memory if not already present.
     ///
     /// Called before `resolve_thread` so that the session manager finds the
@@ -657,6 +680,16 @@ impl Agent {
                     thread_id,
                     &message.channel,
                     &message.user_id,
+                    &response,
+                )
+                .await;
+
+                // Nocturne-style memory growth: emit an internal system event after a completed turn
+                // so lightweight reflection routines can decide to CRUD memory conservatively.
+                self.emit_turn_completed_memory_event(
+                    &message.user_id,
+                    thread_id,
+                    &message.content,
                     &response,
                 )
                 .await;
@@ -2138,6 +2171,14 @@ impl Agent {
                         thread_id,
                         &message.channel,
                         &message.user_id,
+                        &response,
+                    )
+                    .await;
+
+                    self.emit_turn_completed_memory_event(
+                        &message.user_id,
+                        thread_id,
+                        &message.content,
                         &response,
                     )
                     .await;

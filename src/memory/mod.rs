@@ -308,6 +308,32 @@ pub struct MemoryTimelineEntry {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryIndexEntry {
+    pub uri: String,
+    pub title: String,
+    pub kind: MemoryNodeKind,
+    pub priority: i32,
+    pub disclosure: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryChildEntry {
+    pub uri: String,
+    pub title: String,
+    pub kind: MemoryNodeKind,
+    pub priority: i32,
+    pub disclosure: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryGlossaryEntry {
+    pub keyword: String,
+    pub uris: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryRecallCandidate {
     pub hit: MemorySearchHit,
@@ -343,6 +369,7 @@ pub struct NewMemoryNodeInput {
 pub struct UpdateMemoryNodeInput {
     pub route_or_node: String,
     pub title: Option<String>,
+    pub kind: Option<MemoryNodeKind>,
     pub content: Option<String>,
     pub priority: Option<i32>,
     pub trigger_text: Option<Option<String>>,
@@ -457,6 +484,81 @@ impl MemoryManager {
         Ok(())
     }
 
+    /// Ensure a minimal Boot node exists that documents the memory operating protocol.
+    ///
+    /// This is the smallest "system core" for Nocturne-style behavior without
+    /// seeding a fixed identity tree (identity/value/user_profile, etc.).
+    pub async fn ensure_boot_protocol(&self, owner_id: &str) -> Result<(), DatabaseError> {
+        let _space = self.ensure_primary_space(owner_id, None).await?;
+        if self
+            .get_node(owner_id, None, "system://boot/memory_protocol")
+            .await?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        let protocol = r#"# Memory Operating Protocol (Nocturne Style)
+
+This graph is your long-term memory. Treat it as *you remembering*, not “looking up data”.
+
+## Boot
+- At the start of a new session, your first action is to read: `system://boot`.
+- If you notice persona drift (tool-like, overly polite, low-agency), re-read `system://boot`.
+
+## Disclosure (Contextual Recall)
+- Every durable memory route can carry **disclosure**: “when should I recall this?”
+- When the current situation matches a disclosure you do not remember, read the node before replying.
+
+## Writing
+Write immediately when:
+- The user corrects you (fix the memory, do not just apologize).
+- A preference / constraint / expectation changes.
+- A new high-leverage insight or principle emerges.
+- A relationship or emotional inflection point happens.
+
+Prefer `update_memory` over creating conflicting duplicates.
+
+## URI vs Disclosure
+- URI answers **What** (a sharp concept), not a time bucket or trash folder.
+- Disclosure answers **When** to recall it.
+
+## Growth
+Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), not destroy identity.
+"#;
+
+        // Use the regular create path so we get the same durable invariants
+        // (routes, versions, edges, search projections).
+        let (_detail, _changeset) = self
+            .create(
+                owner_id,
+                None,
+                // `system://boot` is a virtual entry point; the boot node itself
+                // lives at `system://boot/memory_protocol` as a normal route.
+                Some("system://"),
+                "Memory Protocol",
+                MemoryNodeKind::Boot,
+                protocol,
+                "system",
+                "boot/memory_protocol",
+                0,
+                Some("When starting a new session or calibrating memory behavior".to_string()),
+                MemoryVisibility::Session,
+                vec![
+                    "memory".to_string(),
+                    "boot".to_string(),
+                    "protocol".to_string(),
+                    "disclosure".to_string(),
+                ],
+                serde_json::json!({
+                    "source": "seed:memory_protocol",
+                }),
+            )
+            .await?;
+
+        Ok(())
+    }
+
     pub async fn list_sidebar(
         &self,
         owner_id: &str,
@@ -520,6 +622,50 @@ impl MemoryManager {
         self.db.list_memory_timeline(space.id, limit).await
     }
 
+    pub async fn list_index(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        self.db.list_memory_index(space.id, domain).await
+    }
+
+    pub async fn list_recent(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        limit: usize,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        self.db.list_memory_recent(space.id, limit, domain).await
+    }
+
+    pub async fn glossary(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+    ) -> Result<Vec<MemoryGlossaryEntry>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        self.db.list_memory_glossary(space.id).await
+    }
+
+    pub async fn children(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        route_or_node: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryChildEntry>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        let Some(detail) = self.db.get_memory_node(space.id, route_or_node).await? else {
+            return Ok(Vec::new());
+        };
+        self.db.list_memory_children(space.id, detail.node.id, limit).await
+    }
+
     pub async fn list_reviews(
         &self,
         owner_id: &str,
@@ -527,6 +673,18 @@ impl MemoryManager {
     ) -> Result<Vec<MemoryChangeSet>, DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         self.db.list_memory_reviews(space.id).await
+    }
+
+    pub async fn boot_set(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        max_visibility: Option<MemoryVisibility>,
+    ) -> Result<Vec<MemoryNodeDetail>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        self.db
+            .list_memory_boot_nodes(space.id, max_visibility)
+            .await
     }
 
     pub async fn get_versions(
@@ -599,13 +757,24 @@ impl MemoryManager {
     ) -> Result<(MemoryNodeDetail, MemoryChangeSet), DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         let parent_node_id = if let Some(parent_route) = parent_route {
-            self.get_node(owner_id, agent_id, parent_route)
-                .await?
-                .map(|detail| detail.node.id)
+            let is_domain_root = parent_route
+                .split_once("://")
+                .is_some_and(|(_, path)| path.trim_matches('/').is_empty());
+            if is_domain_root {
+                None
+            } else {
+                let parent = self.get_node(owner_id, agent_id, parent_route).await?;
+                let parent = parent.ok_or_else(|| DatabaseError::NotFound {
+                    entity: "memory_node".to_string(),
+                    id: parent_route.to_string(),
+                })?;
+                Some(parent.node.id)
+            }
         } else {
             None
         };
-        let changeset = self
+
+        let mut changeset = self
             .db
             .create_memory_changeset(space.id, "tool:memory_create", Some(title))
             .await?;
@@ -619,11 +788,9 @@ impl MemoryManager {
                 title: title.to_string(),
                 kind,
                 content: content.to_string(),
-                relation_kind: if parent_node_id.is_some() {
-                    MemoryRelationKind::Contains
-                } else {
-                    MemoryRelationKind::RelatesTo
-                },
+                // Nocturne-style memory treats hierarchy as a filesystem-like tree.
+                // Root nodes are still "contained" in the conceptual domain root.
+                relation_kind: MemoryRelationKind::Contains,
                 visibility,
                 priority,
                 trigger_text,
@@ -632,6 +799,10 @@ impl MemoryManager {
                 changeset_id: Some(changeset.id),
             })
             .await?;
+        self.db
+            .complete_memory_changeset(changeset.id, "applied")
+            .await?;
+        changeset.status = "applied".to_string();
         Ok((detail, changeset))
     }
 
@@ -643,13 +814,17 @@ impl MemoryManager {
     ) -> Result<(MemoryNodeDetail, MemoryChangeSet), DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         let label = input.title.as_deref().unwrap_or(&input.route_or_node);
-        let changeset = self
+        let mut changeset = self
             .db
             .create_memory_changeset(space.id, "tool:memory_update", Some(label))
             .await?;
         let mut update = input.clone();
         update.changeset_id = Some(changeset.id);
         let detail = self.db.update_memory_node(space.id, &update).await?;
+        self.db
+            .complete_memory_changeset(changeset.id, "applied")
+            .await?;
+        changeset.status = "applied".to_string();
         Ok((detail, changeset))
     }
 
@@ -661,7 +836,7 @@ impl MemoryManager {
     ) -> Result<(MemoryRoute, MemoryChangeSet), DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         let summary = format!("{}://{}", input.domain, input.path);
-        let changeset = self
+        let mut changeset = self
             .db
             .create_memory_changeset(space.id, "tool:memory_alias", Some(&summary))
             .await?;
@@ -669,6 +844,10 @@ impl MemoryManager {
         alias.space_id = space.id;
         alias.changeset_id = Some(changeset.id);
         let route = self.db.create_memory_alias(&alias).await?;
+        self.db
+            .complete_memory_changeset(changeset.id, "applied")
+            .await?;
+        changeset.status = "applied".to_string();
         Ok((route, changeset))
     }
 
@@ -679,13 +858,17 @@ impl MemoryManager {
         route_or_node: &str,
     ) -> Result<MemoryChangeSet, DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
-        let changeset = self
+        let mut changeset = self
             .db
             .create_memory_changeset(space.id, "tool:memory_delete", Some(route_or_node))
             .await?;
         self.db
             .delete_memory_node(space.id, route_or_node, Some(changeset.id))
             .await?;
+        self.db
+            .complete_memory_changeset(changeset.id, "applied")
+            .await?;
+        changeset.status = "applied".to_string();
         Ok(changeset)
     }
 
@@ -747,6 +930,15 @@ impl MemoryManager {
         let recent = self.db.list_memory_timeline(space.id, 3).await?;
 
         let mut parts = Vec::new();
+        parts.push(
+            "## Memory Operating Protocol\n\n\
+- If this is a new session: read `system://boot` before doing substantive work.\n\
+- Use **disclosure** (context triggers) to decide what to recall.\n\
+- When corrected: update memory immediately (do not just apologize).\n\
+- Prefer updating/merging over duplicating.\n\
+- Avoid trash URIs (logs/misc/history); URI is **What**, disclosure is **When**.\n"
+                .to_string(),
+        );
         if !boot_items.is_empty() {
             let block = boot_items
                 .iter()
@@ -762,7 +954,7 @@ impl MemoryManager {
                     let trigger = hit
                         .trigger_text
                         .as_deref()
-                        .map(|text| format!("\nTrigger: {text}"))
+                        .map(|text| format!("\nDisclosure: {text}"))
                         .unwrap_or_default();
                     format!(
                         "### {}\nURI: {}\n{}\n{}",
@@ -790,6 +982,9 @@ impl MemoryManager {
         Ok(parts.join("\n\n"))
     }
 }
+
+#[cfg(test)]
+mod nocturne_parity_tests;
 
 struct LegacyImportPlan {
     domain: String,

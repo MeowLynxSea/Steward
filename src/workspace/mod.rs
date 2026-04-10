@@ -803,6 +803,55 @@ impl Workspace {
             .await
     }
 
+    /// Build the workspace-backed portion of the system prompt.
+    ///
+    /// This exists primarily for tests and offline prompt construction.
+    /// It intentionally relies on `read()` so that multi-scope workspaces
+    /// enforce identity-file isolation via `is_identity_path()`:
+    /// identity/config files never fall back to secondary scopes, while
+    /// memory files (e.g. MEMORY.md) still benefit from shared reads.
+    pub async fn system_prompt_for_context(
+        &self,
+        include_bootstrap: bool,
+    ) -> Result<String, WorkspaceError> {
+        let mut out = String::new();
+
+        // Keep this list stable and ordered: it affects the prompt.
+        // NOTE: paths::* are normal "workspace document" paths, not graph memory URIs.
+        let mut paths: Vec<&str> = vec![
+            paths::SOUL,
+            paths::AGENTS,
+            paths::USER,
+            paths::IDENTITY,
+            paths::TOOLS,
+            paths::ASSISTANT_DIRECTIVES,
+            paths::PROFILE,
+            paths::MEMORY,
+            paths::HEARTBEAT,
+        ];
+        if include_bootstrap {
+            paths.push(paths::BOOTSTRAP);
+        }
+
+        for path in paths {
+            match self.read(path).await {
+                Ok(doc) => {
+                    let content = doc.content.trim();
+                    if content.is_empty() {
+                        continue;
+                    }
+                    out.push_str(&format!("## {path}\n{content}\n\n"));
+                }
+                Err(WorkspaceError::DocumentNotFound { .. }) => {
+                    // Missing files are normal, especially in tests and fresh workspaces.
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(out)
+    }
+
     /// Write (create or update) a file.
     ///
     /// Creates parent directories implicitly (they're virtual in the DB).

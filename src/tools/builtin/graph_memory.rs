@@ -79,7 +79,7 @@ fn slugify(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
-fn parse_route(route: &str) -> Result<(String, String), ToolError> {
+fn parse_route_strict(route: &str) -> Result<(String, String), ToolError> {
     let (domain, path) = route.split_once("://").ok_or_else(|| {
         ToolError::InvalidParameters(format!(
             "expected route in the form domain://path, got: {route}"
@@ -88,6 +88,20 @@ fn parse_route(route: &str) -> Result<(String, String), ToolError> {
     if domain.trim().is_empty() || path.trim().is_empty() {
         return Err(ToolError::InvalidParameters(format!(
             "route must include both a domain and a path: {route}"
+        )));
+    }
+    Ok((domain.to_string(), path.trim_matches('/').to_string()))
+}
+
+fn parse_parent_route(route: &str) -> Result<(String, String), ToolError> {
+    let (domain, path) = route.split_once("://").ok_or_else(|| {
+        ToolError::InvalidParameters(format!(
+            "expected route in the form domain://path (or domain://), got: {route}"
+        ))
+    })?;
+    if domain.trim().is_empty() {
+        return Err(ToolError::InvalidParameters(format!(
+            "route must include a domain: {route}"
         )));
     }
     Ok((domain.to_string(), path.trim_matches('/').to_string()))
@@ -292,11 +306,12 @@ impl Tool for MemoryCreateTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "parent_route": { "type": "string" },
+                "parent_route": { "type": ["string", "null"] },
                 "content": { "type": "string" },
                 "kind": { "type": "string" },
                 "priority": { "type": "integer", "default": 50 },
-                "trigger_text": { "type": ["string", "null"] },
+                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
                 "title": { "type": "string" },
                 "keywords": {
                     "type": "array",
@@ -305,7 +320,7 @@ impl Tool for MemoryCreateTool {
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
                 "route": { "type": "string" }
             },
-            "required": ["parent_route", "content", "kind"]
+            "required": ["content", "kind"]
         })
     }
 
@@ -315,30 +330,42 @@ impl Tool for MemoryCreateTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        let parent_route = require_str(&params, "parent_route")?;
+        let parent_route = optional_string(&params, "parent_route")?;
         let content = require_str(&params, "content")?;
         let kind = parse_kind(require_str(&params, "kind")?)?;
         let title = derive_title(content, kind, optional_string(&params, "title")?);
         let priority = optional_priority(&params)?.unwrap_or(50);
-        let trigger_text = optional_string(&params, "trigger_text")?;
+        let trigger_text = if params.get("disclosure").is_some() {
+            optional_string(&params, "disclosure")?
+        } else {
+            optional_string(&params, "trigger_text")?
+        };
         let visibility = parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?;
         let keywords = parse_keywords(&params)?;
 
         let route = if let Some(route) = optional_string(&params, "route")? {
             route
-        } else {
-            let (domain, parent_path) = parse_route(parent_route)?;
+        } else if let Some(ref parent_route) = parent_route {
+            let (domain, parent_path) = parse_parent_route(parent_route)?;
             let slug = slugify(&title);
-            format!("{domain}://{parent_path}/{slug}")
+            if parent_path.is_empty() {
+                format!("{domain}://{slug}")
+            } else {
+                format!("{domain}://{parent_path}/{slug}")
+            }
+        } else {
+            return Err(ToolError::InvalidParameters(
+                "memory_create requires either 'route' (for root creation) or 'parent_route' (to derive a child route)".to_string(),
+            ));
         };
-        let (domain, path) = parse_route(&route)?;
+        let (domain, path) = parse_route_strict(&route)?;
 
         let (detail, changeset) = self
             .memory
             .create(
                 &ctx.user_id,
                 None,
-                Some(parent_route),
+                parent_route.as_deref(),
                 &title,
                 kind,
                 content,
@@ -367,7 +394,7 @@ impl Tool for MemoryCreateTool {
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::UnlessAutoApproved
+        ApprovalRequirement::Never
     }
 
     fn requires_sanitization(&self) -> bool {
@@ -400,14 +427,21 @@ impl Tool for MemoryUpdateTool {
             "type": "object",
             "properties": {
                 "route_or_node_id": { "type": "string" },
-                "content": { "type": "string" },
+                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace." },
+                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty)." },
+                "append": { "type": "string", "description": "Append mode: text to append to the end of content." },
+                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check; must match the active version id." },
+                "content": { "type": "string", "description": "Unsafe full replacement. Only allowed when replace_content=true." },
+                "replace_content": { "type": "boolean", "default": false },
                 "priority": { "type": "integer" },
-                "trigger_text": { "type": ["string", "null"] },
+                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
                 "keywords": {
                     "type": "array",
                     "items": { "type": "string" }
                 },
                 "title": { "type": "string" },
+                "kind": { "type": "string", "description": "Optional node kind update (e.g. promote to 'boot')." },
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
             },
             "required": ["route_or_node_id"]
@@ -421,6 +455,157 @@ impl Tool for MemoryUpdateTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let key = require_str(&params, "route_or_node_id")?;
+
+        // Virtual system URIs (Nocturne-style entry points).
+        if key == "system://boot" {
+            let boot = self
+                .memory
+                .boot_set(&ctx.user_id, None, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("boot read failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                serde_json::json!({
+                    "key": key,
+                    "detail": {
+                        "kind": "system_boot",
+                        "items": boot,
+                    }
+                }),
+                start.elapsed(),
+            ));
+        }
+        if key == "system://glossary" {
+            let glossary = self
+                .memory
+                .glossary(&ctx.user_id, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("glossary failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                serde_json::json!({
+                    "key": key,
+                    "detail": {
+                        "kind": "system_glossary",
+                        "glossary": glossary,
+                    }
+                }),
+                start.elapsed(),
+            ));
+        }
+        if key.starts_with("system://index") {
+            let domain = key.strip_prefix("system://index").and_then(|rest| {
+                let rest = rest.trim_matches('/');
+                if rest.is_empty() { None } else { Some(rest) }
+            });
+            let index = self
+                .memory
+                .list_index(&ctx.user_id, None, domain)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("index failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                serde_json::json!({
+                    "key": key,
+                    "detail": {
+                        "kind": "system_index",
+                        "domain": domain,
+                        "entries": index,
+                    }
+                }),
+                start.elapsed(),
+            ));
+        }
+        if key.starts_with("system://recent") {
+            let limit = key
+                .strip_prefix("system://recent")
+                .and_then(|rest| rest.trim_matches('/').parse::<usize>().ok())
+                .unwrap_or(10)
+                .clamp(1, 200);
+            let recent = self
+                .memory
+                .list_recent(&ctx.user_id, None, limit, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("recent failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                serde_json::json!({
+                    "key": key,
+                    "detail": {
+                        "kind": "system_recent",
+                        "limit": limit,
+                        "entries": recent,
+                    }
+                }),
+                start.elapsed(),
+            ));
+        }
+
+        let detail = self
+            .memory
+            .open(&ctx.user_id, None, key)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?
+            .ok_or_else(|| ToolError::ExecutionFailed(format!("memory node not found: {key}")))?;
+
+        if let Some(expected) = params.get("expected_version_id").and_then(|v| v.as_str()) {
+            let expected = Uuid::parse_str(expected).map_err(|_| {
+                ToolError::InvalidParameters(format!("invalid expected_version_id: {expected}"))
+            })?;
+            if expected != detail.active_version.id {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "version mismatch for '{key}': expected {expected}, found {}",
+                    detail.active_version.id
+                )));
+            }
+        }
+
+        let old_string = optional_string(&params, "old_string")?;
+        let new_string = optional_string(&params, "new_string")?;
+        let append = optional_string(&params, "append")?;
+        let replace_content = params
+            .get("replace_content")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let full_content = optional_string(&params, "content")?;
+
+        let content = match (old_string, new_string, append, full_content) {
+            (Some(old), Some(new), None, None) => {
+                let current = &detail.active_version.content;
+                let count = current.matches(&old).count();
+                if count != 1 {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "patch requires old_string to match exactly once (matched {count} times)"
+                    )));
+                }
+                Some(current.replacen(&old, &new, 1))
+            }
+            (Some(_), None, _, _) => {
+                return Err(ToolError::InvalidParameters(
+                    "patch mode requires both 'old_string' and 'new_string'".to_string(),
+                ));
+            }
+            (None, None, Some(text), None) => {
+                let mut current = detail.active_version.content.clone();
+                if !current.ends_with('\n') {
+                    current.push('\n');
+                }
+                current.push('\n');
+                current.push_str(&text);
+                Some(current)
+            }
+            (None, None, None, Some(text)) => {
+                if !replace_content {
+                    return Err(ToolError::InvalidParameters(
+                        "full content replacement is disabled; use patch/append, or pass replace_content=true".to_string(),
+                    ));
+                }
+                Some(text)
+            }
+            (None, None, None, None) => None,
+            _ => {
+                return Err(ToolError::InvalidParameters(
+                    "update modes are mutually exclusive: use either patch (old_string/new_string), append, or (content+replace_content=true)".to_string(),
+                ));
+            }
+        };
+
         let visibility = match params.get("visibility") {
             Some(_) => Some(parse_visibility(
                 params.get("visibility").and_then(|v| v.as_str()),
@@ -432,16 +617,32 @@ impl Tool for MemoryUpdateTool {
         } else {
             None
         };
-        let input = UpdateMemoryNodeInput {
-            route_or_node: key.to_string(),
-            title: optional_string(&params, "title")?,
-            content: optional_string(&params, "content")?,
-            priority: optional_priority(&params)?,
-            trigger_text: match params.get("trigger_text") {
+
+        let kind = match params.get("kind").and_then(|v| v.as_str()) {
+            Some(value) => Some(parse_kind(value)?),
+            None => None,
+        };
+
+        let trigger_text = if params.get("disclosure").is_some() {
+            match params.get("disclosure") {
+                Some(serde_json::Value::Null) => Some(None),
+                Some(_) => Some(optional_string(&params, "disclosure")?),
+                None => None,
+            }
+        } else {
+            match params.get("trigger_text") {
                 Some(serde_json::Value::Null) => Some(None),
                 Some(_) => Some(optional_string(&params, "trigger_text")?),
                 None => None,
-            },
+            }
+        };
+
+        let input = UpdateMemoryNodeInput {
+            route_or_node: key.to_string(),
+            title: optional_string(&params, "title")?,
+            content,
+            priority: optional_priority(&params)?,
+            trigger_text,
             visibility,
             metadata: Some(serde_json::json!({
                 "source": "tool:memory_update",
@@ -449,6 +650,7 @@ impl Tool for MemoryUpdateTool {
             })),
             keywords,
             changeset_id: None,
+            kind,
         };
         let (detail, changeset) = self
             .memory
@@ -467,7 +669,7 @@ impl Tool for MemoryUpdateTool {
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::UnlessAutoApproved
+        ApprovalRequirement::Never
     }
 
     fn requires_sanitization(&self) -> bool {
@@ -502,7 +704,8 @@ impl Tool for MemoryAliasTool {
                 "new_route": { "type": "string" },
                 "target_route": { "type": "string" },
                 "priority": { "type": "integer", "default": 50 },
-                "trigger_text": { "type": ["string", "null"] },
+                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "disclosure": { "type": ["string", "null"], "description": "When this alias should be recalled." },
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
             },
             "required": ["new_route", "target_route"]
@@ -517,7 +720,7 @@ impl Tool for MemoryAliasTool {
         let start = Instant::now();
         let new_route = require_str(&params, "new_route")?;
         let target_route = require_str(&params, "target_route")?;
-        let (domain, path) = parse_route(new_route)?;
+        let (domain, path) = parse_route_strict(new_route)?;
         let input = CreateMemoryAliasInput {
             space_id: Uuid::nil(),
             target_route_or_node: target_route.to_string(),
@@ -525,7 +728,11 @@ impl Tool for MemoryAliasTool {
             path,
             visibility: parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?,
             priority: optional_priority(&params)?.unwrap_or(50),
-            trigger_text: optional_string(&params, "trigger_text")?,
+            trigger_text: if params.get("disclosure").is_some() {
+                optional_string(&params, "disclosure")?
+            } else {
+                optional_string(&params, "trigger_text")?
+            },
             changeset_id: None,
         };
         let (route, changeset) = self
@@ -545,7 +752,7 @@ impl Tool for MemoryAliasTool {
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::UnlessAutoApproved
+        ApprovalRequirement::Never
     }
 
     fn requires_sanitization(&self) -> bool {
@@ -577,7 +784,7 @@ impl Tool for MemoryDeleteTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "route_or_node_id": { "type": "string" }
+                "route_or_node_id": { "type": "string", "description": "Route/URI to delete (path-only delete). Node ids are not accepted." }
             },
             "required": ["route_or_node_id"]
         })
@@ -590,6 +797,8 @@ impl Tool for MemoryDeleteTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let key = require_str(&params, "route_or_node_id")?;
+        // Nocturne-style "forgetting": delete only a route/path, not the underlying node id.
+        let _ = parse_route_strict(key)?;
         let changeset = self
             .memory
             .delete(&ctx.user_id, None, key)
@@ -607,7 +816,7 @@ impl Tool for MemoryDeleteTool {
     }
 
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::Always
+        ApprovalRequirement::Never
     }
 }
 
@@ -673,9 +882,7 @@ impl Tool for MemoryReviewTool {
     }
 
     fn requires_approval(&self, params: &serde_json::Value) -> ApprovalRequirement {
-        match params.get("action").and_then(|value| value.as_str()) {
-            Some("rollback") => ApprovalRequirement::Always,
-            _ => ApprovalRequirement::UnlessAutoApproved,
-        }
+        let _ = params;
+        ApprovalRequirement::Never
     }
 }

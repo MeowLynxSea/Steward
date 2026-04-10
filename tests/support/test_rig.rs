@@ -770,6 +770,7 @@ impl TestRigBuilder {
             safety: components.safety,
             tools: components.tools,
             workspace: components.workspace,
+            memory: components.memory,
             extension_manager: components.extension_manager,
             skill_registry: components.skill_registry,
             skill_catalog: components.skill_catalog,

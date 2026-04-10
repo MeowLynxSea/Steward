@@ -889,7 +889,9 @@ impl Agent {
         self.routine_engine_slot = slot;
     }
 
-    async fn routine_engine(&self) -> Option<Arc<crate::agent::routine_engine::RoutineEngine>> {
+    pub(crate) async fn routine_engine(
+        &self,
+    ) -> Option<Arc<crate::agent::routine_engine::RoutineEngine>> {
         self.routine_engine_slot.read().await.clone()
     }
 

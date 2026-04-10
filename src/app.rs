@@ -10,6 +10,8 @@
 use std::sync::Arc;
 
 use crate::agent::SessionManager as AgentSessionManager;
+use crate::agent::{Routine, RoutineAction, Trigger};
+use crate::agent::routine::{NotifyConfig, RoutineGuardrails, next_cron_fire};
 use crate::config::Config;
 use crate::context::ContextManager;
 use crate::db::Database;
@@ -26,6 +28,8 @@ use crate::tools::mcp::{McpProcessManager, McpSessionManager};
 use crate::tools::wasm::SharedCredentialRegistry;
 use crate::tools::wasm::WasmToolRuntime;
 use crate::workspace::{EmbeddingCacheConfig, EmbeddingProvider, Workspace};
+use chrono::Utc;
+use uuid::Uuid;
 
 /// Fully initialized application components, ready for channel wiring
 /// and agent construction.
@@ -81,6 +85,127 @@ pub struct AppBuilder {
 
     // Backend-specific handles needed by secrets store
     handles: Option<crate::db::DatabaseHandles>,
+}
+
+async fn ensure_default_memory_routines(
+    db: Arc<dyn Database>,
+    user_id: &str,
+) -> Result<(), crate::error::DatabaseError> {
+    // Create only if missing; do not overwrite user edits.
+    let existing = db.get_routine_by_name(user_id, "memory_reflection").await?;
+    if existing.is_none() {
+        let routine = Routine {
+            id: Uuid::new_v4(),
+            name: "memory_reflection".to_string(),
+            description: "Conservative Nocturne-style memory reflection after each completed turn."
+                .to_string(),
+            user_id: user_id.to_string(),
+            enabled: true,
+            trigger: Trigger::SystemEvent {
+                source: "agent".to_string(),
+                event_type: "turn_completed".to_string(),
+                filters: std::collections::HashMap::new(),
+            },
+            action: RoutineAction::Lightweight {
+                prompt: r#"You are a conservative memory gardener.
+
+Input: a completed turn payload with {thread_id, user_input, assistant_output, timestamp}.
+
+Rules:
+- Only write memory on high-signal events: user corrections, outdated facts, new stable preferences, new agreements/decisions, strong emotions, or a new durable insight.
+- Prefer update over create. If correcting a known fact: read the relevant URI, then patch via update_memory with old_string/new_string (or append) and include expected_version_id when possible.
+- If creating: pick a meaningful URI path that reflects a stable mental model. Avoid junk buckets (misc/logs/history). Use disclosure to describe WHEN to recall.
+- If aliasing helps cross-link: use add_alias. If removing: delete_memory only deletes a path, never hard-deletes content.
+- If nothing is worth storing, do nothing.
+
+Tools available: read_memory, create_memory, update_memory, delete_memory, add_alias, search_memory, manage_triggers."#
+                    .to_string(),
+                context_paths: Vec::new(),
+                max_tokens: 2048,
+                use_tools: true,
+                max_tool_rounds: 3,
+            },
+            guardrails: RoutineGuardrails {
+                cooldown: std::time::Duration::from_secs(0),
+                max_concurrent: 1,
+                dedup_window: None,
+            },
+            notify: NotifyConfig {
+                channel: None,
+                user: None,
+                on_attention: false,
+                on_failure: true,
+                on_success: false,
+            },
+            last_run_at: None,
+            next_fire_at: None,
+            run_count: 0,
+            consecutive_failures: 0,
+            state: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db.create_routine(&routine).await?;
+    }
+
+    let existing = db.get_routine_by_name(user_id, "memory_maintenance").await?;
+    if existing.is_none() {
+        let schedule = "0 3 * * *".to_string(); // daily 03:00 local time
+        let timezone = crate::timezone::detect_system_timezone().to_string();
+        let next_fire = next_cron_fire(&schedule, Some(&timezone))
+            .unwrap_or(None);
+
+        let routine = Routine {
+            id: Uuid::new_v4(),
+            name: "memory_maintenance".to_string(),
+            description: "Daily Nocturne-style memory maintenance (merge/refine/promote-to-boot)."
+                .to_string(),
+            user_id: user_id.to_string(),
+            enabled: true,
+            trigger: Trigger::Cron {
+                schedule: schedule.clone(),
+                timezone: Some(timezone),
+            },
+            action: RoutineAction::Lightweight {
+                prompt: r#"You are running daily memory maintenance.
+
+Goals:
+- Merge redundant nodes, split overly long nodes, refine titles/paths for clarity.
+- Promote important durable protocol/identity/invariants to boot (by setting kind=boot or creating boot nodes).
+- Manage triggers/keywords as a glossary for horizontal recall.
+- Avoid large-scale deletion. If removing, delete only paths (delete_memory), keeping rollback possible via changesets.
+
+If nothing to do, do nothing."#
+                    .to_string(),
+                context_paths: Vec::new(),
+                max_tokens: 2048,
+                use_tools: true,
+                max_tool_rounds: 3,
+            },
+            guardrails: RoutineGuardrails {
+                cooldown: std::time::Duration::from_secs(0),
+                max_concurrent: 1,
+                dedup_window: None,
+            },
+            notify: NotifyConfig {
+                channel: None,
+                user: None,
+                on_attention: false,
+                on_failure: true,
+                on_success: false,
+            },
+            last_run_at: None,
+            next_fire_at: next_fire,
+            run_count: 0,
+            consecutive_failures: 0,
+            state: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db.create_routine(&routine).await?;
+    }
+
+    Ok(())
 }
 
 impl AppBuilder {
@@ -779,13 +904,34 @@ impl AppBuilder {
 
         let memory = if let Some(ref db) = self.db {
             let manager = Arc::new(MemoryManager::new(Arc::clone(db)));
-            if let Err(e) = manager
-                .import_legacy_workspace(&self.config.owner_id, None)
-                .await
+            if let Err(e) = manager.ensure_boot_protocol(&self.config.owner_id).await {
+                tracing::warn!("Failed to seed boot memory protocol node: {e}");
+            }
+
+            // Nocturne-style memory: do NOT import legacy identity trees by default.
+            // Allow explicit opt-in for migration/debugging.
+            let import_legacy = std::env::var("STEWARD_IMPORT_LEGACY_WORKSPACE_MEMORY")
+                .ok()
+                .map(|v| {
+                    let v = v.trim().to_ascii_lowercase();
+                    v == "1" || v == "true" || v == "yes"
+                })
+                .unwrap_or(false);
+            if import_legacy {
+                if let Err(e) = manager
+                    .import_legacy_workspace(&self.config.owner_id, None)
+                    .await
+                {
+                    tracing::warn!("Failed to import legacy workspace memory into graph: {e}");
+                }
+            }
+
+            if let Err(e) = ensure_default_memory_routines(Arc::clone(db), &self.config.owner_id).await
             {
-                tracing::warn!("Failed to import legacy workspace memory into graph: {e}");
+                tracing::warn!("Failed to seed default memory routines: {e}");
             }
             tools.register_graph_memory_tools(Arc::clone(&manager));
+            tools.register_nocturne_memory_tools(Arc::clone(&manager));
             Some(manager)
         } else {
             None

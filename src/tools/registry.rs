@@ -23,6 +23,8 @@ use crate::tools::builtin::{
     SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
     ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
     WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
+    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ManageTriggersTool, ReadMemoryTool,
+    SearchMemoryTool, UpdateMemoryTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -57,6 +59,13 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "memory_alias",
     "memory_delete",
     "memory_review",
+    "read_memory",
+    "create_memory",
+    "update_memory",
+    "delete_memory",
+    "add_alias",
+    "search_memory",
+    "manage_triggers",
     "create_job",
     "list_jobs",
     "job_status",
@@ -372,6 +381,19 @@ impl ToolRegistry {
         self.register_sync(Arc::new(MemoryReviewTool::new(memory)));
 
         tracing::debug!("Registered 7 graph-native memory tools");
+    }
+
+    /// Register Nocturne-compatible memory tools backed by the native memory manager.
+    pub fn register_nocturne_memory_tools(&self, memory: Arc<crate::memory::MemoryManager>) {
+        self.register_sync(Arc::new(ReadMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(CreateMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(UpdateMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(DeleteMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(AddAliasTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(SearchMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ManageTriggersTool::new(memory)));
+
+        tracing::debug!("Registered 7 Nocturne-compatible memory tools");
     }
 
     /// Register job management tools.

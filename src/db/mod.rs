@@ -33,7 +33,7 @@ use crate::history::{
 use crate::memory::{
     CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryNodeDetail, MemorySearchHit,
     MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput,
-    UpdateMemoryNodeInput,
+    UpdateMemoryNodeInput, MemoryIndexEntry, MemoryGlossaryEntry, MemoryChildEntry,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
@@ -971,6 +971,31 @@ pub trait MemoryStore: Send + Sync {
         space_id: Uuid,
         max_visibility: Option<crate::memory::MemoryVisibility>,
     ) -> Result<Vec<MemoryNodeDetail>, DatabaseError>;
+
+    async fn list_memory_index(
+        &self,
+        space_id: Uuid,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError>;
+
+    async fn list_memory_recent(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError>;
+
+    async fn list_memory_glossary(
+        &self,
+        space_id: Uuid,
+    ) -> Result<Vec<MemoryGlossaryEntry>, DatabaseError>;
+
+    async fn list_memory_children(
+        &self,
+        space_id: Uuid,
+        parent_node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemoryChildEntry>, DatabaseError>;
 }
 
 #[async_trait]

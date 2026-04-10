@@ -11,6 +11,7 @@ use crate::memory::{
     MemoryNodeDetail, MemoryNodeKind, MemoryRelationKind, MemoryRoute, MemorySearchHit,
     MemorySidebarItem, MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion,
     MemoryVersionStatus, MemoryVisibility, NewMemoryNodeInput, UpdateMemoryNodeInput,
+    MemoryIndexEntry, MemoryGlossaryEntry, MemoryChildEntry,
 };
 
 fn row_to_memory_space(row: &libsql::Row) -> MemorySpace {
@@ -223,8 +224,8 @@ impl LibSqlBackend {
             .query(
                 "SELECT id, node_id, supersedes_version_id, status, content, metadata, created_at
                  FROM memory_versions
-                 WHERE node_id = ?1 AND status = 'active'
-                 ORDER BY created_at DESC
+                 WHERE node_id = ?1 AND status IN ('active', 'orphaned')
+                 ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, created_at DESC
                  LIMIT 1",
                 params![node_id.to_string()],
             )
@@ -1102,20 +1103,22 @@ impl MemoryStore for LibSqlBackend {
         let conn = self.connect().await?;
         let now = Utc::now();
 
-        if input.title.is_some() || input.metadata.is_some() {
+        if input.title.is_some() || input.metadata.is_some() || input.kind.is_some() {
             let title = input
                 .title
                 .clone()
                 .unwrap_or_else(|| before.node.title.clone());
+            let kind = input.kind.unwrap_or(before.node.kind);
             let metadata = input
                 .metadata
                 .clone()
                 .unwrap_or_else(|| before.node.metadata.clone());
             conn.execute(
-                "UPDATE memory_nodes SET title = ?2, metadata = ?3, updated_at = ?4 WHERE id = ?1",
+                "UPDATE memory_nodes SET title = ?2, kind = ?3, metadata = ?4, updated_at = ?5 WHERE id = ?1",
                 params![
                     before.node.id.to_string(),
                     title,
+                    kind.as_str(),
                     metadata.to_string(),
                     fmt_ts(&now)
                 ],
@@ -1128,19 +1131,27 @@ impl MemoryStore for LibSqlBackend {
             && content != before.active_version.content
         {
             conn.execute(
-                "UPDATE memory_versions SET status = 'deprecated' WHERE node_id = ?1 AND status = 'active'",
+                "UPDATE memory_versions
+                 SET status = 'deprecated'
+                 WHERE node_id = ?1 AND status IN ('active', 'orphaned')",
                 params![before.node.id.to_string()],
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            let new_status = if before.routes.is_empty() {
+                "orphaned"
+            } else {
+                "active"
+            };
             conn.execute(
                 "INSERT INTO memory_versions
                  (id, node_id, supersedes_version_id, status, content, metadata, created_at)
-                 VALUES (?1, ?2, ?3, 'active', ?4, ?5, ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     Uuid::new_v4().to_string(),
                     before.node.id.to_string(),
                     before.active_version.id.to_string(),
+                    new_status,
                     content,
                     input
                         .metadata
@@ -1154,22 +1165,19 @@ impl MemoryStore for LibSqlBackend {
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         }
 
-        let target_route = if let Some(route) = self
+        let target_route = self
             .fetch_memory_route(space_id, &input.route_or_node)
             .await?
-        {
-            route
-        } else {
-            before
-                .primary_route
-                .clone()
-                .ok_or_else(|| DatabaseError::NotFound {
-                    entity: "memory_route".to_string(),
-                    id: input.route_or_node.clone(),
-                })?
-        };
+            .or_else(|| before.primary_route.clone());
+        let route_id_for_changeset = target_route
+            .as_ref()
+            .and_then(|route| route.edge_id.map(|_| route.id));
 
         if input.priority.is_some() || input.trigger_text.is_some() || input.visibility.is_some() {
+            let target_route = target_route.ok_or_else(|| DatabaseError::NotFound {
+                entity: "memory_route".to_string(),
+                id: input.route_or_node.clone(),
+            })?;
             let edge = before
                 .edges
                 .iter()
@@ -1244,7 +1252,7 @@ impl MemoryStore for LibSqlBackend {
             self.write_changeset_row(
                 changeset_id,
                 Some(before.node.id),
-                target_route.edge_id.map(|_| target_route.id),
+                route_id_for_changeset,
                 "update",
                 &serde_json::to_value(&before).unwrap_or(serde_json::Value::Null),
                 &serde_json::to_value(&after).unwrap_or(serde_json::Value::Null),
@@ -1698,7 +1706,7 @@ impl MemoryStore for LibSqlBackend {
                  JOIN memory_routes r ON r.node_id = n.id
                  LEFT JOIN memory_edges e ON e.id = r.edge_id
                  WHERE n.space_id = ?1
-                   AND n.kind IN ('identity', 'value', 'directive', 'user_profile', 'procedure', 'boot')
+                   AND n.kind = 'boot'
                    AND (?2 IS NULL OR e.visibility IN ('session', 'shared'))
                  ORDER BY n.updated_at DESC",
                 params![space_id.to_string(), max_visibility.map(|_| "session")],
@@ -1717,5 +1725,203 @@ impl MemoryStore for LibSqlBackend {
             }
         }
         Ok(details)
+    }
+
+    async fn list_memory_index(
+        &self,
+        space_id: Uuid,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = if let Some(domain) = domain {
+            conn.query(
+                "SELECT d.uri, d.title, d.kind, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+                 FROM memory_search_docs d
+                 JOIN memory_routes r ON r.id = d.route_id
+                 LEFT JOIN memory_edges e ON e.id = r.edge_id
+                 WHERE d.space_id = ?1 AND r.domain = ?2
+                 ORDER BY r.domain ASC, r.path ASC",
+                params![space_id.to_string(), domain],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        } else {
+            conn.query(
+                "SELECT d.uri, d.title, d.kind, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+                 FROM memory_search_docs d
+                 JOIN memory_routes r ON r.id = d.route_id
+                 LEFT JOIN memory_edges e ON e.id = r.edge_id
+                 WHERE d.space_id = ?1
+                 ORDER BY r.domain ASC, r.path ASC",
+                params![space_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        };
+
+        let mut entries = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            entries.push(MemoryIndexEntry {
+                uri: get_text(&row, 0),
+                title: get_text(&row, 1),
+                kind: MemoryNodeKind::from_str(&get_text(&row, 2)),
+                priority: row.get::<i64>(3).unwrap_or(100) as i32,
+                disclosure: get_opt_text(&row, 4),
+                updated_at: get_ts(&row, 5),
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn list_memory_recent(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+        domain: Option<&str>,
+    ) -> Result<Vec<MemoryIndexEntry>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = if let Some(domain) = domain {
+            conn.query(
+                "SELECT d.uri, d.title, d.kind, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+                 FROM memory_search_docs d
+                 JOIN memory_routes r ON r.id = d.route_id
+                 LEFT JOIN memory_edges e ON e.id = r.edge_id
+                 WHERE d.space_id = ?1 AND r.domain = ?2
+                 ORDER BY d.updated_at DESC
+                 LIMIT ?3",
+                params![space_id.to_string(), domain, limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        } else {
+            conn.query(
+                "SELECT d.uri, d.title, d.kind, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+                 FROM memory_search_docs d
+                 JOIN memory_routes r ON r.id = d.route_id
+                 LEFT JOIN memory_edges e ON e.id = r.edge_id
+                 WHERE d.space_id = ?1
+                 ORDER BY d.updated_at DESC
+                 LIMIT ?2",
+                params![space_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        };
+
+        let mut entries = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            entries.push(MemoryIndexEntry {
+                uri: get_text(&row, 0),
+                title: get_text(&row, 1),
+                kind: MemoryNodeKind::from_str(&get_text(&row, 2)),
+                priority: row.get::<i64>(3).unwrap_or(100) as i32,
+                disclosure: get_opt_text(&row, 4),
+                updated_at: get_ts(&row, 5),
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn list_memory_glossary(
+        &self,
+        space_id: Uuid,
+    ) -> Result<Vec<MemoryGlossaryEntry>, DatabaseError> {
+        use std::collections::{HashMap, HashSet};
+
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT k.keyword, r.domain, r.path
+                 FROM memory_keywords k
+                 JOIN memory_routes r ON r.node_id = k.node_id
+                 WHERE k.space_id = ?1
+                 ORDER BY k.keyword ASC, r.is_primary DESC, r.updated_at DESC",
+                params![space_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut map: HashMap<String, (HashSet<String>, Vec<String>)> = HashMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            let keyword = get_text(&row, 0);
+            let domain = get_text(&row, 1);
+            let path = get_text(&row, 2);
+            let uri = format!("{domain}://{path}");
+            let entry = map.entry(keyword).or_insert_with(|| (HashSet::new(), Vec::new()));
+            if entry.0.insert(uri.clone()) {
+                entry.1.push(uri);
+            }
+        }
+
+        let mut out = map
+            .into_iter()
+            .map(|(keyword, (_seen, uris))| MemoryGlossaryEntry { keyword, uris })
+            .collect::<Vec<_>>();
+        out.sort_by(|a, b| a.keyword.cmp(&b.keyword));
+        Ok(out)
+    }
+
+    async fn list_memory_children(
+        &self,
+        space_id: Uuid,
+        parent_node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemoryChildEntry>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT n.id, n.title, n.kind, n.updated_at, r.domain, r.path, coalesce(e.priority, 100), e.trigger_text
+                 FROM memory_edges e
+                 JOIN memory_nodes n ON n.id = e.child_node_id
+                 LEFT JOIN memory_routes r ON r.node_id = n.id AND r.is_primary = 1
+                 WHERE e.space_id = ?1 AND e.parent_node_id = ?2 AND e.relation_kind = 'contains'
+                 ORDER BY e.priority ASC, n.updated_at DESC
+                 LIMIT ?3",
+                params![space_id.to_string(), parent_node_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            let node_id = get_text(&row, 0);
+            let domain = get_opt_text(&row, 4);
+            let path = get_opt_text(&row, 5);
+            let uri = if let (Some(domain), Some(path)) = (domain, path) {
+                if !domain.trim().is_empty() && !path.trim().is_empty() {
+                    format!("{domain}://{path}")
+                } else {
+                    format!("node://{node_id}")
+                }
+            } else {
+                format!("node://{node_id}")
+            };
+
+            out.push(MemoryChildEntry {
+                uri,
+                title: get_text(&row, 1),
+                kind: MemoryNodeKind::from_str(&get_text(&row, 2)),
+                updated_at: get_ts(&row, 3),
+                priority: row.get::<i64>(6).unwrap_or(100) as i32,
+                disclosure: get_opt_text(&row, 7),
+            });
+        }
+        Ok(out)
     }
 }
