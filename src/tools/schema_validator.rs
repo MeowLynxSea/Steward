@@ -726,14 +726,14 @@ mod tests {
         );
     }
 
-    /// Validate that the memory tool schemas (which need Workspace) are correct.
+    /// Validate that the workspace tool schemas (which need Workspace) are correct.
     /// Since Workspace requires a database connection, we validate the schemas
     /// are structurally correct by inlining them.
     #[test]
-    fn test_memory_tool_schemas_inline() {
+    fn test_workspace_tool_schemas_inline() {
         let schemas: Vec<(&str, serde_json::Value)> = vec![
             (
-                "memory_search",
+                "workspace_search",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -753,7 +753,7 @@ mod tests {
                 }),
             ),
             (
-                "memory_write",
+                "workspace_write",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -765,7 +765,7 @@ mod tests {
                 }),
             ),
             (
-                "memory_read",
+                "workspace_read",
                 serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -775,7 +775,7 @@ mod tests {
                 }),
             ),
             (
-                "memory_tree",
+                "workspace_tree",
                 serde_json::json!({
                     "type": "object",
                     "properties": {

@@ -353,6 +353,11 @@ impl Agent {
             workspace.clone(),
             self.llm().clone(),
         );
+        let runner = if let Some(memory) = self.memory() {
+            runner.with_memory(Arc::clone(memory))
+        } else {
+            runner
+        };
 
         match runner.check_heartbeat().await {
             crate::agent::HeartbeatResult::Ok => Ok(SubmissionResult::ok_with_message(
@@ -362,7 +367,7 @@ impl Agent {
                 format!("Heartbeat findings:\n\n{}", msg),
             )),
             crate::agent::HeartbeatResult::Skipped => Ok(SubmissionResult::ok_with_message(
-                "Heartbeat skipped: no HEARTBEAT.md checklist found in workspace.",
+                "Heartbeat skipped: no heartbeat procedure is configured in memory.",
             )),
             crate::agent::HeartbeatResult::Failed(err) => Ok(SubmissionResult::error(format!(
                 "Heartbeat failed: {}",

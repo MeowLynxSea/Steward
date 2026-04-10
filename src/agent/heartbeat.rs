@@ -32,6 +32,7 @@ use tokio::sync::mpsc;
 
 use crate::channels::OutgoingResponse;
 use crate::llm::{ChatMessage, CompletionRequest, LlmProvider, Reasoning};
+use crate::memory::MemoryManager;
 use crate::tenant::AdminScope;
 use crate::workspace::Workspace;
 use crate::workspace::hygiene::HygieneConfig;
@@ -180,6 +181,7 @@ pub struct HeartbeatRunner {
     config: HeartbeatConfig,
     hygiene_config: HygieneConfig,
     workspace: Arc<Workspace>,
+    memory: Option<Arc<MemoryManager>>,
     llm: Arc<dyn LlmProvider>,
     response_tx: Option<mpsc::Sender<OutgoingResponse>>,
     store: Option<AdminScope>,
@@ -198,11 +200,18 @@ impl HeartbeatRunner {
             config,
             hygiene_config,
             workspace,
+            memory: None,
             llm,
             response_tx: None,
             store: None,
             consecutive_failures: 0,
         }
+    }
+
+    /// Attach the native memory manager for graph-based recall and writes.
+    pub fn with_memory(mut self, memory: Arc<MemoryManager>) -> Self {
+        self.memory = Some(memory);
+        self
     }
 
     /// Set the response channel for notifications.
@@ -315,34 +324,42 @@ impl HeartbeatRunner {
     /// Run a single heartbeat check.
     pub async fn check_heartbeat(&self) -> HeartbeatResult {
         // Get the heartbeat checklist
-        let checklist = match self.workspace.heartbeat_checklist().await {
+        let checklist = match self.load_heartbeat_checklist().await {
             Ok(Some(content)) if !is_effectively_empty(&content) => content,
             Ok(_) => return HeartbeatResult::Skipped,
-            Err(e) => return HeartbeatResult::Failed(format!("Failed to read checklist: {}", e)),
+            Err(error) => return HeartbeatResult::Failed(error),
         };
 
         // Build the heartbeat prompt
         let prompt = format!(
-            "Read the HEARTBEAT.md checklist below and follow it strictly. \
+            "Read the heartbeat checklist below and follow it strictly. \
              Do not infer or repeat old tasks. Check each item and report findings.\n\
              \n\
              If nothing needs attention, reply EXACTLY with: HEARTBEAT_OK\n\
              \n\
              If something needs attention, provide a concise summary of what needs action.\n\
              \n\
-             ## HEARTBEAT.md\n\
+             ## Heartbeat Procedure\n\
              \n\
              {}",
             checklist
         );
 
         // Get the system prompt for context
-        let system_prompt = match self.workspace.system_prompt().await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("Failed to get system prompt for heartbeat: {}", e);
-                String::new()
+        let system_prompt = if let Some(memory) = self.memory.as_ref() {
+            match memory
+                .build_prompt_context(self.workspace.user_id(), None, &prompt, false)
+                .await
+            {
+                Ok(prompt) => prompt,
+                Err(e) => {
+                    tracing::warn!("Failed to build memory prompt for heartbeat: {}", e);
+                    String::new()
+                }
             }
+        } else {
+            tracing::warn!("Memory manager unavailable; heartbeat will run without native memory prompt");
+            String::new()
         };
 
         // Run the agent turn
@@ -396,7 +413,45 @@ impl HeartbeatRunner {
             return HeartbeatResult::Ok;
         }
 
+        if let Some(memory) = self.memory.as_ref()
+            && let Err(e) = memory
+                .record_episode(
+                    self.workspace.user_id(),
+                    None,
+                    "Heartbeat Finding",
+                    content,
+                    Some("When a recurring proactive check uncovered follow-up work".to_string()),
+                    serde_json::json!({
+                        "source": "heartbeat",
+                        "checklist_route": "core://procedures/heartbeat",
+                    }),
+                )
+                .await
+        {
+            tracing::warn!("Failed to write heartbeat finding to memory graph: {}", e);
+        }
+
         HeartbeatResult::NeedsAttention(content.to_string())
+    }
+
+    async fn load_heartbeat_checklist(&self) -> Result<Option<String>, String> {
+        if let Some(memory) = self.memory.as_ref() {
+            match memory
+                .get_node(self.workspace.user_id(), None, "core://procedures/heartbeat")
+                .await
+            {
+                Ok(Some(detail)) => return Ok(Some(detail.active_version.content)),
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Failed to load heartbeat procedure from memory graph: {}", e);
+                }
+            }
+        }
+
+        self.workspace
+            .heartbeat_checklist()
+            .await
+            .map_err(|e| format!("Failed to read heartbeat checklist: {}", e))
     }
 
     /// Send a notification about heartbeat findings.
@@ -495,11 +550,15 @@ pub fn spawn_heartbeat(
     config: HeartbeatConfig,
     hygiene_config: HygieneConfig,
     workspace: Arc<Workspace>,
+    memory: Option<Arc<MemoryManager>>,
     llm: Arc<dyn LlmProvider>,
     response_tx: Option<mpsc::Sender<OutgoingResponse>>,
     store: Option<AdminScope>,
 ) -> tokio::task::JoinHandle<()> {
     let mut runner = HeartbeatRunner::new(config, hygiene_config, workspace, llm);
+    if let Some(memory) = memory {
+        runner = runner.with_memory(memory);
+    }
     if let Some(tx) = response_tx {
         runner = runner.with_response_channel(tx);
     }
@@ -523,6 +582,7 @@ pub fn spawn_multi_user_heartbeat(
     response_tx: Option<mpsc::Sender<OutgoingResponse>>,
     store: AdminScope,
 ) -> tokio::task::JoinHandle<()> {
+    let memory = Arc::new(MemoryManager::new(Arc::clone(store.db())));
     tokio::spawn(async move {
         if !config.enabled {
             tracing::info!("Multi-user heartbeat is disabled");
@@ -608,6 +668,7 @@ pub fn spawn_multi_user_heartbeat(
                 let llm_clone = llm.clone();
                 let tx = response_tx.clone();
                 let admin = store.clone();
+                let memory = Arc::clone(&memory);
 
                 join_set.spawn(async move {
                     // Run memory hygiene per user (same as single-user heartbeat)
@@ -623,6 +684,7 @@ pub fn spawn_multi_user_heartbeat(
                     }
 
                     let mut runner = HeartbeatRunner::new(cfg, hyg, workspace, llm_clone);
+                    runner = runner.with_memory(Arc::clone(&memory));
                     if let Some(tx) = tx {
                         runner = runner.with_response_channel(tx);
                     }
@@ -894,15 +956,16 @@ mod tests {
     }
 
     #[test]
-    fn test_spawn_heartbeat_accepts_store_param() {
+    fn test_spawn_heartbeat_accepts_memory_and_store_params() {
         // Regression: spawn_heartbeat must accept an optional Database store
         // for persisting heartbeat notifications to a dedicated conversation.
-        // Compile-time check: the 7th parameter is `Option<Arc<dyn Database>>`.
+        // Compile-time check: the memory and store parameters remain threaded through.
         #[allow(clippy::type_complexity)]
         let _fn_ptr: fn(
             HeartbeatConfig,
             HygieneConfig,
             Arc<crate::workspace::Workspace>,
+            Option<Arc<crate::memory::MemoryManager>>,
             Arc<dyn crate::llm::LlmProvider>,
             Option<tokio::sync::mpsc::Sender<crate::channels::OutgoingResponse>>,
             Option<AdminScope>,

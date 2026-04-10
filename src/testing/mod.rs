@@ -519,6 +519,7 @@ impl TestHarnessBuilder {
             safety,
             tools,
             workspace: None,
+            memory: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,

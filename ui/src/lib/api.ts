@@ -1,7 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   PatchSettingsRequest,
-  MemoryDocument,
+  MemoryNodeDetail,
+  MemorySidebarSection,
+  MemoryTimelineEntry,
+  MemoryChangeSet,
+  MemoryVersion,
+  MemorySearchHit,
   SessionDetail,
   SendSessionMessageResponse,
   SessionSummary,
@@ -115,20 +120,47 @@ export const apiClient = {
     });
   },
 
-  getMemoryDirectory(path = "") {
-    return invoke<{ path: string; entries: WorkspaceEntry[] }>("get_memory_directory", {
-      path
-    });
-  },
-
-  getMemoryDocument(path: string) {
-    return invoke<MemoryDocument>("get_memory_document", { path });
-  },
-
   searchWorkspace(query: string) {
     return invoke<{ results: WorkspaceSearchResult[] }>("search_workspace", {
       payload: { query }
     });
+  },
+
+  listMemorySidebar() {
+    return invoke<{ sections: MemorySidebarSection[] }>("list_memory_sidebar");
+  },
+
+  getMemoryNode(key: string) {
+    return invoke<{ detail: MemoryNodeDetail | null }>("get_memory_node", { key });
+  },
+
+  searchMemoryGraph(query: string, limit = 12, domains?: string[]) {
+    return invoke<{ results: MemorySearchHit[] }>("search_memory_graph", {
+      payload: { query, limit, domains: domains ?? null }
+    });
+  },
+
+  listMemoryTimeline() {
+    return invoke<{ entries: MemoryTimelineEntry[] }>("list_memory_timeline");
+  },
+
+  listMemoryReviews() {
+    return invoke<{ reviews: MemoryChangeSet[] }>("list_memory_reviews");
+  },
+
+  applyMemoryReview(id: string, action: "accept" | "rollback") {
+    return invoke<{ reviews: MemoryChangeSet[] }>("apply_memory_review", {
+      id,
+      payload: { action }
+    });
+  },
+
+  rollbackMemoryChangeset(id: string) {
+    return invoke<{ reviews: MemoryChangeSet[] }>("rollback_memory_changeset", { id });
+  },
+
+  getMemoryVersions(key: string) {
+    return invoke<{ versions: MemoryVersion[] }>("get_memory_versions", { key });
   },
 
   createWorkspaceMount(path: string, display_name?: string, bypass_write = true) {

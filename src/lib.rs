@@ -62,6 +62,7 @@ pub mod hooks;
 pub mod import;
 pub mod ipc;
 pub mod llm;
+pub mod memory;
 pub mod observability;
 pub mod pairing;
 pub mod profile;
@@ -95,6 +96,7 @@ pub mod prelude {
     pub use crate::context::{JobContext, JobState};
     pub use crate::error::{Error, Result};
     pub use crate::llm::LlmProvider;
+    pub use crate::memory::MemoryManager;
     pub use crate::safety::{SanitizedOutput, Sanitizer};
     pub use crate::tools::{Tool, ToolOutput, ToolRegistry};
     pub use crate::workspace::{MemoryDocument, Workspace};

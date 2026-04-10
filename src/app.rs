@@ -16,6 +16,7 @@ use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::hooks::HookRegistry;
 use crate::llm::{LlmProvider, RecordingLlm, SessionManager};
+use crate::memory::MemoryManager;
 use crate::safety::SafetyLayer;
 use crate::secrets::SecretsStore;
 use crate::skills::SkillRegistry;
@@ -39,6 +40,7 @@ pub struct AppComponents {
     pub tools: Arc<ToolRegistry>,
     pub embeddings: Option<Arc<dyn EmbeddingProvider>>,
     pub workspace: Option<Arc<Workspace>>,
+    pub memory: Option<Arc<MemoryManager>>,
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub mcp_session_manager: Arc<McpSessionManager>,
     pub mcp_process_manager: Arc<McpProcessManager>,
@@ -316,7 +318,7 @@ impl AppBuilder {
         // Create embeddings provider using the unified method
         let embeddings = self.config.embeddings.create_provider();
 
-        // Register memory tools if database is available
+        // Register workspace document tools if database is available
         let workspace_user_id = self.config.owner_id.as_str();
         let workspace = if let Some(ref db) = self.db {
             let emb_cache_config = EmbeddingCacheConfig {
@@ -341,7 +343,7 @@ impl AppBuilder {
             ws = ws.with_memory_layers(self.config.workspace.memory_layers.clone());
             let ws = Arc::new(ws);
 
-            tools.register_memory_tools(Arc::clone(&ws));
+            tools.register_workspace_tools(Arc::clone(&ws));
 
             Some(ws)
         } else {
@@ -775,6 +777,20 @@ impl AppBuilder {
             }
         }
 
+        let memory = if let Some(ref db) = self.db {
+            let manager = Arc::new(MemoryManager::new(Arc::clone(db)));
+            if let Err(e) = manager
+                .import_legacy_workspace(&self.config.owner_id, None)
+                .await
+            {
+                tracing::warn!("Failed to import legacy workspace memory into graph: {e}");
+            }
+            tools.register_graph_memory_tools(Arc::clone(&manager));
+            Some(manager)
+        } else {
+            None
+        };
+
         // Seed workspace and backfill embeddings
         if let Some(ref ws) = workspace {
             // Import workspace files from disk FIRST if WORKSPACE_IMPORT_DIR is set.
@@ -866,6 +882,7 @@ impl AppBuilder {
             tools,
             embeddings,
             workspace,
+            memory,
             extension_manager,
             mcp_session_manager,
             mcp_process_manager,

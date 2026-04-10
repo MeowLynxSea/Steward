@@ -1464,7 +1464,7 @@ mod tests {
         thread.start_turn("Search for X");
         {
             let turn = thread.turns.last_mut().unwrap();
-            turn.record_tool_call("memory_search", serde_json::json!({"query": "X"}));
+            turn.record_tool_call("workspace_search", serde_json::json!({"query": "X"}));
             turn.record_tool_result(serde_json::json!("Found X in doc.md"));
         }
         thread.complete_turn("I found X in doc.md.");
@@ -1480,7 +1480,7 @@ mod tests {
         assert!(messages[1].tool_calls.is_some());
         let tcs = messages[1].tool_calls.as_ref().unwrap();
         assert_eq!(tcs.len(), 1);
-        assert_eq!(tcs[0].name, "memory_search");
+        assert_eq!(tcs[0].name, "workspace_search");
 
         assert_eq!(messages[2].role, crate::llm::Role::Tool);
         assert!(messages[2].content.contains("Found X"));

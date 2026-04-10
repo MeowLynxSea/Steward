@@ -84,7 +84,7 @@ impl ApprovalContext {
 ///
 /// Controls how many times a tool can be invoked per user, per time window.
 /// Read-only tools (echo, time, json, file_read, etc.) should NOT be rate limited.
-/// Write/external tools (shell, http, file_write, memory_write, create_job) should be.
+/// Write/external tools (shell, http, file_write, workspace_write, create_job) should be.
 #[derive(Debug, Clone)]
 pub struct ToolRateLimitConfig {
     /// Maximum invocations per minute.
@@ -355,8 +355,8 @@ pub trait Tool: Send + Sync {
     /// Per-invocation rate limit for this tool.
     ///
     /// Return `Some(config)` to throttle how often this tool can be called per user.
-    /// Read-only tools (echo, time, json, file_read, memory_search, etc.) should
-    /// return `None`. Write/external tools (shell, http, file_write, memory_write,
+    /// Read-only tools (echo, time, json, file_read, workspace_search, etc.) should
+    /// return `None`. Write/external tools (shell, http, file_write, workspace_write,
     /// create_job) should return sensible limits to prevent runaway agents.
     ///
     /// Rate limits are per-user, per-tool, and in-memory (reset on restart).

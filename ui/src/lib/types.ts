@@ -172,11 +172,125 @@ export interface WorkspaceSearchResult {
   vector_rank: number | null;
 }
 
-export interface MemoryDocument {
+export type MemoryNodeKind =
+  | "boot"
+  | "identity"
+  | "value"
+  | "user_profile"
+  | "directive"
+  | "curated"
+  | "episode"
+  | "procedure"
+  | "reference";
+
+export interface MemoryRoute {
+  id: string;
+  space_id: string;
+  edge_id: string | null;
+  node_id: string;
+  domain: string;
   path: string;
-  content: string;
+  is_primary: boolean;
+  created_at: string;
   updated_at: string;
-  word_count: number;
+}
+
+export interface MemoryVersion {
+  id: string;
+  node_id: string;
+  supersedes_version_id: string | null;
+  status: "active" | "deprecated" | "orphaned";
+  content: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface MemoryKeyword {
+  id: string;
+  space_id: string;
+  node_id: string;
+  keyword: string;
+  created_at: string;
+}
+
+export interface MemoryEdge {
+  id: string;
+  space_id: string;
+  parent_node_id: string | null;
+  child_node_id: string;
+  relation_kind: string;
+  visibility: string;
+  priority: number;
+  trigger_text: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MemorySearchHit {
+  node_id: string;
+  route_id: string;
+  version_id: string;
+  uri: string;
+  title: string;
+  kind: MemoryNodeKind;
+  content_snippet: string;
+  priority: number;
+  trigger_text: string | null;
+  score: number;
+  updated_at: string;
+}
+
+export interface MemoryNodeDetail {
+  node: {
+    id: string;
+    space_id: string;
+    kind: MemoryNodeKind;
+    title: string;
+    metadata: Record<string, unknown> | null;
+    created_at: string;
+    updated_at: string;
+  };
+  active_version: MemoryVersion;
+  primary_route: MemoryRoute | null;
+  routes: MemoryRoute[];
+  edges: MemoryEdge[];
+  keywords: MemoryKeyword[];
+  related_nodes: MemorySearchHit[];
+}
+
+export interface MemorySidebarItem {
+  node_id: string;
+  route_id: string | null;
+  uri: string | null;
+  title: string;
+  subtitle: string | null;
+  kind: MemoryNodeKind;
+  updated_at: string;
+}
+
+export interface MemorySidebarSection {
+  key: string;
+  title: string;
+  items: MemorySidebarItem[];
+}
+
+export interface MemoryTimelineEntry {
+  node_id: string;
+  route_id: string | null;
+  uri: string | null;
+  title: string;
+  content_snippet: string;
+  updated_at: string;
+}
+
+export interface MemoryChangeSet {
+  id: string;
+  space_id: string;
+  origin: string;
+  summary: string | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface WorkspaceMount {

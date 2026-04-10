@@ -10,12 +10,19 @@
     FolderPlus,
     GitBranch,
     HardDrive,
+    History,
+    Network,
     RefreshCw,
     Save,
     Search,
     Undo2
   } from "lucide-svelte";
   import type {
+    MemoryChangeSet,
+    MemoryNodeDetail,
+    MemorySearchHit,
+    MemorySidebarSection,
+    MemoryTimelineEntry,
     MountedFileDiff,
     WorkspaceEntry,
     WorkspaceMountDetail,
@@ -23,20 +30,29 @@
   } from "../lib/types";
 
   type ConflictResolution = "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge";
-  type WorkspaceTab = "files" | "changes";
+  type WorkspaceTab = "files" | "changes" | "memory";
 
   interface Props {
     currentPath: string;
     entries: WorkspaceEntry[];
     searchResults: WorkspaceSearchResult[];
     searchQuery: string;
+    memorySections: MemorySidebarSection[];
+    memorySearchResults: MemorySearchHit[];
+    memorySelectedNode: MemoryNodeDetail | null;
+    memoryTimeline: MemoryTimelineEntry[];
+    memoryReviews: MemoryChangeSet[];
+    memoryLoading?: boolean;
     selectedMount: WorkspaceMountDetail | null;
     mountDiff: MountedFileDiff[];
     collapsed?: boolean;
     onSearch: (query: string) => void;
+    onSearchMemory: (query: string) => void;
     onRefresh: () => void;
+    onRefreshMemory: () => void;
     onNavigate: (path: string) => void;
     onOpenEntry: (entry: WorkspaceEntry) => void;
+    onOpenMemory: (key: string) => void;
     onRequestMount: () => void;
     onKeepMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
     onRevertMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
@@ -49,6 +65,8 @@
       mergedContent?: string
     ) => void;
     onUseResult: (result: WorkspaceSearchResult) => void;
+    onUseMemoryResult: (result: MemorySearchHit) => void;
+    onApplyMemoryReview: (id: string, action: "accept" | "rollback") => void;
   }
 
   let {
@@ -56,22 +74,34 @@
     entries,
     searchResults,
     searchQuery,
+    memorySections,
+    memorySearchResults,
+    memorySelectedNode,
+    memoryTimeline,
+    memoryReviews,
+    memoryLoading = false,
     selectedMount,
     mountDiff,
     collapsed = false,
     onSearch,
+    onSearchMemory,
     onRefresh,
+    onRefreshMemory,
     onNavigate,
     onOpenEntry,
+    onOpenMemory,
     onRequestMount,
     onKeepMount,
     onRevertMount,
     onCreateCheckpoint,
     onResolveConflict,
-    onUseResult
+    onUseResult,
+    onUseMemoryResult,
+    onApplyMemoryReview
   }: Props = $props();
 
   let localQuery = $state("");
+  let localMemoryQuery = $state("");
   let activeTab = $state<WorkspaceTab>("files");
   let expandedSections = $state<Record<string, boolean>>({ "临时空间": true });
   let mergeDrafts = $state<Record<string, string>>({});
@@ -103,6 +133,10 @@
 
   function handleSearch() {
     onSearch(localQuery);
+  }
+
+  function handleMemorySearch() {
+    onSearchMemory(localMemoryQuery);
   }
 
   function createMergeDraft(diff: MountedFileDiff) {
@@ -169,6 +203,9 @@
       </button>
       <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={() => activeTab = 'changes'}>
         变更
+      </button>
+      <button class="tab {activeTab === 'memory' ? 'active' : ''}" onclick={() => activeTab = 'memory'}>
+        记忆
       </button>
     </div>
 
@@ -237,7 +274,7 @@
           {/if}
         {/if}
       </div>
-    {:else}
+    {:else if activeTab === "changes"}
       <!-- Changes tab -->
       <div class="changes-panel">
         {#if selectedMount}
@@ -395,6 +432,130 @@
           </div>
         {:else}
           <div class="empty-hint">选择一个挂载目录查看变更</div>
+        {/if}
+      </div>
+    {:else}
+      <div class="changes-panel memory-panel">
+        <div class="mount-info">
+          <strong>原生记忆图谱</strong>
+          <div class="mount-stats">
+            <span>{memoryTimeline.length} 时间线</span>
+            <span>{memoryReviews.length} 待审查</span>
+          </div>
+        </div>
+
+        <div class="search-box">
+          <Search size={14} strokeWidth={2} />
+          <input
+            type="text"
+            placeholder="搜索记忆..."
+            bind:value={localMemoryQuery}
+            onkeydown={(event) => event.key === "Enter" && handleMemorySearch()}
+          />
+          <button class="icon-btn" onclick={onRefreshMemory} aria-label="刷新记忆">
+            <RefreshCw size={14} strokeWidth={2} />
+          </button>
+        </div>
+
+        {#if memoryLoading}
+          <div class="empty-hint">正在载入记忆…</div>
+        {:else if memorySearchResults.length > 0}
+          <div class="memory-section">
+            {#each memorySearchResults as result}
+              <button class="tree-item" onclick={() => onOpenMemory(result.uri)}>
+                <Search size={13} strokeWidth={2} />
+                <span class="tree-item-name">{result.title}</span>
+                <span class="memory-meta">{result.uri}</span>
+              </button>
+              <button class="tree-item subtle" onclick={() => onUseMemoryResult(result)}>
+                <ChevronRight size={13} strokeWidth={2} />
+                <span class="tree-item-name">{result.content_snippet}</span>
+              </button>
+            {/each}
+          </div>
+        {:else}
+          <div class="memory-section">
+            {#each memorySections as section}
+              <button class="section-header" onclick={() => toggleSection(section.title)}>
+                {#if expandedSections[section.title]}
+                  <ChevronDown size={14} strokeWidth={2} />
+                {:else}
+                  <ChevronRight size={14} strokeWidth={2} />
+                {/if}
+                <span>{section.title}</span>
+              </button>
+              {#if expandedSections[section.title]}
+                {#each section.items as item}
+                  <button
+                    class="tree-item"
+                    onclick={() => onOpenMemory(item.uri ?? item.node_id)}
+                  >
+                    <span class="tree-item-icon">
+                      {#if item.kind === "episode"}
+                        <History size={14} strokeWidth={2} />
+                      {:else}
+                        <Network size={14} strokeWidth={2} />
+                      {/if}
+                    </span>
+                    <span class="tree-item-name">{item.title}</span>
+                    {#if item.subtitle}
+                      <span class="memory-meta">{item.subtitle}</span>
+                    {/if}
+                  </button>
+                {/each}
+              {/if}
+            {/each}
+          </div>
+        {/if}
+
+        {#if memorySelectedNode}
+          <div class="memory-detail">
+            <div class="mount-info">
+              <strong>{memorySelectedNode.node.title}</strong>
+              <div class="mount-stats">
+                <span>{memorySelectedNode.node.kind}</span>
+                <span>{memorySelectedNode.routes.length} routes</span>
+              </div>
+            </div>
+            {#if memorySelectedNode.primary_route}
+              <div class="memory-chip">{memorySelectedNode.primary_route.domain}://{memorySelectedNode.primary_route.path}</div>
+            {/if}
+            {#if memorySelectedNode.keywords.length > 0}
+              <div class="tree-item-badges">
+                {#each memorySelectedNode.keywords as keyword}
+                  <span class="badge">{keyword.keyword}</span>
+                {/each}
+              </div>
+            {/if}
+            <div class="memory-content">{memorySelectedNode.active_version.content}</div>
+          </div>
+        {/if}
+
+        {#if memoryReviews.length > 0}
+          <div class="memory-section">
+            <div class="section-header static">
+              <AlertTriangle size={14} strokeWidth={2} />
+              <span>待审查变更</span>
+            </div>
+            {#each memoryReviews as review}
+              <div class="conflict-card">
+                <div class="conflict-head">
+                  <strong>{review.summary ?? "Pending memory change"}</strong>
+                  <span class="badge">{review.origin}</span>
+                </div>
+                <div class="conflict-actions">
+                  <button class="action-btn primary" onclick={() => onApplyMemoryReview(review.id, "accept")}>
+                    <Check size={14} strokeWidth={2} />
+                    接受
+                  </button>
+                  <button class="action-btn danger" onclick={() => onApplyMemoryReview(review.id, "rollback")}>
+                    <Undo2 size={14} strokeWidth={2} />
+                    回滚
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
     {/if}
@@ -864,6 +1025,55 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  .memory-panel {
+    gap: 10px;
+  }
+
+  .memory-section,
+  .memory-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .memory-meta {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    margin-left: auto;
+    text-align: right;
+  }
+
+  .tree-item.subtle {
+    padding-left: 28px;
+  }
+
+  .memory-chip {
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-default);
+    border-radius: 999px;
+    padding: 6px 10px;
+    background: var(--bg-hover);
+  }
+
+  .memory-content {
+    border-radius: 12px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 220px;
+    overflow: auto;
+  }
+
+  .section-header.static {
+    cursor: default;
   }
 
   @media (max-width: 1024px) {

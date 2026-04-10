@@ -3,6 +3,7 @@
 mod echo;
 pub mod extension_tools;
 mod file;
+mod graph_memory;
 mod http;
 mod job;
 mod json;
@@ -21,13 +22,17 @@ pub use extension_tools::{
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
 };
 pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFileTool};
+pub use graph_memory::{
+    MemoryAliasTool, MemoryCreateTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool,
+    MemoryReviewTool, MemoryUpdateTool,
+};
 pub use http::HttpTool;
 pub use job::{
     CancelJobTool, CreateJobTool, JobEventsTool, JobPromptTool, JobStatusTool, ListJobsTool,
     SchedulerSlot,
 };
 pub use json::JsonTool;
-pub use memory::{MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool};
+pub use memory::{WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool};
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,

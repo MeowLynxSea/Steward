@@ -33,6 +33,7 @@ use crate::extensions::ExtensionManager;
 use crate::llm::{
     ChatMessage, CompletionRequest, FinishReason, LlmProvider, ToolCall, ToolCompletionRequest,
 };
+use crate::memory::MemoryManager;
 use crate::tenant::AdminScope;
 use crate::tools::{
     ToolError, ToolRegistry, autonomous_allowed_tool_names, autonomous_unavailable_message,
@@ -91,6 +92,7 @@ pub struct RoutineEngine {
     store: AdminScope,
     llm: Arc<dyn LlmProvider>,
     workspace: Arc<Workspace>,
+    memory: Option<Arc<MemoryManager>>,
     /// Sender for notifications (routed to channel manager).
     notify_tx: mpsc::Sender<OutgoingResponse>,
     /// Currently running routine count (across all routines).
@@ -118,6 +120,7 @@ impl RoutineEngine {
         store: AdminScope,
         llm: Arc<dyn LlmProvider>,
         workspace: Arc<Workspace>,
+        memory: Option<Arc<MemoryManager>>,
         notify_tx: mpsc::Sender<OutgoingResponse>,
         scheduler: Option<Arc<Scheduler>>,
         extension_manager: Option<Arc<ExtensionManager>>,
@@ -129,6 +132,7 @@ impl RoutineEngine {
             store,
             llm,
             workspace,
+            memory,
             notify_tx,
             running_count: Arc::new(AtomicUsize::new(0)),
             event_cache: Arc::new(RwLock::new(Vec::new())),
@@ -783,6 +787,7 @@ impl RoutineEngine {
             store: self.store.clone(),
             llm: self.llm.clone(),
             workspace: routine_workspace,
+            memory: self.memory.clone(),
             notify_tx: self.notify_tx.clone(),
             running_count: self.running_count.clone(),
             scheduler: self.scheduler.clone(),
@@ -867,6 +872,7 @@ impl RoutineEngine {
             store: self.store.clone(),
             llm: self.llm.clone(),
             workspace: self.workspace.clone(),
+            memory: self.memory.clone(),
             notify_tx: self.notify_tx.clone(),
             running_count: self.running_count.clone(),
             scheduler: self.scheduler.clone(),
@@ -920,6 +926,7 @@ impl RoutineEngine {
             store: self.store.clone(),
             llm: self.llm.clone(),
             workspace: routine_workspace,
+            memory: self.memory.clone(),
             notify_tx: self.notify_tx.clone(),
             running_count: self.running_count.clone(),
             scheduler: self.scheduler.clone(),
@@ -1057,6 +1064,7 @@ struct EngineContext {
     store: AdminScope,
     llm: Arc<dyn LlmProvider>,
     workspace: Arc<Workspace>,
+    memory: Option<Arc<MemoryManager>>,
     notify_tx: mpsc::Sender<OutgoingResponse>,
     running_count: Arc<AtomicUsize>,
     scheduler: Option<Arc<Scheduler>>,
@@ -1351,12 +1359,27 @@ async fn execute_lightweight(
     );
 
     // Get system prompt
-    let system_prompt = match ctx.workspace.system_prompt().await {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(routine = %routine.name, "Failed to get system prompt: {}", e);
-            String::new()
+    let system_prompt = if let Some(memory) = ctx.memory.as_ref() {
+        match memory
+            .build_prompt_context(ctx.workspace.user_id(), None, &full_prompt, false)
+            .await
+        {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                tracing::warn!(
+                    routine = %routine.name,
+                    "Failed to build routine memory prompt: {}",
+                    e
+                );
+                String::new()
+            }
         }
+    } else {
+        tracing::warn!(
+            routine = %routine.name,
+            "Memory manager unavailable; running routine without native memory prompt"
+        );
+        String::new()
     };
 
     // Determine max_tokens from model metadata with fallback
@@ -2289,7 +2312,7 @@ mod tests {
 
     #[test]
     fn test_routine_tool_denylist_allows_safe_tools() {
-        let allowed = vec!["echo", "time", "json", "http", "memory_search", "shell"];
+        let allowed = vec!["echo", "time", "json", "http", "workspace_search", "shell"];
         for tool in &allowed {
             assert!(
                 !crate::tools::AUTONOMOUS_TOOL_DENYLIST.contains(tool),

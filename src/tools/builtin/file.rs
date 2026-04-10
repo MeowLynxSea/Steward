@@ -17,7 +17,7 @@ use crate::tools::tool::{
 };
 use crate::workspace::paths as ws_paths;
 
-/// Well-known workspace filenames that must go through memory_write, not write_file.
+/// Well-known workspace filenames that must go through workspace_write, not write_file.
 ///
 /// If the LLM tries to write one of these via the filesystem tool we reject
 /// immediately and point it at the correct tool.
@@ -32,7 +32,7 @@ const WORKSPACE_FILES: &[&str] = &[
 ];
 
 /// Check whether `path` resolves to a workspace file that should be written
-/// through `memory_write` instead of `write_file`.
+/// through `workspace_write` instead of `write_file`.
 fn is_workspace_path(path: &str) -> bool {
     let filename = std::path::Path::new(path)
         .file_name()
@@ -77,9 +77,9 @@ impl Tool for ReadFileTool {
     }
 
     fn description(&self) -> &str {
-        "Read a file from the LOCAL FILESYSTEM. NOT for workspace memory paths \
-         (use memory_read for those). If the path is inside a mounted workspace directory, \
-         prefer `workspace://<mount-id>/...` via memory_read instead. \
+        "Read a file from the LOCAL FILESYSTEM. NOT for workspace document paths \
+         (use workspace_read for those). If the path is inside a mounted workspace directory, \
+         prefer `workspace://<mount-id>/...` via workspace_read instead. \
          Reading unmounted disk paths may require ask-mode approval. \
          Returns file content as text. For large files, you can specify offset and limit to read a portion."
     }
@@ -205,9 +205,9 @@ impl Tool for WriteFileTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace memory \
-         (use memory_write for that). If the target is inside a mounted workspace directory, \
-         prefer `workspace://<mount-id>/...` via memory_write so changes stay in the workspace branch first. \
+        "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace documents \
+         (use workspace_write for that). If the target is inside a mounted workspace directory, \
+         prefer `workspace://<mount-id>/...` via workspace_write so changes stay in the workspace branch first. \
          Writing unmounted disk paths may require ask-mode approval and 'always allow' can promote the directory into a mount. \
          Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use apply_patch for targeted edits."
     }
@@ -239,7 +239,7 @@ impl Tool for WriteFileTool {
         // Reject workspace paths: these live in the database, not on disk.
         if is_workspace_path(path_str) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is a workspace memory file. Use the memory_write tool instead of write_file. \
+                "'{}' is a workspace document path. Use the workspace_write tool instead of write_file. \
                  For HEARTBEAT.md use target='heartbeat', for MEMORY.md use target='memory'.",
                 path_str
             )));
@@ -435,8 +435,8 @@ impl Tool for ListDirTool {
     }
 
     fn description(&self) -> &str {
-        "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace memory \
-         (use memory_tree for that). If the directory is mounted into the workspace, prefer `workspace://<mount-id>` via memory_tree instead. Listing mounted directories is read-only and should not require ask-mode approval; unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
+        "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace document trees \
+         (use workspace_tree for that). If the directory is mounted into the workspace, prefer `workspace://<mount-id>` via workspace_tree instead. Listing mounted directories is read-only and should not require ask-mode approval; unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -875,8 +875,8 @@ mod tests {
 
             let msg = err.to_string();
             assert!(
-                msg.contains("memory_write"),
-                "Rejection for {} should mention memory_write, got: {}",
+                msg.contains("workspace_write"),
+                "Rejection for {} should mention workspace_write, got: {}",
                 filename,
                 msg
             );
@@ -896,8 +896,8 @@ mod tests {
                 .unwrap_err();
 
             assert!(
-                err.to_string().contains("memory_write"),
-                "Rejection for {} should mention memory_write",
+                err.to_string().contains("workspace_write"),
+                "Rejection for {} should mention workspace_write",
                 prefix_path
             );
         }

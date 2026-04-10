@@ -13,6 +13,7 @@ use crate::agent::context_monitor::{CompactionStrategy, ContextBreakdown};
 use crate::agent::session::Thread;
 use crate::error::Error;
 use crate::llm::{ChatMessage, CompletionRequest, LlmProvider, Reasoning};
+use crate::memory::MemoryManager;
 use crate::workspace::Workspace;
 
 /// Result of a compaction operation.
@@ -47,20 +48,22 @@ impl ContextCompactor {
         thread: &mut Thread,
         strategy: CompactionStrategy,
         workspace: Option<&Workspace>,
+        memory: Option<&MemoryManager>,
+        owner_id: &str,
     ) -> Result<CompactionResult, Error> {
         let messages = thread.messages();
         let tokens_before = ContextBreakdown::analyze(&messages).total_tokens;
 
         let result = match strategy {
             CompactionStrategy::Summarize { keep_recent } => {
-                self.compact_with_summary(thread, keep_recent, workspace)
+                self.compact_with_summary(thread, keep_recent, workspace, memory, owner_id)
                     .await?
             }
             CompactionStrategy::Truncate { keep_recent } => {
                 self.compact_truncate(thread, keep_recent)
             }
             CompactionStrategy::MoveToWorkspace => {
-                self.compact_to_workspace(thread, workspace).await?
+                self.compact_to_workspace(thread, workspace, memory, owner_id).await?
             }
         };
 
@@ -82,6 +85,8 @@ impl ContextCompactor {
         thread: &mut Thread,
         keep_recent: usize,
         workspace: Option<&Workspace>,
+        memory: Option<&MemoryManager>,
+        owner_id: &str,
     ) -> Result<CompactionPartial, Error> {
         if thread.turns.len() <= keep_recent {
             return Ok(CompactionPartial::empty());
@@ -105,7 +110,18 @@ impl ContextCompactor {
 
         // Write to workspace if available.
         // If archival fails, preserve turns to avoid context loss.
-        let (summary_written, turns_removed) = if let Some(ws) = workspace {
+        let (summary_written, turns_removed) = if let Some(manager) = memory {
+            match self.write_summary_to_memory(manager, owner_id, &summary).await {
+                Ok(()) => {
+                    thread.truncate_turns(keep_recent);
+                    (true, turns_to_remove)
+                }
+                Err(e) => {
+                    tracing::warn!("Compaction summary memory write failed (turns preserved): {}", e);
+                    (false, 0)
+                }
+            }
+        } else if let Some(ws) = workspace {
             match self.write_summary_to_workspace(ws, &summary).await {
                 Ok(()) => {
                     thread.truncate_turns(keep_recent);
@@ -146,12 +162,9 @@ impl ContextCompactor {
         &self,
         thread: &mut Thread,
         workspace: Option<&Workspace>,
+        memory: Option<&MemoryManager>,
+        owner_id: &str,
     ) -> Result<CompactionPartial, Error> {
-        let Some(ws) = workspace else {
-            // Fall back to truncation if no workspace
-            return Ok(self.compact_truncate(thread, 5));
-        };
-
         // Keep more turns when moving to workspace (we have a backup)
         let keep_recent = 10;
         if thread.turns.len() <= keep_recent {
@@ -165,15 +178,30 @@ impl ContextCompactor {
         let content = format_turns_for_storage(old_turns);
 
         // Write to workspace. If archival fails, preserve turns.
-        let (written, turns_removed) = match self.write_context_to_workspace(ws, &content).await {
-            Ok(()) => {
-                thread.truncate_turns(keep_recent);
-                (true, turns_to_remove)
+        let (written, turns_removed) = if let Some(manager) = memory {
+            match self.write_summary_to_memory(manager, owner_id, &content).await {
+                Ok(()) => {
+                    thread.truncate_turns(keep_recent);
+                    (true, turns_to_remove)
+                }
+                Err(e) => {
+                    tracing::warn!("Compaction context memory write failed (turns preserved): {}", e);
+                    (false, 0)
+                }
             }
-            Err(e) => {
-                tracing::warn!("Compaction context write failed (turns preserved): {}", e);
-                (false, 0)
+        } else if let Some(ws) = workspace {
+            match self.write_context_to_workspace(ws, &content).await {
+                Ok(()) => {
+                    thread.truncate_turns(keep_recent);
+                    (true, turns_to_remove)
+                }
+                Err(e) => {
+                    tracing::warn!("Compaction context write failed (turns preserved): {}", e);
+                    (false, 0)
+                }
             }
+        } else {
+            return Ok(self.compact_truncate(thread, 5));
         };
 
         Ok(CompactionPartial {
@@ -248,6 +276,25 @@ Be brief but capture all important details. Use bullet points."#,
 
         workspace
             .append(&format!("daily/{}.md", date), &entry)
+            .await?;
+        Ok(())
+    }
+
+    async fn write_summary_to_memory(
+        &self,
+        memory: &MemoryManager,
+        owner_id: &str,
+        summary: &str,
+    ) -> Result<(), Error> {
+        memory
+            .record_episode(
+                owner_id,
+                None,
+                "Context Compaction Summary",
+                summary,
+                Some("When recent compressed context may need to be recalled".to_string()),
+                serde_json::json!({ "source": "compaction" }),
+            )
             .await?;
         Ok(())
     }
@@ -388,6 +435,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 3 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -434,6 +483,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 5 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -465,6 +516,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 3 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed on empty turns");
@@ -492,6 +545,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 2 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact with summary should succeed");
@@ -533,6 +588,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 3 },
                 None,
+                None,
+                "test-owner",
             )
             .await;
 
@@ -559,6 +616,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 5 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -585,6 +644,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 3 },
                 Some(&workspace),
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed even when workspace write fails");
@@ -618,7 +679,13 @@ mod tests {
         let mut thread = make_thread(20);
 
         let result = compactor
-            .compact(&mut thread, CompactionStrategy::MoveToWorkspace, None)
+            .compact(
+                &mut thread,
+                CompactionStrategy::MoveToWorkspace,
+                None,
+                None,
+                "test-owner",
+            )
             .await
             .expect("compact should succeed");
 
@@ -646,7 +713,13 @@ mod tests {
         let mut thread = make_thread(4);
 
         let result = compactor
-            .compact(&mut thread, CompactionStrategy::MoveToWorkspace, None)
+            .compact(
+                &mut thread,
+                CompactionStrategy::MoveToWorkspace,
+                None,
+                None,
+                "test-owner",
+            )
             .await
             .expect("compact should succeed");
 
@@ -670,6 +743,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::MoveToWorkspace,
                 Some(&workspace),
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed even when workspace write fails");
@@ -755,6 +830,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 5 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -782,6 +859,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 0 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -806,6 +885,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 0 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -833,6 +914,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 3 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("compact should succeed");
@@ -873,6 +956,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 10 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("first compact");
@@ -885,6 +970,8 @@ mod tests {
                 &mut thread,
                 CompactionStrategy::Truncate { keep_recent: 3 },
                 None,
+                None,
+                "test-owner",
             )
             .await
             .expect("second compact");

@@ -16,10 +16,10 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `scheduler.rs` | Parallel job scheduling. Maintains `jobs` map (full LLM-driven) and `subtasks` map (tool-exec/background). |
 | *(moved to `src/worker/job.rs`)* | Per-job execution now lives in `src/worker/job.rs` as `JobDelegate`, using the shared `run_agentic_loop()` engine. |
 | `agentic_loop.rs` | Shared agentic loop engine: `run_agentic_loop()`, `LoopDelegate` trait, `LoopOutcome`, `LoopSignal`, `TextAction`. All execution paths (chat, job, Claude Code) delegate to this. |
-| `compaction.rs` | Context window management: summarize old turns, write to workspace daily log, trim context. Three strategies. |
+| `compaction.rs` | Context window management: summarize old turns, persist them into episodic memory when available, and trim context. Three strategies. |
 | `context_monitor.rs` | Detects memory pressure. Suggests `CompactionStrategy` based on usage level. |
 | `self_repair.rs` | Detects stuck jobs and broken tools, attempts recovery. |
-| `heartbeat.rs` | Proactive periodic execution. Reads `HEARTBEAT.md`, notifies via channel if findings. |
+| `heartbeat.rs` | Proactive periodic execution. Reads the heartbeat procedure from native memory graph (fallback to `HEARTBEAT.md`), notifies via channel if findings. |
 | `submission.rs` | Parses all user submissions into typed variants before routing. |
 | `undo.rs` | Turn-based undo/redo with checkpoints. Checkpoints store message lists (max 20 by default). |
 | `routine.rs` | `Routine` types: `Trigger` (cron/event/system_event/manual) + `RoutineAction` (lightweight/full_job) + `RoutineGuardrails`. |
@@ -83,8 +83,8 @@ Triggered by `ContextMonitor` when token usage approaches the model's context li
 **Token estimation**: Word-count × 1.3 + 4 overhead per message. Default context limit: 100,000 tokens. Compaction threshold: 80% (configurable).
 
 Three strategies, chosen by `ContextMonitor.suggest_compaction()` based on usage ratio:
-- **MoveToWorkspace** — Writes full turn transcript to workspace daily log, keeps 10 recent turns. Used when usage is 80–85% (moderate). Falls back to `Truncate(5)` if no workspace.
-- **Summarize** (`keep_recent: N`) — LLM generates a summary of old turns, writes it to workspace daily log (`daily/YYYY-MM-DD.md`), removes old turns. Used when usage is 85–95%.
+- **MoveToWorkspace** — Archives the full turn transcript into native episodic memory when available, otherwise falls back to workspace archival or `Truncate(5)`. Keeps 10 recent turns. Used when usage is 80–85% (moderate).
+- **Summarize** (`keep_recent: N`) — LLM generates a summary of old turns, writes it to native episodic memory when available (or workspace daily log as a fallback), removes old turns. Used when usage is 85–95%.
 - **Truncate** (`keep_recent: N`) — Removes oldest turns without summarization (fast path). Used when usage >95% (critical).
 
 If the LLM call for summarization fails, the error propagates — turns are **not** truncated on failure.

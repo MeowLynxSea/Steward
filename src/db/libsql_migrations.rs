@@ -912,6 +912,163 @@ CREATE TABLE IF NOT EXISTS workspace_mount_checkpoint_files (
 ALTER TABLE conversation_messages ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
 "#,
     ),
+    (
+        19,
+        "native_memory_graph",
+        r#"
+CREATE TABLE IF NOT EXISTS memory_spaces (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    agent_id TEXT,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (owner_id, agent_id, slug)
+);
+
+CREATE TABLE IF NOT EXISTS memory_nodes (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_nodes_space_kind
+    ON memory_nodes(space_id, kind, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_versions (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    supersedes_version_id TEXT REFERENCES memory_versions(id) ON DELETE SET NULL,
+    status TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_versions_node_created
+    ON memory_versions(node_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_edges (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    parent_node_id TEXT REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    child_node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    relation_kind TEXT NOT NULL DEFAULT 'contains',
+    visibility TEXT NOT NULL DEFAULT 'private',
+    priority INTEGER NOT NULL DEFAULT 100,
+    trigger_text TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_edges_space_child
+    ON memory_edges(space_id, child_node_id, priority, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_routes (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    edge_id TEXT REFERENCES memory_edges(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    domain TEXT NOT NULL,
+    path TEXT NOT NULL,
+    is_primary INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (space_id, domain, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_routes_space_node
+    ON memory_routes(space_id, node_id, is_primary DESC);
+
+CREATE TABLE IF NOT EXISTS memory_keywords (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    keyword TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (space_id, node_id, keyword)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_keywords_node
+    ON memory_keywords(node_id, keyword);
+
+CREATE TABLE IF NOT EXISTS memory_search_docs (
+    route_id TEXT PRIMARY KEY REFERENCES memory_routes(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    version_id TEXT NOT NULL REFERENCES memory_versions(id) ON DELETE CASCADE,
+    uri TEXT NOT NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    trigger_text TEXT,
+    keywords TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_search_docs_space_updated
+    ON memory_search_docs(space_id, updated_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_docs_fts USING fts5(
+    title,
+    content,
+    trigger_text,
+    keywords,
+    uri,
+    content='memory_search_docs',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_insert AFTER INSERT ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_delete AFTER DELETE ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_update AFTER UPDATE ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri);
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri);
+END;
+
+CREATE TABLE IF NOT EXISTS memory_changesets (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    origin TEXT NOT NULL,
+    summary TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_changesets_space_status
+    ON memory_changesets(space_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS memory_changeset_rows (
+    id TEXT PRIMARY KEY,
+    changeset_id TEXT NOT NULL REFERENCES memory_changesets(id) ON DELETE CASCADE,
+    node_id TEXT REFERENCES memory_nodes(id) ON DELETE SET NULL,
+    route_id TEXT REFERENCES memory_routes(id) ON DELETE SET NULL,
+    operation TEXT NOT NULL,
+    before_json TEXT NOT NULL DEFAULT 'null',
+    after_json TEXT NOT NULL DEFAULT 'null',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_changeset_rows_changeset
+    ON memory_changeset_rows(changeset_id, created_at ASC);
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

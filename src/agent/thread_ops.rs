@@ -485,7 +485,13 @@ impl Agent {
 
                 let compactor = ContextCompactor::new(self.llm().clone());
                 if let Err(e) = compactor
-                    .compact(thread, strategy, self.workspace().map(|w| w.as_ref()))
+                    .compact(
+                        thread,
+                        strategy,
+                        self.workspace().map(|w| w.as_ref()),
+                        self.memory().map(|m| m.as_ref()),
+                        &self.deps.owner_id,
+                    )
                     .await
                 {
                     tracing::warn!("Auto-compaction failed: {}", e);
@@ -1361,7 +1367,13 @@ impl Agent {
 
         let compactor = ContextCompactor::new(self.llm().clone());
         match compactor
-            .compact(thread, strategy, self.workspace().map(|w| w.as_ref()))
+            .compact(
+                thread,
+                strategy,
+                self.workspace().map(|w| w.as_ref()),
+                self.memory().map(|m| m.as_ref()),
+                &self.deps.owner_id,
+            )
             .await
         {
             Ok(result) => {
@@ -2779,7 +2791,7 @@ mod tests {
     fn test_rebuild_chat_messages_with_enriched_tool_calls() {
         let tool_json = serde_json::json!([
             {
-                "name": "memory_search",
+                "name": "workspace_search",
                 "call_id": "call_0",
                 "parameters": {"query": "test"},
                 "result": "Found 3 results",
@@ -2810,7 +2822,7 @@ mod tests {
         assert!(result[1].tool_calls.is_some());
         let tcs = result[1].tool_calls.as_ref().unwrap();
         assert_eq!(tcs.len(), 2);
-        assert_eq!(tcs[0].name, "memory_search");
+        assert_eq!(tcs[0].name, "workspace_search");
         assert_eq!(tcs[0].id, "call_0");
         assert_eq!(tcs[1].name, "echo");
 
@@ -2953,6 +2965,7 @@ mod tests {
             })),
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
+            memory: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,

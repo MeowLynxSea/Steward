@@ -2358,7 +2358,7 @@ mod tests {
     #[test]
     fn test_tool_selection_preserves_call_id() {
         let selection = ToolSelection {
-            tool_name: "memory_search".to_string(),
+            tool_name: "workspace_search".to_string(),
             parameters: serde_json::json!({"query": "test"}),
             reasoning: "Need to search memory".to_string(),
             alternatives: vec![],

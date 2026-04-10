@@ -10,6 +10,7 @@ use crate::hooks::bootstrap_hooks;
 use crate::llm::{
     ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, create_session_manager,
 };
+use crate::memory::MemoryManager;
 use crate::runtime_events::{RuntimeEventEmitter, SseManager};
 use crate::task_runtime::TaskRuntime;
 use crate::tools::mcp::McpSessionManager;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub owner_id: String,
     pub db: Option<Arc<dyn Database>>,
     pub workspace: Option<Arc<Workspace>>,
+    pub memory: Option<Arc<MemoryManager>>,
     pub agent_session_manager: Arc<AgentSessionManager>,
     pub title_llm: Arc<dyn crate::llm::LlmProvider>,
     pub task_runtime: Arc<TaskRuntime>,
@@ -42,6 +44,7 @@ impl AppState {
         owner_id: String,
         db: Option<Arc<dyn Database>>,
         workspace: Option<Arc<Workspace>>,
+        memory: Option<Arc<MemoryManager>>,
         agent_session_manager: Arc<AgentSessionManager>,
         title_llm: Arc<dyn crate::llm::LlmProvider>,
         task_runtime: Arc<TaskRuntime>,
@@ -54,6 +57,7 @@ impl AppState {
             owner_id,
             db,
             workspace,
+            memory,
             agent_session_manager,
             title_llm,
             task_runtime,
@@ -138,6 +142,7 @@ pub async fn start_embedded_runtime(
     // Clone values needed for AppState BEFORE moving components into AgentDeps
     let app_state_db = components.db.clone();
     let app_state_workspace = components.workspace.clone();
+    let app_state_memory = components.memory.clone();
     let app_state_tools = Arc::clone(&components.tools);
     let app_state_mcp = Arc::clone(&components.mcp_session_manager);
     let app_state_session_manager = Arc::clone(&session_manager);
@@ -175,6 +180,7 @@ pub async fn start_embedded_runtime(
         safety: components.safety,
         tools: components.tools,
         workspace: components.workspace,
+        memory: components.memory,
         extension_manager,
         skill_registry: components.skill_registry,
         skill_catalog: components.skill_catalog,
@@ -232,6 +238,7 @@ pub async fn start_embedded_runtime(
         config.owner_id.clone(),
         app_state_db,
         app_state_workspace,
+        app_state_memory,
         app_state_session_manager,
         app_llm.clone(),
         app_state_task_runtime,

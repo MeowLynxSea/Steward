@@ -13,15 +13,22 @@
   import MemorySettingsDrawers from "../components/settings/MemorySettingsDrawers.svelte";
   import MemorySettingsPanel from "../components/settings/MemorySettingsPanel.svelte";
   import {
-    friendlyTitleForPath,
-    memoryGroups,
+    memoryRouteKey,
     type MemoryNavItem,
     type MemoryPanelMode
   } from "../components/settings/memory";
   import { apiClient } from "../lib/api";
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { themeStore } from "../lib/stores/theme.svelte";
-  import type { MemoryDocument, WorkspaceEntry } from "../lib/types";
+  import type {
+    MemoryChangeSet,
+    MemoryNodeDetail,
+    MemorySearchHit,
+    MemorySidebarItem,
+    MemorySidebarSection,
+    MemoryTimelineEntry,
+    MemoryVersion
+  } from "../lib/types";
 
   type SettingsSection = "general" | "models" | "memory";
 
@@ -39,22 +46,20 @@
   let activeSection = $state<SettingsSection>("general");
   let showBackendDrawer = $state(false);
   let showMemoryDrawer = $state(false);
-  let showDailyDrawer = $state(false);
-  let memoryDrawerMode = $state<MemoryPanelMode>("document");
+  let memoryDrawerMode = $state<MemoryPanelMode>("node");
   let activeMemoryItem = $state<MemoryNavItem | null>(null);
-  let activeMemoryDocument = $state<MemoryDocument | null>(null);
-  let dailyEntries = $state<WorkspaceEntry[]>([]);
-  let activeDailyEntry = $state<WorkspaceEntry | null>(null);
-  let activeDailyDocument = $state<MemoryDocument | null>(null);
+  let memorySections = $state<MemorySidebarSection[]>([]);
+  let memoryTimeline = $state<MemoryTimelineEntry[]>([]);
+  let memoryReviews = $state<MemoryChangeSet[]>([]);
+  let selectedNode = $state<MemoryNodeDetail | null>(null);
+  let selectedVersions = $state<MemoryVersion[]>([]);
   let memoryPanelLoading = $state(false);
-  let dailyDocumentLoading = $state(false);
   let memoryError = $state<string | null>(null);
-  let memoryEmptyState = $state<string | null>(null);
-  let regressionQuery = $state("");
-  let regressionResults = $state<import("../lib/types").WorkspaceSearchResult[]>([]);
-  let regressionLoading = $state(false);
-  let regressionHasSearched = $state(false);
-  let regressionError = $state<string | null>(null);
+  let memorySearchQuery = $state("");
+  let memorySearchResults = $state<MemorySearchHit[]>([]);
+  let memorySearchLoading = $state(false);
+  let memorySearchHasSearched = $state(false);
+  let memorySearchError = $state<string | null>(null);
 
   const backendOptions = $derived(
     settingsStore.data.backends.map((backend) => ({
@@ -77,11 +82,6 @@
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key !== "Escape") {
-      return;
-    }
-
-    if (showDailyDrawer) {
-      closeDailyDrawer();
       return;
     }
 
@@ -108,180 +108,150 @@
 
   function closeMemoryDrawer() {
     showMemoryDrawer = false;
-    memoryDrawerMode = "document";
+    memoryDrawerMode = "node";
     activeMemoryItem = null;
-    activeMemoryDocument = null;
-    dailyEntries = [];
+    selectedNode = null;
+    selectedVersions = [];
     memoryError = null;
-    memoryEmptyState = null;
   }
 
-  function closeDailyDrawer() {
-    showDailyDrawer = false;
-    activeDailyEntry = null;
-    activeDailyDocument = null;
-  }
-
-  async function loadMemoryDocument(path: string) {
+  async function loadMemoryOverview() {
     memoryPanelLoading = true;
     memoryError = null;
-    memoryEmptyState = null;
-    activeMemoryDocument = null;
     try {
-      activeMemoryDocument = await apiClient.getMemoryDocument(path);
+      const [sidebarResponse, timelineResponse, reviewsResponse] = await Promise.all([
+        apiClient.listMemorySidebar(),
+        apiClient.listMemoryTimeline(),
+        apiClient.listMemoryReviews()
+      ]);
+      memorySections = sidebarResponse.sections;
+      memoryTimeline = timelineResponse.entries;
+      memoryReviews = reviewsResponse.reviews;
     } catch (error) {
-      const message = errorMessage(error, "Failed to load memory document");
-
-      if (message.includes("Document not found")) {
-        if (path === "context/profile.json") {
-          memoryEmptyState =
-            "心理档案尚未生成。Agent 在完成画像写入后，这里才会出现内容。";
-        } else if (path === "context/assistant-directives.md") {
-          memoryEmptyState =
-            "行为导出尚未生成。通常会在心理档案写入并同步后自动出现。";
-        } else {
-          memoryEmptyState = "这个记忆文件目前还不存在。";
-        }
-      } else {
-        memoryError = message;
-      }
+      memoryError = errorMessage(error, "Failed to load memory graph");
     } finally {
       memoryPanelLoading = false;
     }
   }
 
-  async function loadDailyEntries() {
-    memoryPanelLoading = true;
-    memoryError = null;
-    dailyEntries = [];
-    try {
-      const response = await apiClient.getMemoryDirectory("daily");
-      dailyEntries = [...response.entries].sort((left, right) =>
-        right.path.localeCompare(left.path)
-      );
-    } catch (error) {
-      memoryError = errorMessage(error, "Failed to load daily logs");
-    } finally {
-      memoryPanelLoading = false;
-    }
-  }
-
-  async function openMemoryItem(item: MemoryNavItem) {
-    activeMemoryItem = item;
-    memoryDrawerMode = item.kind;
+  async function openMemoryItem(item: MemorySidebarItem) {
     showMemoryDrawer = true;
-    closeDailyDrawer();
-
-    if (item.kind === "daily") {
-      await loadDailyEntries();
+    if (item.uri?.startsWith("review://")) {
+      activeMemoryItem = {
+        key: item.uri,
+        title: "Review Queue",
+        description: "检查 AI 对记忆图谱的结构化修改，并决定接受还是回滚。",
+        kind: "reviews"
+      };
+      memoryDrawerMode = "reviews";
       return;
     }
 
-    if (item.path) {
-      await loadMemoryDocument(item.path);
-    }
-  }
-
-  function updateRegressionQuery(value: string) {
-    regressionQuery = value;
-  }
-
-  async function runRegressionSearch() {
-    const query = regressionQuery.trim();
-    if (!query) {
-      regressionHasSearched = false;
-      regressionResults = [];
-      regressionError = null;
-      return;
-    }
-
-    regressionLoading = true;
-    regressionHasSearched = true;
-    regressionError = null;
-
-    try {
-      const response = await apiClient.searchWorkspace(query);
-      regressionResults = response.results;
-    } catch (error) {
-      regressionError = errorMessage(error, "Failed to run regression search");
-    } finally {
-      regressionLoading = false;
-    }
-  }
-
-  async function openRegressionDrawer() {
     activeMemoryItem = {
-      key: "regression",
-      title: "回归搜索",
-      description: "在 Agent 的记忆中搜索相关信息，帮助你更好地理解 Agent 的行为和决策依据。",
-      kind: "regression"
+      key: memoryRouteKey(item),
+      title: item.title,
+      description: item.subtitle ?? "检查这个记忆节点的内容、routes、trigger 和版本历史。",
+      kind: "node"
     };
-    memoryDrawerMode = "regression";
-    showMemoryDrawer = true;
-    closeDailyDrawer();
+    memoryDrawerMode = "node";
+    memoryPanelLoading = true;
     memoryError = null;
-    memoryEmptyState = null;
-  }
-
-  async function openDailyEntry(entry: WorkspaceEntry) {
-    activeDailyEntry = entry;
-    showDailyDrawer = true;
-    dailyDocumentLoading = true;
-    activeDailyDocument = null;
-    memoryError = null;
+    selectedNode = null;
+    selectedVersions = [];
     try {
-      activeDailyDocument = await apiClient.getMemoryDocument(entry.path);
+      const key = item.uri ?? item.node_id;
+      const [detailResponse, versionsResponse] = await Promise.all([
+        apiClient.getMemoryNode(key),
+        apiClient.getMemoryVersions(key)
+      ]);
+      selectedNode = detailResponse.detail;
+      selectedVersions = versionsResponse.versions;
     } catch (error) {
-      memoryError = errorMessage(error, "Failed to load daily log");
+      memoryError = errorMessage(error, "Failed to load memory node");
     } finally {
-      dailyDocumentLoading = false;
+      memoryPanelLoading = false;
     }
   }
 
-  async function openPathFromRegression(path: string) {
-    if (path.startsWith("daily/")) {
-      const dailyItem = memoryGroups
-        .flatMap((group) => group.items)
-        .find((item) => item.kind === "daily");
+  function updateMemorySearchQuery(value: string) {
+    memorySearchQuery = value;
+  }
 
-      if (dailyItem) {
-        await openMemoryItem(dailyItem);
-      }
-
-      await openDailyEntry({
-        path,
-        name: path.split("/").pop(),
-        is_directory: false,
-        updated_at: null,
-        content_preview: null
-      });
+  async function runMemorySearch() {
+    const query = memorySearchQuery.trim();
+    if (!query) {
+      memorySearchHasSearched = false;
+      memorySearchResults = [];
+      memorySearchError = null;
       return;
     }
 
-    const existing = memoryGroups
-      .flatMap((group) => group.items)
-      .find((item) => item.path === path);
+    memorySearchLoading = true;
+    memorySearchHasSearched = true;
+    memorySearchError = null;
 
-    if (existing) {
-      await openMemoryItem(existing);
-      return;
+    try {
+      const response = await apiClient.searchMemoryGraph(query, 20);
+      memorySearchResults = response.results;
+    } catch (error) {
+      memorySearchError = errorMessage(error, "Failed to search memory graph");
+    } finally {
+      memorySearchLoading = false;
     }
+  }
 
-    await openMemoryItem({
-      key: path,
-      title: friendlyTitleForPath(path),
-      description: path,
-      path,
-      kind: "document"
-    });
+  async function openMemorySearchDrawer() {
+    activeMemoryItem = {
+      key: "search",
+      title: "Recall Search",
+      description: "调试 graph-native 记忆召回结果，查看 route、snippet 和命中节点。",
+      kind: "search"
+    };
+    memoryDrawerMode = "search";
+    showMemoryDrawer = true;
+    memoryError = null;
+  }
+
+  async function openMemoryReviewsDrawer() {
+    activeMemoryItem = {
+      key: "reviews",
+      title: "Review Queue",
+      description: "查看待审查的 changeset，并决定接受还是回滚。",
+      kind: "reviews"
+    };
+    memoryDrawerMode = "reviews";
+    showMemoryDrawer = true;
+    memoryError = null;
+  }
+
+  async function openMemoryKey(key: string) {
+    const syntheticItem: MemorySidebarItem = {
+      node_id: key,
+      route_id: null,
+      uri: key,
+      title: key,
+      subtitle: null,
+      kind: "reference",
+      updated_at: new Date().toISOString()
+    };
+    await openMemoryItem(syntheticItem);
+  }
+
+  async function handleApplyMemoryReview(id: string, action: "accept" | "rollback") {
+    const response =
+      action === "rollback"
+        ? await apiClient.rollbackMemoryChangeset(id)
+        : await apiClient.applyMemoryReview(id, action);
+    memoryReviews = response.reviews;
   }
 
   function selectSection(section: SettingsSection) {
     activeSection = section;
 
     if (section !== "memory") {
-      closeDailyDrawer();
       closeMemoryDrawer();
+    } else if (memorySections.length === 0 && !memoryPanelLoading) {
+      void loadMemoryOverview();
     }
 
     if (section !== "models") {
@@ -378,9 +348,13 @@
       </section>
     {:else if activeSection === "memory"}
       <MemorySettingsPanel
+        {memorySections}
+        {memoryTimeline}
+        {memoryReviews}
         {memoryError}
         onOpenItem={openMemoryItem}
-        onOpenRegression={openRegressionDrawer}
+        onOpenSearch={openMemorySearchDrawer}
+        onOpenReviews={openMemoryReviewsDrawer}
       />
     {:else}
       <section class="settings-section">
@@ -486,28 +460,23 @@
 
 <MemorySettingsDrawers
   {showMemoryDrawer}
-  {showDailyDrawer}
   {memoryDrawerMode}
   {activeMemoryItem}
-  {activeMemoryDocument}
-  {dailyEntries}
-  {activeDailyEntry}
-  {activeDailyDocument}
+  {selectedNode}
+  {selectedVersions}
+  {memoryReviews}
   {memoryPanelLoading}
-  {dailyDocumentLoading}
   {memoryError}
-  {memoryEmptyState}
-  {regressionQuery}
-  {regressionResults}
-  {regressionLoading}
-  {regressionHasSearched}
-  {regressionError}
+  {memorySearchQuery}
+  {memorySearchResults}
+  {memorySearchLoading}
+  {memorySearchHasSearched}
+  {memorySearchError}
   onCloseMemoryDrawer={closeMemoryDrawer}
-  onCloseDailyDrawer={closeDailyDrawer}
-  onOpenDailyEntry={openDailyEntry}
-  onRegressionQueryChange={updateRegressionQuery}
-  onRunRegressionSearch={runRegressionSearch}
-  onOpenPath={openPathFromRegression}
+  onMemorySearchQueryChange={updateMemorySearchQuery}
+  onRunMemorySearch={runMemorySearch}
+  onOpenMemoryKey={openMemoryKey}
+  onApplyMemoryReview={handleApplyMemoryReview}
 />
 
 <style>

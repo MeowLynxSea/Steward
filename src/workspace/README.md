@@ -1,6 +1,14 @@
-# Workspace & Memory System
+# Workspace & File Context System
 
 Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace provides persistent memory for agents with a flexible filesystem-like structure.
+
+## Current Scope
+
+`src/workspace/` is now responsible for mounted files, workspace indexing, and file-context retrieval.
+
+Steward's long-term agent memory no longer lives here as runtime truth. The native graph-based memory system now lives under `src/memory/`, backed by libSQL tables such as `memory_nodes`, `memory_versions`, and `memory_routes`.
+
+Legacy files like `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, and `daily/*.md` are imported once into the graph during migration. After that, the graph is the source of truth and the workspace copy is only legacy content.
 
 ## Key Principles
 
@@ -68,7 +76,7 @@ let results = workspace.search("dark mode preference", 5).await?;
 let prompt = workspace.system_prompt().await?;
 ```
 
-## Memory Tools
+## Legacy Workspace Memory Tools
 
 Four tools for LLM use:
 
@@ -111,12 +119,13 @@ When a workspace has additional read scopes (via `with_additional_read_scopes`),
 
 **Design rule:** If you want shared identity across users, seed the same content into each user's scope at setup time. Don't rely on multi-scope fallback for identity files.
 
-## Heartbeat System
+## Legacy Heartbeat File Format
 
 Proactive periodic execution (default: 30 minutes):
 
-1. Reads `HEARTBEAT.md` checklist
-2. Runs agent turn with checklist prompt
+1. Reads the migrated heartbeat procedure from the native memory graph (`core://procedures/heartbeat`)
+2. Falls back to `HEARTBEAT.md` only when graph memory is unavailable
+3. Runs agent turn with checklist prompt
 3. If findings, notifies via channel
 4. If nothing, agent replies "HEARTBEAT_OK" (no notification)
 

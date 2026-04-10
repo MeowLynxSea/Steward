@@ -24,9 +24,11 @@ use crate::skills::{LoadedSkill, SkillTrust};
 /// Review by the security team is required before expanding this list.
 ///
 const READ_ONLY_TOOLS: &[&str] = &[
-    "memory_search",
-    "memory_read",
-    "memory_tree",
+    "workspace_search",
+    "workspace_read",
+    "workspace_tree",
+    "memory_recall",
+    "memory_open",
     "time",
     "echo",
     "json",
@@ -151,10 +153,11 @@ mod tests {
         vec![
             make_tool("shell"),
             make_tool("http"),
-            make_tool("memory_write"),
-            make_tool("memory_search"),
-            make_tool("memory_read"),
-            make_tool("memory_tree"),
+            make_tool("workspace_write"),
+            make_tool("workspace_search"),
+            make_tool("workspace_read"),
+            make_tool("workspace_tree"),
+            make_tool("memory_recall"),
             make_tool("time"),
             make_tool("echo"),
             make_tool("json"),
@@ -191,9 +194,10 @@ mod tests {
         let kept_names: Vec<&str> = result.tools.iter().map(|t| t.name.as_str()).collect();
         assert!(!kept_names.contains(&"shell"));
         assert!(!kept_names.contains(&"http"));
-        assert!(!kept_names.contains(&"memory_write"));
-        assert!(kept_names.contains(&"memory_search"));
-        assert!(kept_names.contains(&"memory_read"));
+        assert!(!kept_names.contains(&"workspace_write"));
+        assert!(kept_names.contains(&"workspace_search"));
+        assert!(kept_names.contains(&"workspace_read"));
+        assert!(kept_names.contains(&"memory_recall"));
         assert!(kept_names.contains(&"time"));
         assert_eq!(result.min_trust, SkillTrust::Installed);
     }

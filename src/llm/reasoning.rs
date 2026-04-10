@@ -415,10 +415,10 @@ impl Reasoning {
         }
     }
 
-    /// Set a custom system prompt from workspace identity files.
+    /// Set a custom system prompt assembled by the caller.
     ///
-    /// This is typically loaded from workspace.system_prompt() which combines
-    /// AGENTS.md, SOUL.md, USER.md, and IDENTITY.md into a unified prompt.
+    /// In the current runtime this is typically built by the native memory
+    /// context assembler rather than loaded directly from workspace files.
     pub fn with_system_prompt(mut self, prompt: String) -> Self {
         if !prompt.is_empty() {
             self.workspace_system_prompt = Some(prompt);
@@ -2445,12 +2445,12 @@ That's my plan."#;
 
     #[test]
     fn test_recover_json_tool_call() {
-        let tools = make_tools(&["memory_search"]);
+        let tools = make_tools(&["workspace_search"]);
         let content =
-            r#"<tool_call>{"name": "memory_search", "arguments": {"query": "test"}}</tool_call>"#;
+            r#"<tool_call>{"name": "workspace_search", "arguments": {"query": "test"}}</tool_call>"#;
         let calls = recover_tool_calls_from_content(content, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "memory_search");
+        assert_eq!(calls[0].name, "workspace_search");
         assert_eq!(calls[0].arguments, serde_json::json!({"query": "test"}));
     }
 
@@ -2534,11 +2534,11 @@ That's my plan."#;
 
     #[test]
     fn test_recover_multiline_json_tool_call_on_own_line() {
-        let tools = make_tools(&["memory_search"]);
-        let content = "Let me check.\n\n<tool_call>\n{\"name\": \"memory_search\", \"arguments\": {\"query\": \"test\"}}\n</tool_call>\n\nDone.";
+        let tools = make_tools(&["workspace_search"]);
+        let content = "Let me check.\n\n<tool_call>\n{\"name\": \"workspace_search\", \"arguments\": {\"query\": \"test\"}}\n</tool_call>\n\nDone.";
         let calls = recover_tool_calls_from_content(content, &tools);
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "memory_search");
+        assert_eq!(calls[0].name, "workspace_search");
         assert_eq!(calls[0].arguments, serde_json::json!({"query": "test"}));
     }
 
@@ -3617,7 +3617,7 @@ That's my plan."#;
                 content: Some("I'll write the report.".to_string()),
                 tool_calls: vec![ToolCall {
                     id: "call_1".to_string(),
-                    name: "memory_write".to_string(),
+                    name: "workspace_write".to_string(),
                     arguments: serde_json::json!({}),
                     reasoning: None,
                 }],
@@ -3638,7 +3638,7 @@ That's my plan."#;
         let reasoning = Reasoning::new(llm);
         let mut ctx = ReasoningContext::new().with_message(ChatMessage::user("Write a report"));
         ctx.available_tools.push(ToolDefinition {
-            name: "memory_write".to_string(),
+            name: "workspace_write".to_string(),
             description: "Write to memory".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         });
@@ -3659,13 +3659,13 @@ That's my plan."#;
         let reasoning = Reasoning::new(llm);
         let mut ctx = ReasoningContext::new().with_message(ChatMessage::user("Write a report"));
         ctx.available_tools.push(ToolDefinition {
-            name: "memory_write".to_string(),
+            name: "workspace_write".to_string(),
             description: "Write to memory".to_string(),
             parameters: serde_json::json!({"type": "object"}),
         });
 
         let selections = reasoning.select_tools(&ctx).await.unwrap();
         assert_eq!(selections.len(), 1);
-        assert_eq!(selections[0].tool_name, "memory_write");
+        assert_eq!(selections[0].tool_name, "workspace_write");
     }
 }

@@ -9,6 +9,7 @@
 mod conversations;
 mod jobs;
 mod local_jobs;
+mod memory;
 mod routines;
 mod settings;
 mod tasks;

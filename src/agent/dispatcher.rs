@@ -104,33 +104,27 @@ impl Agent {
             .and_then(|v| v.as_str())
             .is_some_and(|t| t == "group" || t == "channel" || t == "supergroup");
 
-        // Load workspace system prompt (identity files: AGENTS.md, SOUL.md, etc.)
-        // In group chats, MEMORY.md is excluded to prevent leaking personal context.
-        // Resolve the user's timezone
+        // Resolve the user's timezone for tool execution metadata and timestamps.
         let user_tz = crate::timezone::resolve_timezone(
             message.timezone.as_deref(),
             None, // user setting lookup can be added later
             &self.config.default_timezone,
         );
 
-        let system_prompt = if let Some(ws) = self.workspace() {
-            let scoped_workspace = if ws.user_id() == message.user_id {
-                Arc::clone(ws)
-            } else {
-                Arc::new(ws.scoped_to_user(&message.user_id))
-            };
-            match scoped_workspace
-                .system_prompt_for_context_tz(is_group_chat, user_tz)
+        let system_prompt = if let Some(memory) = self.memory() {
+            match memory
+                .build_prompt_context(&message.user_id, None, &message.content, is_group_chat)
                 .await
             {
                 Ok(prompt) if !prompt.is_empty() => Some(prompt),
                 Ok(_) => None,
                 Err(e) => {
-                    tracing::debug!("Could not load workspace system prompt: {}", e);
+                    tracing::debug!("Could not load memory prompt context: {}", e);
                     None
                 }
             }
         } else {
+            tracing::debug!("Memory manager unavailable; dispatching without native memory prompt");
             None
         };
 
@@ -1829,6 +1823,7 @@ mod tests {
             })),
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
+            memory: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -2714,6 +2709,7 @@ mod tests {
             })),
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
+            memory: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -2845,6 +2841,7 @@ mod tests {
                     registry
                 },
                 workspace: None,
+                memory: None,
                 extension_manager: None,
                 skill_registry: None,
                 skill_catalog: None,

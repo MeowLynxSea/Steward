@@ -15,7 +15,8 @@ use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
     CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
     ResolveWorkspaceConflictRequest, SendSessionMessageRequest, WorkspaceActionRequest,
-    WorkspaceIndexRequest, WorkspaceSearchRequest,
+    WorkspaceIndexRequest, WorkspaceSearchRequest, MemoryGraphSearchRequest,
+    MemoryReviewActionRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -1521,43 +1522,6 @@ pub async fn get_workspace_tree(
 }
 
 #[tauri::command]
-pub async fn get_memory_directory(
-    state: State<'_, AppState>,
-    path: Option<String>,
-) -> Result<steward_core::ipc::MemoryDirectoryResponse, String> {
-    let workspace = state
-        .workspace
-        .as_ref()
-        .ok_or_else(|| "Workspace not available".to_string())?;
-
-    let path = path.unwrap_or_default();
-    let entries = workspace.list(&path).await.map_err(|e| e.to_string())?;
-
-    Ok(steward_core::ipc::MemoryDirectoryResponse { path, entries })
-}
-
-#[tauri::command]
-pub async fn get_memory_document(
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<steward_core::ipc::MemoryDocumentResponse, String> {
-    let workspace = state
-        .workspace
-        .as_ref()
-        .ok_or_else(|| "Workspace not available".to_string())?;
-
-    let doc = workspace.read(&path).await.map_err(|e| e.to_string())?;
-    let word_count = doc.word_count();
-
-    Ok(steward_core::ipc::MemoryDocumentResponse {
-        path: doc.path,
-        content: doc.content,
-        updated_at: doc.updated_at,
-        word_count,
-    })
-}
-
-#[tauri::command]
 pub async fn search_workspace(
     state: State<'_, AppState>,
     payload: WorkspaceSearchRequest,
@@ -1586,6 +1550,146 @@ pub async fn search_workspace(
         .collect();
 
     Ok(steward_core::ipc::WorkspaceSearchResponse { results: responses })
+}
+
+#[tauri::command]
+pub async fn list_memory_sidebar(
+    state: State<'_, AppState>,
+) -> Result<steward_core::ipc::MemorySidebarResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let sections = memory
+        .list_sidebar(&state.owner_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemorySidebarResponse { sections })
+}
+
+#[tauri::command]
+pub async fn get_memory_node(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<steward_core::ipc::MemoryNodeDetailResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let detail = memory
+        .get_node(&state.owner_id, None, &key)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryNodeDetailResponse { detail })
+}
+
+#[tauri::command]
+pub async fn search_memory_graph(
+    state: State<'_, AppState>,
+    payload: MemoryGraphSearchRequest,
+) -> Result<steward_core::ipc::MemoryGraphSearchResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let results = memory
+        .search(
+            &state.owner_id,
+            None,
+            &payload.query,
+            payload.limit.unwrap_or(12),
+            payload.domains.as_deref().unwrap_or(&[]),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryGraphSearchResponse { results })
+}
+
+#[tauri::command]
+pub async fn list_memory_timeline(
+    state: State<'_, AppState>,
+) -> Result<steward_core::ipc::MemoryTimelineResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let entries = memory
+        .list_timeline(&state.owner_id, None, 20)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryTimelineResponse { entries })
+}
+
+#[tauri::command]
+pub async fn list_memory_reviews(
+    state: State<'_, AppState>,
+) -> Result<steward_core::ipc::MemoryReviewsResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let reviews = memory
+        .list_reviews(&state.owner_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryReviewsResponse { reviews })
+}
+
+#[tauri::command]
+pub async fn get_memory_versions(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<steward_core::ipc::MemoryVersionsResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let versions = memory
+        .get_versions(&state.owner_id, None, &key)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryVersionsResponse { versions })
+}
+
+#[tauri::command]
+pub async fn apply_memory_review(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: MemoryReviewActionRequest,
+) -> Result<steward_core::ipc::MemoryReviewsResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    memory
+        .review(&state.owner_id, None, id, &payload.action)
+        .await
+        .map_err(|e| e.to_string())?;
+    let reviews = memory
+        .list_reviews(&state.owner_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryReviewsResponse { reviews })
+}
+
+#[tauri::command]
+pub async fn rollback_memory_changeset(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<steward_core::ipc::MemoryReviewsResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    memory
+        .review(&state.owner_id, None, id, "rollback")
+        .await
+        .map_err(|e| e.to_string())?;
+    let reviews = memory
+        .list_reviews(&state.owner_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryReviewsResponse { reviews })
 }
 
 // =============================================================================

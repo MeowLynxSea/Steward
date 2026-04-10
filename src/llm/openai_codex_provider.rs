@@ -1137,7 +1137,7 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
     /// to match OpenAI's `^[a-zA-Z0-9_-]+$` pattern.
     #[test]
     fn test_sanitize_tool_name_replaces_dots() {
-        assert_eq!(super::sanitize_tool_name("memory_search"), "memory_search");
+        assert_eq!(super::sanitize_tool_name("workspace_search"), "workspace_search");
         assert_eq!(
             super::sanitize_tool_name("mcp.server.tool"),
             "mcp_server_tool"
@@ -1185,7 +1185,7 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
             },
             ToolDefinition {
-                name: "memory_search".to_string(),
+                name: "workspace_search".to_string(),
                 description: "Memory".to_string(),
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
             },

@@ -30,6 +30,7 @@ use crate::error::{ChannelError, Error};
 use crate::extensions::ExtensionManager;
 use crate::hooks::HookRegistry;
 use crate::llm::LlmProvider;
+use crate::memory::MemoryManager;
 use crate::runtime_events::RuntimeEventEmitter;
 use crate::safety::SafetyLayer;
 use crate::skills::SkillRegistry;
@@ -172,6 +173,7 @@ pub struct AgentDeps {
     pub safety: Arc<SafetyLayer>,
     pub tools: Arc<ToolRegistry>,
     pub workspace: Option<Arc<Workspace>>,
+    pub memory: Option<Arc<MemoryManager>>,
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     pub skill_catalog: Option<Arc<crate::skills::catalog::SkillCatalog>>,
@@ -563,9 +565,9 @@ impl Agent {
              Mounted workspace content must be accessed via workspace URIs, not direct disk paths."
         );
         let guidance = match tool_name {
-            "read_file" => "Use memory_read with:",
-            "list_dir" => "Use memory_tree with:",
-            _ => "Use workspace tools such as memory_read or memory_write with:",
+            "read_file" => "Use workspace_read with:",
+            "list_dir" => "Use workspace_tree with:",
+            _ => "Use workspace tools such as workspace_read or workspace_write with:",
         };
         message.push('\n');
         message.push_str(guidance);
@@ -921,6 +923,10 @@ impl Agent {
 
     pub(super) fn workspace(&self) -> Option<&Arc<Workspace>> {
         self.deps.workspace.as_ref()
+    }
+
+    pub(super) fn memory(&self) -> Option<&Arc<MemoryManager>> {
+        self.deps.memory.as_ref()
     }
 
     pub(super) fn hooks(&self) -> &Arc<HookRegistry> {
@@ -1342,6 +1348,7 @@ impl Agent {
                             config,
                             hygiene,
                             workspace.clone(),
+                            self.memory().cloned(),
                             self.cheap_llm().clone(),
                             Some(notify_tx),
                             self.admin_store(),
@@ -1371,6 +1378,7 @@ impl Agent {
                         crate::tenant::AdminScope::new(Arc::clone(store)),
                         self.llm().clone(),
                         Arc::clone(workspace),
+                        self.memory().cloned(),
                         notify_tx,
                         Some(self.scheduler.clone()),
                         self.deps.extension_manager.clone(),
@@ -2544,6 +2552,7 @@ mod tests {
             })),
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
+            memory: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -2821,8 +2830,8 @@ mod tests {
             "redirect should include workspace uri, got: {redirect}"
         );
         assert!(
-            redirect.contains("memory_read"),
-            "redirect should point the agent to memory_read, got: {redirect}"
+            redirect.contains("workspace_read"),
+            "redirect should point the agent to workspace_read, got: {redirect}"
         );
         assert!(
             !redirect.contains(&raw_file.display().to_string()),

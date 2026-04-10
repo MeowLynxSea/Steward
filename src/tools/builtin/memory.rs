@@ -1,16 +1,15 @@
-//! Memory tools for persistent workspace memory.
+//! Workspace document tools.
 //!
 //! These tools allow the agent to:
-//! - Search past memories, decisions, and context
-//! - Read and write files in the workspace
+//! - Search indexed workspace documents
+//! - Read and write files in the workspace document store
 //!
 //! # Usage
 //!
-//! The agent should use `memory_search` before answering questions about
-//! prior work, decisions, dates, people, preferences, or todos.
+//! The agent should use `workspace_search` before answering questions that
+//! depend on indexed workspace content.
 //!
-//! Use `memory_write` to persist important facts that should be remembered
-//! across sessions.
+//! Use `workspace_write` to persist or update workspace documents.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -150,17 +149,15 @@ fn map_write_err(e: crate::error::WorkspaceError) -> ToolError {
     }
 }
 
-/// Tool for searching workspace memory.
+/// Tool for searching workspace documents.
 ///
-/// Performs hybrid search (FTS + semantic) across all memory documents.
-/// The agent should call this tool before answering questions about
-/// prior work, decisions, preferences, or any historical context.
-pub struct MemorySearchTool {
+/// Performs hybrid search (FTS + semantic) across indexed workspace content.
+pub struct WorkspaceSearchTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
 
-impl MemorySearchTool {
-    /// Create a new memory search tool with a workspace resolver.
+impl WorkspaceSearchTool {
+    /// Create a new workspace search tool with a workspace resolver.
     pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
         Self { resolver }
     }
@@ -174,14 +171,14 @@ impl MemorySearchTool {
 }
 
 #[async_trait]
-impl Tool for MemorySearchTool {
+impl Tool for WorkspaceSearchTool {
     fn name(&self) -> &str {
-        "memory_search"
+        "workspace_search"
     }
 
     fn description(&self) -> &str {
-        "Search past memories, decisions, and context. MUST be called before answering \
-         questions about prior work, decisions, dates, people, preferences, or todos. \
+        "Search indexed workspace documents and mounted content. Use this when you need \
+         project context from the workspace rather than graph-native long-term memory. \
          Returns relevant snippets with relevance scores."
     }
 
@@ -243,20 +240,20 @@ impl Tool for MemorySearchTool {
     }
 
     fn requires_sanitization(&self) -> bool {
-        false // Internal memory, trusted content
+        false // Internal workspace content, trusted content
     }
 }
 
-/// Tool for writing to workspace memory.
+/// Tool for writing workspace documents.
 ///
-/// Use this to persist important information that should be remembered
-/// across sessions: decisions, preferences, facts, lessons learned.
-pub struct MemoryWriteTool {
+/// Use this to create or update workspace-local documents that live alongside
+/// mounted project content.
+pub struct WorkspaceWriteTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
 
-impl MemoryWriteTool {
-    /// Create a new memory write tool with a workspace resolver.
+impl WorkspaceWriteTool {
+    /// Create a new workspace write tool with a workspace resolver.
     pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
         Self { resolver }
     }
@@ -270,20 +267,18 @@ impl MemoryWriteTool {
 }
 
 #[async_trait]
-impl Tool for MemoryWriteTool {
+impl Tool for WorkspaceWriteTool {
     fn name(&self) -> &str {
-        "memory_write"
+        "workspace_write"
     }
 
     fn description(&self) -> &str {
-        "Write to persistent memory (database-backed, NOT the local filesystem). \
-         Use for important facts, decisions, preferences, or lessons learned that should \
-         be remembered across sessions. Targets: 'memory' for curated long-term facts, \
-         'daily_log' for timestamped session notes, 'heartbeat' for the periodic \
-         checklist (HEARTBEAT.md), 'bootstrap' to clear the first-run ritual file, \
-         or provide a custom global memory path for arbitrary file creation. Mounted \
-         working-tree files use paths like 'workspace://<mount-id>/src/main.rs'. \
-         Never pass absolute filesystem paths like '/Users/...' or 'C:\\...'."
+        "Write to workspace documents (database-backed, NOT the raw local filesystem). \
+         Use this for workspace notes, imported context files, mounted workspace edits, \
+         and other document content that belongs to the workspace layer rather than the \
+         graph-native memory system. Mounted working-tree files use paths like \
+         'workspace://<mount-id>/src/main.rs'. Never pass absolute filesystem paths \
+         like '/Users/...' or 'C:\\...'."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -296,7 +291,7 @@ impl Tool for MemoryWriteTool {
                 },
                 "target": {
                     "type": "string",
-                    "description": "Where to write: 'memory' for MEMORY.md, 'daily_log' for today's log, 'heartbeat' for HEARTBEAT.md checklist, 'bootstrap' to clear BOOTSTRAP.md (content is ignored; the file is always cleared), a global memory path like 'projects/alpha/notes.md', or a mounted path like 'workspace://<mount-id>/src/main.rs'",
+                    "description": "Where to write: 'memory' for the legacy curated document during migration, 'daily_log' for today's workspace log, 'heartbeat' for the legacy heartbeat checklist import path, 'bootstrap' to clear BOOTSTRAP.md (content is ignored; the file is always cleared), a global workspace document path like 'projects/alpha/notes.md', or a mounted path like 'workspace://<mount-id>/src/main.rs'",
                     "default": "daily_log"
                 },
                 "append": {
@@ -334,7 +329,7 @@ impl Tool for MemoryWriteTool {
 
         if looks_like_filesystem_path(target) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' looks like a local filesystem path. memory_write only works with workspace-memory paths. \
+                "'{}' looks like a local filesystem path. workspace_write only works with workspace document paths. \
                  Use write_file for filesystem writes. For opening files in an editor, use shell with: open \"<absolute_path>\".",
                 target
             )));
@@ -525,15 +520,15 @@ impl Tool for MemoryWriteTool {
     }
 }
 
-/// Tool for reading workspace files.
+/// Tool for reading workspace documents.
 ///
-/// Use this to read the full content of any file in the workspace.
-pub struct MemoryReadTool {
+/// Use this to read the full content of any workspace document.
+pub struct WorkspaceReadTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
 
-impl MemoryReadTool {
-    /// Create a new memory read tool with a workspace resolver.
+impl WorkspaceReadTool {
+    /// Create a new workspace read tool with a workspace resolver.
     pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
         Self { resolver }
     }
@@ -547,17 +542,17 @@ impl MemoryReadTool {
 }
 
 #[async_trait]
-impl Tool for MemoryReadTool {
+impl Tool for WorkspaceReadTool {
     fn name(&self) -> &str {
-        "memory_read"
+        "workspace_read"
     }
 
     fn description(&self) -> &str {
-        "Read a file from the workspace memory (database-backed storage). \
-         Use this to read files shown by memory_tree. NOT for local filesystem files \
+        "Read a document from the workspace layer (database-backed storage). \
+         Use this to read files shown by workspace_tree. NOT for local filesystem files \
          (use read_file for those). Do not pass absolute paths like '/Users/...' or 'C:\\...'. \
-         Works with identity files, heartbeat checklist, memory, daily logs, \
-         other global memory paths like `projects/alpha/notes.md`, or mounted \
+         Works with imported workspace docs, legacy migration files, other global \
+         workspace paths like `projects/alpha/notes.md`, or mounted \
          files at `workspace://<mount-id>/...`."
     }
 
@@ -585,7 +580,7 @@ impl Tool for MemoryReadTool {
 
         if looks_like_filesystem_path(path) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' looks like a local filesystem path. memory_read only works with workspace-memory paths. \
+                "'{}' looks like a local filesystem path. workspace_read only works with workspace document paths. \
                  Use read_file for filesystem reads. For opening files in an editor, use shell with: open \"<absolute_path>\".",
                 path
             )));
@@ -608,19 +603,19 @@ impl Tool for MemoryReadTool {
     }
 
     fn requires_sanitization(&self) -> bool {
-        false // Internal memory
+        false // Internal workspace content
     }
 }
 
 /// Tool for viewing workspace structure as a tree.
 ///
 /// Returns a hierarchical view of files and directories with configurable depth.
-pub struct MemoryTreeTool {
+pub struct WorkspaceTreeTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
 
-impl MemoryTreeTool {
-    /// Create a new memory tree tool with a workspace resolver.
+impl WorkspaceTreeTool {
+    /// Create a new workspace tree tool with a workspace resolver.
     pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
         Self { resolver }
     }
@@ -682,15 +677,15 @@ impl MemoryTreeTool {
 }
 
 #[async_trait]
-impl Tool for MemoryTreeTool {
+impl Tool for WorkspaceTreeTool {
     fn name(&self) -> &str {
-        "memory_tree"
+        "workspace_tree"
     }
 
     fn description(&self) -> &str {
-        "View mounted workspace trees. Global memory is not nested under `workspace://`; \
-         read global memory directly via paths like `MEMORY.md` or `projects/...`. \
-         Use memory_read to read files shown here, NOT read_file. \
+        "View mounted workspace trees. Workspace documents are not nested under `workspace://`; \
+         read them directly via paths like `projects/...` or migrated legacy docs. \
+         Use workspace_read to read files shown here, NOT read_file. \
          The workspace tree is separate from the local filesystem and represents \
          mounted working directories."
     }

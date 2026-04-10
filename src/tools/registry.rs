@@ -18,10 +18,12 @@ use crate::tools::builder::{
 use crate::tools::builtin::{
     ApplyPatchTool, CancelJobTool, CreateJobTool, EchoTool, ExtensionInfoTool, HttpTool,
     JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, MoveFileTool, ReadFileTool,
-    ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
-    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool,
-    ToolUpgradeTool, WriteFileTool,
+    MemoryAliasTool, MemoryCreateTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool,
+    MemoryReviewTool, MemoryUpdateTool, MoveFileTool, ReadFileTool, ShellTool,
+    SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
+    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
+    ToolSearchTool, ToolUpgradeTool, WorkspaceReadTool, WorkspaceSearchTool,
+    WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -33,7 +35,7 @@ use crate::workspace::Workspace;
 
 /// Names of built-in tools that cannot be shadowed by dynamic registrations.
 /// This prevents a dynamically built or installed tool from replacing a
-/// security-critical built-in like "shell" or "memory_write".
+/// security-critical built-in like "shell" or "workspace_write".
 const PROTECTED_TOOL_NAMES: &[&str] = &[
     "echo",
     "time",
@@ -45,10 +47,17 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "move_file",
     "list_dir",
     "apply_patch",
-    "memory_search",
-    "memory_write",
-    "memory_read",
-    "memory_tree",
+    "workspace_search",
+    "workspace_write",
+    "workspace_read",
+    "workspace_tree",
+    "memory_recall",
+    "memory_open",
+    "memory_create",
+    "memory_update",
+    "memory_alias",
+    "memory_delete",
+    "memory_review",
     "create_job",
     "list_jobs",
     "job_status",
@@ -318,39 +327,52 @@ impl ToolRegistry {
         tracing::debug!("Registered 6 development tools");
     }
 
-    /// Register memory tools with a workspace resolver.
+    /// Register workspace document tools with a workspace resolver.
     ///
-    /// Memory tools require a workspace resolver for persistence. Call this after
+    /// Workspace tools require a workspace resolver for persistence. Call this after
     /// `register_builtin_tools()` if you have a workspace available.
-    pub fn register_memory_tools_with_resolver(
+    pub fn register_workspace_tools_with_resolver(
         &self,
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
-        self.register_sync(Arc::new(MemorySearchTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryWriteTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryReadTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryTreeTool::new(resolver)));
+        self.register_sync(Arc::new(WorkspaceSearchTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceWriteTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceReadTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceTreeTool::new(resolver)));
 
-        tracing::debug!("Registered 4 memory tools");
+        tracing::debug!("Registered 4 workspace document tools");
     }
 
-    /// Register memory tools with a fixed workspace (backward compatibility).
+    /// Register workspace document tools with a fixed workspace.
     ///
-    /// Memory tools require a workspace for persistence. Call this after
+    /// Workspace tools require a workspace for persistence. Call this after
     /// `register_builtin_tools()` if you have a workspace available.
-    pub fn register_memory_tools(&self, workspace: Arc<Workspace>) {
-        self.register_sync(Arc::new(MemorySearchTool::from_workspace(Arc::clone(
+    pub fn register_workspace_tools(&self, workspace: Arc<Workspace>) {
+        self.register_sync(Arc::new(WorkspaceSearchTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(MemoryWriteTool::from_workspace(Arc::clone(
+        self.register_sync(Arc::new(WorkspaceWriteTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(MemoryReadTool::from_workspace(Arc::clone(
+        self.register_sync(Arc::new(WorkspaceReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(MemoryTreeTool::from_workspace(workspace)));
+        self.register_sync(Arc::new(WorkspaceTreeTool::from_workspace(workspace)));
 
-        tracing::debug!("Registered 4 memory tools");
+        tracing::debug!("Registered 4 workspace document tools");
+    }
+
+    /// Register graph-native memory tools backed by the native memory manager.
+    pub fn register_graph_memory_tools(&self, memory: Arc<crate::memory::MemoryManager>) {
+        self.register_sync(Arc::new(MemoryRecallTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryOpenTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryCreateTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryUpdateTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryAliasTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryDeleteTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemoryReviewTool::new(memory)));
+
+        tracing::debug!("Registered 7 graph-native memory tools");
     }
 
     /// Register job management tools.

@@ -195,20 +195,6 @@ pub struct WorkspaceTreeResponse {
     pub entries: Vec<crate::workspace::WorkspaceTreeEntry>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct MemoryDirectoryResponse {
-    pub path: String,
-    pub entries: Vec<crate::workspace::WorkspaceEntry>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct MemoryDocumentResponse {
-    pub path: String,
-    pub content: String,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    pub word_count: usize,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct WorkspaceSearchRequest {
     pub query: String,
@@ -228,6 +214,48 @@ pub struct WorkspaceSearchResultResponse {
 #[derive(Debug, Serialize)]
 pub struct WorkspaceSearchResponse {
     pub results: Vec<WorkspaceSearchResultResponse>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemorySidebarResponse {
+    pub sections: Vec<crate::memory::MemorySidebarSection>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemoryGraphSearchRequest {
+    pub query: String,
+    pub limit: Option<usize>,
+    pub domains: Option<Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryGraphSearchResponse {
+    pub results: Vec<crate::memory::MemorySearchHit>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryNodeDetailResponse {
+    pub detail: Option<crate::memory::MemoryNodeDetail>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryTimelineResponse {
+    pub entries: Vec<crate::memory::MemoryTimelineEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryReviewsResponse {
+    pub reviews: Vec<crate::memory::MemoryChangeSet>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryVersionsResponse {
+    pub versions: Vec<crate::memory::MemoryVersion>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemoryReviewActionRequest {
+    pub action: String,
 }
 
 // =============================================================================

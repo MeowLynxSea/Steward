@@ -30,6 +30,11 @@ use crate::history::{
     AgentJobRecord, AgentJobSummary, ConversationMessage, ConversationSummary, JobEventRecord,
     LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow,
 };
+use crate::memory::{
+    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryNodeDetail,
+    MemorySearchHit, MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion,
+    NewMemoryNodeInput, UpdateMemoryNodeInput,
+};
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
 use crate::workspace::{
@@ -875,6 +880,99 @@ pub trait WorkspaceStore: Send + Sync {
 }
 
 #[async_trait]
+pub trait MemoryStore: Send + Sync {
+    async fn ensure_memory_space(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        slug: &str,
+        title: &str,
+    ) -> Result<MemorySpace, DatabaseError>;
+
+    async fn create_memory_changeset(
+        &self,
+        space_id: Uuid,
+        origin: &str,
+        summary: Option<&str>,
+    ) -> Result<MemoryChangeSet, DatabaseError>;
+
+    async fn complete_memory_changeset(
+        &self,
+        changeset_id: Uuid,
+        status: &str,
+    ) -> Result<(), DatabaseError>;
+
+    async fn get_memory_changeset_rows(
+        &self,
+        changeset_id: Uuid,
+    ) -> Result<Vec<MemoryChangeSetRow>, DatabaseError>;
+
+    async fn rollback_memory_changeset(&self, changeset_id: Uuid) -> Result<(), DatabaseError>;
+
+    async fn create_memory_node(
+        &self,
+        input: &NewMemoryNodeInput,
+    ) -> Result<MemoryNodeDetail, DatabaseError>;
+
+    async fn update_memory_node(
+        &self,
+        space_id: Uuid,
+        input: &UpdateMemoryNodeInput,
+    ) -> Result<MemoryNodeDetail, DatabaseError>;
+
+    async fn create_memory_alias(
+        &self,
+        input: &CreateMemoryAliasInput,
+    ) -> Result<crate::memory::MemoryRoute, DatabaseError>;
+
+    async fn delete_memory_node(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+        changeset_id: Option<Uuid>,
+    ) -> Result<(), DatabaseError>;
+
+    async fn get_memory_node(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+    ) -> Result<Option<MemoryNodeDetail>, DatabaseError>;
+
+    async fn search_memory_graph(
+        &self,
+        space_id: Uuid,
+        query: &str,
+        limit: usize,
+        domains: &[String],
+    ) -> Result<Vec<MemorySearchHit>, DatabaseError>;
+
+    async fn list_memory_sidebar(
+        &self,
+        space_id: Uuid,
+        limit_per_section: usize,
+    ) -> Result<Vec<MemorySidebarSection>, DatabaseError>;
+
+    async fn list_memory_timeline(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemoryTimelineEntry>, DatabaseError>;
+
+    async fn list_memory_reviews(
+        &self,
+        space_id: Uuid,
+    ) -> Result<Vec<MemoryChangeSet>, DatabaseError>;
+
+    async fn get_memory_versions(&self, node_id: Uuid) -> Result<Vec<MemoryVersion>, DatabaseError>;
+
+    async fn list_memory_boot_nodes(
+        &self,
+        space_id: Uuid,
+        max_visibility: Option<crate::memory::MemoryVisibility>,
+    ) -> Result<Vec<MemoryNodeDetail>, DatabaseError>;
+}
+
+#[async_trait]
 pub trait UserStore: Send + Sync {
     // ---- Users ----
 
@@ -996,6 +1094,7 @@ pub trait Database:
     + TemplateStore
     + TaskStore
     + WorkspaceStore
+    + MemoryStore
     + UserStore
     + Send
     + Sync

@@ -748,7 +748,7 @@ mod tests {
     async fn test_truncated_tool_calls_discarded_on_length() {
         let truncated_tool_call = ToolCall {
             id: "call_1".to_string(),
-            name: "memory_write".to_string(),
+            name: "workspace_write".to_string(),
             arguments: serde_json::json!({}), // empty — truncated
             reasoning: None,
         };
@@ -800,7 +800,7 @@ mod tests {
             result: RespondResult::ToolCalls {
                 tool_calls: vec![ToolCall {
                     id: "call_1".to_string(),
-                    name: "memory_write".to_string(),
+                    name: "workspace_write".to_string(),
                     arguments: serde_json::json!({}),
                     reasoning: None,
                 }],
