@@ -2446,8 +2446,7 @@ That's my plan."#;
     #[test]
     fn test_recover_json_tool_call() {
         let tools = make_tools(&["workspace_search"]);
-        let content =
-            r#"<tool_call>{"name": "workspace_search", "arguments": {"query": "test"}}</tool_call>"#;
+        let content = r#"<tool_call>{"name": "workspace_search", "arguments": {"query": "test"}}</tool_call>"#;
         let calls = recover_tool_calls_from_content(content, &tools);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "workspace_search");

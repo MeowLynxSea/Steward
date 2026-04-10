@@ -358,7 +358,9 @@ impl HeartbeatRunner {
                 }
             }
         } else {
-            tracing::warn!("Memory manager unavailable; heartbeat will run without native memory prompt");
+            tracing::warn!(
+                "Memory manager unavailable; heartbeat will run without native memory prompt"
+            );
             String::new()
         };
 
@@ -437,13 +439,20 @@ impl HeartbeatRunner {
     async fn load_heartbeat_checklist(&self) -> Result<Option<String>, String> {
         if let Some(memory) = self.memory.as_ref() {
             match memory
-                .get_node(self.workspace.user_id(), None, "core://procedures/heartbeat")
+                .get_node(
+                    self.workspace.user_id(),
+                    None,
+                    "core://procedures/heartbeat",
+                )
                 .await
             {
                 Ok(Some(detail)) => return Ok(Some(detail.active_version.content)),
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::warn!("Failed to load heartbeat procedure from memory graph: {}", e);
+                    tracing::warn!(
+                        "Failed to load heartbeat procedure from memory graph: {}",
+                        e
+                    );
                 }
             }
         }

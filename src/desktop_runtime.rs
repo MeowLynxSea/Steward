@@ -8,7 +8,8 @@ use crate::config::Config;
 use crate::db::Database;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
-    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, create_session_manager,
+    ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
+    create_session_manager,
 };
 use crate::memory::MemoryManager;
 use crate::runtime_events::{RuntimeEventEmitter, SseManager};
@@ -28,6 +29,7 @@ pub struct AppState {
     pub db: Option<Arc<dyn Database>>,
     pub workspace: Option<Arc<Workspace>>,
     pub memory: Option<Arc<MemoryManager>>,
+    pub llm_reloader: Arc<RuntimeLlmReloader>,
     pub agent_session_manager: Arc<AgentSessionManager>,
     pub title_llm: Arc<dyn crate::llm::LlmProvider>,
     pub task_runtime: Arc<TaskRuntime>,
@@ -45,6 +47,7 @@ impl AppState {
         db: Option<Arc<dyn Database>>,
         workspace: Option<Arc<Workspace>>,
         memory: Option<Arc<MemoryManager>>,
+        llm_reloader: Arc<RuntimeLlmReloader>,
         agent_session_manager: Arc<AgentSessionManager>,
         title_llm: Arc<dyn crate::llm::LlmProvider>,
         task_runtime: Arc<TaskRuntime>,
@@ -58,6 +61,7 @@ impl AppState {
             db,
             workspace,
             memory,
+            llm_reloader,
             agent_session_manager,
             title_llm,
             task_runtime,
@@ -147,6 +151,13 @@ pub async fn start_embedded_runtime(
     let app_state_mcp = Arc::clone(&components.mcp_session_manager);
     let app_state_session_manager = Arc::clone(&session_manager);
     let app_state_task_runtime = Arc::clone(&task_runtime);
+    let app_state_secrets_store = components.secrets_store.clone();
+    let app_state_llm_reloader = Arc::new(RuntimeLlmReloader::new(
+        Arc::clone(&reloadable_llm_state),
+        session.clone(),
+        config.owner_id.clone(),
+        app_state_secrets_store,
+    ));
     let extension_manager = components.extension_manager.clone();
 
     if let Some(extension_manager) = extension_manager.as_ref()
@@ -239,6 +250,7 @@ pub async fn start_embedded_runtime(
         app_state_db,
         app_state_workspace,
         app_state_memory,
+        app_state_llm_reloader,
         app_state_session_manager,
         app_llm.clone(),
         app_state_task_runtime,

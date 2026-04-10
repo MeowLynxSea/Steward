@@ -8,12 +8,9 @@ use uuid::Uuid;
 
 use crate::context::JobContext;
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryManager, MemoryNodeKind, MemoryVisibility,
-    UpdateMemoryNodeInput,
+    CreateMemoryAliasInput, MemoryManager, MemoryNodeKind, MemoryVisibility, UpdateMemoryNodeInput,
 };
-use crate::tools::tool::{
-    ApprovalRequirement, Tool, ToolError, ToolOutput, require_str,
-};
+use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
 fn parse_kind(value: &str) -> Result<MemoryNodeKind, ToolError> {
     match value {
@@ -425,7 +422,9 @@ impl Tool for MemoryUpdateTool {
         let start = Instant::now();
         let key = require_str(&params, "route_or_node_id")?;
         let visibility = match params.get("visibility") {
-            Some(_) => Some(parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?),
+            Some(_) => Some(parse_visibility(
+                params.get("visibility").and_then(|v| v.as_str()),
+            )?),
             None => None,
         };
         let keywords = if params.get("keywords").is_some() {

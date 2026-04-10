@@ -63,7 +63,8 @@ impl ContextCompactor {
                 self.compact_truncate(thread, keep_recent)
             }
             CompactionStrategy::MoveToWorkspace => {
-                self.compact_to_workspace(thread, workspace, memory, owner_id).await?
+                self.compact_to_workspace(thread, workspace, memory, owner_id)
+                    .await?
             }
         };
 
@@ -111,13 +112,19 @@ impl ContextCompactor {
         // Write to workspace if available.
         // If archival fails, preserve turns to avoid context loss.
         let (summary_written, turns_removed) = if let Some(manager) = memory {
-            match self.write_summary_to_memory(manager, owner_id, &summary).await {
+            match self
+                .write_summary_to_memory(manager, owner_id, &summary)
+                .await
+            {
                 Ok(()) => {
                     thread.truncate_turns(keep_recent);
                     (true, turns_to_remove)
                 }
                 Err(e) => {
-                    tracing::warn!("Compaction summary memory write failed (turns preserved): {}", e);
+                    tracing::warn!(
+                        "Compaction summary memory write failed (turns preserved): {}",
+                        e
+                    );
                     (false, 0)
                 }
             }
@@ -179,13 +186,19 @@ impl ContextCompactor {
 
         // Write to workspace. If archival fails, preserve turns.
         let (written, turns_removed) = if let Some(manager) = memory {
-            match self.write_summary_to_memory(manager, owner_id, &content).await {
+            match self
+                .write_summary_to_memory(manager, owner_id, &content)
+                .await
+            {
                 Ok(()) => {
                     thread.truncate_turns(keep_recent);
                     (true, turns_to_remove)
                 }
                 Err(e) => {
-                    tracing::warn!("Compaction context memory write failed (turns preserved): {}", e);
+                    tracing::warn!(
+                        "Compaction context memory write failed (turns preserved): {}",
+                        e
+                    );
                     (false, 0)
                 }
             }

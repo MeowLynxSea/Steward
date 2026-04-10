@@ -19,11 +19,10 @@ use crate::tools::builtin::{
     ApplyPatchTool, CancelJobTool, CreateJobTool, EchoTool, ExtensionInfoTool, HttpTool,
     JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
     MemoryAliasTool, MemoryCreateTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool,
-    MemoryReviewTool, MemoryUpdateTool, MoveFileTool, ReadFileTool, ShellTool,
-    SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
-    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
-    ToolSearchTool, ToolUpgradeTool, WorkspaceReadTool, WorkspaceSearchTool,
-    WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
+    MemoryReviewTool, MemoryUpdateTool, MoveFileTool, ReadFileTool, ShellTool, SkillInstallTool,
+    SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
+    ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
+    WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};

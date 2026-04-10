@@ -13,10 +13,10 @@ use steward_core::desktop_runtime::AppState;
 use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
-    CreateWorkspaceMountRequest, PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
-    ResolveWorkspaceConflictRequest, SendSessionMessageRequest, WorkspaceActionRequest,
-    WorkspaceIndexRequest, WorkspaceSearchRequest, MemoryGraphSearchRequest,
-    MemoryReviewActionRequest,
+    CreateWorkspaceMountRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
+    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
+    SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceIndexRequest,
+    WorkspaceSearchRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -55,8 +55,11 @@ fn plan_desktop_message_dispatch(
 // Settings (2 commands)
 // =============================================================================
 
-fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsResponse {
-    let llm_ready = settings.major_backend().is_some();
+fn build_settings_response(
+    settings: &Settings,
+    llm_readiness_error: Option<String>,
+) -> steward_core::ipc::SettingsResponse {
+    let llm_ready = settings.major_backend().is_some() && llm_readiness_error.is_none();
     steward_core::ipc::SettingsResponse {
         backends: settings.backends.clone(),
         major_backend_id: settings.major_backend_id.clone(),
@@ -64,7 +67,68 @@ fn build_settings_response(settings: &Settings) -> steward_core::ipc::SettingsRe
         cheap_model_uses_primary: settings.cheap_model_uses_primary,
         llm_ready,
         llm_onboarding_required: !llm_ready,
-        llm_readiness_error: None,
+        llm_readiness_error,
+    }
+}
+
+async fn sync_llm_settings_to_store(
+    owner_id: &str,
+    store: Option<&dyn steward_core::db::Database>,
+    settings: &Settings,
+) -> Result<(), String> {
+    let Some(store) = store else {
+        return Ok(());
+    };
+
+    let backends =
+        serde_json::to_value(&settings.backends).map_err(|e| format!("serialize backends: {e}"))?;
+    let major_backend_id = serde_json::to_value(&settings.major_backend_id)
+        .map_err(|e| format!("serialize major backend: {e}"))?;
+    let cheap_backend_id = serde_json::to_value(&settings.cheap_backend_id)
+        .map_err(|e| format!("serialize cheap backend: {e}"))?;
+    let cheap_model_uses_primary = serde_json::json!(settings.cheap_model_uses_primary);
+    let onboard_completed = serde_json::json!(settings.onboard_completed);
+
+    store
+        .set_setting(owner_id, "backends", &backends)
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(owner_id, "major_backend_id", &major_backend_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(owner_id, "cheap_backend_id", &cheap_backend_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(
+            owner_id,
+            "cheap_model_uses_primary",
+            &cheap_model_uses_primary,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(owner_id, "onboard_completed", &onboard_completed)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+async fn reload_llm_runtime(
+    state: &AppState,
+    settings: &Settings,
+) -> Result<Option<String>, String> {
+    sync_llm_settings_to_store(&state.owner_id, state.db.as_deref(), settings).await?;
+
+    match state.llm_reloader.reload_from_settings(settings).await {
+        Ok(_) => Ok(None),
+        Err(error) => {
+            tracing::warn!(%error, "Failed to reload desktop LLM runtime after settings update");
+            Ok(Some(error.to_string()))
+        }
     }
 }
 
@@ -75,12 +139,12 @@ pub async fn get_settings(
     let settings = Settings::load_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    Ok(build_settings_response(&settings))
+    Ok(build_settings_response(&settings, None))
 }
 
 #[tauri::command]
 pub async fn patch_settings(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     payload: PatchSettingsRequest,
 ) -> Result<steward_core::ipc::SettingsResponse, String> {
     let mut settings = Settings::load_toml(&Settings::default_toml_path())
@@ -131,7 +195,9 @@ pub async fn patch_settings(
         .save_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?;
 
-    Ok(build_settings_response(&settings))
+    let llm_readiness_error = reload_llm_runtime(&state, &settings).await?;
+
+    Ok(build_settings_response(&settings, llm_readiness_error))
 }
 
 // =============================================================================
@@ -1881,9 +1947,23 @@ pub async fn get_workbench_capabilities(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use chrono::Utc;
 
-    use super::build_thread_messages_from_db_messages;
+    use super::{
+        build_thread_messages_from_db_messages, reload_llm_runtime, sync_llm_settings_to_store,
+    };
+    use steward_core::agent::SessionManager;
+    use steward_core::desktop_runtime::AppState;
+    use steward_core::llm::{
+        DisabledLlmProvider, LlmProvider, ReloadableLlmProvider, ReloadableLlmState,
+        ReloadableSlot, RuntimeLlmReloader, create_session_manager,
+    };
+    use steward_core::settings::{BackendInstance, Settings};
+    use steward_core::task_runtime::TaskRuntime;
+    use steward_core::tools::ToolRegistry;
+    use steward_core::tools::mcp::McpSessionManager;
 
     #[test]
     fn build_thread_messages_from_db_messages_keeps_persisted_turn_cost() {
@@ -1924,5 +2004,128 @@ mod tests {
         assert_eq!(turn_cost.input_tokens, 512);
         assert_eq!(turn_cost.output_tokens, 96);
         assert_eq!(turn_cost.cost_usd, "$0.0034");
+    }
+
+    fn backend(id: &str) -> BackendInstance {
+        BackendInstance {
+            id: id.to_string(),
+            provider: "openai".to_string(),
+            api_key: None,
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            model: "gpt-5-mini".to_string(),
+            request_format: Some("chat_completions".to_string()),
+        }
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn sync_llm_settings_to_store_persists_backend_selection() {
+        use steward_core::db::libsql::LibSqlBackend;
+        use steward_core::db::{Database, SettingsStore};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("settings.db");
+        let db = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("create db"));
+        db.run_migrations().await.expect("run migrations");
+        let settings = Settings {
+            onboard_completed: true,
+            backends: vec![backend("primary")],
+            major_backend_id: Some("primary".to_string()),
+            cheap_backend_id: None,
+            cheap_model_uses_primary: true,
+            ..Default::default()
+        };
+
+        sync_llm_settings_to_store("test-user", Some(db.as_ref()), &settings)
+            .await
+            .expect("sync settings");
+
+        let stored = db
+            .get_all_settings("test-user")
+            .await
+            .expect("get settings");
+
+        assert_eq!(
+            stored.get("major_backend_id"),
+            Some(&serde_json::json!("primary"))
+        );
+        assert_eq!(
+            stored.get("cheap_backend_id"),
+            Some(&serde_json::Value::Null)
+        );
+        assert_eq!(
+            stored.get("cheap_model_uses_primary"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            stored.get("onboard_completed"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            stored
+                .get("backends")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn reload_llm_runtime_switches_from_unconfigured_to_selected_backend() {
+        use steward_core::db::Database;
+        use steward_core::db::libsql::LibSqlBackend;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("runtime.db");
+        let db_backend = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("create db"));
+        db_backend.run_migrations().await.expect("run migrations");
+        let db: Arc<dyn Database> = db_backend;
+        let session =
+            create_session_manager(steward_core::config::LlmConfig::for_testing().session).await;
+        let disabled: Arc<dyn LlmProvider> = Arc::new(DisabledLlmProvider::new());
+        let reloadable_state = Arc::new(ReloadableLlmState::new(disabled.clone(), disabled));
+        let primary_llm: Arc<dyn LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+            Arc::clone(&reloadable_state),
+            ReloadableSlot::Primary,
+        ));
+        let llm_reloader = Arc::new(RuntimeLlmReloader::new(
+            Arc::clone(&reloadable_state),
+            session,
+            "test-user".to_string(),
+            None,
+        ));
+        let (message_inject_tx, _message_inject_rx) = tokio::sync::mpsc::channel(1);
+        let state = AppState::new(
+            "test-user".to_string(),
+            Some(Arc::clone(&db)),
+            None,
+            None,
+            llm_reloader,
+            Arc::new(SessionManager::new()),
+            Arc::clone(&primary_llm),
+            Arc::new(TaskRuntime::new()),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(McpSessionManager::new()),
+            None,
+            message_inject_tx,
+        );
+        let settings = Settings {
+            onboard_completed: true,
+            backends: vec![backend("primary")],
+            major_backend_id: Some("primary".to_string()),
+            cheap_backend_id: None,
+            cheap_model_uses_primary: true,
+            ..Default::default()
+        };
+
+        assert_eq!(state.title_llm.active_model_name(), "unconfigured");
+
+        let reload_error = reload_llm_runtime(&state, &settings)
+            .await
+            .expect("reload runtime");
+
+        assert!(reload_error.is_none());
+        assert_eq!(state.title_llm.active_model_name(), "gpt-5-mini");
     }
 }

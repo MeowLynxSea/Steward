@@ -698,9 +698,13 @@ impl MemoryManager {
     ) -> Result<(), DatabaseError> {
         let _space = self.ensure_primary_space(owner_id, agent_id).await?;
         match action {
-            "rollback" | "rollback_requested" => self.db.rollback_memory_changeset(changeset_id).await,
+            "rollback" | "rollback_requested" => {
+                self.db.rollback_memory_changeset(changeset_id).await
+            }
             "accept" | "approve" | "applied" => {
-                self.db.complete_memory_changeset(changeset_id, "applied").await
+                self.db
+                    .complete_memory_changeset(changeset_id, "applied")
+                    .await
             }
             other => self.db.complete_memory_changeset(changeset_id, other).await,
         }
@@ -716,14 +720,29 @@ impl MemoryManager {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         let boot_items = self
             .db
-            .list_memory_boot_nodes(space.id, if is_group_chat { Some(MemoryVisibility::Session) } else { None })
+            .list_memory_boot_nodes(
+                space.id,
+                if is_group_chat {
+                    Some(MemoryVisibility::Session)
+                } else {
+                    None
+                },
+            )
             .await?;
         let triggered_hits = self
             .db
             .search_memory_graph(space.id, user_input, 5, &[])
             .await?
             .into_iter()
-            .filter(|hit| !is_group_chat || !matches!(hit.kind, MemoryNodeKind::Curated | MemoryNodeKind::UserProfile | MemoryNodeKind::Episode))
+            .filter(|hit| {
+                !is_group_chat
+                    || !matches!(
+                        hit.kind,
+                        MemoryNodeKind::Curated
+                            | MemoryNodeKind::UserProfile
+                            | MemoryNodeKind::Episode
+                    )
+            })
             .collect::<Vec<_>>();
         let recent = self.db.list_memory_timeline(space.id, 3).await?;
 
@@ -745,7 +764,10 @@ impl MemoryManager {
                         .as_deref()
                         .map(|text| format!("\nTrigger: {text}"))
                         .unwrap_or_default();
-                    format!("### {}\nURI: {}\n{}\n{}", hit.title, hit.uri, hit.content_snippet, trigger)
+                    format!(
+                        "### {}\nURI: {}\n{}\n{}",
+                        hit.title, hit.uri, hit.content_snippet, trigger
+                    )
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
@@ -754,7 +776,12 @@ impl MemoryManager {
         if !recent.is_empty() {
             let block = recent
                 .iter()
-                .map(|item| format!("### {}\n{}\n{}", item.title, item.updated_at, item.content_snippet))
+                .map(|item| {
+                    format!(
+                        "### {}\n{}\n{}",
+                        item.title, item.updated_at, item.content_snippet
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             parts.push(format!("## Recent Episodes\n\n{block}"));
@@ -892,7 +919,10 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
         }),
         _ if !content.trim().is_empty() => Some(LegacyImportPlan {
             domain: "imported".to_string(),
-            path: path.trim_matches('/').trim_end_matches(".md").replace('.', "/"),
+            path: path
+                .trim_matches('/')
+                .trim_end_matches(".md")
+                .replace('.', "/"),
             title: default_title,
             kind: MemoryNodeKind::Reference,
             relation_kind: MemoryRelationKind::RelatesTo,
@@ -1051,11 +1081,7 @@ mod tests {
             .await
             .expect("accept create changeset");
 
-        let primary_route = created
-            .primary_route
-            .as_ref()
-            .expect("primary route")
-            .uri();
+        let primary_route = created.primary_route.as_ref().expect("primary route").uri();
 
         let (alias_route, alias_changeset) = manager
             .alias(
@@ -1114,11 +1140,7 @@ mod tests {
             .await
             .expect("accept create changeset");
 
-        let primary_route = created
-            .primary_route
-            .as_ref()
-            .expect("primary route")
-            .uri();
+        let primary_route = created.primary_route.as_ref().expect("primary route").uri();
         let version_id = created.active_version.id;
 
         let delete_changeset = manager

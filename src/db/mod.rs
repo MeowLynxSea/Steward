@@ -31,9 +31,9 @@ use crate::history::{
     LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow,
 };
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryNodeDetail,
-    MemorySearchHit, MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion,
-    NewMemoryNodeInput, UpdateMemoryNodeInput,
+    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryNodeDetail, MemorySearchHit,
+    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput,
+    UpdateMemoryNodeInput,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
@@ -963,7 +963,8 @@ pub trait MemoryStore: Send + Sync {
         space_id: Uuid,
     ) -> Result<Vec<MemoryChangeSet>, DatabaseError>;
 
-    async fn get_memory_versions(&self, node_id: Uuid) -> Result<Vec<MemoryVersion>, DatabaseError>;
+    async fn get_memory_versions(&self, node_id: Uuid)
+    -> Result<Vec<MemoryVersion>, DatabaseError>;
 
     async fn list_memory_boot_nodes(
         &self,

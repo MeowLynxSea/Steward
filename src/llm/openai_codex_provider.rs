@@ -1137,7 +1137,10 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
     /// to match OpenAI's `^[a-zA-Z0-9_-]+$` pattern.
     #[test]
     fn test_sanitize_tool_name_replaces_dots() {
-        assert_eq!(super::sanitize_tool_name("workspace_search"), "workspace_search");
+        assert_eq!(
+            super::sanitize_tool_name("workspace_search"),
+            "workspace_search"
+        );
         assert_eq!(
             super::sanitize_tool_name("mcp.server.tool"),
             "mcp_server_tool"

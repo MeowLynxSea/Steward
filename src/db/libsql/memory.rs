@@ -157,7 +157,11 @@ impl LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        Ok(rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))?.map(|row| row_to_memory_route(&row)))
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_memory_route(&row)))
     }
 
     async fn fetch_memory_route(
@@ -166,7 +170,9 @@ impl LibSqlBackend {
         route_or_node: &str,
     ) -> Result<Option<MemoryRoute>, DatabaseError> {
         if let Some((domain, path)) = route_or_node.split_once("://") {
-            return self.fetch_memory_route_by_path(space_id, domain, path).await;
+            return self
+                .fetch_memory_route_by_path(space_id, domain, path)
+                .await;
         }
         Ok(None)
     }
@@ -184,7 +190,11 @@ impl LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        Ok(rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))?.map(|row| row_to_memory_node(&row)))
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_memory_node(&row)))
     }
 
     async fn resolve_node_id(
@@ -196,7 +206,10 @@ impl LibSqlBackend {
             return Ok(Some(route.node_id));
         }
         match Uuid::parse_str(route_or_node) {
-            Ok(node_id) => Ok(self.fetch_memory_node_by_id(node_id).await?.map(|node| node.id)),
+            Ok(node_id) => Ok(self
+                .fetch_memory_node_by_id(node_id)
+                .await?
+                .map(|node| node.id)),
             Err(_) => Ok(None),
         }
     }
@@ -217,7 +230,11 @@ impl LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        Ok(rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))?.map(|row| row_to_memory_version(&row)))
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_memory_version(&row)))
     }
 
     async fn fetch_memory_routes_for_node(
@@ -236,7 +253,11 @@ impl LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut routes = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             routes.push(row_to_memory_route(&row));
         }
         Ok(routes)
@@ -258,7 +279,11 @@ impl LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut edges = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             edges.push(row_to_memory_edge(&row));
         }
         Ok(edges)
@@ -280,7 +305,11 @@ impl LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut keywords = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             keywords.push(row_to_memory_keyword(&row));
         }
         Ok(keywords)
@@ -316,10 +345,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn rebuild_search_doc_for_route(
-        &self,
-        route_id: Uuid,
-    ) -> Result<(), DatabaseError> {
+    async fn rebuild_search_doc_for_route(&self, route_id: Uuid) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
         let mut rows = conn
             .query(
@@ -335,7 +361,11 @@ impl LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? else {
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        else {
             let _ = conn
                 .execute(
                     "DELETE FROM memory_search_docs WHERE route_id = ?1",
@@ -354,7 +384,11 @@ impl LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut keywords = Vec::new();
-        while let Some(kw_row) = kw_rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(kw_row) = kw_rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             keywords.push(get_text(&kw_row, 0));
         }
 
@@ -393,10 +427,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn fetch_detail(
-        &self,
-        node_id: Uuid,
-    ) -> Result<Option<MemoryNodeDetail>, DatabaseError> {
+    async fn fetch_detail(&self, node_id: Uuid) -> Result<Option<MemoryNodeDetail>, DatabaseError> {
         let Some(node) = self.fetch_memory_node_by_id(node_id).await? else {
             return Ok(None);
         };
@@ -412,7 +443,11 @@ impl LibSqlBackend {
             .into_iter()
             .filter(|hit| hit.node_id != node_id)
             .collect::<Vec<_>>();
-        let primary_route = routes.iter().find(|route| route.is_primary).cloned().or_else(|| routes.first().cloned());
+        let primary_route = routes
+            .iter()
+            .find(|route| route.is_primary)
+            .cloned()
+            .or_else(|| routes.first().cloned());
         Ok(Some(MemoryNodeDetail {
             node,
             active_version,
@@ -440,16 +475,17 @@ impl LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             items.push(row_to_changeset_row(&row));
         }
         Ok(items)
     }
 
-    async fn upsert_memory_node_snapshot(
-        &self,
-        node: &MemoryNode,
-    ) -> Result<(), DatabaseError> {
+    async fn upsert_memory_node_snapshot(&self, node: &MemoryNode) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
         conn.execute(
             "INSERT INTO memory_nodes (id, space_id, kind, title, metadata, created_at, updated_at)
@@ -505,7 +541,12 @@ impl LibSqlBackend {
             params![
                 version.id.to_string(),
                 version.node_id.to_string(),
-                opt_text(version.supersedes_version_id.map(|value| value.to_string()).as_deref()),
+                opt_text(
+                    version
+                        .supersedes_version_id
+                        .map(|value| value.to_string())
+                        .as_deref()
+                ),
                 version.status.as_str(),
                 version.content.as_str(),
                 version.metadata.to_string(),
@@ -550,10 +591,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn upsert_edge_snapshot(
-        &self,
-        edge: &MemoryEdge,
-    ) -> Result<(), DatabaseError> {
+    async fn upsert_edge_snapshot(&self, edge: &MemoryEdge) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
         conn.execute(
             "INSERT INTO memory_edges
@@ -585,10 +623,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn upsert_route_snapshot(
-        &self,
-        route: &MemoryRoute,
-    ) -> Result<(), DatabaseError> {
+    async fn upsert_route_snapshot(&self, route: &MemoryRoute) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
         let _ = conn
             .execute(
@@ -668,10 +703,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn hard_delete_node_snapshot(
-        &self,
-        node_id: Uuid,
-    ) -> Result<(), DatabaseError> {
+    async fn hard_delete_node_snapshot(&self, node_id: Uuid) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
         let _ = conn
             .execute(
@@ -718,7 +750,8 @@ impl LibSqlBackend {
         route_scope: Option<Uuid>,
     ) -> Result<(), DatabaseError> {
         self.upsert_memory_node_snapshot(&detail.node).await?;
-        self.restore_active_version_snapshot(&detail.active_version).await?;
+        self.restore_active_version_snapshot(&detail.active_version)
+            .await?;
 
         let routes_to_restore = detail
             .routes
@@ -755,10 +788,7 @@ impl LibSqlBackend {
         Ok(())
     }
 
-    async fn rollback_changeset_row(
-        &self,
-        row: &MemoryChangeSetRow,
-    ) -> Result<(), DatabaseError> {
+    async fn rollback_changeset_row(&self, row: &MemoryChangeSetRow) -> Result<(), DatabaseError> {
         match row.operation.as_str() {
             "create" => {
                 let detail: MemoryNodeDetail = serde_json::from_value(row.after_json.clone())
@@ -784,9 +814,7 @@ impl LibSqlBackend {
                     Some(
                         serde_json::from_value::<MemoryRoute>(row.after_json.clone())
                             .map_err(|e| {
-                                DatabaseError::Query(format!(
-                                    "invalid delete route snapshot: {e}"
-                                ))
+                                DatabaseError::Query(format!("invalid delete route snapshot: {e}"))
                             })?
                             .id,
                     )
@@ -823,14 +851,24 @@ impl MemoryStore for LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        if let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             return Ok(row_to_memory_space(&row));
         }
         let id = Uuid::new_v4();
         conn.execute(
             "INSERT INTO memory_spaces (id, owner_id, agent_id, slug, title)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id.to_string(), owner_id, agent_id_str.as_deref(), slug, title],
+            params![
+                id.to_string(),
+                owner_id,
+                agent_id_str.as_deref(),
+                slug,
+                title
+            ],
         )
         .await
         .map_err(|e| DatabaseError::Query(e.to_string()))?;
@@ -914,7 +952,8 @@ impl MemoryStore for LibSqlBackend {
         for row in rows.iter().rev() {
             self.rollback_changeset_row(row).await?;
         }
-        self.complete_memory_changeset(changeset_id, "rolled_back").await
+        self.complete_memory_changeset(changeset_id, "rolled_back")
+            .await
     }
 
     async fn create_memory_node(
@@ -927,7 +966,10 @@ impl MemoryStore for LibSqlBackend {
             .is_some()
         {
             if let Some(detail) = self
-                .get_memory_node(input.space_id, &format!("{}://{}", input.domain, input.path))
+                .get_memory_node(
+                    input.space_id,
+                    &format!("{}://{}", input.domain, input.path),
+                )
                 .await?
             {
                 return Ok(detail);
@@ -1005,7 +1047,11 @@ impl MemoryStore for LibSqlBackend {
         .await
         .map_err(|e| DatabaseError::Query(e.to_string()))?;
 
-        for keyword in input.keywords.iter().filter(|keyword| !keyword.trim().is_empty()) {
+        for keyword in input
+            .keywords
+            .iter()
+            .filter(|keyword| !keyword.trim().is_empty())
+        {
             conn.execute(
                 "INSERT OR IGNORE INTO memory_keywords (id, space_id, node_id, keyword)
                  VALUES (?1, ?2, ?3, ?4)",
@@ -1057,8 +1103,14 @@ impl MemoryStore for LibSqlBackend {
         let now = Utc::now();
 
         if input.title.is_some() || input.metadata.is_some() {
-            let title = input.title.clone().unwrap_or_else(|| before.node.title.clone());
-            let metadata = input.metadata.clone().unwrap_or_else(|| before.node.metadata.clone());
+            let title = input
+                .title
+                .clone()
+                .unwrap_or_else(|| before.node.title.clone());
+            let metadata = input
+                .metadata
+                .clone()
+                .unwrap_or_else(|| before.node.metadata.clone());
             conn.execute(
                 "UPDATE memory_nodes SET title = ?2, metadata = ?3, updated_at = ?4 WHERE id = ?1",
                 params![
@@ -1102,7 +1154,10 @@ impl MemoryStore for LibSqlBackend {
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         }
 
-        let target_route = if let Some(route) = self.fetch_memory_route(space_id, &input.route_or_node).await? {
+        let target_route = if let Some(route) = self
+            .fetch_memory_route(space_id, &input.route_or_node)
+            .await?
+        {
             route
         } else {
             before
@@ -1114,10 +1169,7 @@ impl MemoryStore for LibSqlBackend {
                 })?
         };
 
-        if input.priority.is_some()
-            || input.trigger_text.is_some()
-            || input.visibility.is_some()
-        {
+        if input.priority.is_some() || input.trigger_text.is_some() || input.visibility.is_some() {
             let edge = before
                 .edges
                 .iter()
@@ -1159,7 +1211,10 @@ impl MemoryStore for LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-            for keyword in keywords.into_iter().filter(|keyword| !keyword.trim().is_empty()) {
+            for keyword in keywords
+                .into_iter()
+                .filter(|keyword| !keyword.trim().is_empty())
+            {
                 conn.execute(
                     "INSERT OR IGNORE INTO memory_keywords (id, space_id, node_id, keyword)
                      VALUES (?1, ?2, ?3, ?4)",
@@ -1178,13 +1233,13 @@ impl MemoryStore for LibSqlBackend {
         for route in self.fetch_memory_routes_for_node(before.node.id).await? {
             self.rebuild_search_doc_for_route(route.id).await?;
         }
-        let after = self
-            .fetch_detail(before.node.id)
-            .await?
-            .ok_or_else(|| DatabaseError::NotFound {
-                entity: "memory_node".to_string(),
-                id: before.node.id.to_string(),
-            })?;
+        let after =
+            self.fetch_detail(before.node.id)
+                .await?
+                .ok_or_else(|| DatabaseError::NotFound {
+                    entity: "memory_node".to_string(),
+                    id: before.node.id.to_string(),
+                })?;
         if let Some(changeset_id) = input.changeset_id {
             self.write_changeset_row(
                 changeset_id,
@@ -1203,7 +1258,10 @@ impl MemoryStore for LibSqlBackend {
         &self,
         input: &CreateMemoryAliasInput,
     ) -> Result<MemoryRoute, DatabaseError> {
-        let Some(detail) = self.get_memory_node(input.space_id, &input.target_route_or_node).await? else {
+        let Some(detail) = self
+            .get_memory_node(input.space_id, &input.target_route_or_node)
+            .await?
+        else {
             return Err(DatabaseError::NotFound {
                 entity: "memory_node".to_string(),
                 id: input.target_route_or_node.clone(),
@@ -1399,17 +1457,27 @@ impl MemoryStore for LibSqlBackend {
         };
 
         let mut rows = if let Some(filter) = domain_filter {
-            conn.query(sql, params![space_id.to_string(), match_query, filter, limit as i64])
-                .await
-                .map_err(|e| DatabaseError::Query(e.to_string()))?
+            conn.query(
+                sql,
+                params![space_id.to_string(), match_query, filter, limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
         } else {
-            conn.query(sql, params![space_id.to_string(), match_query, limit as i64])
-                .await
-                .map_err(|e| DatabaseError::Query(e.to_string()))?
+            conn.query(
+                sql,
+                params![space_id.to_string(), match_query, limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
         };
 
         let mut hits = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             let content = get_text(&row, 6);
             hits.push(MemorySearchHit {
                 node_id: get_text(&row, 0).parse().unwrap_or_default(),
@@ -1434,7 +1502,9 @@ impl MemoryStore for LibSqlBackend {
         limit_per_section: usize,
     ) -> Result<Vec<MemorySidebarSection>, DatabaseError> {
         let boot = self.list_memory_boot_nodes(space_id, None).await?;
-        let recent = self.list_memory_timeline(space_id, limit_per_section).await?;
+        let recent = self
+            .list_memory_timeline(space_id, limit_per_section)
+            .await?;
         let reviews = self.list_memory_reviews(space_id).await?;
         let conn = self.connect().await?;
         let mut rows = conn
@@ -1449,7 +1519,11 @@ impl MemoryStore for LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut domain_items = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             let uri = get_text(&row, 2);
             domain_items.push(MemorySidebarItem {
                 node_id: get_text(&row, 0).parse().unwrap_or_default(),
@@ -1511,7 +1585,9 @@ impl MemoryStore for LibSqlBackend {
                         node_id: Uuid::nil(),
                         route_id: None,
                         uri: Some(format!("review://{}", changeset.id)),
-                        title: changeset.summary.unwrap_or_else(|| "Pending memory review".to_string()),
+                        title: changeset
+                            .summary
+                            .unwrap_or_else(|| "Pending memory review".to_string()),
                         subtitle: Some(changeset.origin),
                         kind: MemoryNodeKind::Procedure,
                         updated_at: changeset.updated_at,
@@ -1539,7 +1615,11 @@ impl MemoryStore for LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut entries = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             let content = get_text(&row, 4);
             entries.push(MemoryTimelineEntry {
                 node_id: get_text(&row, 0).parse().unwrap_or_default(),
@@ -1569,13 +1649,20 @@ impl MemoryStore for LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut changesets = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             changesets.push(row_to_memory_changeset(&row));
         }
         Ok(changesets)
     }
 
-    async fn get_memory_versions(&self, node_id: Uuid) -> Result<Vec<MemoryVersion>, DatabaseError> {
+    async fn get_memory_versions(
+        &self,
+        node_id: Uuid,
+    ) -> Result<Vec<MemoryVersion>, DatabaseError> {
         let conn = self.connect().await?;
         let mut rows = conn
             .query(
@@ -1588,7 +1675,11 @@ impl MemoryStore for LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut versions = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             versions.push(row_to_memory_version(&row));
         }
         Ok(versions)
@@ -1615,7 +1706,11 @@ impl MemoryStore for LibSqlBackend {
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
         let mut details = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
             let node_id: Uuid = get_text(&row, 0).parse().unwrap_or_default();
             if let Some(detail) = self.fetch_detail(node_id).await? {
                 details.push(detail);
