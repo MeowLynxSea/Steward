@@ -7,6 +7,7 @@ mod support;
 
 #[cfg(feature = "libsql")]
 mod advanced {
+    use std::sync::Arc;
     use std::time::Duration;
 
     use steward_core::agent::routine::Trigger;
@@ -845,11 +846,12 @@ mod advanced {
     // -----------------------------------------------------------------------
 
     /// Exercises the full onboarding flow: bootstrap greeting fires, user
-    /// converses for 3 turns, agent writes profile + memory + identity,
-    /// clears BOOTSTRAP.md, and the workspace reflects all writes.
+    /// converses for 3 turns, agent writes graph-native URI memory,
+    /// clears BOOTSTRAP.md, and the workspace reflects the onboarding completion.
     #[tokio::test]
     async fn bootstrap_onboarding_clears_bootstrap() {
         use steward_core::workspace::paths;
+        use steward_core::memory::MemoryManager;
 
         let trace = LlmTrace::from_file(format!("{FIXTURES}/bootstrap_onboarding.json")).unwrap();
         let rig = TestRigBuilder::new()
@@ -879,7 +881,7 @@ mod advanced {
         );
 
         // 3. Run the 3-turn conversation. The trace has the agent write
-        //    profile, memory, identity, and then clear bootstrap.
+        //    graph memory via `create_memory`, then clear bootstrap.
         let mut total = 1; // already have the greeting
         for turn in &trace.turns {
             rig.send_message(&turn.user_input).await;
@@ -887,15 +889,28 @@ mod advanced {
             let _ = rig.wait_for_responses(total, TIMEOUT).await;
         }
 
-        // 4. Verify all memory_write calls succeeded.
+        // 4. Verify the expected tool calls succeeded.
         let completed = rig.tool_calls_completed();
+        let create_memory_calls: Vec<_> = completed
+            .iter()
+            .filter(|(name, _)| name == "create_memory")
+            .collect();
+        assert!(
+            create_memory_calls.len() >= 2,
+            "expected at least 2 create_memory calls (user + agent), got: {create_memory_calls:?}"
+        );
+        assert!(
+            create_memory_calls.iter().all(|(_, ok)| *ok),
+            "all create_memory calls should succeed: {create_memory_calls:?}"
+        );
+
         let memory_writes: Vec<_> = completed
             .iter()
             .filter(|(name, _)| name == "memory_write")
             .collect();
         assert!(
-            memory_writes.len() >= 4,
-            "expected at least 4 memory_write calls (profile, memory, identity, bootstrap), got: {memory_writes:?}"
+            !memory_writes.is_empty(),
+            "expected at least 1 memory_write call (bootstrap clear), got: {memory_writes:?}"
         );
         assert!(
             memory_writes.iter().all(|(_, ok)| *ok),
@@ -913,101 +928,25 @@ mod advanced {
         // 6. The bootstrap-completed flag should be set (prevents re-injection).
         assert!(
             ws.is_bootstrap_completed(),
-            "bootstrap_completed flag should be set after profile write"
+            "bootstrap_completed flag should be set after bootstrap clear"
         );
 
-        // 7. Profile should exist in workspace with expected fields.
-        let profile = ws.read(paths::PROFILE).await.expect("read profile");
-        assert!(
-            !profile.content.is_empty(),
-            "profile.json should not be empty"
-        );
-        assert!(
-            profile.content.contains("Alex"),
-            "profile should contain preferred_name, got: {:?}",
-            &profile.content[..profile.content.len().min(200)]
-        );
-
-        // Try parsing the stored profile to catch deserialization issues early.
-        let stored = ws
-            .read(paths::PROFILE)
+        // 7. Verify that the user profile is present in graph memory.
+        // The test channel sends messages as "test-user" by default; graph memory
+        // tool calls should be scoped to that user id.
+        let owner_id = "test-user".to_string();
+        let agent_id = None;
+        let memory = MemoryManager::new(Arc::clone(rig.database()));
+        let detail = memory
+            .open(&owner_id, agent_id, "core://user/profile")
             .await
-            .expect("read profile for deser test");
-        let deser_result =
-            serde_json::from_str::<steward_core::profile::PsychographicProfile>(&stored.content);
+            .expect("open core://user/profile")
+            .expect("core://user/profile should exist");
+        let content = &detail.active_version.content;
         assert!(
-            deser_result.is_ok(),
-            "profile should deserialize: {:?}\ncontent: {:?}",
-            deser_result.err(),
-            &stored.content[..stored.content.len().min(300)]
-        );
-        let parsed = deser_result.unwrap();
-        assert!(
-            parsed.is_populated(),
-            "profile should be populated: name={:?}, profession={:?}, goals={:?}",
-            parsed.preferred_name,
-            parsed.context.profession,
-            parsed.assistance.goals
-        );
-
-        // Manually trigger sync.
-        let synced = ws
-            .sync_profile_documents()
-            .await
-            .expect("sync_profile_documents");
-        assert!(
-            synced,
-            "sync_profile_documents should return true for a populated profile"
-        );
-        assert!(
-            profile.content.contains("backend engineer"),
-            "profile should contain profession"
-        );
-        assert!(
-            profile.content.contains("distributed systems"),
-            "profile should contain interests"
-        );
-
-        // 8. USER.md should have been synced from the profile via sync_profile_documents().
-        let user_doc = ws.read(paths::USER).await.expect("read USER.md");
-        assert!(
-            user_doc.content.contains("Alex"),
-            "USER.md should contain user name from profile, got: {:?}",
-            &user_doc.content[..user_doc.content.len().min(300)]
-        );
-        assert!(
-            user_doc.content.contains("direct"),
-            "USER.md should contain communication tone from profile, got: {:?}",
-            &user_doc.content[..user_doc.content.len().min(300)]
-        );
-        assert!(
-            user_doc.content.contains("backend engineer"),
-            "USER.md should contain profession from profile, got: {:?}",
-            &user_doc.content[..user_doc.content.len().min(300)]
-        );
-
-        // 9. Assistant directives should have been synced from the profile.
-        let directives = ws
-            .read(paths::ASSISTANT_DIRECTIVES)
-            .await
-            .expect("read assistant-directives.md");
-        assert!(
-            directives.content.contains("Alex"),
-            "assistant-directives should reference user name, got: {:?}",
-            &directives.content[..directives.content.len().min(300)]
-        );
-        assert!(
-            directives.content.contains("direct"),
-            "assistant-directives should reflect communication style, got: {:?}",
-            &directives.content[..directives.content.len().min(300)]
-        );
-
-        // 10. IDENTITY.md should have been written by the agent.
-        let identity = ws.read(paths::IDENTITY).await.expect("read IDENTITY.md");
-        assert!(
-            identity.content.contains("Claw"),
-            "IDENTITY.md should contain the chosen agent name, got: {:?}",
-            identity.content
+            content.contains("Alex") && content.contains("backend engineer"),
+            "graph memory should include user profile content, got: {:?}",
+            &content[..content.len().min(300)]
         );
 
         rig.shutdown();

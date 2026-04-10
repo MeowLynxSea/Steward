@@ -1112,6 +1112,12 @@ Example:
             None => return String::new(),
         };
         let hints = match channel {
+            "desktop" => {
+                "\
+- No markdown tables. Use bullet lists instead.\n\
+- Keep replies readable in a narrow chat pane (short paragraphs, clear headings).\n\
+- Avoid heavy formatting; prefer plain markdown."
+            }
             "discord" => {
                 "\
 - No markdown tables (Discord renders them as plaintext). Use bullet lists instead.\n\

@@ -861,7 +861,7 @@ mod tests {
             .emit_system_event(
                 "github",
                 "issue.opened",
-                &serde_json::json!({"repository": "NearAI/Steward"}),
+                &serde_json::json!({"repository": "MeowLynxSea/Steward"}),
                 Some("default"),
             )
             .await;

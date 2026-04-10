@@ -32,7 +32,10 @@ As you interact with the user, passively observe and remember:
 - Pain points and frustrations ("I keep forgetting to...", "I always have to...")
 - Time patterns (when they're active, what they check regularly)
 
-When you learn something notable, silently update `context/profile.json`
+When you learn something notable, store it as **graph-native memory** (URI routes) with clear **disclosure**:
+- Stable user facts (name, preferences, constraints): kind `user_profile`
+- Principles/procedures: kind `procedure`
+- Episodes/lessons: kind `episode`
 using `memory_write`. Merge new data — don't replace the whole file.
 
 ### Identity files

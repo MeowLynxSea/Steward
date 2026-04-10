@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use crate::context::JobContext;
 use crate::tools::tool::{Tool, ToolError, ToolOutput, require_str};
 use crate::workspace::{Workspace, paths};
+use chrono::Utc;
 
 // ── WorkspaceResolver ──────────────────────────────────────────────
 
@@ -147,6 +148,25 @@ fn is_workspace_mount_uri(path: &str) -> bool {
     path.starts_with("workspace://")
 }
 
+fn normalize_legacy_memory_target(target: &str, ctx: &JobContext) -> String {
+    match target {
+        "memory" => paths::MEMORY.to_string(),
+        "heartbeat" => paths::HEARTBEAT.to_string(),
+        "bootstrap" => paths::BOOTSTRAP.to_string(),
+        "daily_log" => {
+            // Default to the user's timezone when valid; fall back to UTC.
+            let tz = crate::timezone::parse_timezone(&ctx.user_timezone)
+                .unwrap_or(chrono_tz::Tz::UTC);
+            let date = Utc::now().with_timezone(&tz).date_naive();
+            format!("{}{}.md", paths::DAILY_DIR, date)
+        }
+        other => other.to_string(),
+    }
+}
+
+const REMOVED_PROFILE_JSON_PATH: &str = "context/profile.json";
+const REMOVED_ASSISTANT_DIRECTIVES_PATH: &str = "context/assistant-directives.md";
+
 /// Map workspace write errors to tool errors, using `NotAuthorized` for
 /// injection rejections so the LLM gets a clear signal to stop.
 fn map_write_err(e: crate::error::WorkspaceError) -> ToolError {
@@ -157,6 +177,436 @@ fn map_write_err(e: crate::error::WorkspaceError) -> ToolError {
             ))
         }
         other => ToolError::ExecutionFailed(format!("Write failed: {other}")),
+    }
+}
+
+/// Legacy workspace-memory writer tool.
+///
+/// Historically, Steward used `memory_write` to persist to workspace documents such as
+/// MEMORY.md, BOOTSTRAP.md, and arbitrary `notes/...` paths. Some onboarding prompts
+/// and E2E traces still rely on this tool name. This tool writes to the workspace
+/// document store (not graph-native memory).
+pub struct MemoryWriteTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl MemoryWriteTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryWriteTool {
+    fn name(&self) -> &str {
+        "memory_write"
+    }
+
+    fn description(&self) -> &str {
+        "Legacy: write a workspace memory document (e.g. MEMORY.md, BOOTSTRAP.md, or any custom path like projects/foo.md). \
+         For graph-native long-term memory, use memory_create/memory_update instead."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Workspace document path, or legacy shorthands: 'memory', 'daily_log', 'heartbeat', 'bootstrap'."
+                },
+                "content": { "type": "string" },
+                "append": { "type": "boolean", "default": false }
+            },
+            "required": ["target", "content"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let target = require_str(&params, "target")?;
+        let content = require_str(&params, "content")?;
+        // Legacy traces (bootstrap onboarding, profile writes) expect overwrite semantics
+        // unless explicitly opting into append.
+        let append = params
+            .get("append")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let normalized_target = normalize_legacy_memory_target(target, ctx);
+
+        if normalized_target.eq_ignore_ascii_case(REMOVED_PROFILE_JSON_PATH)
+            || normalized_target.eq_ignore_ascii_case(REMOVED_ASSISTANT_DIRECTIVES_PATH)
+        {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{normalized_target}' is part of the removed psychographic profile subsystem. \
+Use graph memory instead (create_memory/memory_create with a `core://...` URI)."
+            )));
+        }
+
+        // Nocturne-style: do not let the agent treat system-prompt identity documents
+        // as its long-term memory store. These files remain human-owned.
+        if matches!(
+            normalized_target.as_str(),
+            paths::SOUL | paths::AGENTS | paths::USER | paths::IDENTITY | paths::TOOLS
+        ) {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{normalized_target}' is a workspace identity document, not graph memory. \
+Use graph memory instead (create_memory/memory_create)."
+            )));
+        }
+
+        if append {
+            workspace
+                .append(&normalized_target, content)
+                .await
+                .map_err(map_write_err)?;
+        } else {
+            workspace
+                .write(&normalized_target, content)
+                .await
+                .map_err(map_write_err)?;
+        }
+
+        if normalized_target.eq_ignore_ascii_case(paths::BOOTSTRAP)
+            && !append
+            && content.trim().is_empty()
+        {
+            // Clearing BOOTSTRAP.md is the signal that onboarding is complete.
+            workspace.mark_bootstrap_completed();
+
+            // Best-effort: persist so the desktop app doesn't re-inject BOOTSTRAP.md on restart.
+            // Keep tests hermetic: unit/integration tests should not read/write host settings.
+            if !cfg!(test) {
+                let toml_path = crate::settings::Settings::default_toml_path();
+                if let Ok(Some(mut settings)) = crate::settings::Settings::load_toml(&toml_path)
+                    && !settings.bootstrap_onboarding_completed
+                {
+                    settings.bootstrap_onboarding_completed = true;
+                    if let Err(e) = settings.save_toml(&toml_path) {
+                        tracing::warn!(
+                            "failed to persist bootstrap_onboarding_completed: {e}"
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "target": normalized_target,
+                "appended": append
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+/// Legacy workspace-memory reader tool.
+///
+/// Historically, Steward used `memory_read` to read from the workspace document
+/// store (not mounted `workspace://...` files). Some E2E traces still rely on
+/// this tool name.
+pub struct MemoryReadTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl MemoryReadTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryReadTool {
+    fn name(&self) -> &str {
+        "memory_read"
+    }
+
+    fn description(&self) -> &str {
+        "Legacy: read a workspace memory document by path (e.g. MEMORY.md, BOOTSTRAP.md, or any custom doc path like projects/foo.md). \
+         This does NOT read the local filesystem; for mounted workspace files use workspace_read with workspace:// URIs."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Workspace document path (not a filesystem path, and not a workspace:// mount URI)." }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let path = require_str(&params, "path")?;
+
+        if looks_like_filesystem_path(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "memory_read only reads workspace documents, not filesystem paths: '{path}'"
+            )));
+        }
+        if is_workspace_mount_uri(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "memory_read does not read mounted workspace files. Use workspace_read for: '{path}'"
+            )));
+        }
+
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let doc = workspace
+            .read(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Read failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "path": doc.path,
+                "content": doc.content
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+/// Legacy workspace-memory tree viewer.
+///
+/// Similar to workspace_tree, but for the workspace document store (MEMORY.md,
+/// BOOTSTRAP.md, context/*, etc) rather than mounted workspace:// content.
+pub struct MemoryTreeTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl MemoryTreeTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+
+    async fn build_tree(
+        workspace: &Arc<Workspace>,
+        path: &str,
+        current_depth: usize,
+        max_depth: usize,
+    ) -> Result<Vec<serde_json::Value>, ToolError> {
+        if current_depth > max_depth {
+            return Ok(Vec::new());
+        }
+
+        let entries = workspace
+            .list(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Tree failed: {e}")))?;
+
+        let mut result = Vec::new();
+        for entry in entries {
+            let display_path = if entry.is_directory {
+                format!("{}/", entry.name())
+            } else {
+                entry.name().to_string()
+            };
+
+            if entry.is_directory && current_depth < max_depth {
+                let children =
+                    Box::pin(Self::build_tree(workspace, &entry.path, current_depth + 1, max_depth))
+                        .await?;
+                if children.is_empty() {
+                    result.push(serde_json::Value::String(display_path));
+                } else {
+                    result.push(serde_json::json!({ display_path: children }));
+                }
+            } else {
+                result.push(serde_json::Value::String(display_path));
+            }
+        }
+
+        Ok(result)
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryTreeTool {
+    fn name(&self) -> &str {
+        "memory_tree"
+    }
+
+    fn description(&self) -> &str {
+        "Legacy: view the workspace memory-document tree (not mounted workspace:// files). \
+         Useful for browsing what memory documents exist and their folder layout."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Root path to start from within the workspace document store (default: root).",
+                    "default": ""
+                },
+                "depth": {
+                    "type": "integer",
+                    "description": "Maximum depth to traverse (1 = immediate children only)",
+                    "default": 2,
+                    "minimum": 1,
+                    "maximum": 10
+                }
+            }
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let depth = params
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(2)
+            .clamp(1, 10) as usize;
+
+        if looks_like_filesystem_path(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "memory_tree only lists workspace documents, not filesystem paths: '{path}'"
+            )));
+        }
+        if is_workspace_mount_uri(path) {
+            return Err(ToolError::InvalidParameters(format!(
+                "memory_tree does not operate on mounted workspace URIs. Use workspace_tree for: '{path}'"
+            )));
+        }
+
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let tree = Self::build_tree(&workspace, path, 1, depth).await?;
+
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "path": path,
+                "depth": depth,
+                "tree": tree
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+/// Legacy workspace-memory search tool.
+///
+/// Provides the historical `memory_search` name used in some traces and prompts.
+/// This searches the workspace index (mounted + workspace documents).
+pub struct MemorySearchTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl MemorySearchTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for MemorySearchTool {
+    fn name(&self) -> &str {
+        "memory_search"
+    }
+
+    fn description(&self) -> &str {
+        "Legacy: search workspace memory documents and mounted files by hybrid search (FTS + semantic)."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "limit": { "type": "integer", "default": 5, "minimum": 1, "maximum": 20 }
+            },
+            "required": ["query"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let query = require_str(&params, "query")?;
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5)
+            .min(20) as usize;
+
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let results = workspace
+            .search(query, limit)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Search failed: {e}")))?;
+
+        let output = serde_json::json!({
+            "query": query,
+            "limit": limit,
+            "results": results.into_iter().map(|r| serde_json::json!({
+                "path": r.document_path,
+                "content": r.content,
+                "score": r.score,
+                "document_id": r.document_id.to_string(),
+            })).collect::<Vec<_>>()
+        });
+
+        Ok(ToolOutput::success(output, start.elapsed()))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
     }
 }
 
@@ -410,51 +860,6 @@ impl Tool for WorkspaceWriteTool {
             None
         };
 
-        // Sync derived identity documents when the profile is written.
-        let normalized_path = {
-            let trimmed = resolved_path.trim().trim_matches('/');
-            let mut result = String::new();
-            let mut last_was_slash = false;
-            for c in trimmed.chars() {
-                if c == '/' {
-                    if !last_was_slash {
-                        result.push(c);
-                    }
-                    last_was_slash = true;
-                } else {
-                    result.push(c);
-                    last_was_slash = false;
-                }
-            }
-            result
-        };
-        let mut synced_docs: Vec<&str> = Vec::new();
-        if normalized_path == paths::PROFILE {
-            match workspace.sync_profile_documents().await {
-                Ok(true) => {
-                    tracing::info!("profile write: synced USER.md + assistant-directives.md");
-                    synced_docs.extend_from_slice(&[paths::USER, paths::ASSISTANT_DIRECTIVES]);
-
-                    workspace.mark_bootstrap_completed();
-                    let toml_path = crate::settings::Settings::default_toml_path();
-                    if let Ok(Some(mut settings)) = crate::settings::Settings::load_toml(&toml_path)
-                        && !settings.profile_onboarding_completed
-                    {
-                        settings.profile_onboarding_completed = true;
-                        if let Err(e) = settings.save_toml(&toml_path) {
-                            tracing::warn!("failed to persist profile_onboarding_completed: {e}");
-                        }
-                    }
-                }
-                Ok(false) => {
-                    tracing::debug!("profile not populated, skipping document sync");
-                }
-                Err(e) => {
-                    tracing::warn!("profile document sync failed: {e}");
-                }
-            }
-        }
-
         let mut output = serde_json::json!({
             "status": "written",
             "path": resolved_path,
@@ -464,9 +869,6 @@ impl Tool for WorkspaceWriteTool {
         if let Some((actual_layer, redirected)) = layer_result {
             output["layer"] = serde_json::Value::String(actual_layer);
             output["redirected"] = serde_json::Value::Bool(redirected);
-        }
-        if !synced_docs.is_empty() {
-            output["synced"] = serde_json::json!(synced_docs);
         }
 
         Ok(ToolOutput::success(output, start.elapsed()))

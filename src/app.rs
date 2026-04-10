@@ -893,12 +893,17 @@ impl AppBuilder {
 
         // Load bootstrap-completed flag from settings so that existing users
         // who already completed onboarding don't re-get bootstrap injection.
-        if let Some(ref ws) = workspace {
-            let toml_path = crate::settings::Settings::default_toml_path();
-            if let Ok(Some(settings)) = crate::settings::Settings::load_toml(&toml_path)
-                && settings.profile_onboarding_completed
-            {
-                ws.mark_bootstrap_completed();
+        //
+        // Important: keep integration tests hermetic. Tests build the crate with
+        // `cfg(test)` enabled and should not read host-machine settings files.
+        if !cfg!(test) {
+            if let Some(ref ws) = workspace {
+                let toml_path = crate::settings::Settings::default_toml_path();
+                if let Ok(Some(settings)) = crate::settings::Settings::load_toml(&toml_path)
+                    && settings.bootstrap_onboarding_completed
+                {
+                    ws.mark_bootstrap_completed();
+                }
             }
         }
 

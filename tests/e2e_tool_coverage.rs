@@ -8,11 +8,18 @@ mod support;
 
 #[cfg(feature = "libsql")]
 mod tests {
+    use std::sync::LazyLock;
     use std::time::Duration;
 
     use crate::support::cleanup::CleanupGuard;
     use crate::support::test_rig::TestRigBuilder;
     use crate::support::trace_llm::LlmTrace;
+
+    // libsql and some tool fixtures can occasionally crash the process when many
+    // full-stack rigs are created concurrently within the same test binary.
+    // Serialize these coverage tests to keep CI stable.
+    static TOOL_COVERAGE_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
 
     const TEST_DIR_BASE: &str = "/tmp/steward_coverage_test";
 
@@ -29,6 +36,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_json_operations() {
+        let _guard = TOOL_COVERAGE_LOCK.lock().await;
         let trace = LlmTrace::from_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/llm_traces/coverage/json_operations.json"
@@ -70,6 +78,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shell_echo() {
+        let _guard = TOOL_COVERAGE_LOCK.lock().await;
         let trace = LlmTrace::from_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/llm_traces/coverage/shell_echo.json"
@@ -94,6 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_dir() {
+        let _guard = TOOL_COVERAGE_LOCK.lock().await;
         let test_dir = setup_test_dir("list_dir");
         let _cleanup = CleanupGuard::new().dir(&test_dir);
         std::fs::write(format!("{test_dir}/file_a.txt"), "content a").unwrap();
@@ -123,6 +133,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_apply_patch_chain() {
+        let _guard = TOOL_COVERAGE_LOCK.lock().await;
         let test_dir = setup_test_dir("apply_patch");
         let _cleanup = CleanupGuard::new().dir(&test_dir);
 
@@ -168,6 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_memory_full_cycle() {
+        let _guard = TOOL_COVERAGE_LOCK.lock().await;
         let trace = LlmTrace::from_file(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/llm_traces/coverage/memory_full_cycle.json"

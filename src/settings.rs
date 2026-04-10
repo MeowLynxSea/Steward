@@ -87,8 +87,17 @@ pub struct Settings {
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
 
-    #[serde(default, alias = "personal_onboarding_completed")]
-    pub profile_onboarding_completed: bool,
+    /// Whether the user completed the initial bootstrap/onboarding flow.
+    ///
+    /// Backward-compatible aliases:
+    /// - `profile_onboarding_completed` (legacy psychographic profile onboarding)
+    /// - `personal_onboarding_completed` (older name)
+    #[serde(
+        default,
+        alias = "profile_onboarding_completed",
+        alias = "personal_onboarding_completed"
+    )]
+    pub bootstrap_onboarding_completed: bool,
 
     #[serde(default)]
     pub agent: AgentSettings,

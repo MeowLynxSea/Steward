@@ -35,6 +35,20 @@ fn parse_kind(value: &str) -> Result<MemoryNodeKind, ToolError> {
     }
 }
 
+fn kind_enum_values() -> Vec<&'static str> {
+    vec![
+        "boot",
+        "identity",
+        "value",
+        "user_profile",
+        "directive",
+        "curated",
+        "episode",
+        "procedure",
+        "reference",
+    ]
+}
+
 fn slugify(value: &str) -> String {
     let mut slug = String::with_capacity(value.len());
     let mut last_dash = false;
@@ -328,18 +342,25 @@ impl Tool for CreateMemoryTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let kind_values = kind_enum_values();
         serde_json::json!({
             "type": "object",
             "properties": {
-                "parent_uri": { "type": "string" },
+                "parent_uri": { "type": "string", "description": "Parent URI to derive a child uri from (domain://path or domain://). Provide this OR 'uri'." },
+                "uri": { "type": "string", "description": "Explicit root uri to create (domain://path). Provide this OR 'parent_uri'." },
                 "content": { "type": "string" },
-                "priority": { "type": "integer" },
+                "priority": { "type": "integer", "default": 50 },
                 "title": { "type": "string" },
                 "disclosure": { "type": ["string", "null"] },
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
-                "keywords": { "type": "array", "items": { "type": "string" } }
+                "keywords": { "type": "array", "items": { "type": "string" } },
+                "kind": { "type": "string", "enum": kind_values, "description": "Optional node kind. Defaults to 'reference'. Use 'user_profile' for stable user facts like the user's name." }
             },
-            "required": ["parent_uri", "content", "priority"]
+            "anyOf": [
+                { "required": ["uri"] },
+                { "required": ["parent_uri"] }
+            ],
+            "required": ["content"]
         })
     }
 
@@ -349,22 +370,35 @@ impl Tool for CreateMemoryTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        let parent_uri = require_str(&params, "parent_uri")?;
         let content = require_str(&params, "content")?;
         let priority = parse_priority(&params, 50)?;
-        let title = optional_string(&params, "title")?
-            .filter(|v| !v.trim().is_empty())
-            .unwrap_or_else(|| Utc::now().format("memory-%Y%m%d-%H%M%S").to_string());
+        let kind = params
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .map(parse_kind)
+            .transpose()?
+            .unwrap_or(MemoryNodeKind::Reference);
         let disclosure = optional_string(&params, "disclosure")?;
         let visibility = parse_visibility(&params)?;
         let keywords = parse_string_list(&params, "keywords")?;
 
-        let (domain, parent_path) = parse_parent_uri(parent_uri)?;
-        let slug = slugify(&title);
-        let path = if parent_path.is_empty() {
-            slug
+        let title = optional_string(&params, "title")?
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| Utc::now().format("memory-%Y%m%d-%H%M%S").to_string());
+
+        let (parent_uri, domain, path) = if let Some(uri) = optional_string(&params, "uri")? {
+            let (domain, path) = parse_uri_strict(&uri)?;
+            (None, domain, path)
         } else {
-            format!("{parent_path}/{slug}")
+            let parent_uri = require_str(&params, "parent_uri")?;
+            let (domain, parent_path) = parse_parent_uri(parent_uri)?;
+            let slug = slugify(&title);
+            let path = if parent_path.is_empty() {
+                slug
+            } else {
+                format!("{parent_path}/{slug}")
+            };
+            (Some(parent_uri.to_string()), domain, path)
         };
 
         let (detail, changeset) = self
@@ -372,9 +406,9 @@ impl Tool for CreateMemoryTool {
             .create(
                 &ctx.user_id,
                 None,
-                Some(parent_uri),
+                parent_uri.as_deref(),
                 &title,
-                MemoryNodeKind::Curated,
+                kind,
                 content,
                 &domain,
                 &path,
@@ -431,6 +465,7 @@ impl Tool for UpdateMemoryTool {
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
+        let kind_values = kind_enum_values();
         serde_json::json!({
             "type": "object",
             "properties": {
@@ -444,7 +479,7 @@ impl Tool for UpdateMemoryTool {
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
                 "keywords": { "type": "array", "items": { "type": "string" } },
                 "title": { "type": "string" },
-                "kind": { "type": "string" }
+                "kind": { "type": "string", "enum": kind_values }
             },
             "required": ["uri"]
         })
@@ -457,6 +492,13 @@ impl Tool for UpdateMemoryTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let uri = require_str(&params, "uri")?;
+
+        if uri.starts_with("system://") {
+            return Err(ToolError::InvalidParameters(
+                "system:// URIs are virtual entry points (read-only). Update a concrete memory URI like system://boot/memory_protocol (or a core://... node) instead."
+                    .to_string(),
+            ));
+        }
 
         let detail = self
             .memory

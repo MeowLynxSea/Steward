@@ -490,13 +490,9 @@ impl MemoryManager {
     /// seeding a fixed identity tree (identity/value/user_profile, etc.).
     pub async fn ensure_boot_protocol(&self, owner_id: &str) -> Result<(), DatabaseError> {
         let _space = self.ensure_primary_space(owner_id, None).await?;
-        if self
+        let existing = self
             .get_node(owner_id, None, "system://boot/memory_protocol")
-            .await?
-            .is_some()
-        {
-            return Ok(());
-        }
+            .await?;
 
         let protocol = r#"# Memory Operating Protocol (Nocturne Style)
 
@@ -519,6 +515,10 @@ Write immediately when:
 
 Prefer `update_memory` over creating conflicting duplicates.
 
+## Graph Memory vs Workspace Documents
+- Use graph-native memory tools (`create_memory`/`memory_create`, `update_memory`/`memory_update`, aliases, route deletion) for durable memories.
+- `memory_write` is a legacy workspace-document tool. Do NOT use it as your long-term memory store.
+
 ## URI vs Disclosure
 - URI answers **What** (a sharp concept), not a time bucket or trash folder.
 - Disclosure answers **When** to recall it.
@@ -526,6 +526,31 @@ Prefer `update_memory` over creating conflicting duplicates.
 ## Growth
 Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), not destroy identity.
 "#;
+
+        if let Some(existing) = existing {
+            // If this node was seeded by us, keep it updated across versions.
+            // Never overwrite user-modified boot protocol content.
+            let seeded = existing
+                .node
+                .metadata
+                .get("source")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s == "seed:memory_protocol");
+
+            if seeded && !existing.active_version.content.contains("Graph Memory vs Workspace") {
+                let input = UpdateMemoryNodeInput {
+                    route_or_node: "system://boot/memory_protocol".to_string(),
+                    content: Some(protocol.to_string()),
+                    metadata: Some(serde_json::json!({
+                        "source": "seed:memory_protocol",
+                        "updated_at": Utc::now(),
+                    })),
+                    ..Default::default()
+                };
+                let _ = self.update(owner_id, None, &input).await?;
+            }
+            return Ok(());
+        }
 
         // Use the regular create path so we get the same durable invariants
         // (routes, versions, edges, search projections).
@@ -1078,28 +1103,6 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             priority: 15,
             trigger_text: Some("When prior decisions or lessons may matter".to_string()),
             keywords: vec!["memory".to_string()],
-        }),
-        "context/profile.json" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "profile/psychographic".to_string(),
-            title: "Psychographic Profile".to_string(),
-            kind: MemoryNodeKind::UserProfile,
-            relation_kind: MemoryRelationKind::Contains,
-            visibility: MemoryVisibility::Private,
-            priority: 20,
-            trigger_text: Some("When interaction style should adapt to the user".to_string()),
-            keywords: vec!["profile".to_string()],
-        }),
-        "context/assistant-directives.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "instructions/assistant-directives".to_string(),
-            title: "Assistant Directives".to_string(),
-            kind: MemoryNodeKind::Directive,
-            relation_kind: MemoryRelationKind::Contains,
-            visibility: MemoryVisibility::Session,
-            priority: 10,
-            trigger_text: Some("When resolving response style and behavior".to_string()),
-            keywords: vec!["directives".to_string()],
         }),
         _ if path.starts_with("daily/") => Some(LegacyImportPlan {
             domain: "timeline".to_string(),

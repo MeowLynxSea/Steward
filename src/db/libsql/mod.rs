@@ -20,11 +20,13 @@ mod workspace;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use libsql::{Connection, Database as LibSqlDatabase};
 use rust_decimal::Decimal;
+use tokio::sync::Mutex;
 
 use crate::agent::routine::{
     NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RoutineRun, RunStatus, Trigger,
@@ -59,9 +61,16 @@ pub struct LibSqlBackend {
     db: Arc<LibSqlDatabase>,
 }
 
+// libsql uses native components under the hood. In practice we've seen rare
+// process-level crashes (SIGSEGV/SIGABRT) when many tests create libsql
+// databases concurrently. Serializing the builder path keeps tests stable and
+// does not affect the single-db production runtime.
+static LIBSQL_BUILDER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 impl LibSqlBackend {
     /// Create a new local embedded database.
     pub async fn new_local(path: &Path) -> Result<Self, DatabaseError> {
+        let _guard = LIBSQL_BUILDER_LOCK.lock().await;
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -79,6 +88,7 @@ impl LibSqlBackend {
 
     /// Create a new in-memory database (for testing).
     pub async fn new_memory() -> Result<Self, DatabaseError> {
+        let _guard = LIBSQL_BUILDER_LOCK.lock().await;
         let db = libsql::Builder::new_local(":memory:")
             .build()
             .await
@@ -95,6 +105,7 @@ impl LibSqlBackend {
         url: &str,
         auth_token: &str,
     ) -> Result<Self, DatabaseError> {
+        let _guard = LIBSQL_BUILDER_LOCK.lock().await;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| {
                 DatabaseError::Pool(format!("Failed to create database directory: {}", e))

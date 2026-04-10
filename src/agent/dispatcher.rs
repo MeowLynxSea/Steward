@@ -111,7 +111,28 @@ impl Agent {
             &self.config.default_timezone,
         );
 
-        let system_prompt = if let Some(memory) = self.memory() {
+        // Assemble system prompt context from two sources:
+        // 1) Workspace identity/config files (SOUL/AGENTS/USER/IDENTITY/TOOLS/etc.)
+        // 2) Native graph memory context (Nocturne-style boot + disclosure recall)
+        let workspace_prompt = match tenant.workspace() {
+            Some(ws) => {
+                let include_bootstrap = !ws.is_bootstrap_completed();
+                match ws
+                    .system_prompt_for_chat(include_bootstrap, is_group_chat)
+                    .await
+                {
+                    Ok(p) if !p.is_empty() => Some(p),
+                    Ok(_) => None,
+                    Err(e) => {
+                        tracing::debug!("Could not load workspace system prompt: {}", e);
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let memory_prompt = if let Some(memory) = self.memory() {
             match memory
                 .build_prompt_context(&message.user_id, None, &message.content, is_group_chat)
                 .await
@@ -126,6 +147,13 @@ impl Agent {
         } else {
             tracing::debug!("Memory manager unavailable; dispatching without native memory prompt");
             None
+        };
+
+        let system_prompt = match (workspace_prompt, memory_prompt) {
+            (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
         };
 
         // Select and prepare active skills (if skills system is enabled)

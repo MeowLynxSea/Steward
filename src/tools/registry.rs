@@ -22,7 +22,8 @@ use crate::tools::builtin::{
     MemoryReviewTool, MemoryUpdateTool, MoveFileTool, ReadFileTool, ShellTool, SkillInstallTool,
     SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
     ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
-    WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
+    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, WorkspaceReadTool,
+    WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
     AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ManageTriggersTool, ReadMemoryTool,
     SearchMemoryTool, UpdateMemoryTool,
 };
@@ -49,7 +50,9 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "list_dir",
     "apply_patch",
     "workspace_search",
+    "memory_search",
     "workspace_write",
+    "memory_write",
     "workspace_read",
     "workspace_tree",
     "memory_recall",
@@ -344,11 +347,15 @@ impl ToolRegistry {
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
         self.register_sync(Arc::new(WorkspaceSearchTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(MemorySearchTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceWriteTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(MemoryWriteTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(MemoryReadTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceReadTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(MemoryTreeTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceTreeTool::new(resolver)));
 
-        tracing::debug!("Registered 4 workspace document tools");
+        tracing::debug!("Registered 8 workspace document tools (plus legacy memory_* aliases)");
     }
 
     /// Register workspace document tools with a fixed workspace.
@@ -359,15 +366,27 @@ impl ToolRegistry {
         self.register_sync(Arc::new(WorkspaceSearchTool::from_workspace(Arc::clone(
             &workspace,
         ))));
+        self.register_sync(Arc::new(MemorySearchTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
         self.register_sync(Arc::new(WorkspaceWriteTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(MemoryWriteTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(MemoryReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));
         self.register_sync(Arc::new(WorkspaceReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));
+        self.register_sync(Arc::new(MemoryTreeTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
         self.register_sync(Arc::new(WorkspaceTreeTool::from_workspace(workspace)));
 
-        tracing::debug!("Registered 4 workspace document tools");
+        tracing::debug!("Registered 8 workspace document tools (plus legacy memory_* aliases)");
     }
 
     /// Register graph-native memory tools backed by the native memory manager.

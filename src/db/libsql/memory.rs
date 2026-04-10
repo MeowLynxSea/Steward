@@ -361,11 +361,19 @@ impl LibSqlBackend {
                 params![route_id.to_string()],
             )
             .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            .map_err(|e| {
+                DatabaseError::Query(format!(
+                    "rebuild_search_doc_for_route: select route detail failed: {e}"
+                ))
+            })?;
         let Some(row) = rows
             .next()
             .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map_err(|e| {
+                DatabaseError::Query(format!(
+                    "rebuild_search_doc_for_route: read route detail row failed: {e}"
+                ))
+            })?
         else {
             let _ = conn
                 .execute(
@@ -383,12 +391,20 @@ impl LibSqlBackend {
                 params![node_id.clone()],
             )
             .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            .map_err(|e| {
+                DatabaseError::Query(format!(
+                    "rebuild_search_doc_for_route: select keywords failed: {e}"
+                ))
+            })?;
         let mut keywords = Vec::new();
         while let Some(kw_row) = kw_rows
             .next()
             .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map_err(|e| {
+                DatabaseError::Query(format!(
+                    "rebuild_search_doc_for_route: read keyword row failed: {e}"
+                ))
+            })?
         {
             keywords.push(get_text(&kw_row, 0));
         }
@@ -424,7 +440,11 @@ impl LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        .map_err(|e| {
+            DatabaseError::Query(format!(
+                "rebuild_search_doc_for_route: upsert memory_search_docs failed: {e}"
+            ))
+        })?;
         Ok(())
     }
 
@@ -996,7 +1016,7 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_nodes failed: {e}")))?;
 
         conn.execute(
             "INSERT INTO memory_versions (id, node_id, supersedes_version_id, status, content, metadata, created_at)
@@ -1010,7 +1030,7 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_versions failed: {e}")))?;
 
         conn.execute(
             "INSERT INTO memory_edges
@@ -1029,7 +1049,7 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_edges failed: {e}")))?;
 
         conn.execute(
             "INSERT INTO memory_routes
@@ -1046,7 +1066,7 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_routes failed: {e}")))?;
 
         for keyword in input
             .keywords
@@ -1064,7 +1084,7 @@ impl MemoryStore for LibSqlBackend {
                 ],
             )
             .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_keywords failed: {e}")))?;
         }
 
         self.rebuild_search_doc_for_route(route_id).await?;

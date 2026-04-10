@@ -37,7 +37,10 @@ pub use job::{
     SchedulerSlot,
 };
 pub use json::JsonTool;
-pub use memory::{WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool};
+pub use memory::{
+    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, WorkspaceReadTool,
+    WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool,
+};
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,
     RoutineListTool, RoutineUpdateTool,

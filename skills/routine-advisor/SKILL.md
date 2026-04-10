@@ -85,7 +85,7 @@ Parameters:
   - Sunday evening: `0 18 * * SUN`
 - `action_type`: "lightweight" for simple checks, "full_job" for multi-step tasks
 - `prompt`: Clear, specific instruction for what the routine should do
-- `context_paths`: Workspace files to load as context (e.g., `["context/profile.json", "MEMORY.md"]`)
+- `context_paths`: Workspace files to load as context (e.g., `["USER.md", "MEMORY.md"]`)
 
 ## Routine Ideas by User Type
 
@@ -111,7 +111,7 @@ Parameters:
 - Weekly reflection prompt (what went well, what to improve)
 - Periodic task/reminder check-in
 - Regular cleanup of stale tasks or notes
-- Weekly profile evolution (if the user has a profile in `context/profile.json`, suggest a Monday routine that reads the profile via `memory_read`, searches recent conversations for new patterns with `memory_search`, and updates the profile via `memory_write` if any fields should change with confidence > 0.6 — be conservative, only update with clear evidence)
+- Weekly memory maintenance (suggest a Monday routine that reads graph memory via `read_memory` / `system://recent`, searches recent conversations, and updates graph memory via `update_memory` / `create_memory` only when evidence is clear)
 
 ## Awareness
 

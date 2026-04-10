@@ -65,7 +65,6 @@ pub mod llm;
 pub mod memory;
 pub mod observability;
 pub mod pairing;
-pub mod profile;
 pub mod registry;
 pub mod runtime_events;
 pub mod safety;

@@ -757,16 +757,23 @@ impl Agent {
         response: OutgoingResponse,
     ) -> Result<(), ChannelError> {
         if message.channel == "desktop" {
-            self.emit_runtime_event_for_message(
-                message,
-                steward_common::AppEvent::Response {
-                    content: response.content,
-                    thread_id: response
-                        .thread_id
-                        .unwrap_or_else(|| message.thread_id.clone().unwrap_or_default()),
-                },
-            );
-            Ok(())
+            // Desktop normally uses runtime events (Tauri IPC). In headless/test
+            // contexts we may not have a runtime emitter, so fall back to the
+            // channel transport so responses aren't silently dropped.
+            if self.emitter().is_some() {
+                self.emit_runtime_event_for_message(
+                    message,
+                    steward_common::AppEvent::Response {
+                        content: response.content,
+                        thread_id: response
+                            .thread_id
+                            .unwrap_or_else(|| message.thread_id.clone().unwrap_or_default()),
+                    },
+                );
+                Ok(())
+            } else {
+                self.send_channel_response(message, response).await
+            }
         } else {
             self.send_channel_response(message, response).await
         }
@@ -779,14 +786,23 @@ impl Agent {
         thread_id: Uuid,
     ) -> Result<(), ChannelError> {
         if channel_name == "desktop" {
-            self.emit_runtime_event_for_user(
-                user_id,
-                steward_common::AppEvent::Response {
-                    content: BOOTSTRAP_GREETING.to_string(),
-                    thread_id: thread_id.to_string(),
-                },
-            );
-            Ok(())
+            // Same fallback rationale as deliver_response(): when no runtime
+            // emitter exists (headless/test), deliver through the message
+            // transport instead of dropping the greeting.
+            if self.emitter().is_some() {
+                self.emit_runtime_event_for_user(
+                    user_id,
+                    steward_common::AppEvent::Response {
+                        content: BOOTSTRAP_GREETING.to_string(),
+                        thread_id: thread_id.to_string(),
+                    },
+                );
+                Ok(())
+            } else {
+                let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
+                out.thread_id = Some(thread_id.to_string());
+                self.broadcast_channel(channel_name, user_id, out).await
+            }
         } else {
             let mut out = OutgoingResponse::text(BOOTSTRAP_GREETING.to_string());
             out.thread_id = Some(thread_id.to_string());

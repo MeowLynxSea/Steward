@@ -29,6 +29,20 @@ fn parse_kind(value: &str) -> Result<MemoryNodeKind, ToolError> {
     }
 }
 
+fn kind_enum_values() -> Vec<&'static str> {
+    vec![
+        "boot",
+        "identity",
+        "value",
+        "user_profile",
+        "directive",
+        "curated",
+        "episode",
+        "procedure",
+        "reference",
+    ]
+}
+
 fn parse_visibility(value: Option<&str>) -> Result<MemoryVisibility, ToolError> {
     match value.unwrap_or("private") {
         "private" => Ok(MemoryVisibility::Private),
@@ -263,198 +277,6 @@ impl Tool for MemoryOpenTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let key = require_str(&params, "route_or_node_id")?;
-        let detail = self
-            .memory
-            .open(&ctx.user_id, None, key)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?;
-        Ok(ToolOutput::success(
-            serde_json::json!({
-                "key": key,
-                "detail": detail,
-            }),
-            start.elapsed(),
-        ))
-    }
-
-    fn requires_sanitization(&self) -> bool {
-        false
-    }
-}
-
-pub struct MemoryCreateTool {
-    memory: Arc<MemoryManager>,
-}
-
-impl MemoryCreateTool {
-    pub fn new(memory: Arc<MemoryManager>) -> Self {
-        Self { memory }
-    }
-}
-
-#[async_trait]
-impl Tool for MemoryCreateTool {
-    fn name(&self) -> &str {
-        "memory_create"
-    }
-
-    fn description(&self) -> &str {
-        "Create a new graph-native memory node under a parent route. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. This writes directly to Steward's native memory graph and records a pending review changeset."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "parent_route": { "type": ["string", "null"] },
-                "content": { "type": "string" },
-                "kind": { "type": "string" },
-                "priority": { "type": "integer", "default": 50 },
-                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
-                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
-                "title": { "type": "string" },
-                "keywords": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
-                "route": { "type": "string" }
-            },
-            "required": ["content", "kind"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        ctx: &JobContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let start = Instant::now();
-        let parent_route = optional_string(&params, "parent_route")?;
-        let content = require_str(&params, "content")?;
-        let kind = parse_kind(require_str(&params, "kind")?)?;
-        let title = derive_title(content, kind, optional_string(&params, "title")?);
-        let priority = optional_priority(&params)?.unwrap_or(50);
-        let trigger_text = if params.get("disclosure").is_some() {
-            optional_string(&params, "disclosure")?
-        } else {
-            optional_string(&params, "trigger_text")?
-        };
-        let visibility = parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?;
-        let keywords = parse_keywords(&params)?;
-
-        let route = if let Some(route) = optional_string(&params, "route")? {
-            route
-        } else if let Some(ref parent_route) = parent_route {
-            let (domain, parent_path) = parse_parent_route(parent_route)?;
-            let slug = slugify(&title);
-            if parent_path.is_empty() {
-                format!("{domain}://{slug}")
-            } else {
-                format!("{domain}://{parent_path}/{slug}")
-            }
-        } else {
-            return Err(ToolError::InvalidParameters(
-                "memory_create requires either 'route' (for root creation) or 'parent_route' (to derive a child route)".to_string(),
-            ));
-        };
-        let (domain, path) = parse_route_strict(&route)?;
-
-        let (detail, changeset) = self
-            .memory
-            .create(
-                &ctx.user_id,
-                None,
-                parent_route.as_deref(),
-                &title,
-                kind,
-                content,
-                &domain,
-                &path,
-                priority,
-                trigger_text,
-                visibility,
-                keywords,
-                serde_json::json!({
-                    "source": "tool:memory_create",
-                    "job_id": ctx.job_id,
-                }),
-            )
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory create failed: {e}")))?;
-
-        Ok(ToolOutput::success(
-            serde_json::json!({
-                "node": detail,
-                "changeset_id": changeset.id,
-                "review_status": changeset.status,
-            }),
-            start.elapsed(),
-        ))
-    }
-
-    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::Never
-    }
-
-    fn requires_sanitization(&self) -> bool {
-        false
-    }
-}
-
-pub struct MemoryUpdateTool {
-    memory: Arc<MemoryManager>,
-}
-
-impl MemoryUpdateTool {
-    pub fn new(memory: Arc<MemoryManager>) -> Self {
-        Self { memory }
-    }
-}
-
-#[async_trait]
-impl Tool for MemoryUpdateTool {
-    fn name(&self) -> &str {
-        "memory_update"
-    }
-
-    fn description(&self) -> &str {
-        "Update an existing graph-native memory node or route metadata. Use this instead of editing legacy workspace memory files such as MEMORY.md, HEARTBEAT.md, or daily/*.md. Records the change in a pending review changeset."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "route_or_node_id": { "type": "string" },
-                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace." },
-                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty)." },
-                "append": { "type": "string", "description": "Append mode: text to append to the end of content." },
-                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check; must match the active version id." },
-                "content": { "type": "string", "description": "Unsafe full replacement. Only allowed when replace_content=true." },
-                "replace_content": { "type": "boolean", "default": false },
-                "priority": { "type": "integer" },
-                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
-                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
-                "keywords": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "title": { "type": "string" },
-                "kind": { "type": "string", "description": "Optional node kind update (e.g. promote to 'boot')." },
-                "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
-            },
-            "required": ["route_or_node_id"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        ctx: &JobContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let start = Instant::now();
-        let key = require_str(&params, "route_or_node_id")?;
 
         // Virtual system URIs (Nocturne-style entry points).
         if key == "system://boot" {
@@ -534,6 +356,230 @@ impl Tool for MemoryUpdateTool {
                     }
                 }),
                 start.elapsed(),
+            ));
+        }
+
+        let detail = self
+            .memory
+            .open(&ctx.user_id, None, key)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "key": key,
+                "detail": detail,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct MemoryCreateTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl MemoryCreateTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryCreateTool {
+    fn name(&self) -> &str {
+        "memory_create"
+    }
+
+    fn description(&self) -> &str {
+        "Create a new graph-native memory node under a parent route. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. This writes directly to Steward's native memory graph and records a changeset snapshot (auto-applied)."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        let kind_values = kind_enum_values();
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "parent_route": { "type": "string", "description": "Parent URI to derive a child route from (domain://path or domain://). Provide this OR 'route'. (Alias: parent_uri)" },
+                "parent_uri": { "type": "string", "description": "Alias for parent_route." },
+                "content": { "type": "string" },
+                "kind": { "type": "string", "enum": kind_values, "description": "Optional memory node kind. Defaults to 'reference'. Use 'user_profile' for stable user facts like the user's name." },
+                "priority": { "type": "integer", "default": 50 },
+                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
+                "title": { "type": "string" },
+                "keywords": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
+                "route": { "type": "string", "description": "Root creation URI (domain://path). Required when parent_route is omitted. (Alias: uri)" },
+                "uri": { "type": "string", "description": "Alias for route." }
+            },
+            "anyOf": [
+                { "required": ["route"] },
+                { "required": ["uri"] },
+                { "required": ["parent_route"] },
+                { "required": ["parent_uri"] }
+            ],
+            "required": ["content"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let parent_route = optional_string(&params, "parent_route")?
+            .or(optional_string(&params, "parent_uri")?);
+        let content = require_str(&params, "content")?;
+        let kind = optional_string(&params, "kind")?
+            .map(|value| parse_kind(&value))
+            .transpose()?
+            .unwrap_or(MemoryNodeKind::Reference);
+        let title = derive_title(content, kind, optional_string(&params, "title")?);
+        let priority = optional_priority(&params)?.unwrap_or(50);
+        let trigger_text = if params.get("disclosure").is_some() {
+            optional_string(&params, "disclosure")?
+        } else {
+            optional_string(&params, "trigger_text")?
+        };
+        let visibility = parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?;
+        let keywords = parse_keywords(&params)?;
+
+        let route = if let Some(route) = optional_string(&params, "route")?
+            .or(optional_string(&params, "uri")?)
+        {
+            route
+        } else if let Some(ref parent_route) = parent_route {
+            let (domain, parent_path) = parse_parent_route(parent_route)?;
+            let slug = slugify(&title);
+            if parent_path.is_empty() {
+                format!("{domain}://{slug}")
+            } else {
+                format!("{domain}://{parent_path}/{slug}")
+            }
+        } else {
+            return Err(ToolError::InvalidParameters(
+                "memory_create requires either 'route' (for root creation) or 'parent_route' (to derive a child route)".to_string(),
+            ));
+        };
+        let (domain, path) = parse_route_strict(&route)?;
+
+        let (detail, changeset) = self
+            .memory
+            .create(
+                &ctx.user_id,
+                None,
+                parent_route.as_deref(),
+                &title,
+                kind,
+                content,
+                &domain,
+                &path,
+                priority,
+                trigger_text,
+                visibility,
+                keywords,
+                serde_json::json!({
+                    "source": "tool:memory_create",
+                    "job_id": ctx.job_id,
+                }),
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory create failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "node": detail,
+                "changeset_id": changeset.id,
+                "review_status": changeset.status,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::Never
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct MemoryUpdateTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl MemoryUpdateTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for MemoryUpdateTool {
+    fn name(&self) -> &str {
+        "memory_update"
+    }
+
+    fn description(&self) -> &str {
+        "Update an existing graph-native memory node or route metadata. Use this instead of editing legacy workspace memory files such as MEMORY.md, HEARTBEAT.md, or daily/*.md. Records the change in a changeset snapshot (auto-applied)."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        let kind_values = kind_enum_values();
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "route_or_node_id": { "type": "string", "description": "Node id or route (domain://path). Alias: uri." },
+                "uri": { "type": "string", "description": "Alias for route_or_node_id." },
+                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace." },
+                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty)." },
+                "append": { "type": "string", "description": "Append mode: text to append to the end of content." },
+                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check; must match the active version id." },
+                "content": { "type": "string", "description": "Unsafe full replacement. Only allowed when replace_content=true." },
+                "replace_content": { "type": "boolean", "default": false },
+                "priority": { "type": "integer" },
+                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
+                "keywords": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                },
+                "title": { "type": "string" },
+                "kind": { "type": "string", "enum": kind_values, "description": "Optional node kind update (e.g. promote to 'boot')." },
+                "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
+            },
+            "anyOf": [
+                { "required": ["route_or_node_id"] },
+                { "required": ["uri"] }
+            ]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let key = if let Some(value) = params.get("route_or_node_id").and_then(|v| v.as_str()) {
+            value
+        } else {
+            require_str(&params, "uri")?
+        };
+
+        if key.starts_with("system://") {
+            return Err(ToolError::InvalidParameters(
+                "system:// URIs are virtual entry points (read-only). Use memory_open/read_memory to inspect them, and update a concrete URI like system://boot/memory_protocol instead."
+                    .to_string(),
             ));
         }
 

@@ -90,8 +90,6 @@ const SYSTEM_PROMPT_FILES: &[&str] = &[
     paths::TOOLS,
     paths::HEARTBEAT,
     paths::BOOTSTRAP,
-    paths::ASSISTANT_DIRECTIVES,
-    paths::PROFILE,
 ];
 
 /// Returns true if `path` (already normalized) is a system-prompt-injected file.
@@ -479,7 +477,7 @@ pub struct Workspace {
     /// The agent loop checks and clears this to send a proactive greeting.
     bootstrap_pending: std::sync::atomic::AtomicBool,
     /// Safety net: when true, BOOTSTRAP.md injection is suppressed even if
-    /// the file still exists. Set from `profile_onboarding_completed` setting.
+    /// the file still exists. Set from `bootstrap_onboarding_completed` setting.
     bootstrap_completed: std::sync::atomic::AtomicBool,
     /// Default search configuration applied to all queries.
     search_defaults: SearchConfig,
@@ -814,6 +812,19 @@ impl Workspace {
         &self,
         include_bootstrap: bool,
     ) -> Result<String, WorkspaceError> {
+        self.system_prompt_for_chat(include_bootstrap, false).await
+    }
+
+    /// Build the workspace-backed portion of the system prompt for chat.
+    ///
+    /// This is the runtime-facing variant used by the agent loop. It supports
+    /// redaction policies (e.g. group chat) while preserving identity-file
+    /// isolation semantics via `read()`.
+    pub async fn system_prompt_for_chat(
+        &self,
+        include_bootstrap: bool,
+        is_group_chat: bool,
+    ) -> Result<String, WorkspaceError> {
         let mut out = String::new();
 
         // Keep this list stable and ordered: it affects the prompt.
@@ -824,11 +835,13 @@ impl Workspace {
             paths::USER,
             paths::IDENTITY,
             paths::TOOLS,
-            paths::ASSISTANT_DIRECTIVES,
-            paths::PROFILE,
-            paths::MEMORY,
-            paths::HEARTBEAT,
         ];
+        // In group chats, avoid leaking personal long-term memory into a shared context.
+        // See `src/agent/CLAUDE.md` guidance.
+        if !is_group_chat {
+            paths.push(paths::MEMORY);
+        }
+        paths.push(paths::HEARTBEAT);
         if include_bootstrap {
             paths.push(paths::BOOTSTRAP);
         }
@@ -1445,108 +1458,6 @@ impl Workspace {
         Ok(path)
     }
 
-    /// Sync derived identity documents from the psychographic profile.
-    ///
-    /// Reads `context/profile.json` and, if the profile is populated, writes:
-    /// - `USER.md` (from `to_user_md()`, using section-based merge to preserve user edits)
-    /// - `context/assistant-directives.md` (from `to_assistant_directives()`)
-    /// - `HEARTBEAT.md` (from `to_heartbeat_md()`, only if it doesn't already exist)
-    ///
-    /// Returns `Ok(true)` if documents were synced, `Ok(false)` if skipped.
-    pub async fn sync_profile_documents(&self) -> Result<bool, WorkspaceError> {
-        let doc = match self.read(paths::PROFILE).await {
-            Ok(d) if !d.content.is_empty() => d,
-            _ => return Ok(false),
-        };
-
-        let profile: crate::profile::PsychographicProfile = match serde_json::from_str(&doc.content)
-        {
-            Ok(p) => p,
-            Err(_) => return Ok(false),
-        };
-
-        if !profile.is_populated() {
-            return Ok(false);
-        }
-
-        // Merge profile content into USER.md, preserving any user-written sections.
-        // Injection scanning happens inside self.write() for system-prompt files.
-        let new_profile_content = profile.to_user_md();
-        let merged = match self.read(paths::USER).await {
-            Ok(existing) => merge_profile_section(&existing.content, &new_profile_content),
-            Err(_) => wrap_profile_section(&new_profile_content),
-        };
-        self.write(paths::USER, &merged).await?;
-
-        let directives = profile.to_assistant_directives();
-        self.write(paths::ASSISTANT_DIRECTIVES, &directives).await?;
-
-        // Seed HEARTBEAT.md only if it doesn't exist yet (don't clobber user customizations).
-        if self.read(paths::HEARTBEAT).await.is_err() {
-            self.write(paths::HEARTBEAT, &profile.to_heartbeat_md())
-                .await?;
-        }
-
-        Ok(true)
-    }
-}
-
-const PROFILE_SECTION_BEGIN: &str = "<!-- BEGIN:profile-sync -->";
-const PROFILE_SECTION_END: &str = "<!-- END:profile-sync -->";
-
-/// Wrap profile content in section delimiters.
-fn wrap_profile_section(content: &str) -> String {
-    format!(
-        "{}\n{}\n{}",
-        PROFILE_SECTION_BEGIN, content, PROFILE_SECTION_END
-    )
-}
-
-/// Merge auto-generated profile content into an existing USER.md.
-///
-/// - If delimiters are found, replaces only the delimited block.
-/// - If the old-format auto-generated header is present, does a full replace.
-/// - If the content matches the seed template, does a full replace.
-/// - Otherwise appends the delimited block (preserves user-authored content).
-fn merge_profile_section(existing: &str, new_content: &str) -> String {
-    let delimited = wrap_profile_section(new_content);
-
-    // Case 1: existing delimiters — replace the range.
-    // Search for END *after* BEGIN to avoid matching a stray END marker earlier in the file.
-    if let Some(begin) = existing.find(PROFILE_SECTION_BEGIN)
-        && let Some(end_offset) = existing[begin..].find(PROFILE_SECTION_END)
-    {
-        let end_start = begin + end_offset;
-        let end = end_start + PROFILE_SECTION_END.len();
-        let mut result = String::with_capacity(existing.len());
-        result.push_str(&existing[..begin]);
-        result.push_str(&delimited);
-        result.push_str(&existing[end..]);
-        return result;
-    }
-
-    // Case 2: old-format auto-generated header — full replace.
-    if existing.starts_with("<!-- Auto-generated from context/profile.json") {
-        return delimited;
-    }
-
-    // Case 3: seed template — full replace.
-    if is_seed_template(existing) {
-        return delimited;
-    }
-
-    // Case 4: unknown user content — append delimited block at the end.
-    let trimmed = existing.trim_end();
-    if trimmed.is_empty() {
-        return delimited;
-    }
-    format!("{}\n\n{}", trimmed, delimited)
-}
-
-/// Check if content matches the seed template for USER.md.
-fn is_seed_template(content: &str) -> bool {
-    let trimmed = content.trim();
-    trimmed.starts_with("# User Context") && trimmed.contains("- **Name:**")
 }
 
 // ==================== Search ====================
@@ -1758,16 +1669,9 @@ impl Workspace {
         }
 
         // BOOTSTRAP.md is only seeded on truly fresh workspaces (no identity
-        // files existed before seeding) AND when no profile exists yet (the user
-        // may already have a profile from a previous install and doesn't need
-        // onboarding). This prevents existing users from getting a spurious
-        // first-run ritual after upgrading.
-        // Uses read_primary() to avoid false positives from secondary scopes.
-        let has_profile = self.read_primary(paths::PROFILE).await.is_ok_and(|d| {
-            !d.content.trim().is_empty()
-                && serde_json::from_str::<crate::profile::PsychographicProfile>(&d.content).is_ok()
-        });
-        if is_fresh_workspace && !has_profile {
+        // files existed before seeding). This prevents existing users from
+        // getting a spurious first-run ritual after upgrading.
+        if is_fresh_workspace {
             if let Err(e) = self.write(paths::BOOTSTRAP, BOOTSTRAP_SEED).await {
                 tracing::warn!("Failed to seed {}: {}", paths::BOOTSTRAP, e);
             } else {
@@ -1955,80 +1859,6 @@ mod tests {
         assert_eq!(normalize_directory(""), "");
     }
 
-    // ── Fix 1: merge_profile_section tests ─────────────────────────
-
-    #[test]
-    fn test_merge_replaces_existing_delimited_block() {
-        let existing = "# My Notes\n\nSome user content.\n\n\
-            <!-- BEGIN:profile-sync -->\nold profile data\n<!-- END:profile-sync -->\n\n\
-            More user content.";
-        let result = merge_profile_section(existing, "new profile data");
-        assert!(result.contains("new profile data"));
-        assert!(!result.contains("old profile data"));
-        assert!(result.contains("# My Notes"));
-        assert!(result.contains("More user content."));
-    }
-
-    #[test]
-    fn test_merge_preserves_user_content_outside_block() {
-        let existing = "User wrote this.\n\n\
-            <!-- BEGIN:profile-sync -->\nold stuff\n<!-- END:profile-sync -->\n\n\
-            And this too.";
-        let result = merge_profile_section(existing, "updated");
-        assert!(result.contains("User wrote this."));
-        assert!(result.contains("And this too."));
-        assert!(result.contains("updated"));
-    }
-
-    #[test]
-    fn test_merge_appends_when_no_markers() {
-        let existing = "# My custom USER.md\n\nHand-written notes.";
-        let result = merge_profile_section(existing, "profile content");
-        assert!(result.contains("# My custom USER.md"));
-        assert!(result.contains("Hand-written notes."));
-        assert!(result.contains(PROFILE_SECTION_BEGIN));
-        assert!(result.contains("profile content"));
-        assert!(result.contains(PROFILE_SECTION_END));
-    }
-
-    #[test]
-    fn test_merge_migrates_old_auto_generated_header() {
-        let existing = "<!-- Auto-generated from context/profile.json. Manual edits may be overwritten on profile updates. -->\n\n\
-            Old profile content here.";
-        let result = merge_profile_section(existing, "new profile");
-        assert!(result.contains(PROFILE_SECTION_BEGIN));
-        assert!(result.contains("new profile"));
-        assert!(!result.contains("Old profile content here."));
-        assert!(!result.contains("Auto-generated from context/profile.json"));
-    }
-
-    #[test]
-    fn test_merge_migrates_seed_template() {
-        let existing = "# User Context\n\n- **Name:**\n- **Timezone:**\n- **Preferences:**\n\n\
-            The agent will fill this in as it learns about you.";
-        let result = merge_profile_section(existing, "actual profile");
-        assert!(result.contains(PROFILE_SECTION_BEGIN));
-        assert!(result.contains("actual profile"));
-        assert!(!result.contains("The agent will fill this in"));
-    }
-
-    #[test]
-    fn test_merge_end_marker_must_follow_begin() {
-        // END marker appears before BEGIN — should not match as a valid range.
-        let existing = format!(
-            "Preamble\n{}\nstray end\n{}\nreal begin\n{}\nreal end\n{}",
-            PROFILE_SECTION_END, // stray END first
-            "middle content",
-            PROFILE_SECTION_BEGIN, // BEGIN comes after
-            PROFILE_SECTION_END,   // proper END
-        );
-        let result = merge_profile_section(&existing, "replaced");
-        // The replacement should use the BEGIN..END pair, not the stray END.
-        assert!(result.contains("replaced"));
-        assert!(result.contains("Preamble"));
-        assert!(result.contains("stray end"));
-    }
-
     // ── Fix 3: bootstrap_completed flag tests ──────────────────────
 
     #[test]
@@ -2058,8 +1888,8 @@ mod tests {
             ("HEARTBEAT.md", true),
             ("TOOLS.md", true),
             ("BOOTSTRAP.md", true),
-            ("context/assistant-directives.md", true),
-            ("context/profile.json", true),
+            ("context/assistant-directives.md", false),
+            ("context/profile.json", false),
             ("soul.md", true),
             ("notes/foo.md", false),
             ("daily/2024-01-01.md", false),
@@ -2124,25 +1954,17 @@ mod seed_tests {
         (ws, temp_dir)
     }
 
-    /// Empty profile.json should NOT suppress bootstrap seeding.
     #[tokio::test]
-    async fn seed_if_empty_ignores_empty_profile() {
+    async fn seed_if_empty_seeds_bootstrap_on_fresh_workspace() {
         let (ws, _dir) = create_test_workspace().await;
 
-        // Pre-create an empty profile.json (simulates a previous failed write).
-        ws.write(paths::PROFILE, "")
-            .await
-            .expect("write empty profile");
-
-        // Seed should still create BOOTSTRAP.md because the profile is empty.
         let count = ws.seed_if_empty().await.expect("seed_if_empty");
         assert!(count > 0, "should have seeded files");
         assert!(
             ws.take_bootstrap_pending(),
-            "bootstrap_pending should be set when profile is empty"
+            "bootstrap_pending should be set when BOOTSTRAP.md is freshly seeded"
         );
 
-        // BOOTSTRAP.md should exist with content.
         let doc = ws.read(paths::BOOTSTRAP).await.expect("read BOOTSTRAP");
         assert!(
             !doc.content.is_empty(),
@@ -2150,48 +1972,24 @@ mod seed_tests {
         );
     }
 
-    /// Corrupted (non-JSON) profile.json should NOT suppress bootstrap seeding.
     #[tokio::test]
-    async fn seed_if_empty_ignores_corrupted_profile() {
+    async fn seed_if_empty_skips_bootstrap_when_identity_present() {
         let (ws, _dir) = create_test_workspace().await;
 
-        // Pre-create a profile.json with non-JSON garbage.
-        ws.write(paths::PROFILE, "not valid json {{{")
-            .await
-            .expect("write corrupted profile");
+        // Simulate an existing user/workspace by creating an identity doc.
+        ws.write(paths::USER, "Existing user").await.expect("write USER");
 
         let count = ws.seed_if_empty().await.expect("seed_if_empty");
-        assert!(count > 0, "should have seeded files");
-        assert!(
-            ws.take_bootstrap_pending(),
-            "bootstrap_pending should be set when profile is invalid JSON"
-        );
-    }
-
-    /// Non-empty profile.json should suppress bootstrap seeding (existing user).
-    #[tokio::test]
-    async fn seed_if_empty_skips_bootstrap_with_populated_profile() {
-        let (ws, _dir) = create_test_workspace().await;
-
-        // Pre-create a valid profile.json (existing user upgrading).
-        let profile = crate::profile::PsychographicProfile::default();
-        let profile_json = serde_json::to_string(&profile).expect("serialize profile");
-        ws.write(paths::PROFILE, &profile_json)
-            .await
-            .expect("write profile");
-
-        let count = ws.seed_if_empty().await.expect("seed_if_empty");
-        // Identity files are still seeded, but BOOTSTRAP should be skipped.
-        assert!(count > 0, "should have seeded identity files");
+        assert!(count > 0, "should have seeded missing core files");
         assert!(
             !ws.take_bootstrap_pending(),
-            "bootstrap_pending should NOT be set when profile exists"
+            "bootstrap_pending should NOT be set when workspace is not fresh"
         );
 
         // BOOTSTRAP.md should not exist.
         assert!(
             ws.read(paths::BOOTSTRAP).await.is_err(),
-            "BOOTSTRAP.md should NOT have been seeded with existing profile"
+            "BOOTSTRAP.md should NOT have been seeded when identity exists"
         );
     }
 
