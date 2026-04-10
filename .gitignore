@@ -47,3 +47,5 @@ __pycache__/
 /node-compile-cache/
 
 .DS_Store
+
+nocturne_memory
