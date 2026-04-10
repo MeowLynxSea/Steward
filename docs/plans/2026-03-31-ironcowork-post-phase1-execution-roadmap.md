@@ -51,7 +51,7 @@ Goal: finish the product identity and make the system understandable to develope
 
 ---
 
-## Active Trellis Task Registry
+## Active Task Registry
 
 - `04-01-phase2-session-first-agent-runtime`
 - `04-01-phase2-run-history-and-approval-center`
@@ -211,7 +211,7 @@ Acceptance:
 
 ### Issue 3.1: Workspace Indexing And Retrieval
 
-Handled by the existing Trellis task `03-31-phase3-workspace-indexing-and-retrieval`.
+Handled by the existing work item `03-31-phase3-workspace-indexing-and-retrieval`.
 
 Focus:
 
