@@ -501,6 +501,8 @@ fn main() {
             tauri_commands::index_workspace,
             tauri_commands::get_workspace_index_job,
             tauri_commands::get_workspace_tree,
+            tauri_commands::get_memory_directory,
+            tauri_commands::get_memory_document,
             tauri_commands::search_workspace,
             tauri_commands::list_workspace_mounts,
             tauri_commands::create_workspace_mount,

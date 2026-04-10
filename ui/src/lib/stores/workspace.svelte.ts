@@ -97,7 +97,7 @@ class WorkspaceState {
     try {
       const mount = await apiClient.createWorkspaceMount(trimmed, displayName, true);
       this.status = `Mounted ${mount.mount.display_name}`;
-      await this.fetch("workspace://mounts");
+      await this.fetch("workspace://");
       await this.loadMount(mount.mount.id);
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to create mount";

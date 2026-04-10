@@ -18,7 +18,7 @@ use crate::workspace::{
     MemoryDocument, MountActionRequest, MountedFileDiff, MountedFileStatus, RankedResult,
     SearchConfig, SearchResult, WorkspaceEntry, WorkspaceMount, WorkspaceMountCheckpoint,
     WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView, WorkspaceMountSummary,
-    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, fuse_results,
+    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, fuse_results, normalize_mount_path,
 };
 
 use chrono::Utc;
@@ -83,14 +83,6 @@ struct TextChange {
     base_start: usize,
     base_end: usize,
     new_lines: Vec<String>,
-}
-
-fn normalize_mount_path(path: &str) -> String {
-    path.trim_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 fn compute_content_hash(bytes: &[u8]) -> String {
@@ -646,7 +638,7 @@ impl LibSqlBackend {
         mount_id: Uuid,
         path: &str,
     ) -> Result<MountFileRecord, WorkspaceError> {
-        let path = normalize_mount_path(path);
+        let path = normalize_mount_path(path)?;
         if let Some(existing) = self.load_mount_file_record(mount_id, &path).await? {
             return Ok(existing);
         }
@@ -686,16 +678,16 @@ impl LibSqlBackend {
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
-        let pattern = prefix
-            .map(|value| {
-                let normalized = normalize_mount_path(value);
-                if normalized.is_empty() {
-                    "%".to_string()
-                } else {
-                    format!("{normalized}%")
-                }
-            })
-            .unwrap_or_else(|| "%".to_string());
+        let pattern = if let Some(value) = prefix {
+            let normalized = normalize_mount_path(value)?;
+            if normalized.is_empty() {
+                "%".to_string()
+            } else {
+                format!("{normalized}%")
+            }
+        } else {
+            "%".to_string()
+        };
         let mut rows = conn
             .query(
                 "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, conflict_reason, updated_at
@@ -1627,66 +1619,14 @@ impl WorkspaceStore for LibSqlBackend {
     async fn list_workspace_tree(
         &self,
         user_id: &str,
-        agent_id: Option<Uuid>,
+        _agent_id: Option<Uuid>,
         uri: &str,
     ) -> Result<Vec<WorkspaceTreeEntry>, WorkspaceError> {
-        let parsed = WorkspaceUri::parse(uri).unwrap_or(WorkspaceUri::MemoryRoot);
+        let parsed = WorkspaceUri::parse(uri)?.ok_or_else(|| WorkspaceError::InvalidDocType {
+            doc_type: uri.to_string(),
+        })?;
         match parsed {
-            WorkspaceUri::MemoryRoot => Ok(vec![
-                WorkspaceTreeEntry {
-                    name: "Memory".to_string(),
-                    path: "memory".to_string(),
-                    uri: WorkspaceUri::memory_uri(""),
-                    is_directory: true,
-                    kind: WorkspaceTreeEntryKind::MemoryRoot,
-                    status: None,
-                    updated_at: None,
-                    content_preview: None,
-                    bypass_write: None,
-                    dirty_count: 0,
-                    conflict_count: 0,
-                    pending_delete_count: 0,
-                },
-                WorkspaceTreeEntry {
-                    name: "Mounts".to_string(),
-                    path: "mounts".to_string(),
-                    uri: "workspace://mounts".to_string(),
-                    is_directory: true,
-                    kind: WorkspaceTreeEntryKind::MountsRoot,
-                    status: None,
-                    updated_at: None,
-                    content_preview: None,
-                    bypass_write: None,
-                    dirty_count: 0,
-                    conflict_count: 0,
-                    pending_delete_count: 0,
-                },
-            ]),
-            WorkspaceUri::MemoryPath(path) => {
-                let entries = self.list_directory(user_id, agent_id, &path).await?;
-                Ok(entries
-                    .into_iter()
-                    .map(|entry| WorkspaceTreeEntry {
-                        name: entry.name().to_string(),
-                        path: entry.path.clone(),
-                        uri: WorkspaceUri::memory_uri(&entry.path),
-                        is_directory: entry.is_directory,
-                        kind: if entry.is_directory {
-                            WorkspaceTreeEntryKind::MemoryDirectory
-                        } else {
-                            WorkspaceTreeEntryKind::MemoryFile
-                        },
-                        status: None,
-                        updated_at: entry.updated_at,
-                        content_preview: entry.content_preview,
-                        bypass_write: None,
-                        dirty_count: 0,
-                        conflict_count: 0,
-                        pending_delete_count: 0,
-                    })
-                    .collect())
-            }
-            WorkspaceUri::MountsRoot => Ok(self
+            WorkspaceUri::Root => Ok(self
                 .list_mount_summaries_internal(user_id)
                 .await?
                 .into_iter()
@@ -1705,12 +1645,101 @@ impl WorkspaceStore for LibSqlBackend {
                     pending_delete_count: summary.pending_delete_count,
                 })
                 .collect()),
-            WorkspaceUri::MountRoot(mount_id) | WorkspaceUri::MountPath(mount_id, _) => {
+            WorkspaceUri::MountRoot(mount_id) => {
                 let mount = self.fetch_mount(user_id, mount_id).await?;
-                let prefix = match WorkspaceUri::parse(uri).unwrap() {
-                    WorkspaceUri::MountPath(_, path) => normalize_mount_path(&path),
-                    _ => String::new(),
-                };
+                let prefix = String::new();
+                let dir_path = Path::new(&mount.source_root).join(&prefix);
+                let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
+
+                if dir_path.is_dir() {
+                    let read_dir =
+                        std::fs::read_dir(&dir_path).map_err(|e| WorkspaceError::IoError {
+                            reason: format!(
+                                "failed to list mount directory {}: {e}",
+                                dir_path.display()
+                            ),
+                        })?;
+                    for entry in read_dir {
+                        let entry = entry.map_err(|e| WorkspaceError::IoError {
+                            reason: format!("failed to read mount dir entry: {e}"),
+                        })?;
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        let rel = normalize_mount_path(&name)?;
+                        let is_directory = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                        entries_map.insert(
+                            name.clone(),
+                            WorkspaceTreeEntry {
+                                name,
+                                path: rel.clone(),
+                                uri: WorkspaceUri::mount_uri(mount_id, Some(&rel)),
+                                is_directory,
+                                kind: if is_directory {
+                                    WorkspaceTreeEntryKind::MountedDirectory
+                                } else {
+                                    WorkspaceTreeEntryKind::MountedFile
+                                },
+                                status: None,
+                                updated_at: None,
+                                content_preview: None,
+                                bypass_write: Some(mount.bypass_write),
+                                dirty_count: 0,
+                                conflict_count: 0,
+                                pending_delete_count: 0,
+                            },
+                        );
+                    }
+                }
+
+                for record in self
+                    .list_mount_file_records(mount_id, Some(&prefix))
+                    .await?
+                {
+                    let relative = record.path.clone();
+                    let child_name = relative.split('/').next().unwrap_or("").to_string();
+                    if child_name.is_empty() {
+                        continue;
+                    }
+                    let child_path = child_name.clone();
+                    let is_directory = relative.contains('/');
+                    let entry =
+                        entries_map
+                            .entry(child_name.clone())
+                            .or_insert(WorkspaceTreeEntry {
+                                name: child_name.clone(),
+                                path: child_path.clone(),
+                                uri: WorkspaceUri::mount_uri(mount_id, Some(&child_path)),
+                                is_directory,
+                                kind: if is_directory {
+                                    WorkspaceTreeEntryKind::MountedDirectory
+                                } else {
+                                    WorkspaceTreeEntryKind::MountedFile
+                                },
+                                status: None,
+                                updated_at: Some(record.updated_at),
+                                content_preview: None,
+                                bypass_write: Some(mount.bypass_write),
+                                dirty_count: 0,
+                                conflict_count: 0,
+                                pending_delete_count: 0,
+                            });
+                    if is_directory {
+                        entry.is_directory = true;
+                        entry.kind = WorkspaceTreeEntryKind::MountedDirectory;
+                        entry.dirty_count += usize::from(record.status != MountedFileStatus::Clean);
+                        entry.conflict_count +=
+                            usize::from(record.status == MountedFileStatus::Conflicted);
+                        entry.pending_delete_count +=
+                            usize::from(record.status == MountedFileStatus::PendingDelete);
+                    } else {
+                        entry.status = Some(record.status);
+                        entry.updated_at = Some(record.updated_at);
+                    }
+                }
+
+                Ok(entries_map.into_values().collect())
+            }
+            WorkspaceUri::MountPath(mount_id, prefix) => {
+                let mount = self.fetch_mount(user_id, mount_id).await?;
                 let dir_path = Path::new(&mount.source_root).join(&prefix);
                 let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
 
@@ -1731,7 +1760,7 @@ impl WorkspaceStore for LibSqlBackend {
                             name.clone()
                         } else {
                             format!("{prefix}/{name}")
-                        });
+                        })?;
                         let is_directory = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
                         entries_map.insert(
                             name.clone(),
@@ -1919,7 +1948,7 @@ impl WorkspaceStore for LibSqlBackend {
         path: &str,
         content: &[u8],
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        let normalized = normalize_mount_path(path);
+        let normalized = normalize_mount_path(path)?;
         let existing = self.load_mount_file_record(mount_id, &normalized).await?;
         let base = match existing.clone() {
             Some(record) => record,
@@ -1976,7 +2005,7 @@ impl WorkspaceStore for LibSqlBackend {
         mount_id: Uuid,
         path: &str,
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        let normalized = normalize_mount_path(path);
+        let normalized = normalize_mount_path(path)?;
         let existing = match self.load_mount_file_record(mount_id, &normalized).await? {
             Some(record) => record,
             None => {
@@ -2041,7 +2070,10 @@ impl WorkspaceStore for LibSqlBackend {
         scope_path: Option<&str>,
     ) -> Result<WorkspaceMountDiff, WorkspaceError> {
         let mount = self.fetch_mount(user_id, mount_id).await?;
-        let prefix = scope_path.map(normalize_mount_path);
+        let prefix = match scope_path {
+            Some(path) => Some(normalize_mount_path(path)?),
+            None => None,
+        };
         let mut entries = Vec::new();
         for record in self
             .list_mount_file_records(mount_id, prefix.as_deref())
@@ -2171,7 +2203,10 @@ impl WorkspaceStore for LibSqlBackend {
         request: &MountActionRequest,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
         let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
-        let target_prefix = request.scope_path.as_deref().map(normalize_mount_path);
+        let target_prefix = match request.scope_path.as_deref() {
+            Some(path) => Some(normalize_mount_path(path)?),
+            None => None,
+        };
         let records = self
             .list_mount_file_records(request.mount_id, target_prefix.as_deref())
             .await?;
@@ -2367,7 +2402,10 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &MountActionRequest,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        let target_prefix = request.scope_path.as_deref().map(normalize_mount_path);
+        let target_prefix = match request.scope_path.as_deref() {
+            Some(path) => Some(normalize_mount_path(path)?),
+            None => None,
+        };
         let records = self
             .list_mount_file_records(request.mount_id, target_prefix.as_deref())
             .await?;
@@ -2465,7 +2503,7 @@ impl WorkspaceStore for LibSqlBackend {
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
         let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
         let record = self
-            .load_mount_file_record(request.mount_id, &normalize_mount_path(&request.path))
+            .load_mount_file_record(request.mount_id, &normalize_mount_path(&request.path)?)
             .await?
             .ok_or_else(|| WorkspaceError::MountPathNotFound {
                 mount_id: request.mount_id.to_string(),
@@ -2520,6 +2558,7 @@ impl WorkspaceStore for LibSqlBackend {
                         reason: "renamed_copy_path is required".to_string(),
                     }
                 })?;
+                let copy_path = normalize_mount_path(&copy_path)?;
                 let snapshot = match record.working_snapshot_id {
                     Some(snapshot_id) => self.read_snapshot_required(snapshot_id).await?,
                     None => {
@@ -2852,6 +2891,89 @@ mod tests {
 
         let disk_content = std::fs::read_to_string(mount_root.join("main.rs")).expect("read disk");
         assert!(disk_content.contains("kept"));
+    }
+
+    #[tokio::test]
+    async fn test_workspace_root_lists_mounts_directly() {
+        let (backend, dir) = setup_backend().await;
+        let mount_root = dir.path().join("root-project");
+        std::fs::create_dir_all(&mount_root).expect("create mount root");
+
+        let mount = backend
+            .create_workspace_mount(&CreateMountRequest {
+                user_id: "default".to_string(),
+                display_name: "root-project".to_string(),
+                source_root: mount_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create mount");
+
+        let entries = backend
+            .list_workspace_tree("default", None, "workspace://")
+            .await
+            .expect("list workspace root");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].kind, WorkspaceTreeEntryKind::Mount);
+        assert_eq!(entries[0].path, mount.mount.id.to_string());
+        assert_eq!(
+            entries[0].uri,
+            WorkspaceUri::mount_uri(mount.mount.id, None)
+        );
+
+        let legacy_entries = backend
+            .list_workspace_tree("default", None, "workspace://mounts")
+            .await
+            .expect("list legacy workspace root");
+        assert_eq!(legacy_entries.len(), 1);
+        assert_eq!(
+            legacy_entries[0].uri,
+            WorkspaceUri::mount_uri(mount.mount.id, None)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_workspace_mount_rejects_parent_escape() {
+        let (backend, dir) = setup_backend().await;
+        let mount_root = dir.path().join("escape-project");
+        std::fs::create_dir_all(&mount_root).expect("create mount root");
+        std::fs::write(dir.path().join("secret.txt"), "secret").expect("seed sibling file");
+
+        let mount = backend
+            .create_workspace_mount(&CreateMountRequest {
+                user_id: "default".to_string(),
+                display_name: "escape-project".to_string(),
+                source_root: mount_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create mount");
+
+        let read_err = backend
+            .read_workspace_mount_file("default", mount.mount.id, "../secret.txt")
+            .await
+            .expect_err("reject escaped read");
+        assert!(read_err.to_string().contains("escapes root"));
+
+        let write_err = backend
+            .write_workspace_mount_file("default", mount.mount.id, "../written.txt", b"owned")
+            .await
+            .expect_err("reject escaped write");
+        assert!(write_err.to_string().contains("escapes root"));
+        assert!(
+            !dir.path().join("written.txt").exists(),
+            "escaped write must not create files outside the mount"
+        );
+
+        let tree_err = backend
+            .list_workspace_tree(
+                "default",
+                None,
+                &format!("workspace://{}/../secret.txt", mount.mount.id),
+            )
+            .await
+            .expect_err("reject escaped tree path");
+        assert!(tree_err.to_string().contains("escapes root"));
     }
 
     #[tokio::test]

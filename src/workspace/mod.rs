@@ -61,7 +61,7 @@ pub use mounts::{
     ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
     MountedFileDiff, MountedFileStatus, WorkspaceMount, WorkspaceMountCheckpoint,
     WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView, WorkspaceMountSummary,
-    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
+    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, normalize_mount_path,
 };
 pub use search::{
     FusionStrategy, RankedResult, SearchConfig, SearchResult, fuse_results, reciprocal_rank_fusion,
@@ -762,13 +762,9 @@ impl Workspace {
     /// println!("{}", doc.content);
     /// ```
     pub async fn read(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
-        if let Some(uri) = WorkspaceUri::parse(path) {
+        if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::MemoryRoot => Err(WorkspaceError::InvalidDocType {
-                    doc_type: path.to_string(),
-                }),
-                WorkspaceUri::MemoryPath(path) => self.read_memory_path(&path).await,
-                WorkspaceUri::MountsRoot | WorkspaceUri::MountRoot(_) => {
+                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
                     Err(WorkspaceError::InvalidDocType {
                         doc_type: path.to_string(),
                     })
@@ -824,14 +820,13 @@ impl Workspace {
     /// workspace.write("projects/alpha/README.md", "# Project Alpha\n\nDescription here.").await?;
     /// ```
     pub async fn write(&self, path: &str, content: &str) -> Result<MemoryDocument, WorkspaceError> {
-        if let Some(uri) = WorkspaceUri::parse(path) {
+        if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::MemoryRoot
-                | WorkspaceUri::MountsRoot
-                | WorkspaceUri::MountRoot(_) => Err(WorkspaceError::InvalidDocType {
-                    doc_type: path.to_string(),
-                }),
-                WorkspaceUri::MemoryPath(path) => self.write_memory_path(&path, content).await,
+                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
+                    Err(WorkspaceError::InvalidDocType {
+                        doc_type: path.to_string(),
+                    })
+                }
                 WorkspaceUri::MountPath(mount_id, mount_path) => {
                     let file = self
                         .storage
@@ -1064,14 +1059,13 @@ impl Workspace {
     ///
     /// Also deletes associated chunks.
     pub async fn delete(&self, path: &str) -> Result<(), WorkspaceError> {
-        if let Some(uri) = WorkspaceUri::parse(path) {
+        if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::MemoryRoot
-                | WorkspaceUri::MountsRoot
-                | WorkspaceUri::MountRoot(_) => Err(WorkspaceError::InvalidDocType {
-                    doc_type: path.to_string(),
-                }),
-                WorkspaceUri::MemoryPath(path) => self.delete_memory_path(&path).await,
+                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
+                    Err(WorkspaceError::InvalidDocType {
+                        doc_type: path.to_string(),
+                    })
+                }
                 WorkspaceUri::MountPath(mount_id, mount_path) => self
                     .storage
                     .delete_workspace_mount_file(&self.user_id, mount_id, &mount_path)
@@ -1099,14 +1093,14 @@ impl Workspace {
     /// }
     /// ```
     pub async fn list(&self, directory: &str) -> Result<Vec<WorkspaceEntry>, WorkspaceError> {
-        if let Some(uri) = WorkspaceUri::parse(directory) {
+        if let Some(uri) = WorkspaceUri::parse(directory)? {
             let tree = self
                 .storage
                 .list_workspace_tree(
                     &self.user_id,
                     self.agent_id,
                     match uri {
-                        WorkspaceUri::MemoryRoot => WorkspaceUri::root_uri(),
+                        WorkspaceUri::Root => WorkspaceUri::root_uri(),
                         _ => directory,
                     },
                 )

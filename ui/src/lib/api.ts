@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   PatchSettingsRequest,
+  MemoryDocument,
   SessionDetail,
   SendSessionMessageResponse,
   SessionSummary,
@@ -114,8 +115,20 @@ export const apiClient = {
     });
   },
 
+  getMemoryDirectory(path = "") {
+    return invoke<{ path: string; entries: WorkspaceEntry[] }>("get_memory_directory", {
+      path
+    });
+  },
+
+  getMemoryDocument(path: string) {
+    return invoke<MemoryDocument>("get_memory_document", { path });
+  },
+
   searchWorkspace(query: string) {
-    return invoke<{ results: WorkspaceSearchResult[] }>("search_workspace", { query });
+    return invoke<{ results: WorkspaceSearchResult[] }>("search_workspace", {
+      payload: { query }
+    });
   },
 
   createWorkspaceMount(path: string, display_name?: string, bypass_write = true) {

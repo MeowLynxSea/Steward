@@ -172,6 +172,13 @@ export interface WorkspaceSearchResult {
   vector_rank: number | null;
 }
 
+export interface MemoryDocument {
+  path: string;
+  content: string;
+  updated_at: string;
+  word_count: number;
+}
+
 export interface WorkspaceMount {
   id: string;
   user_id: string;

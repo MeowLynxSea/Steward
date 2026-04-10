@@ -79,7 +79,7 @@ impl Tool for ReadFileTool {
     fn description(&self) -> &str {
         "Read a file from the LOCAL FILESYSTEM. NOT for workspace memory paths \
          (use memory_read for those). If the path is inside a mounted workspace directory, \
-         prefer `workspace://mounts/<mount-id>/...` via memory_read instead. \
+         prefer `workspace://<mount-id>/...` via memory_read instead. \
          Reading unmounted disk paths may require ask-mode approval. \
          Returns file content as text. For large files, you can specify offset and limit to read a portion."
     }
@@ -90,7 +90,7 @@ impl Tool for ReadFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read. Prefer `workspace://mounts/<mount-id>/...` in mounted areas; use local disk paths only when you intentionally need raw filesystem access."
+                    "description": "Path to the file to read. Prefer `workspace://<mount-id>/...` in mounted areas; use local disk paths only when you intentionally need raw filesystem access."
                 },
                 "offset": {
                     "type": "integer",
@@ -207,7 +207,7 @@ impl Tool for WriteFileTool {
     fn description(&self) -> &str {
         "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace memory \
          (use memory_write for that). If the target is inside a mounted workspace directory, \
-         prefer `workspace://mounts/<mount-id>/...` via memory_write so changes stay in the workspace branch first. \
+         prefer `workspace://<mount-id>/...` via memory_write so changes stay in the workspace branch first. \
          Writing unmounted disk paths may require ask-mode approval and 'always allow' can promote the directory into a mount. \
          Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use apply_patch for targeted edits."
     }
@@ -218,7 +218,7 @@ impl Tool for WriteFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write. Prefer `workspace://mounts/<mount-id>/...` for mounted directories; use local disk paths only for explicit raw filesystem operations."
+                    "description": "Path to the file to write. Prefer `workspace://<mount-id>/...` for mounted directories; use local disk paths only for explicit raw filesystem operations."
                 },
                 "content": {
                     "type": "string",
@@ -436,7 +436,7 @@ impl Tool for ListDirTool {
 
     fn description(&self) -> &str {
         "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace memory \
-         (use memory_tree for that). If the directory is mounted into the workspace, prefer `workspace://mounts/<mount-id>` via memory_tree instead. Listing unmounted directories may require ask-mode approval. Shows files and subdirectories with their sizes."
+         (use memory_tree for that). If the directory is mounted into the workspace, prefer `workspace://<mount-id>` via memory_tree instead. Listing mounted directories is read-only and should not require ask-mode approval; unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -512,6 +512,10 @@ impl Tool for ListDirTool {
 
     fn requires_sanitization(&self) -> bool {
         false // Directory listings are safe
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
     }
 
     fn domain(&self) -> ToolDomain {

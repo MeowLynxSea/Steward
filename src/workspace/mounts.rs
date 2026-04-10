@@ -1,6 +1,10 @@
+use std::path::{Component, Path};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::error::WorkspaceError;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -151,62 +155,133 @@ pub struct ConflictResolutionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceUri {
-    MemoryRoot,
-    MemoryPath(String),
-    MountsRoot,
+    Root,
     MountRoot(Uuid),
     MountPath(Uuid, String),
 }
 
 impl WorkspaceUri {
-    pub fn parse(input: &str) -> Option<Self> {
+    pub fn parse(input: &str) -> Result<Option<Self>, WorkspaceError> {
         if !input.starts_with("workspace://") {
-            return None;
+            return Ok(None);
         }
 
         let rest = input.trim_start_matches("workspace://").trim_matches('/');
         if rest.is_empty() {
-            return Some(Self::MemoryRoot);
+            return Ok(Some(Self::Root));
         }
-        if rest == "memory" {
-            return Some(Self::MemoryRoot);
+
+        let rest = if rest == "mounts" {
+            ""
+        } else {
+            rest.strip_prefix("mounts/").unwrap_or(rest)
+        };
+
+        if rest.is_empty() {
+            return Ok(Some(Self::Root));
         }
-        if let Some(path) = rest.strip_prefix("memory/") {
-            return Some(Self::MemoryPath(path.to_string()));
-        }
-        if rest == "mounts" {
-            return Some(Self::MountsRoot);
-        }
-        if let Some(mount_rest) = rest.strip_prefix("mounts/") {
-            let (mount_id, path) = match mount_rest.split_once('/') {
-                Some((id, tail)) => (id, Some(tail.to_string())),
-                None => (mount_rest, None),
-            };
-            let mount_id = Uuid::parse_str(mount_id).ok()?;
-            return Some(match path {
-                Some(path) if !path.is_empty() => Self::MountPath(mount_id, path),
-                _ => Self::MountRoot(mount_id),
-            });
-        }
-        None
+
+        let (mount_id, path) = match rest.split_once('/') {
+            Some((id, tail)) => (id, Some(tail)),
+            None => (rest, None),
+        };
+        let mount_id = Uuid::parse_str(mount_id).map_err(|_| WorkspaceError::InvalidDocType {
+            doc_type: input.to_string(),
+        })?;
+        let normalized = match path {
+            Some(path) if !path.is_empty() => normalize_mount_path(path)?,
+            _ => String::new(),
+        };
+
+        Ok(Some(match normalized.is_empty() {
+            true => Self::MountRoot(mount_id),
+            false => Self::MountPath(mount_id, normalized),
+        }))
     }
 
     pub fn root_uri() -> &'static str {
         "workspace://"
     }
 
-    pub fn memory_uri(path: &str) -> String {
-        if path.is_empty() {
-            "workspace://memory".to_string()
-        } else {
-            format!("workspace://memory/{path}")
+    pub fn mount_uri(mount_id: Uuid, path: Option<&str>) -> String {
+        match path {
+            Some(path) if !path.is_empty() => format!("workspace://{mount_id}/{path}"),
+            _ => format!("workspace://{mount_id}"),
+        }
+    }
+}
+
+pub fn normalize_mount_path(path: &str) -> Result<String, WorkspaceError> {
+    if path.contains('\0') {
+        return Err(WorkspaceError::IoError {
+            reason: "mount path contains null byte".to_string(),
+        });
+    }
+
+    let mut normalized = Vec::new();
+    for component in Path::new(path.trim()).components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(segment) => normalized.push(segment.to_string_lossy().into_owned()),
+            Component::ParentDir => {
+                if normalized.pop().is_none() {
+                    return Err(WorkspaceError::IoError {
+                        reason: format!("mount path escapes root: {path}"),
+                    });
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(WorkspaceError::IoError {
+                    reason: format!("mount path must be relative: {path}"),
+                });
+            }
         }
     }
 
-    pub fn mount_uri(mount_id: Uuid, path: Option<&str>) -> String {
-        match path {
-            Some(path) if !path.is_empty() => format!("workspace://mounts/{mount_id}/{path}"),
-            _ => format!("workspace://mounts/{mount_id}"),
-        }
+    Ok(normalized.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_root_and_legacy_mount_root() {
+        assert_eq!(
+            WorkspaceUri::parse("workspace://").unwrap(),
+            Some(WorkspaceUri::Root)
+        );
+        assert_eq!(
+            WorkspaceUri::parse("workspace://mounts").unwrap(),
+            Some(WorkspaceUri::Root)
+        );
+    }
+
+    #[test]
+    fn parse_direct_and_legacy_mount_paths() {
+        let id = Uuid::new_v4();
+        assert_eq!(
+            WorkspaceUri::parse(&format!("workspace://{id}/src/lib.rs")).unwrap(),
+            Some(WorkspaceUri::MountPath(id, "src/lib.rs".to_string()))
+        );
+        assert_eq!(
+            WorkspaceUri::parse(&format!("workspace://mounts/{id}/src/lib.rs")).unwrap(),
+            Some(WorkspaceUri::MountPath(id, "src/lib.rs".to_string()))
+        );
+    }
+
+    #[test]
+    fn rejects_mount_path_escape() {
+        let id = Uuid::new_v4();
+        let err = WorkspaceUri::parse(&format!("workspace://{id}/../secret.txt")).unwrap_err();
+        assert!(err.to_string().contains("escapes root"));
+    }
+
+    #[test]
+    fn normalizes_internal_parent_segments() {
+        assert_eq!(
+            normalize_mount_path("src/bin/../lib.rs").unwrap(),
+            "src/lib.rs"
+        );
     }
 }

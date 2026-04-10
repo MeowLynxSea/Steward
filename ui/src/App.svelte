@@ -300,7 +300,7 @@
         onOpenEntry={(entry) => {
           if (entry.kind === "mount" && entry.path) {
             void workspaceStore.loadMount(entry.path);
-            void workspaceStore.fetch(entry.uri ?? "workspace://mounts");
+            void workspaceStore.fetch(entry.uri ?? "workspace://");
           } else if (entry.is_directory && entry.uri) {
             void workspaceStore.fetch(entry.uri);
           }

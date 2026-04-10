@@ -1514,10 +1514,47 @@ pub async fn get_workspace_tree(
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let uri = path.unwrap_or_else(|| "memory://".to_string());
+    let uri = path.unwrap_or_else(|| "workspace://".to_string());
     let entries = workspace.list_tree(&uri).await.map_err(|e| e.to_string())?;
 
     Ok(steward_core::ipc::WorkspaceTreeResponse { path: uri, entries })
+}
+
+#[tauri::command]
+pub async fn get_memory_directory(
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<steward_core::ipc::MemoryDirectoryResponse, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    let path = path.unwrap_or_default();
+    let entries = workspace.list(&path).await.map_err(|e| e.to_string())?;
+
+    Ok(steward_core::ipc::MemoryDirectoryResponse { path, entries })
+}
+
+#[tauri::command]
+pub async fn get_memory_document(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<steward_core::ipc::MemoryDocumentResponse, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    let doc = workspace.read(&path).await.map_err(|e| e.to_string())?;
+    let word_count = doc.word_count();
+
+    Ok(steward_core::ipc::MemoryDocumentResponse {
+        path: doc.path,
+        content: doc.content,
+        updated_at: doc.updated_at,
+        word_count,
+    })
 }
 
 #[tauri::command]

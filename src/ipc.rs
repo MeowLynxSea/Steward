@@ -195,6 +195,20 @@ pub struct WorkspaceTreeResponse {
     pub entries: Vec<crate::workspace::WorkspaceTreeEntry>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct MemoryDirectoryResponse {
+    pub path: String,
+    pub entries: Vec<crate::workspace::WorkspaceEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MemoryDocumentResponse {
+    pub path: String,
+    pub content: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub word_count: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct WorkspaceSearchRequest {
     pub query: String,

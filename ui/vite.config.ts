@@ -9,6 +9,37 @@ export default defineConfig({
   },
   build: {
     outDir: "../static",
-    emptyOutDir: false
+    emptyOutDir: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) {
+            return;
+          }
+
+          if (id.includes("@tauri-apps/api")) {
+            return "tauri";
+          }
+
+          if (
+            id.includes("marked") ||
+            id.includes("highlight.js") ||
+            id.includes("dompurify")
+          ) {
+            return "markdown";
+          }
+
+          if (id.includes("lucide-svelte")) {
+            return "icons";
+          }
+
+          if (id.includes("/svelte/")) {
+            return "svelte";
+          }
+
+          return "vendor";
+        }
+      }
+    }
   }
 });

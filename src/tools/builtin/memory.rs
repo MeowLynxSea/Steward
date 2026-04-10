@@ -281,8 +281,8 @@ impl Tool for MemoryWriteTool {
          be remembered across sessions. Targets: 'memory' for curated long-term facts, \
          'daily_log' for timestamped session notes, 'heartbeat' for the periodic \
          checklist (HEARTBEAT.md), 'bootstrap' to clear the first-run ritual file, \
-         or provide a custom workspace path for arbitrary file creation, including \
-         mounted paths like 'workspace://mounts/<mount-id>/src/main.rs'. \
+         or provide a custom global memory path for arbitrary file creation. Mounted \
+         working-tree files use paths like 'workspace://<mount-id>/src/main.rs'. \
          Never pass absolute filesystem paths like '/Users/...' or 'C:\\...'."
     }
 
@@ -296,7 +296,7 @@ impl Tool for MemoryWriteTool {
                 },
                 "target": {
                     "type": "string",
-                    "description": "Where to write: 'memory' for MEMORY.md, 'daily_log' for today's log, 'heartbeat' for HEARTBEAT.md checklist, 'bootstrap' to clear BOOTSTRAP.md (content is ignored; the file is always cleared), a workspace path like 'projects/alpha/notes.md', or a mounted path like 'workspace://mounts/<mount-id>/src/main.rs'",
+                    "description": "Where to write: 'memory' for MEMORY.md, 'daily_log' for today's log, 'heartbeat' for HEARTBEAT.md checklist, 'bootstrap' to clear BOOTSTRAP.md (content is ignored; the file is always cleared), a global memory path like 'projects/alpha/notes.md', or a mounted path like 'workspace://<mount-id>/src/main.rs'",
                     "default": "daily_log"
                 },
                 "append": {
@@ -556,9 +556,9 @@ impl Tool for MemoryReadTool {
         "Read a file from the workspace memory (database-backed storage). \
          Use this to read files shown by memory_tree. NOT for local filesystem files \
          (use read_file for those). Do not pass absolute paths like '/Users/...' or 'C:\\...'. \
-         Works with identity files, heartbeat checklist, \
-         memory, daily logs, `workspace://memory/...`, or mounted files at \
-         `workspace://mounts/<mount-id>/...`."
+         Works with identity files, heartbeat checklist, memory, daily logs, \
+         other global memory paths like `projects/alpha/notes.md`, or mounted \
+         files at `workspace://<mount-id>/...`."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -567,7 +567,7 @@ impl Tool for MemoryReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file (e.g., 'MEMORY.md', 'daily/2024-01-15.md', 'projects/alpha/notes.md', or 'workspace://mounts/<mount-id>/src/main.rs')"
+                    "description": "Path to the file (e.g., 'MEMORY.md', 'daily/2024-01-15.md', 'projects/alpha/notes.md', or 'workspace://<mount-id>/src/main.rs')"
                 }
             },
             "required": ["path"]
@@ -688,10 +688,11 @@ impl Tool for MemoryTreeTool {
     }
 
     fn description(&self) -> &str {
-        "View the workspace memory structure as a tree (database-backed storage). \
+        "View mounted workspace trees. Global memory is not nested under `workspace://`; \
+         read global memory directly via paths like `MEMORY.md` or `projects/...`. \
          Use memory_read to read files shown here, NOT read_file. \
-         The workspace is separate from the local filesystem and includes both \
-         workspace memory plus mounted working trees."
+         The workspace tree is separate from the local filesystem and represents \
+         mounted working directories."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
