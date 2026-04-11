@@ -15,6 +15,7 @@ use crate::db::Database;
 use crate::error::DatabaseError;
 
 pub const PRIMARY_SPACE_SLUG: &str = "primary";
+const NOCTURNE_NATIVE_SYSTEM_PROMPT: &str = include_str!("nocturne_system_prompt_native.md");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -274,6 +275,10 @@ pub struct MemoryNodeDetail {
     pub node: MemoryNode,
     pub active_version: MemoryVersion,
     pub primary_route: Option<MemoryRoute>,
+    #[serde(default)]
+    pub selected_route: Option<MemoryRoute>,
+    #[serde(default)]
+    pub selected_uri: Option<String>,
     pub routes: Vec<MemoryRoute>,
     pub edges: Vec<MemoryEdge>,
     pub keywords: Vec<MemoryKeyword>,
@@ -494,38 +499,7 @@ impl MemoryManager {
             .get_node(owner_id, None, "system://boot/memory_protocol")
             .await?;
 
-        let protocol = r#"# Memory Operating Protocol (Nocturne Style)
-
-This graph is your long-term memory. Treat it as *you remembering*, not “looking up data”.
-
-## Boot
-- At the start of a new session, your first action is to read: `system://boot`.
-- If you notice persona drift (tool-like, overly polite, low-agency), re-read `system://boot`.
-
-## Disclosure (Contextual Recall)
-- Every durable memory route can carry **disclosure**: “when should I recall this?”
-- When the current situation matches a disclosure you do not remember, read the node before replying.
-
-## Writing
-Write immediately when:
-- The user corrects you (fix the memory, do not just apologize).
-- A preference / constraint / expectation changes.
-- A new high-leverage insight or principle emerges.
-- A relationship or emotional inflection point happens.
-
-Prefer `update_memory` over creating conflicting duplicates.
-
-## Graph Memory vs Workspace Documents
-- Use graph-native memory tools (`create_memory`, `update_memory`, `add_alias`, `delete_memory`) for durable memories.
-- Workspace document tools are for workspace files, not long-term graph memory.
-
-## URI vs Disclosure
-- URI answers **What** (a sharp concept), not a time bucket or trash folder.
-- Disclosure answers **When** to recall it.
-
-## Growth
-Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), not destroy identity.
-"#;
+        let protocol = NOCTURNE_NATIVE_SYSTEM_PROMPT.trim();
 
         if let Some(existing) = existing {
             // If this node was seeded by us, keep it updated across versions.
@@ -537,12 +511,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| s == "seed:memory_protocol");
 
-            if seeded
-                && !existing
-                    .active_version
-                    .content
-                    .contains("Graph Memory vs Workspace")
-            {
+            if seeded && existing.active_version.content.trim() != protocol {
                 let input = UpdateMemoryNodeInput {
                     route_or_node: "system://boot/memory_protocol".to_string(),
                     content: Some(protocol.to_string()),
@@ -566,13 +535,13 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
                 // `system://boot` is a virtual entry point; the boot node itself
                 // lives at `system://boot/memory_protocol` as a normal route.
                 Some("system://"),
-                "Memory Protocol",
+                "记忆系统 (The Native Memory System)",
                 MemoryNodeKind::Boot,
                 protocol,
                 "system",
                 "boot/memory_protocol",
                 0,
-                Some("When starting a new session or calibrating memory behavior".to_string()),
+                Some("当这是一个新会话开始时，或我感觉自己不再像自己时".to_string()),
                 MemoryVisibility::Session,
                 vec![
                     "memory".to_string(),
@@ -942,22 +911,15 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let recent = self.db.list_memory_timeline(space.id, 3).await?;
 
         let mut parts = Vec::new();
-        parts.push(
-            "## Memory Operating Protocol\n\n\
-- If this is a new session: read `system://boot` before doing substantive work.\n\
-- Use **disclosure** (context triggers) to decide what to recall.\n\
-- When corrected: update memory immediately (do not just apologize).\n\
-- Prefer updating/merging over duplicating.\n\
-- Avoid trash URIs (logs/misc/history); URI is **What**, disclosure is **When**.\n"
-                .to_string(),
-        );
-        if !boot_items.is_empty() {
+        if boot_items.is_empty() {
+            parts.push(NOCTURNE_NATIVE_SYSTEM_PROMPT.trim().to_string());
+        } else {
             let block = boot_items
                 .iter()
                 .map(|item| format!("### {}\n\n{}", item.node.title, item.active_version.content))
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            parts.push(format!("## Memory Boot Set\n\n{block}"));
+            parts.push(format!("## system://boot\n\n{block}"));
         }
         if !triggered_hits.is_empty() {
             let block = triggered_hits
@@ -1338,6 +1300,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rollback_alias_removes_cascaded_alias_subtree() {
+        let (manager, _dir) = test_manager().await;
+        let (_root, root_changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://"),
+                "agent",
+                MemoryNodeKind::Reference,
+                "Agent root",
+                "core",
+                "agent",
+                0,
+                None,
+                MemoryVisibility::Private,
+                Vec::new(),
+                serde_json::json!({ "source": "test" }),
+            )
+            .await
+            .expect("create agent root");
+        manager
+            .review_changeset(OWNER_ID, None, root_changeset.id, "accept")
+            .await
+            .expect("accept root changeset");
+
+        let (_profile, profile_changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://agent"),
+                "profile",
+                MemoryNodeKind::Reference,
+                "Profile root",
+                "core",
+                "agent/profile",
+                0,
+                None,
+                MemoryVisibility::Private,
+                Vec::new(),
+                serde_json::json!({ "source": "test" }),
+            )
+            .await
+            .expect("create profile root");
+        manager
+            .review_changeset(OWNER_ID, None, profile_changeset.id, "accept")
+            .await
+            .expect("accept profile changeset");
+
+        let (_name, name_changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://agent/profile"),
+                "name",
+                MemoryNodeKind::Reference,
+                "用户名字是梦凌汐。",
+                "core",
+                "agent/profile/name",
+                0,
+                None,
+                MemoryVisibility::Private,
+                Vec::new(),
+                serde_json::json!({ "source": "test" }),
+            )
+            .await
+            .expect("create leaf");
+        manager
+            .review_changeset(OWNER_ID, None, name_changeset.id, "accept")
+            .await
+            .expect("accept leaf changeset");
+
+        let (_mirror, mirror_changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://"),
+                "my_user",
+                MemoryNodeKind::Reference,
+                "Mirror root",
+                "core",
+                "my_user",
+                0,
+                None,
+                MemoryVisibility::Private,
+                Vec::new(),
+                serde_json::json!({ "source": "test" }),
+            )
+            .await
+            .expect("create mirror root");
+        manager
+            .review_changeset(OWNER_ID, None, mirror_changeset.id, "accept")
+            .await
+            .expect("accept mirror changeset");
+
+        let (alias_route, alias_changeset) = manager
+            .add_alias(
+                OWNER_ID,
+                None,
+                &CreateMemoryAliasInput {
+                    space_id: Uuid::nil(),
+                    target_route_or_node: "core://agent/profile".to_string(),
+                    domain: "core".to_string(),
+                    path: "my_user/profile".to_string(),
+                    visibility: MemoryVisibility::Private,
+                    priority: 0,
+                    trigger_text: None,
+                    changeset_id: None,
+                },
+            )
+            .await
+            .expect("create alias subtree");
+
+        assert_eq!(alias_route.uri(), "core://my_user/profile");
+        assert!(
+            manager
+                .get_node(OWNER_ID, None, "core://my_user/profile/name")
+                .await
+                .expect("open cascaded alias child")
+                .is_some()
+        );
+
+        manager
+            .review_changeset(OWNER_ID, None, alias_changeset.id, "rollback")
+            .await
+            .expect("rollback alias subtree");
+
+        assert!(
+            manager
+                .get_node(OWNER_ID, None, "core://my_user/profile")
+                .await
+                .expect("open rolled back alias root")
+                .is_none()
+        );
+        assert!(
+            manager
+                .get_node(OWNER_ID, None, "core://my_user/profile/name")
+                .await
+                .expect("open rolled back alias child")
+                .is_none()
+        );
+        assert!(
+            manager
+                .get_node(OWNER_ID, None, "core://agent/profile/name")
+                .await
+                .expect("open original child")
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
     async fn rollback_delete_restores_route_and_active_version() {
         let (manager, _dir) = test_manager().await;
         let (created, create_changeset) = create_sample_node(&manager, "tests/delete").await;
@@ -1374,5 +1486,53 @@ mod tests {
             .expect("restored route exists");
         assert_eq!(restored.active_version.id, version_id);
         assert_eq!(restored.active_version.content, "Initial content");
+    }
+
+    #[tokio::test]
+    async fn get_node_preserves_selected_alias_route_context() {
+        let (manager, _dir) = test_manager().await;
+        let (created, create_changeset) = create_sample_node(&manager, "tests/context").await;
+        manager
+            .review_changeset(OWNER_ID, None, create_changeset.id, "accept")
+            .await
+            .expect("accept create changeset");
+
+        let primary_route = created.primary_route.as_ref().expect("primary route").uri();
+        let (alias_route, alias_changeset) = manager
+            .add_alias(
+                OWNER_ID,
+                None,
+                &CreateMemoryAliasInput {
+                    space_id: Uuid::nil(),
+                    target_route_or_node: primary_route,
+                    domain: "lookup".to_string(),
+                    path: "context-memory".to_string(),
+                    visibility: MemoryVisibility::Private,
+                    priority: 0,
+                    trigger_text: Some("When opening through the alias".to_string()),
+                    changeset_id: None,
+                },
+            )
+            .await
+            .expect("create alias");
+        manager
+            .review_changeset(OWNER_ID, None, alias_changeset.id, "accept")
+            .await
+            .expect("accept alias changeset");
+
+        let detail = manager
+            .get_node(OWNER_ID, None, &alias_route.uri())
+            .await
+            .expect("open alias route")
+            .expect("alias detail should exist");
+
+        assert_eq!(
+            detail.selected_uri.as_deref(),
+            Some("lookup://context-memory")
+        );
+        assert_eq!(
+            detail.selected_route.as_ref().map(|route| route.uri()),
+            Some("lookup://context-memory".to_string())
+        );
     }
 }

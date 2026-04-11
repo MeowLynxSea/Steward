@@ -28,6 +28,7 @@
     WorkspaceMountDetail,
     WorkspaceSearchResult
   } from "../lib/types";
+  import { memoryItemLabel, routeSegment } from "./settings/memory";
 
   type ConflictResolution = "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge";
   type WorkspaceTab = "files" | "changes" | "memory";
@@ -497,7 +498,7 @@
                         <Network size={14} strokeWidth={2} />
                       {/if}
                     </span>
-                    <span class="tree-item-name">{item.title}</span>
+                    <span class="tree-item-name">{memoryItemLabel(item)}</span>
                     {#if item.subtitle}
                       <span class="memory-meta">{item.subtitle}</span>
                     {/if}
@@ -511,14 +512,19 @@
         {#if memorySelectedNode}
           <div class="memory-detail">
             <div class="mount-info">
-              <strong>{memorySelectedNode.node.title}</strong>
+              <strong>
+                {routeSegment(memorySelectedNode.selected_route ?? memorySelectedNode.primary_route) ??
+                  memorySelectedNode.node.title}
+              </strong>
               <div class="mount-stats">
                 <span>{memorySelectedNode.node.kind}</span>
                 <span>{memorySelectedNode.routes.length} routes</span>
               </div>
             </div>
-            {#if memorySelectedNode.primary_route}
-              <div class="memory-chip">{memorySelectedNode.primary_route.domain}://{memorySelectedNode.primary_route.path}</div>
+            {#if memorySelectedNode.selected_route ?? memorySelectedNode.primary_route}
+              <div class="memory-chip">
+                {(memorySelectedNode.selected_route ?? memorySelectedNode.primary_route)?.domain}://{(memorySelectedNode.selected_route ?? memorySelectedNode.primary_route)?.path}
+              </div>
             {/if}
             {#if memorySelectedNode.keywords.length > 0}
               <div class="tree-item-badges">

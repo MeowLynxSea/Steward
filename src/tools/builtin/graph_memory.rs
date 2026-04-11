@@ -182,7 +182,8 @@ fn create_memory_examples() -> Vec<serde_json::Value> {
         json!({
             "parent_uri": "core://agent",
             "content": "Keep status updates concise and high-signal.",
-            "priority": 1
+            "priority": 1,
+            "title": "status_updates"
         }),
     ]
 }
@@ -447,18 +448,18 @@ impl Tool for CreateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Create a new memory under an existing parent URI. If title is omitted, the child URI is auto-assigned as the next numeric sibling."
+        "在指定父节点下创建新记忆。父节点要强调联想相关性（What/主题），不要使用 logs、misc、history 一类无意义的容器。"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "parent_uri": { "type": "string", "description": "Parent URI. Use core:// for the root of a domain." },
+                "parent_uri": { "type": "string", "description": "父节点 URI。用 core:// 表示域根。父节点应该表达主题联想，而不是时间桶或垃圾桶。" },
                 "content": { "type": "string" },
-                "priority": { "type": "integer", "description": "Lower values are recalled earlier." },
-                "title": { "type": "string", "description": "Optional URI segment. Only alphanumeric, '_' and '-' are allowed." },
-                "disclosure": { "type": "string", "description": "Optional recall trigger for this URI." }
+                "priority": { "type": "integer", "description": "优先级（0=最高，数字越小越优先）。" },
+                "title": { "type": "string", "description": "可选路径名称（仅限字母、数字、'_'、'-'）。不填则自动分配序号。" },
+                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。" }
             },
             "required": ["parent_uri", "content", "priority"],
             "additionalProperties": false,
@@ -568,7 +569,7 @@ impl Tool for UpdateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Update an existing memory. Supports patch mode (old_string + new_string), append mode, and edge metadata updates (priority/disclosure). There is no full replace mode."
+        "更新已有记忆。支持 Patch 模式、Append 模式，以及 priority/disclosure 元数据更新。没有全量替换模式。"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -576,11 +577,11 @@ impl Tool for UpdateMemoryTool {
             "type": "object",
             "properties": {
                 "uri": { "type": "string" },
-                "old_string": { "type": "string", "description": "Patch mode: exact text to replace." },
-                "new_string": { "type": "string", "description": "Patch mode: replacement text. Use an empty string to delete the matched section." },
-                "append": { "type": "string", "description": "Append mode: text to append to the end of the current content." },
-                "priority": { "type": "integer", "description": "Optional new priority for this URI." },
-                "disclosure": { "type": "string", "description": "Optional new disclosure for this URI." }
+                "old_string": { "type": "string", "description": "Patch 模式：要替换的原文，必须在内容中唯一匹配。" },
+                "new_string": { "type": "string", "description": "Patch 模式：替换后的文本。设为 \"\" 可删除匹配片段。" },
+                "append": { "type": "string", "description": "Append 模式：追加到内容末尾的文本。" },
+                "priority": { "type": "integer", "description": "新的优先级。" },
+                "disclosure": { "type": "string", "description": "新的触发条件。" }
             },
             "required": ["uri"],
             "additionalProperties": false,
@@ -736,7 +737,7 @@ impl Tool for DeleteMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Delete a memory path by URI. This removes the path from the graph; read the memory first before deleting."
+        "删除一条记忆路径及其子路径，不伤及记忆正文。删除前先 read_memory 确认你知道自己在删什么。"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -803,7 +804,7 @@ impl Tool for AddAliasTool {
     }
 
     fn description(&self) -> &str {
-        "Create an alias URI pointing at the same memory as an existing target URI."
+        "为已有记忆创建别名路径。不是复制，而是同一段内容的新入口；新路径的父节点必须已经存在。"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -812,8 +813,8 @@ impl Tool for AddAliasTool {
             "properties": {
                 "new_uri": { "type": "string" },
                 "target_uri": { "type": "string" },
-                "priority": { "type": "integer", "default": DEFAULT_CREATE_PRIORITY },
-                "disclosure": { "type": "string" }
+                "priority": { "type": "integer", "default": DEFAULT_CREATE_PRIORITY, "description": "此别名的独立优先级。" },
+                "disclosure": { "type": "string", "description": "此别名的独立触发条件。" }
             },
             "required": ["new_uri", "target_uri"],
             "additionalProperties": false,
@@ -1019,6 +1020,229 @@ mod tests {
             .await
             .expect_err("empty update should fail");
         assert!(format!("{err}").contains("no update fields provided"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn create_memory_duplicate_path_fails() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "First version",
+                    "priority": 0,
+                    "title": "user_name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("first create should succeed");
+
+        let err = create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Second version",
+                    "priority": 0,
+                    "title": "user_name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("duplicate create should fail");
+        assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn add_alias_requires_parent_and_cascades_descendants() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let add_alias = AddAliasTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Agent root",
+                    "priority": 0,
+                    "title": "agent"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create root should succeed");
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://agent",
+                    "content": "Profile root",
+                    "priority": 0,
+                    "title": "profile"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create child should succeed");
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://agent/profile",
+                    "content": "用户名字是梦凌汐。",
+                    "priority": 0,
+                    "title": "name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create leaf should succeed");
+
+        let err = add_alias
+            .execute(
+                json!({
+                    "new_uri": "core://my_user/name",
+                    "target_uri": "core://agent/profile"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("missing alias parent should fail");
+        assert!(format!("{err}").contains("core://my_user"));
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Mirror root",
+                    "priority": 0,
+                    "title": "my_user"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create alias parent should succeed");
+
+        add_alias
+            .execute(
+                json!({
+                    "new_uri": "core://my_user/profile",
+                    "target_uri": "core://agent/profile"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("alias should succeed");
+
+        let aliased_child = memory
+            .get_node("user1", None, "core://my_user/profile/name")
+            .await
+            .expect("open cascaded alias child")
+            .expect("cascaded alias child should exist");
+        assert!(aliased_child.active_version.content.contains("梦凌汐"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn delete_memory_removes_path_subtree_only() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let add_alias = AddAliasTool::new(Arc::clone(&memory));
+        let delete = DeleteMemoryTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Agent root",
+                    "priority": 0,
+                    "title": "agent"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create root should succeed");
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://agent",
+                    "content": "Profile root",
+                    "priority": 0,
+                    "title": "profile"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create child should succeed");
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://agent/profile",
+                    "content": "用户名字是梦凌汐。",
+                    "priority": 0,
+                    "title": "name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create leaf should succeed");
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Mirror root",
+                    "priority": 0,
+                    "title": "my_user"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create alias parent should succeed");
+        add_alias
+            .execute(
+                json!({
+                    "new_uri": "core://my_user/profile",
+                    "target_uri": "core://agent/profile"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("alias should succeed");
+
+        delete
+            .execute(json!({ "uri": "core://my_user/profile" }), &ctx)
+            .await
+            .expect("delete subtree should succeed");
+
+        assert!(
+            memory
+                .get_node("user1", None, "core://my_user/profile")
+                .await
+                .expect("read deleted alias")
+                .is_none()
+        );
+        assert!(
+            memory
+                .get_node("user1", None, "core://my_user/profile/name")
+                .await
+                .expect("read deleted alias child")
+                .is_none()
+        );
+        assert!(
+            memory
+                .get_node("user1", None, "core://agent/profile/name")
+                .await
+                .expect("read original child")
+                .is_some()
+        );
     }
 
     #[cfg(feature = "libsql")]

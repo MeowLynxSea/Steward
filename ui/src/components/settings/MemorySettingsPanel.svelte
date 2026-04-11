@@ -12,7 +12,12 @@
     MemorySidebarSection,
     MemoryTimelineEntry
   } from "../../lib/types";
-  import { formatMemoryTimestamp, memoryKindLabel, memoryRouteKey } from "./memory";
+  import {
+    formatMemoryTimestamp,
+    memoryItemLabel,
+    memoryKindLabel,
+    memoryRouteKey
+  } from "./memory";
 
   let {
     memorySections = [],
@@ -66,7 +71,7 @@
             </div>
             <div class="memory-row-main">
               <div class="memory-row-head">
-                <strong>{item.title}</strong>
+                <strong>{memoryItemLabel(item)}</strong>
                 <span>{memoryKindLabel(item.kind)}</span>
               </div>
               <p>{item.subtitle ?? "打开节点详情"}</p>

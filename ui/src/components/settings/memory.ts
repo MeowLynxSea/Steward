@@ -63,3 +63,16 @@ export function formatMemoryTimestamp(value: string | null | undefined) {
 export function routeLabel(route: { domain: string; path: string }) {
   return `${route.domain}://${route.path}`;
 }
+
+export function routeSegment(value: { path: string } | string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+  const path = typeof value === "string" ? value.split("://")[1] ?? value : value.path;
+  const segment = path.split("/").filter(Boolean).at(-1);
+  return segment || path || null;
+}
+
+export function memoryItemLabel(item: Pick<MemorySidebarItem, "uri" | "title">) {
+  return routeSegment(item.uri) ?? item.title;
+}

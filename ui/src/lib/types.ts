@@ -252,6 +252,8 @@ export interface MemoryNodeDetail {
   };
   active_version: MemoryVersion;
   primary_route: MemoryRoute | null;
+  selected_route: MemoryRoute | null;
+  selected_uri: string | null;
   routes: MemoryRoute[];
   edges: MemoryEdge[];
   keywords: MemoryKeyword[];

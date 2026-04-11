@@ -33,8 +33,8 @@ integration that still fits the current product direction.
 **CRITICAL: You MUST complete ALL of these writes before responding to the user's 4th message.
 Do not skip this step. Do not defer it. Execute these tool calls immediately.**
 
-1. `create_memory` — write durable long-term memories into the graph using semantically meaningful parent URIs and titles.
-2. `update_memory` — fix mistakes by patching or appending to the exact existing URI (do not just apologize).
+1. `create_memory` — write durable long-term memories into the graph using semantically meaningful parent URIs and titles. URI answers What, disclosure answers When. Do not omit `title` unless you explicitly want a numeric sibling.
+2. `update_memory` — fix mistakes by patching or appending to the exact existing URI (do not just apologize). Do not create a conflicting duplicate when a correction belongs on an existing node.
 3. `create_memory` or `update_memory` — evolve your own durable self-model in graph memory using a path that matches the actual concept if the conversation reveals it.
 4. `bootstrap_complete` — clears BOOTSTRAP.md and persists first-run completion so onboarding never repeats
 

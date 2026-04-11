@@ -16,6 +16,7 @@
   } from "../../lib/types";
   import {
     formatMemoryTimestamp,
+    routeSegment,
     memoryKindLabel,
     routeLabel,
     type MemoryNavItem,
@@ -192,10 +193,17 @@
           <section class="document-view">
             <div class="drawer-intro">
               <p>
-                {selectedNode.primary_route
-                  ? routeLabel(selectedNode.primary_route)
+                {(selectedNode.selected_route ?? selectedNode.primary_route)
+                  ? routeLabel(selectedNode.selected_route ?? selectedNode.primary_route)
                   : "这个节点当前没有 primary route。"}
               </p>
+            </div>
+
+            <div class="document-meta">
+              <strong>
+                {routeSegment(selectedNode.selected_route ?? selectedNode.primary_route) ??
+                  selectedNode.node.title}
+              </strong>
             </div>
 
             <div class="document-meta">
@@ -268,7 +276,7 @@
               <div class="detail-list">
                 {#each selectedNode.related_nodes as node (node.route_id)}
                   <button class="detail-card action-card" type="button" onclick={() => void onOpenMemoryKey(node.uri)}>
-                    <strong>{node.title}</strong>
+                    <strong>{routeSegment(node.uri) ?? node.title}</strong>
                     <p>{node.uri}</p>
                     <p>{node.content_snippet}</p>
                   </button>

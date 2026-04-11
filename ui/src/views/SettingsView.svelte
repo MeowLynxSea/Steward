@@ -13,6 +13,7 @@
   import MemorySettingsDrawers from "../components/settings/MemorySettingsDrawers.svelte";
   import MemorySettingsPanel from "../components/settings/MemorySettingsPanel.svelte";
   import {
+    memoryItemLabel,
     memoryRouteKey,
     type MemoryNavItem,
     type MemoryPanelMode
@@ -149,7 +150,7 @@
 
     activeMemoryItem = {
       key: memoryRouteKey(item),
-      title: item.title,
+      title: memoryItemLabel(item),
       description: item.subtitle ?? "检查这个记忆节点的内容、routes、trigger 和版本历史。",
       kind: "node"
     };

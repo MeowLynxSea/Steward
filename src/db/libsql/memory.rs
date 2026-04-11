@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use chrono::Utc;
 use libsql::params;
@@ -290,6 +292,251 @@ impl LibSqlBackend {
         Ok(edges)
     }
 
+    async fn fetch_memory_routes_by_prefix(
+        &self,
+        space_id: Uuid,
+        domain: &str,
+        path: &str,
+    ) -> Result<Vec<MemoryRoute>, DatabaseError> {
+        let conn = self.connect().await?;
+        let like = format!("{path}/%");
+        let mut rows = conn
+            .query(
+                "SELECT id, space_id, edge_id, node_id, domain, path, is_primary, created_at, updated_at
+                 FROM memory_routes
+                 WHERE space_id = ?1
+                   AND domain = ?2
+                   AND (path = ?3 OR path LIKE ?4)
+                 ORDER BY length(path) DESC, path DESC",
+                params![space_id.to_string(), domain, path, like],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        let mut routes = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            routes.push(row_to_memory_route(&row));
+        }
+        Ok(routes)
+    }
+
+    async fn count_routes_for_edge(&self, edge_id: Uuid) -> Result<u64, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT count(*) FROM memory_routes WHERE edge_id = ?1",
+                params![edge_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        let count = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .and_then(|row| row.get::<i64>(0).ok())
+            .unwrap_or_default();
+        Ok(count as u64)
+    }
+
+    async fn find_contains_edge(
+        &self,
+        space_id: Uuid,
+        parent_node_id: Option<Uuid>,
+        child_node_id: Uuid,
+    ) -> Result<Option<MemoryEdge>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = if let Some(parent_node_id) = parent_node_id {
+            conn.query(
+                "SELECT id, space_id, parent_node_id, child_node_id, relation_kind, visibility, priority, trigger_text, created_at, updated_at
+                 FROM memory_edges
+                 WHERE space_id = ?1 AND parent_node_id = ?2 AND child_node_id = ?3 AND relation_kind = 'contains'
+                 LIMIT 1",
+                params![
+                    space_id.to_string(),
+                    parent_node_id.to_string(),
+                    child_node_id.to_string()
+                ],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        } else {
+            conn.query(
+                "SELECT id, space_id, parent_node_id, child_node_id, relation_kind, visibility, priority, trigger_text, created_at, updated_at
+                 FROM memory_edges
+                 WHERE space_id = ?1 AND parent_node_id IS NULL AND child_node_id = ?2 AND relation_kind = 'contains'
+                 LIMIT 1",
+                params![space_id.to_string(), child_node_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        };
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_memory_edge(&row)))
+    }
+
+    async fn create_route_snapshot(
+        &self,
+        space_id: Uuid,
+        edge_id: Uuid,
+        node_id: Uuid,
+        domain: &str,
+        path: &str,
+        is_primary: bool,
+    ) -> Result<MemoryRoute, DatabaseError> {
+        let now = Utc::now();
+        let route = MemoryRoute {
+            id: Uuid::new_v4(),
+            space_id,
+            edge_id: Some(edge_id),
+            node_id,
+            domain: domain.to_string(),
+            path: path.to_string(),
+            is_primary,
+            created_at: now,
+            updated_at: now,
+        };
+        self.upsert_route_snapshot(&route).await?;
+        Ok(route)
+    }
+
+    async fn would_create_cycle(
+        &self,
+        parent_node_id: Uuid,
+        child_node_id: Uuid,
+    ) -> Result<bool, DatabaseError> {
+        if parent_node_id == child_node_id {
+            return Ok(true);
+        }
+
+        let conn = self.connect().await?;
+        let mut visited = HashSet::from([child_node_id]);
+        let mut queue = vec![child_node_id];
+        while let Some(current) = queue.pop() {
+            let mut rows = conn
+                .query(
+                    "SELECT child_node_id
+                     FROM memory_edges
+                     WHERE parent_node_id = ?1 AND relation_kind = 'contains'",
+                    params![current.to_string()],
+                )
+                .await
+                .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| DatabaseError::Query(e.to_string()))?
+            {
+                let Some(next) = get_opt_text(&row, 0).and_then(|value| value.parse::<Uuid>().ok())
+                else {
+                    continue;
+                };
+                if next == parent_node_id {
+                    return Ok(true);
+                }
+                if visited.insert(next) {
+                    queue.push(next);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    async fn cascade_create_alias_routes(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        domain: &str,
+        base_path: &str,
+        visited: &mut HashSet<Uuid>,
+        created_routes: &mut Vec<MemoryRoute>,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.connect().await?;
+        let mut stack = vec![(node_id, base_path.to_string(), visited.clone())];
+        while let Some((current_node_id, current_base_path, mut current_visited)) = stack.pop() {
+            if !current_visited.insert(current_node_id) {
+                continue;
+            }
+
+            let mut rows = conn
+                .query(
+                    "SELECT e.id, e.child_node_id
+                     FROM memory_edges e
+                     WHERE e.space_id = ?1 AND e.parent_node_id = ?2 AND e.relation_kind = 'contains'
+                     ORDER BY e.priority ASC, e.created_at ASC",
+                    params![space_id.to_string(), current_node_id.to_string()],
+                )
+                .await
+                .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            let mut next_items = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| DatabaseError::Query(e.to_string()))?
+            {
+                let edge_id: Uuid = get_text(&row, 0).parse().unwrap_or_default();
+                let child_node_id: Uuid = get_text(&row, 1).parse().unwrap_or_default();
+
+                let mut route_rows = conn
+                    .query(
+                        "SELECT id, space_id, edge_id, node_id, domain, path, is_primary, created_at, updated_at
+                         FROM memory_routes
+                         WHERE edge_id = ?1
+                         ORDER BY is_primary DESC, updated_at DESC
+                         LIMIT 1",
+                        params![edge_id.to_string()],
+                    )
+                    .await
+                    .map_err(|e| DatabaseError::Query(e.to_string()))?;
+                let Some(route_row) = route_rows
+                    .next()
+                    .await
+                    .map_err(|e| DatabaseError::Query(e.to_string()))?
+                else {
+                    continue;
+                };
+                let existing_route = row_to_memory_route(&route_row);
+                let Some(segment) = existing_route.path.rsplit('/').next() else {
+                    continue;
+                };
+                let child_path = format!("{current_base_path}/{segment}");
+
+                if self
+                    .fetch_memory_route_by_path(space_id, domain, &child_path)
+                    .await?
+                    .is_none()
+                {
+                    let route = self
+                        .create_route_snapshot(
+                            space_id,
+                            edge_id,
+                            child_node_id,
+                            domain,
+                            &child_path,
+                            false,
+                        )
+                        .await?;
+                    self.rebuild_search_doc_for_route(route.id).await?;
+                    created_routes.push(route);
+                }
+
+                next_items.push((child_node_id, child_path, current_visited.clone()));
+            }
+
+            for item in next_items.into_iter().rev() {
+                stack.push(item);
+            }
+        }
+
+        Ok(())
+    }
+
     async fn fetch_keywords_for_node(
         &self,
         node_id: Uuid,
@@ -466,6 +713,8 @@ impl LibSqlBackend {
             node,
             active_version,
             primary_route,
+            selected_route: None,
+            selected_uri: None,
             routes,
             edges,
             keywords,
@@ -707,12 +956,14 @@ impl LibSqlBackend {
         .await
         .map_err(|e| DatabaseError::Query(e.to_string()))?;
         if let Some(edge_id) = edge_id {
-            let _ = conn
-                .execute(
-                    "DELETE FROM memory_edges WHERE id = ?1",
-                    params![edge_id.to_string()],
-                )
-                .await;
+            if self.count_routes_for_edge(edge_id).await? == 0 {
+                let _ = conn
+                    .execute(
+                        "DELETE FROM memory_edges WHERE id = ?1",
+                        params![edge_id.to_string()],
+                    )
+                    .await;
+            }
         }
         Ok(())
     }
@@ -979,15 +1230,10 @@ impl MemoryStore for LibSqlBackend {
             .await?
             .is_some()
         {
-            if let Some(detail) = self
-                .get_memory_node(
-                    input.space_id,
-                    &format!("{}://{}", input.domain, input.path),
-                )
-                .await?
-            {
-                return Ok(detail);
-            }
+            return Err(DatabaseError::Constraint(format!(
+                "Path '{}://{}' already exists",
+                input.domain, input.path
+            )));
         }
         let conn = self.connect().await?;
         let now = Utc::now();
@@ -1300,67 +1546,97 @@ impl MemoryStore for LibSqlBackend {
                 id: input.target_route_or_node.clone(),
             });
         };
-        if let Some(existing) = self
+        if let Some(_existing) = self
             .fetch_memory_route_by_path(input.space_id, &input.domain, &input.path)
             .await?
         {
-            return Ok(existing);
+            return Err(DatabaseError::Constraint(format!(
+                "Path '{}://{}' already exists",
+                input.domain, input.path
+            )));
         }
 
-        let conn = self.connect().await?;
-        let edge_id = Uuid::new_v4();
-        let route_id = Uuid::new_v4();
-        let now = Utc::now();
-        conn.execute(
-            "INSERT INTO memory_edges
-             (id, space_id, parent_node_id, child_node_id, relation_kind, visibility, priority, trigger_text, created_at, updated_at)
-             VALUES (?1, ?2, NULL, ?3, 'relates_to', ?4, ?5, ?6, ?7, ?7)",
-            params![
-                edge_id.to_string(),
-                input.space_id.to_string(),
-                detail.node.id.to_string(),
-                input.visibility.as_str(),
-                input.priority as i64,
-                opt_text(input.trigger_text.as_deref()),
-                fmt_ts(&now)
-            ],
-        )
-        .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        conn.execute(
-            "INSERT INTO memory_routes
-             (id, space_id, edge_id, node_id, domain, path, is_primary, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?7)",
-            params![
-                route_id.to_string(),
-                input.space_id.to_string(),
-                edge_id.to_string(),
-                detail.node.id.to_string(),
-                input.domain.as_str(),
-                input.path.as_str(),
-                fmt_ts(&now)
-            ],
-        )
-        .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        self.rebuild_search_doc_for_route(route_id).await?;
-        let route = self
-            .fetch_memory_route_by_path(input.space_id, &input.domain, &input.path)
+        let parent_node_id = if let Some((parent_path, _)) = input.path.rsplit_once('/') {
+            let parent_route = self
+                .fetch_memory_route_by_path(input.space_id, &input.domain, parent_path)
+                .await?
+                .ok_or_else(|| DatabaseError::NotFound {
+                    entity: "memory_route".to_string(),
+                    id: format!("{}://{}", input.domain, parent_path),
+                })?;
+            Some(parent_route.node_id)
+        } else {
+            None
+        };
+
+        if let Some(parent_node_id) = parent_node_id
+            && self
+                .would_create_cycle(parent_node_id, detail.node.id)
+                .await?
+        {
+            return Err(DatabaseError::Constraint(format!(
+                "Cannot create alias '{}://{}': target node is an ancestor of the destination parent",
+                input.domain, input.path
+            )));
+        }
+
+        let edge = if let Some(edge) = self
+            .find_contains_edge(input.space_id, parent_node_id, detail.node.id)
             .await?
-            .ok_or_else(|| DatabaseError::NotFound {
-                entity: "memory_route".to_string(),
-                id: route_id.to_string(),
-            })?;
-        if let Some(changeset_id) = input.changeset_id {
-            self.write_changeset_row(
-                changeset_id,
-                Some(detail.node.id),
-                Some(route.id),
-                "alias",
-                &serde_json::Value::Null,
-                &serde_json::to_value(&route).unwrap_or(serde_json::Value::Null),
+        {
+            edge
+        } else {
+            let now = Utc::now();
+            let edge = MemoryEdge {
+                id: Uuid::new_v4(),
+                space_id: input.space_id,
+                parent_node_id,
+                child_node_id: detail.node.id,
+                relation_kind: MemoryRelationKind::Contains,
+                visibility: input.visibility,
+                priority: input.priority,
+                trigger_text: input.trigger_text.clone(),
+                created_at: now,
+                updated_at: now,
+            };
+            self.upsert_edge_snapshot(&edge).await?;
+            edge
+        };
+
+        let route = self
+            .create_route_snapshot(
+                input.space_id,
+                edge.id,
+                detail.node.id,
+                &input.domain,
+                &input.path,
+                false,
             )
             .await?;
+        self.rebuild_search_doc_for_route(route.id).await?;
+
+        let mut created_routes = vec![route.clone()];
+        self.cascade_create_alias_routes(
+            input.space_id,
+            detail.node.id,
+            &input.domain,
+            &input.path,
+            &mut HashSet::new(),
+            &mut created_routes,
+        )
+        .await?;
+        if let Some(changeset_id) = input.changeset_id {
+            for route in &created_routes {
+                self.write_changeset_row(
+                    changeset_id,
+                    Some(route.node_id),
+                    Some(route.id),
+                    "alias",
+                    &serde_json::Value::Null,
+                    &serde_json::to_value(route).unwrap_or(serde_json::Value::Null),
+                )
+                .await?;
+            }
         }
         Ok(route)
     }
@@ -1374,30 +1650,49 @@ impl MemoryStore for LibSqlBackend {
         let Some(before) = self.get_memory_node(space_id, route_or_node).await? else {
             return Ok(());
         };
-        let conn = self.connect().await?;
         let deleted_route = self.fetch_memory_route(space_id, route_or_node).await?;
         if let Some(route) = deleted_route.clone() {
-            conn.execute(
-                "DELETE FROM memory_search_docs WHERE route_id = ?1",
-                params![route.id.to_string()],
-            )
-            .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?;
-            conn.execute(
-                "DELETE FROM memory_routes WHERE id = ?1",
-                params![route.id.to_string()],
-            )
-            .await
-            .map_err(|e| DatabaseError::Query(e.to_string()))?;
-            if let Some(edge_id) = route.edge_id {
-                let _ = conn
-                    .execute(
-                        "DELETE FROM memory_edges WHERE id = ?1",
-                        params![edge_id.to_string()],
+            let routes_to_delete = self
+                .fetch_memory_routes_by_prefix(space_id, &route.domain, &route.path)
+                .await?;
+            let mut affected_nodes = HashSet::new();
+            for route in &routes_to_delete {
+                if let Some(detail) = self.get_memory_node(space_id, &route.uri()).await? {
+                    if let Some(changeset_id) = changeset_id {
+                        self.write_changeset_row(
+                            changeset_id,
+                            Some(detail.node.id),
+                            Some(route.id),
+                            "delete",
+                            &serde_json::to_value(&detail).unwrap_or(serde_json::Value::Null),
+                            &serde_json::to_value(route).unwrap_or(serde_json::Value::Null),
+                        )
+                        .await?;
+                    }
+                    affected_nodes.insert(detail.node.id);
+                }
+            }
+
+            for route in routes_to_delete {
+                self.remove_route_by_id(route.id).await?;
+                affected_nodes.insert(route.node_id);
+            }
+
+            let conn = self.connect().await?;
+            for node_id in affected_nodes {
+                if self.fetch_memory_routes_for_node(node_id).await?.is_empty() {
+                    conn.execute(
+                        "UPDATE memory_versions
+                         SET status = 'orphaned'
+                         WHERE node_id = ?1 AND status = 'active'",
+                        params![node_id.to_string()],
                     )
-                    .await;
+                    .await
+                    .map_err(|e| DatabaseError::Query(e.to_string()))?;
+                }
             }
         } else {
+            let conn = self.connect().await?;
             conn.execute(
                 "DELETE FROM memory_search_docs WHERE node_id = ?1",
                 params![before.node.id.to_string()],
@@ -1416,30 +1711,23 @@ impl MemoryStore for LibSqlBackend {
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        }
-
-        let remaining = self.fetch_memory_routes_for_node(before.node.id).await?;
-        if remaining.is_empty() {
             conn.execute(
                 "UPDATE memory_versions SET status = 'orphaned' WHERE node_id = ?1 AND status = 'active'",
                 params![before.node.id.to_string()],
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;
-        }
-        if let Some(changeset_id) = changeset_id {
-            self.write_changeset_row(
-                changeset_id,
-                Some(before.node.id),
-                None,
-                "delete",
-                &serde_json::to_value(&before).unwrap_or(serde_json::Value::Null),
-                &deleted_route
-                    .as_ref()
-                    .and_then(|route| serde_json::to_value(route).ok())
-                    .unwrap_or(serde_json::Value::Null),
-            )
-            .await?;
+            if let Some(changeset_id) = changeset_id {
+                self.write_changeset_row(
+                    changeset_id,
+                    Some(before.node.id),
+                    None,
+                    "delete",
+                    &serde_json::to_value(&before).unwrap_or(serde_json::Value::Null),
+                    &serde_json::Value::Null,
+                )
+                .await?;
+            }
         }
         Ok(())
     }
@@ -1452,7 +1740,21 @@ impl MemoryStore for LibSqlBackend {
         let Some(node_id) = self.resolve_node_id(space_id, route_or_node).await? else {
             return Ok(None);
         };
-        self.fetch_detail(node_id).await
+        let mut detail = match self.fetch_detail(node_id).await? {
+            Some(detail) => detail,
+            None => return Ok(None),
+        };
+        if route_or_node.contains("://") {
+            let selected_route = detail
+                .routes
+                .iter()
+                .find(|route| route.uri() == route_or_node)
+                .cloned()
+                .or_else(|| detail.primary_route.clone());
+            detail.selected_uri = selected_route.as_ref().map(MemoryRoute::uri);
+            detail.selected_route = selected_route;
+        }
+        Ok(Some(detail))
     }
 
     async fn search_memory_graph(
