@@ -645,6 +645,9 @@ pub struct Turn {
     /// Persisted cost summary for this user-message turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_cost: Option<TurnCostInfo>,
+    /// Persisted conversation row backing the user message in history.
+    #[serde(skip)]
+    pub user_message_id: Option<Uuid>,
     /// Persisted conversation row backing the assistant response in history.
     #[serde(skip)]
     pub assistant_message_id: Option<Uuid>,
@@ -672,6 +675,7 @@ impl Turn {
             error: None,
             narrative: None,
             turn_cost: None,
+            user_message_id: None,
             assistant_message_id: None,
             cost_baseline: None,
             image_content_parts: Vec::new(),

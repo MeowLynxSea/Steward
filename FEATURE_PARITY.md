@@ -345,6 +345,7 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 | Vector memory | ✅ | ✅ | pgvector |
 | Session-based memory | ✅ | ✅ | |
 | Hybrid search (BM25 + vector) | ✅ | ✅ | RRF algorithm |
+| Global conversation history recall | ✅ | ✅ | Derived turn-level recall index over persisted conversations, light automatic prompt injection, and explicit search/read tools |
 | Temporal decay (hybrid search) | ✅ | ❌ | Opt-in time-based scoring factor |
 | MMR re-ranking | ✅ | ❌ | Maximal marginal relevance for result diversity |
 | LLM-based query expansion | ✅ | ❌ | Expand FTS queries via LLM |

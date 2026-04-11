@@ -5,6 +5,7 @@ use crate::agent::{Agent, AgentDeps};
 use crate::app::{AppBuilder, AppBuilderFlags};
 use crate::channels::{ChannelManager, MessageStream};
 use crate::config::Config;
+use crate::conversation_recall::ConversationRecallManager;
 use crate::db::Database;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
@@ -29,6 +30,7 @@ pub struct AppState {
     pub db: Option<Arc<dyn Database>>,
     pub workspace: Option<Arc<Workspace>>,
     pub memory: Option<Arc<MemoryManager>>,
+    pub conversation_recall: Option<Arc<ConversationRecallManager>>,
     pub llm_reloader: Arc<RuntimeLlmReloader>,
     pub agent_session_manager: Arc<AgentSessionManager>,
     pub title_llm: Arc<dyn crate::llm::LlmProvider>,
@@ -47,6 +49,7 @@ impl AppState {
         db: Option<Arc<dyn Database>>,
         workspace: Option<Arc<Workspace>>,
         memory: Option<Arc<MemoryManager>>,
+        conversation_recall: Option<Arc<ConversationRecallManager>>,
         llm_reloader: Arc<RuntimeLlmReloader>,
         agent_session_manager: Arc<AgentSessionManager>,
         title_llm: Arc<dyn crate::llm::LlmProvider>,
@@ -61,6 +64,7 @@ impl AppState {
             db,
             workspace,
             memory,
+            conversation_recall,
             llm_reloader,
             agent_session_manager,
             title_llm,
@@ -147,6 +151,7 @@ pub async fn start_embedded_runtime(
     let app_state_db = components.db.clone();
     let app_state_workspace = components.workspace.clone();
     let app_state_memory = components.memory.clone();
+    let app_state_conversation_recall = components.conversation_recall.clone();
     let app_state_tools = Arc::clone(&components.tools);
     let app_state_mcp = Arc::clone(&components.mcp_session_manager);
     let app_state_session_manager = Arc::clone(&session_manager);
@@ -192,6 +197,7 @@ pub async fn start_embedded_runtime(
         tools: components.tools,
         workspace: components.workspace,
         memory: components.memory,
+        conversation_recall: components.conversation_recall,
         extension_manager,
         skill_registry: components.skill_registry,
         skill_catalog: components.skill_catalog,
@@ -250,6 +256,7 @@ pub async fn start_embedded_runtime(
         app_state_db,
         app_state_workspace,
         app_state_memory,
+        app_state_conversation_recall,
         app_state_llm_reloader,
         app_state_session_manager,
         app_llm.clone(),

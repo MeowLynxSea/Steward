@@ -568,6 +568,7 @@ impl Agent {
             "Persisting user message to DB"
         );
         self.persist_user_message(
+            &session,
             thread_id,
             &message.channel,
             &message.user_id,
@@ -681,6 +682,13 @@ impl Agent {
                     &message.channel,
                     &message.user_id,
                     &response,
+                )
+                .await;
+                self.upsert_conversation_recall_turn(
+                    &session,
+                    thread_id,
+                    &message.channel,
+                    &message.user_id,
                 )
                 .await;
 
@@ -897,6 +905,7 @@ impl Agent {
     /// mid-response. Call this right after `thread.start_turn()`.
     pub(super) async fn persist_user_message(
         &self,
+        session: &Arc<Mutex<Session>>,
         thread_id: Uuid,
         channel: &str,
         user_id: &str,
@@ -914,11 +923,22 @@ impl Agent {
             return;
         }
 
-        if let Err(e) = store
+        match store
             .add_conversation_message(thread_id, "user", user_input)
             .await
         {
-            tracing::warn!("Failed to persist user message: {}", e);
+            Ok(message_id) => {
+                let mut sess = session.lock().await;
+                if let Some(thread) = sess.threads.get_mut(&thread_id)
+                    && let Some(turn) = thread.last_turn_mut()
+                    && turn.user_message_id.is_none()
+                {
+                    turn.user_message_id = Some(message_id);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to persist user message: {}", e);
+            }
         }
     }
 
@@ -981,6 +1001,51 @@ impl Agent {
             Err(error) => {
                 tracing::warn!("Failed to persist assistant message: {}", error);
             }
+        }
+    }
+
+    pub(super) async fn upsert_conversation_recall_turn(
+        &self,
+        session: &Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        channel: &str,
+        user_id: &str,
+    ) {
+        let Some(recall) = self.conversation_recall().cloned() else {
+            return;
+        };
+
+        let turn = {
+            let sess = session.lock().await;
+            let Some(thread) = sess.threads.get(&thread_id) else {
+                return;
+            };
+            let Some(turn) = thread.last_turn() else {
+                return;
+            };
+            let Some(user_message_id) = turn.user_message_id else {
+                return;
+            };
+            crate::conversation_recall::ConversationTurnView {
+                conversation_id: thread_id,
+                channel: channel.to_string(),
+                thread_id: thread_id.to_string(),
+                turn_index: turn.turn_number,
+                user_message_id,
+                assistant_message_id: turn.assistant_message_id,
+                timestamp: turn.started_at,
+                user_text: turn.user_input.clone(),
+                assistant_text: turn.response.clone(),
+                tool_calls: Vec::new(),
+            }
+        };
+
+        if let Err(error) = recall.upsert_completed_turn(user_id, &turn).await {
+            tracing::warn!(
+                thread_id = %thread_id,
+                %error,
+                "Failed to upsert conversation recall turn"
+            );
         }
     }
 
@@ -1537,6 +1602,7 @@ impl Agent {
             let mut job_ctx =
                 JobContext::with_user(&message.user_id, "chat", "Interactive chat session")
                     .with_requester_id(&message.sender_id);
+            job_ctx.conversation_id = Some(thread_id);
             job_ctx.http_interceptor = self.deps.http_interceptor.clone();
             job_ctx.metadata = crate::agent::agent_loop::chat_tool_execution_metadata(message);
             // Prefer a valid timezone from the approval message, fall back to the
@@ -3019,6 +3085,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
             memory: None,
+            conversation_recall: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -3157,9 +3224,16 @@ mod tests {
             .create_conversation("legacy-desktop", user_id, None)
             .await
             .expect("create legacy conversation");
+        let session = Arc::new(Mutex::new(Session::new(user_id)));
 
         agent
-            .persist_user_message(conversation_id, "desktop", user_id, "resume after restart")
+            .persist_user_message(
+                &session,
+                conversation_id,
+                "desktop",
+                user_id,
+                "resume after restart",
+            )
             .await;
 
         let messages = db

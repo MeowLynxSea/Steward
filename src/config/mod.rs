@@ -13,6 +13,7 @@ mod agent;
 mod builder;
 mod channels;
 mod claude_code;
+mod conversation_recall;
 mod database;
 pub(crate) mod embeddings;
 mod heartbeat;
@@ -41,6 +42,7 @@ pub use self::agent::AgentConfig;
 pub use self::builder::BuilderModeConfig;
 pub use self::channels::{ChannelsConfig, DesktopConfig, WasmChannelsConfig};
 pub use self::claude_code::ClaudeCodeConfig;
+pub use self::conversation_recall::ConversationRecallConfig;
 pub use self::database::{DatabaseBackend, DatabaseConfig, default_libsql_path};
 pub use self::embeddings::{DEFAULT_EMBEDDING_CACHE_SIZE, EmbeddingsConfig};
 pub use self::heartbeat::HeartbeatConfig;
@@ -101,6 +103,7 @@ pub struct Config {
     pub transcription: TranscriptionConfig,
     pub search: WorkspaceSearchConfig,
     pub memory_recall: MemoryRecallConfig,
+    pub conversation_recall: ConversationRecallConfig,
     pub workspace: WorkspaceConfig,
     pub observability: crate::observability::ObservabilityConfig,
 }
@@ -168,6 +171,7 @@ impl Config {
             transcription: TranscriptionConfig::default(),
             search: WorkspaceSearchConfig::default(),
             memory_recall: MemoryRecallConfig::default(),
+            conversation_recall: ConversationRecallConfig::default(),
             workspace: WorkspaceConfig::default(),
             observability: crate::observability::ObservabilityConfig::default(),
         }
@@ -357,6 +361,7 @@ impl Config {
             transcription: TranscriptionConfig::resolve(settings)?,
             search: WorkspaceSearchConfig::resolve()?,
             memory_recall: MemoryRecallConfig::resolve()?,
+            conversation_recall: ConversationRecallConfig::resolve()?,
             workspace,
             observability: crate::observability::ObservabilityConfig {
                 backend: std::env::var("OBSERVABILITY_BACKEND").unwrap_or_else(|_| "none".into()),

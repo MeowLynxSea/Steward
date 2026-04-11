@@ -13,6 +13,7 @@ use crate::agent::SessionManager as AgentSessionManager;
 use crate::agent::routine::{NotifyConfig, RoutineGuardrails, next_cron_fire};
 use crate::agent::{Routine, RoutineAction, Trigger};
 use crate::config::Config;
+use crate::conversation_recall::ConversationRecallManager;
 use crate::context::ContextManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
@@ -45,6 +46,7 @@ pub struct AppComponents {
     pub embeddings: Option<Arc<dyn EmbeddingProvider>>,
     pub workspace: Option<Arc<Workspace>>,
     pub memory: Option<Arc<MemoryManager>>,
+    pub conversation_recall: Option<Arc<ConversationRecallManager>>,
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub mcp_session_manager: Arc<McpSessionManager>,
     pub mcp_process_manager: Arc<McpProcessManager>,
@@ -915,6 +917,33 @@ impl AppBuilder {
             }
         }
 
+        let conversation_recall = if let Some(ref db) = self.db {
+            let mut manager = ConversationRecallManager::new(Arc::clone(db))
+                .with_config(self.config.conversation_recall.clone());
+            if let Some(ref emb) = embeddings {
+                manager = manager.with_embeddings(Arc::clone(emb));
+            }
+            let manager = Arc::new(manager);
+            tools.register_conversation_recall_tools(Arc::clone(&manager));
+
+            let manager_bg = Arc::clone(&manager);
+            let owner_id = self.config.owner_id.clone();
+            tokio::spawn(async move {
+                match manager_bg.backfill_for_user(&owner_id).await {
+                    Ok(count) if count > 0 => {
+                        tracing::debug!("Backfilled {} conversation recall turns", count);
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!("Failed to backfill conversation recall docs: {}", error);
+                    }
+                }
+            });
+            Some(manager)
+        } else {
+            None
+        };
+
         let memory = if let Some(ref db) = self.db {
             let mut manager = MemoryManager::new(Arc::clone(db))
                 .with_recall_config(self.config.memory_recall.clone());
@@ -1065,6 +1094,7 @@ impl AppBuilder {
             embeddings,
             workspace,
             memory,
+            conversation_recall,
             extension_manager,
             mcp_session_manager,
             mcp_process_manager,

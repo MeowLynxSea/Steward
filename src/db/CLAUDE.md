@@ -31,6 +31,7 @@ cargo test
 2. Keep schema and runtime contracts aligned with desktop-first behavior.
 3. Use `LibSqlBackend::new_memory()` for isolated tests when possible.
 4. Update `libsql_migrations.rs` when schema changes are required.
+5. Keep canonical turn reconstruction and `conversation_recall_docs` behavior aligned. Historical recall is derived from `conversations` + `conversation_messages`, not from the native memory graph.
 
 ## Notes
 
@@ -38,3 +39,4 @@ cargo test
 - Booleans are stored as `INTEGER` (`0` / `1`).
 - Vector search uses `libsql_vector_idx`.
 - `json_patch` follows RFC 7396 semantics for JSON merge behavior.
+- `conversation_recall_docs` stores completed canonical turns (`user` + final `assistant`) plus FTS/vector search artifacts. `thinking` is always excluded from canonical turns and recall docs; `tool_call` stays out of the search corpus and only reappears as optional summaries in explicit context reads.

@@ -18,6 +18,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `agentic_loop.rs` | Shared agentic loop engine: `run_agentic_loop()`, `LoopDelegate` trait, `LoopOutcome`, `LoopSignal`, `TextAction`. All execution paths (chat, job, Claude Code) delegate to this. |
 | `compaction.rs` | Context window management: summarize old turns, persist them into episodic memory when available, and trim context. Three strategies. |
 | `context_monitor.rs` | Detects memory pressure. Suggests `CompactionStrategy` based on usage level. |
+| `../conversation_recall/` | Cross-conversation history recall. Maintains turn-level recall docs derived from persisted conversation history, prompt injection helpers, and explicit history retrieval APIs. |
 | `self_repair.rs` | Detects stuck jobs and broken tools, attempts recovery. |
 | `heartbeat.rs` | Proactive periodic execution. Reads the heartbeat procedure from native memory graph (fallback to `HEARTBEAT.md`), notifies via channel if findings. |
 | `submission.rs` | Parses all user submissions into typed variants before routing. |
@@ -44,6 +45,7 @@ Session (per user)
 - Turns are append-only. Undo rolls back by restoring a prior checkpoint (message list, not a full thread snapshot).
 - `UndoManager` is per-thread, stored in `SessionManager`, not on `Session` itself. Max 20 checkpoints (oldest dropped when exceeded).
 - Group chat detection: if `metadata.chat_type` is `group`/`channel`/`supergroup`, user-scoped identity prompt files are excluded from the system prompt to prevent leaking personal context.
+- Automatic cross-conversation recall follows the same privacy boundary: group/channel chats do not auto-inject user-scoped historical turns unless explicitly enabled in `CONVERSATION_RECALL_ALLOW_GROUP_AUTO_RECALL`.
 - **Auth mode**: if a thread has `pending_auth` set (e.g. from `tool_auth` returning `awaiting_token`), the next user message is intercepted before any turn creation, logging, or safety validation and sent directly to the credential store. Any control submission (undo, interrupt, etc.) cancels auth mode.
 - `ThreadState` values: `Idle`, `Processing`, `AwaitingApproval`, `Completed`, `Interrupted`.
 - `SessionManager` maps `(user_id, channel, external_thread_id)` → internal UUID. Prunes idle sessions every 10 minutes (warns at 1000 sessions).
@@ -67,6 +69,10 @@ run_agentic_loop(delegate, reasoning, reason_ctx, config)
 ```
 
 **Tool approval:** Tools flagged `requires_approval` pause the loop — `ChatDelegate` returns `LoopOutcome::NeedApproval(pending)`. The desktop runtime stores the `PendingApproval` in thread/session state and emits an `approval_needed` runtime event. The user's approval/deny resumes the loop.
+
+**Prompt context assembly:** conversational turns now compose `workspace prompt + native memory prompt + conversation history prompt`. The history block is intentionally light, excludes the current thread by default, and shows absolute timestamps plus conversation identifiers so the model gets time sense without drowning the active chat.
+
+**Conversation history tools:** `search_conversation_history` returns matched canonical turns plus adjacent preview turns. `read_conversation_context` expands a selected `conversation_id` into a slice or full canonical thread. Both default to excluding `thinking`; tool-call summaries are opt-in on context reads.
 
 **Shared tool execution:** `tools/execute.rs` provides `execute_tool_with_safety()` (validate → timeout → execute → serialize) and `process_tool_result()` (sanitize → wrap → ChatMessage), used by all three delegates.
 

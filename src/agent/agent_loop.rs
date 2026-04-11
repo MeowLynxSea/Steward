@@ -24,6 +24,7 @@ use crate::agent::submission::{Submission, SubmissionParser, SubmissionResult};
 use crate::agent::{HeartbeatConfig as AgentHeartbeatConfig, Router, Scheduler, SchedulerDeps};
 use crate::channels::{IncomingMessage, MessageStream, MessageTransport, OutgoingResponse};
 use crate::config::{AgentConfig, HeartbeatConfig, RoutineConfig, SkillsConfig};
+use crate::conversation_recall::ConversationRecallManager;
 use crate::context::ContextManager;
 use crate::db::Database;
 use crate::error::{ChannelError, Error};
@@ -174,6 +175,7 @@ pub struct AgentDeps {
     pub tools: Arc<ToolRegistry>,
     pub workspace: Option<Arc<Workspace>>,
     pub memory: Option<Arc<MemoryManager>>,
+    pub conversation_recall: Option<Arc<ConversationRecallManager>>,
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     pub skill_catalog: Option<Arc<crate::skills::catalog::SkillCatalog>>,
@@ -945,6 +947,10 @@ impl Agent {
 
     pub(super) fn memory(&self) -> Option<&Arc<MemoryManager>> {
         self.deps.memory.as_ref()
+    }
+
+    pub(super) fn conversation_recall(&self) -> Option<&Arc<ConversationRecallManager>> {
+        self.deps.conversation_recall.as_ref()
     }
 
     pub(super) fn hooks(&self) -> &Arc<HookRegistry> {
@@ -2571,6 +2577,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
             memory: None,
+            conversation_recall: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,

@@ -2179,6 +2179,7 @@ mod tests {
             Some(Arc::clone(&db)),
             None,
             None,
+            None,
             llm_reloader,
             Arc::new(SessionManager::new()),
             Arc::clone(&primary_llm),

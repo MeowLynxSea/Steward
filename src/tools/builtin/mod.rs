@@ -1,5 +1,6 @@
 //! Built-in tools that come with the agent.
 
+mod conversation_history;
 mod echo;
 pub mod extension_tools;
 mod file;
@@ -17,6 +18,7 @@ mod time;
 mod tool_info;
 
 pub use echo::EchoTool;
+pub use conversation_history::{ReadConversationContextTool, SearchConversationHistoryTool};
 pub use extension_tools::{
     ExtensionInfoTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
     ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,

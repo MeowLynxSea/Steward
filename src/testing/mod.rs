@@ -520,6 +520,7 @@ impl TestHarnessBuilder {
             tools,
             workspace: None,
             memory: None,
+            conversation_recall: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,

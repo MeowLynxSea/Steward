@@ -10,6 +10,12 @@
 4. Register in `ToolRegistry::register_builtin_tools()` in `registry.rs`
 5. Add tests
 
+Conversation history recall tools live in this layer as standard built-ins:
+- `search_conversation_history` searches derived turn-level recall docs and returns matched turns plus adjacent preview turns.
+- `read_conversation_context` reads canonical conversation slices or full threads around a selected anchor.
+
+Both tools are backed by the dedicated conversation recall subsystem, not by `src/memory/`.
+
 ### WASM Tools (Recommended)
 
 WASM tools are the preferred way to add new capabilities. They run in a sandboxed environment with explicit capabilities.

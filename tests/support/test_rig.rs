@@ -771,6 +771,7 @@ impl TestRigBuilder {
             tools: components.tools,
             workspace: components.workspace,
             memory: components.memory,
+            conversation_recall: components.conversation_recall,
             extension_manager: components.extension_manager,
             skill_registry: components.skill_registry,
             skill_catalog: components.skill_catalog,

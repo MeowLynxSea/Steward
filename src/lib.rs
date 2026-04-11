@@ -48,6 +48,7 @@ pub mod channels;
 pub mod cli;
 pub mod config;
 pub mod context;
+pub mod conversation_recall;
 pub mod db;
 pub mod desktop_runtime;
 pub mod document_extraction;

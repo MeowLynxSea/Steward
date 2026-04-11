@@ -358,6 +358,8 @@ impl Database for LibSqlBackend {
         if let Some(dimension) = workspace::resolve_embedding_dimension() {
             self.ensure_vector_index(dimension).await?;
             self.ensure_memory_vector_index(dimension).await?;
+            self.ensure_conversation_recall_vector_index(dimension)
+                .await?;
         }
 
         Ok(())

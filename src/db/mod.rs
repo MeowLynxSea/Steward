@@ -24,6 +24,9 @@ use uuid::Uuid;
 use crate::agent::BrokenTool;
 use crate::agent::routine::{Routine, RoutineRun, RunStatus};
 use crate::context::{ActionRecord, JobContext, JobState};
+use crate::conversation_recall::{
+    ConversationRecallDoc, ConversationRecallHit, ConversationTurnView,
+};
 use crate::error::DatabaseError;
 use crate::error::WorkspaceError;
 use crate::history::{
@@ -342,6 +345,43 @@ pub trait ConversationStore: Send + Sync {
         &self,
         conversation_id: Uuid,
     ) -> Result<Vec<ConversationMessage>, DatabaseError>;
+    async fn list_conversation_turns(
+        &self,
+        conversation_id: Uuid,
+        include_tool_calls: bool,
+    ) -> Result<Vec<ConversationTurnView>, DatabaseError>;
+    async fn upsert_conversation_recall_doc(
+        &self,
+        doc: &ConversationRecallDoc,
+    ) -> Result<(), DatabaseError>;
+    async fn search_conversation_recall(
+        &self,
+        user_id: &str,
+        query: &str,
+        query_embedding: Option<&[f32]>,
+        config: &crate::retrieval::SearchConfig,
+        exclude_conversation_id: Option<Uuid>,
+    ) -> Result<Vec<ConversationRecallHit>, DatabaseError>;
+    async fn backfill_conversation_recall_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<usize, DatabaseError>;
+    async fn list_conversation_recall_docs_without_embeddings(
+        &self,
+        user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationRecallDoc>, DatabaseError>;
+    async fn list_recent_conversation_recall(
+        &self,
+        user_id: &str,
+        limit: usize,
+        exclude_conversation_id: Option<Uuid>,
+    ) -> Result<Vec<ConversationRecallHit>, DatabaseError>;
+    async fn update_conversation_recall_doc_embedding(
+        &self,
+        doc_id: Uuid,
+        embedding: &[f32],
+    ) -> Result<(), DatabaseError>;
     async fn conversation_belongs_to_user(
         &self,
         conversation_id: Uuid,

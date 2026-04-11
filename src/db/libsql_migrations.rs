@@ -65,6 +65,57 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation
     ON conversation_messages(conversation_id);
 
+CREATE TABLE IF NOT EXISTS conversation_recall_docs (
+    doc_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    user_message_id TEXT NOT NULL,
+    assistant_message_id TEXT NOT NULL,
+    turn_timestamp TEXT NOT NULL,
+    user_text TEXT NOT NULL,
+    assistant_text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    preview_text TEXT NOT NULL,
+    embedding BLOB,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_user_updated
+    ON conversation_recall_docs(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_conversation_turn
+    ON conversation_recall_docs(conversation_id, turn_index);
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_thread
+    ON conversation_recall_docs(user_id, thread_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS conversation_recall_docs_fts USING fts5(
+    user_text,
+    assistant_text,
+    search_text,
+    preview_text,
+    content='conversation_recall_docs',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_insert AFTER INSERT ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES (new.rowid, new.user_text, new.assistant_text, new.search_text, new.preview_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_delete AFTER DELETE ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(conversation_recall_docs_fts, rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES ('delete', old.rowid, old.user_text, old.assistant_text, old.search_text, old.preview_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_update AFTER UPDATE ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(conversation_recall_docs_fts, rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES ('delete', old.rowid, old.user_text, old.assistant_text, old.search_text, old.preview_text);
+    INSERT INTO conversation_recall_docs_fts(rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES (new.rowid, new.user_text, new.assistant_text, new.search_text, new.preview_text);
+END;
+
 -- ==================== Agent Jobs ====================
 
 CREATE TABLE IF NOT EXISTS agent_jobs (
@@ -1182,6 +1233,62 @@ FROM memory_routes r
 JOIN memory_nodes n ON n.id = r.node_id
 LEFT JOIN memory_edges e ON e.id = r.edge_id
 WHERE n.kind = 'boot';
+"#,
+    ),
+    (
+        21,
+        "conversation_history_recall",
+        r#"
+CREATE TABLE IF NOT EXISTS conversation_recall_docs (
+    doc_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    channel TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    turn_index INTEGER NOT NULL,
+    user_message_id TEXT NOT NULL,
+    assistant_message_id TEXT NOT NULL,
+    turn_timestamp TEXT NOT NULL,
+    user_text TEXT NOT NULL,
+    assistant_text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    preview_text TEXT NOT NULL,
+    embedding BLOB,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_user_updated
+    ON conversation_recall_docs(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_conversation_turn
+    ON conversation_recall_docs(conversation_id, turn_index);
+CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_thread
+    ON conversation_recall_docs(user_id, thread_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS conversation_recall_docs_fts USING fts5(
+    user_text,
+    assistant_text,
+    search_text,
+    preview_text,
+    content='conversation_recall_docs',
+    content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_insert AFTER INSERT ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES (new.rowid, new.user_text, new.assistant_text, new.search_text, new.preview_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_delete AFTER DELETE ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(conversation_recall_docs_fts, rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES ('delete', old.rowid, old.user_text, old.assistant_text, old.search_text, old.preview_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_update AFTER UPDATE ON conversation_recall_docs BEGIN
+    INSERT INTO conversation_recall_docs_fts(conversation_recall_docs_fts, rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES ('delete', old.rowid, old.user_text, old.assistant_text, old.search_text, old.preview_text);
+    INSERT INTO conversation_recall_docs_fts(rowid, user_text, assistant_text, search_text, preview_text)
+    VALUES (new.rowid, new.user_text, new.assistant_text, new.search_text, new.preview_text);
+END;
 "#,
     ),
 ];

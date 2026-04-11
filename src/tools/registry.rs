@@ -6,6 +6,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::context::ContextManager;
+use crate::conversation_recall::ConversationRecallManager;
 use crate::db::Database;
 use crate::extensions::ExtensionManager;
 use crate::llm::{LlmProvider, ToolDefinition};
@@ -19,11 +20,12 @@ use crate::tools::builtin::{
     AddAliasTool, ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool,
     CreateMemoryTool, DeleteMemoryTool, EchoTool, ExplainMemoryRecallTool, ExtensionInfoTool,
     HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    ManageBootTool, ManageTriggersTool, MoveFileTool, ReadFileTool, ReadMemoryTool,
-    SearchMemoryTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool,
-    TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
-    ToolSearchTool, ToolUpgradeTool, UpdateMemoryTool, WorkspaceReadTool, WorkspaceSearchTool,
-    WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
+    ManageBootTool, ManageTriggersTool, MoveFileTool, ReadConversationContextTool, ReadFileTool,
+    ReadMemoryTool, SearchConversationHistoryTool, SearchMemoryTool, ShellTool, SkillInstallTool,
+    SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
+    ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
+    UpdateMemoryTool, WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool,
+    WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -58,6 +60,8 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "update_memory",
     "delete_memory",
     "add_alias",
+    "search_conversation_history",
+    "read_conversation_context",
     "create_job",
     "list_jobs",
     "job_status",
@@ -379,6 +383,19 @@ impl ToolRegistry {
         self.register_sync(Arc::new(AddAliasTool::new(memory)));
 
         tracing::debug!("Registered 9 graph-native memory tools");
+    }
+
+    /// Register conversation history recall tools backed by the derived recall index.
+    pub fn register_conversation_recall_tools(
+        &self,
+        recall: Arc<ConversationRecallManager>,
+    ) {
+        self.register_sync(Arc::new(SearchConversationHistoryTool::new(Arc::clone(
+            &recall,
+        ))));
+        self.register_sync(Arc::new(ReadConversationContextTool::new(recall)));
+
+        tracing::debug!("Registered 2 conversation recall tools");
     }
 
     /// Register job management tools.

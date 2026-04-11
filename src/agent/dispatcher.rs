@@ -149,12 +149,35 @@ impl Agent {
             None
         };
 
-        let system_prompt = match (workspace_prompt, memory_prompt) {
-            (Some(a), Some(b)) => Some(format!("{a}\n\n{b}")),
-            (Some(a), None) => Some(a),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
+        let conversation_history_prompt = if let Some(recall) = self.conversation_recall() {
+            match recall
+                .build_prompt_context(
+                    &message.user_id,
+                    Some(thread_id),
+                    &message.content,
+                    is_group_chat,
+                )
+                .await
+            {
+                Ok(prompt) if !prompt.is_empty() => Some(prompt),
+                Ok(_) => None,
+                Err(error) => {
+                    tracing::debug!(
+                        "Could not load conversation history prompt context: {}",
+                        error
+                    );
+                    None
+                }
+            }
+        } else {
+            None
         };
+
+        let system_prompt_parts = [workspace_prompt, memory_prompt, conversation_history_prompt]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let system_prompt = (!system_prompt_parts.is_empty()).then(|| system_prompt_parts.join("\n\n"));
 
         // Select and prepare active skills (if skills system is enabled)
         let active_skills = self.select_active_skills(&message.content);
@@ -215,6 +238,7 @@ impl Agent {
         let safety = Arc::clone(self.safety());
         let store = self.store().cloned();
         let channel = message.channel.clone();
+        let conversation_recall = self.conversation_recall().cloned();
         let stream_session = Arc::clone(&session);
         let thinking_tracker = Arc::new(Mutex::new(ThinkingTracker::default()));
         let forwarder_thinking_tracker = Arc::clone(&thinking_tracker);
@@ -279,6 +303,40 @@ impl Agent {
                                         "Failed to persist streamed assistant history"
                                     );
                                 }
+                            }
+                        }
+                        if let Some(ref recall) = conversation_recall {
+                            let turn = {
+                                let sess = stream_session.lock().await;
+                                sess.threads
+                                    .get(&thread_id)
+                                    .and_then(|thread| thread.last_turn())
+                                    .and_then(|turn| {
+                                        turn.user_message_id.map(|user_message_id| {
+                                            crate::conversation_recall::ConversationTurnView {
+                                                conversation_id: thread_id,
+                                                channel: channel.clone(),
+                                                thread_id: thread_id.to_string(),
+                                                turn_index: turn.turn_number,
+                                                user_message_id,
+                                                assistant_message_id: turn.assistant_message_id,
+                                                timestamp: turn.started_at,
+                                                user_text: turn.user_input.clone(),
+                                                assistant_text: turn.response.clone(),
+                                                tool_calls: Vec::new(),
+                                            }
+                                        })
+                                    })
+                            };
+                            if let Some(turn) = turn
+                                && let Err(error) =
+                                    recall.upsert_completed_turn(&user_id, &turn).await
+                            {
+                                tracing::warn!(
+                                    thread_id = %thread_id,
+                                    %error,
+                                    "Failed to upsert streamed conversation recall turn"
+                                );
                             }
                         }
                         if let Some(ref emitter) = emitter {
@@ -390,6 +448,7 @@ impl Agent {
         let mut job_ctx =
             JobContext::with_user(&message.user_id, "chat", "Interactive chat session")
                 .with_requester_id(&message.sender_id);
+        job_ctx.conversation_id = Some(thread_id);
         job_ctx.http_interceptor = self.deps.http_interceptor.clone();
         job_ctx.user_timezone = user_tz.name().to_string();
         job_ctx.metadata = crate::agent::agent_loop::chat_tool_execution_metadata(message);
@@ -1852,6 +1911,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
             memory: None,
+            conversation_recall: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -2738,6 +2798,7 @@ mod tests {
             tools: Arc::new(ToolRegistry::new()),
             workspace: None,
             memory: None,
+            conversation_recall: None,
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
@@ -2870,6 +2931,7 @@ mod tests {
                 },
                 workspace: None,
                 memory: None,
+                conversation_recall: None,
                 extension_manager: None,
                 skill_registry: None,
                 skill_catalog: None,
