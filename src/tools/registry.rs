@@ -386,10 +386,7 @@ impl ToolRegistry {
     }
 
     /// Register conversation history recall tools backed by the derived recall index.
-    pub fn register_conversation_recall_tools(
-        &self,
-        recall: Arc<ConversationRecallManager>,
-    ) {
+    pub fn register_conversation_recall_tools(&self, recall: Arc<ConversationRecallManager>) {
         self.register_sync(Arc::new(SearchConversationHistoryTool::new(Arc::clone(
             &recall,
         ))));

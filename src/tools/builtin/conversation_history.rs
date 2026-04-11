@@ -13,7 +13,9 @@ fn optional_usize(params: &serde_json::Value, key: &str) -> Result<Option<usize>
         Some(value) => value
             .as_u64()
             .map(|number| Some(number as usize))
-            .ok_or_else(|| ToolError::InvalidParameters(format!("'{key}' must be a positive integer"))),
+            .ok_or_else(|| {
+                ToolError::InvalidParameters(format!("'{key}' must be a positive integer"))
+            }),
     }
 }
 
@@ -172,10 +174,14 @@ impl Tool for ReadConversationContextTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
-        let conversation_id = Uuid::parse_str(require_str(&params, "conversation_id")?)
-            .map_err(|_| ToolError::InvalidParameters("invalid 'conversation_id' UUID".to_string()))?;
+        let conversation_id =
+            Uuid::parse_str(require_str(&params, "conversation_id")?).map_err(|_| {
+                ToolError::InvalidParameters("invalid 'conversation_id' UUID".to_string())
+            })?;
         let anchor_turn_index = optional_usize(&params, "anchor_turn_index")?;
-        let before_turns = optional_usize(&params, "before_turns")?.unwrap_or(2).min(20);
+        let before_turns = optional_usize(&params, "before_turns")?
+            .unwrap_or(2)
+            .min(20);
         let after_turns = optional_usize(&params, "after_turns")?.unwrap_or(2).min(20);
         let full_thread = params
             .get("full_thread")

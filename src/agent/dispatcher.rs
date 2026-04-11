@@ -177,7 +177,8 @@ impl Agent {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
-        let system_prompt = (!system_prompt_parts.is_empty()).then(|| system_prompt_parts.join("\n\n"));
+        let system_prompt =
+            (!system_prompt_parts.is_empty()).then(|| system_prompt_parts.join("\n\n"));
 
         // Select and prepare active skills (if skills system is enabled)
         let active_skills = self.select_active_skills(&message.content);

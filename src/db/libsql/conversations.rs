@@ -5,12 +5,9 @@ use chrono::{DateTime, Utc};
 use libsql::params;
 use uuid::Uuid;
 
-use super::{
-    LibSqlBackend, fmt_ts, get_i64, get_json, get_opt_text, get_text, get_ts, opt_text,
-};
+use super::{LibSqlBackend, fmt_ts, get_i64, get_json, get_opt_text, get_text, get_ts, opt_text};
 use crate::conversation_recall::{
-    ConversationRecallDoc, ConversationRecallHit, ConversationToolCallSummary,
-    ConversationTurnView,
+    ConversationRecallDoc, ConversationRecallHit, ConversationToolCallSummary, ConversationTurnView,
 };
 use crate::db::ConversationStore;
 use crate::error::DatabaseError;
@@ -79,11 +76,15 @@ fn parse_tool_call_json(value: &serde_json::Value) -> ConversationToolCallSummar
     }
 }
 
-fn parse_tool_call_summary(message: &ConversationMessage) -> Option<Vec<ConversationToolCallSummary>> {
+fn parse_tool_call_summary(
+    message: &ConversationMessage,
+) -> Option<Vec<ConversationToolCallSummary>> {
     let value = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
     match value {
         serde_json::Value::Array(items) => Some(items.iter().map(parse_tool_call_json).collect()),
-        serde_json::Value::Object(ref obj) if obj.get("calls").and_then(|v| v.as_array()).is_some() => {
+        serde_json::Value::Object(ref obj)
+            if obj.get("calls").and_then(|v| v.as_array()).is_some() =>
+        {
             let calls = obj
                 .get("calls")
                 .and_then(|v| v.as_array())
@@ -246,7 +247,10 @@ impl LibSqlBackend {
         ))
     }
 
-    fn turn_to_recall_doc(user_id: &str, turn: &ConversationTurnView) -> Option<ConversationRecallDoc> {
+    fn turn_to_recall_doc(
+        user_id: &str,
+        turn: &ConversationTurnView,
+    ) -> Option<ConversationRecallDoc> {
         let assistant_message_id = turn.assistant_message_id?;
         let assistant_text = turn.assistant_text.clone()?;
         let search_text = format!("User: {}\nAssistant: {}", turn.user_text, assistant_text);
@@ -289,7 +293,12 @@ impl LibSqlBackend {
         }
     }
 
-    fn row_to_recall_hit(row: &libsql::Row, score: f32, rank: u32, from_vector: bool) -> ConversationRecallHit {
+    fn row_to_recall_hit(
+        row: &libsql::Row,
+        score: f32,
+        rank: u32,
+        from_vector: bool,
+    ) -> ConversationRecallHit {
         ConversationRecallHit {
             doc_id: get_text(row, 0).parse().unwrap_or_default(),
             conversation_id: get_text(row, 2).parse().unwrap_or_default(),
@@ -1102,7 +1111,9 @@ impl ConversationStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(format!("failed to upsert conversation recall doc: {e}")))?;
+        .map_err(|e| {
+            DatabaseError::Query(format!("failed to upsert conversation recall doc: {e}"))
+        })?;
         Ok(())
     }
 
@@ -1147,9 +1158,10 @@ impl ConversationStore for LibSqlBackend {
                     &sql,
                     params![user_id, exclude_id.clone(), match_query, pre_limit],
                 )
-                    .await
+                .await
             } else {
-                conn.query(&sql, params![user_id, match_query, pre_limit]).await
+                conn.query(&sql, params![user_id, match_query, pre_limit])
+                    .await
             }
             .map_err(|e| DatabaseError::Query(format!("conversation recall FTS failed: {e}")))?;
 
@@ -1163,7 +1175,12 @@ impl ConversationStore for LibSqlBackend {
                 let normalized = 1.0 / (1.0 + raw_score.abs());
                 results.push(RankedItem {
                     item_id: get_text(&row, 0).parse().unwrap_or_default(),
-                    payload: Self::row_to_recall_hit(&row, normalized, results.len() as u32 + 1, false),
+                    payload: Self::row_to_recall_hit(
+                        &row,
+                        normalized,
+                        results.len() as u32 + 1,
+                        false,
+                    ),
                     rank: results.len() as u32 + 1,
                 });
             }
@@ -1199,42 +1216,44 @@ impl ConversationStore for LibSqlBackend {
                 )
             };
 
-            let vector_attempt: Result<Vec<RankedItem<ConversationRecallHit>>, DatabaseError> = async {
-                let mut rows = if let Some(ref exclude_id) = exclude {
-                    conn.query(
-                        &sql,
-                        params![vector_json, pre_limit, user_id, exclude_id.clone()],
-                    )
-                    .await
-                } else {
-                    conn.query(&sql, params![vector_json, pre_limit, user_id]).await
-                }
-                .map_err(|e| {
-                    DatabaseError::Query(format!("conversation recall vector query failed: {e}"))
-                })?;
-
-                let mut results = Vec::new();
-                while let Some(row) = rows
-                    .next()
-                    .await
+            let vector_attempt: Result<Vec<RankedItem<ConversationRecallHit>>, DatabaseError> =
+                async {
+                    let mut rows = if let Some(ref exclude_id) = exclude {
+                        conn.query(
+                            &sql,
+                            params![vector_json, pre_limit, user_id, exclude_id.clone()],
+                        )
+                        .await
+                    } else {
+                        conn.query(&sql, params![vector_json, pre_limit, user_id])
+                            .await
+                    }
                     .map_err(|e| {
-                        DatabaseError::Query(format!("conversation recall vector row fetch failed: {e}"))
-                    })?
-                {
-                    results.push(RankedItem {
-                        item_id: get_text(&row, 0).parse().unwrap_or_default(),
-                        payload: Self::row_to_recall_hit(
-                            &row,
-                            1.0 / (results.len() as f32 + 1.0),
-                            results.len() as u32 + 1,
-                            true,
-                        ),
-                        rank: results.len() as u32 + 1,
-                    });
+                        DatabaseError::Query(format!(
+                            "conversation recall vector query failed: {e}"
+                        ))
+                    })?;
+
+                    let mut results = Vec::new();
+                    while let Some(row) = rows.next().await.map_err(|e| {
+                        DatabaseError::Query(format!(
+                            "conversation recall vector row fetch failed: {e}"
+                        ))
+                    })? {
+                        results.push(RankedItem {
+                            item_id: get_text(&row, 0).parse().unwrap_or_default(),
+                            payload: Self::row_to_recall_hit(
+                                &row,
+                                1.0 / (results.len() as f32 + 1.0),
+                                results.len() as u32 + 1,
+                                true,
+                            ),
+                            rank: results.len() as u32 + 1,
+                        });
+                    }
+                    Ok(results)
                 }
-                Ok(results)
-            }
-            .await;
+                .await;
 
             match vector_attempt {
                 Ok(results) => results,
@@ -1281,7 +1300,10 @@ impl ConversationStore for LibSqlBackend {
             .map_err(|e| DatabaseError::Query(e.to_string()))?
         {
             let conversation_id = get_text(&row, 0).parse().unwrap_or_default();
-            for turn in self.build_turns_for_conversation(conversation_id, false).await? {
+            for turn in self
+                .build_turns_for_conversation(conversation_id, false)
+                .await?
+            {
                 if let Some(doc) = Self::turn_to_recall_doc(user_id, &turn) {
                     self.upsert_conversation_recall_doc(&doc).await?;
                     upserted += 1;
@@ -1355,7 +1377,11 @@ impl ConversationStore for LibSqlBackend {
         } else {
             conn.query(&sql, params![user_id, limit as i64]).await
         }
-        .map_err(|e| DatabaseError::Query(format!("failed to list recent conversation recall docs: {e}")))?;
+        .map_err(|e| {
+            DatabaseError::Query(format!(
+                "failed to list recent conversation recall docs: {e}"
+            ))
+        })?;
 
         let mut hits = Vec::new();
         while let Some(row) = rows
@@ -1648,7 +1674,11 @@ mod tests {
             .await
             .expect("tool call");
         backend
-            .add_conversation_message(conversation_id, "assistant", "The release was on 2026-03-01.")
+            .add_conversation_message(
+                conversation_id,
+                "assistant",
+                "The release was on 2026-03-01.",
+            )
             .await
             .expect("assistant");
         backend
@@ -1779,7 +1809,10 @@ mod tests {
             .expect("search should fall back to fts");
 
         assert!(!hits.is_empty());
-        assert!(hits.iter().any(|hit| hit.preview_text.contains("Launch readiness")));
+        assert!(
+            hits.iter()
+                .any(|hit| hit.preview_text.contains("Launch readiness"))
+        );
     }
 
     #[tokio::test]
@@ -1802,7 +1835,11 @@ mod tests {
             .await
             .expect("user");
         let assistant_message_id = backend
-            .add_conversation_message(conversation_id, "assistant", "We discussed launch readiness.")
+            .add_conversation_message(
+                conversation_id,
+                "assistant",
+                "We discussed launch readiness.",
+            )
             .await
             .expect("assistant");
 
@@ -1820,8 +1857,9 @@ mod tests {
             assistant_text: "We discussed launch readiness.".to_string(),
             search_text: "User: Where did we leave off?\nAssistant: We discussed launch readiness."
                 .to_string(),
-            preview_text: "User: Where did we leave off?\nAssistant: We discussed launch readiness."
-                .to_string(),
+            preview_text:
+                "User: Where did we leave off?\nAssistant: We discussed launch readiness."
+                    .to_string(),
             embedding: Some(vec![0.1, 0.2, 0.3]),
             updated_at: Utc::now(),
         };

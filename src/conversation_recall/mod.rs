@@ -152,7 +152,10 @@ impl ConversationRecallManager {
     }
 
     pub async fn backfill_for_user(&self, user_id: &str) -> Result<usize, DatabaseError> {
-        let count = self.db.backfill_conversation_recall_for_user(user_id).await?;
+        let count = self
+            .db
+            .backfill_conversation_recall_for_user(user_id)
+            .await?;
         if self.current_embeddings().is_some() {
             self.backfill_embeddings(user_id, self.config.pre_fusion_limit.max(100))
                 .await?;
@@ -184,7 +187,9 @@ impl ConversationRecallManager {
                 .map(|doc| doc.search_text.clone())
                 .collect::<Vec<_>>();
             let embeddings = provider.embed_batch(&texts).await.map_err(|error| {
-                DatabaseError::Query(format!("conversation recall embedding backfill failed: {error}"))
+                DatabaseError::Query(format!(
+                    "conversation recall embedding backfill failed: {error}"
+                ))
             })?;
 
             for (doc, embedding) in docs.iter().zip(embeddings) {
@@ -413,7 +418,8 @@ impl ConversationRecallManager {
             });
         }
 
-        let anchor = anchor_turn_index.unwrap_or_else(|| turns.last().map(|t| t.turn_index).unwrap_or(0));
+        let anchor =
+            anchor_turn_index.unwrap_or_else(|| turns.last().map(|t| t.turn_index).unwrap_or(0));
         let anchor_pos = turns
             .iter()
             .position(|turn| turn.turn_index == anchor)
@@ -436,9 +442,7 @@ impl ConversationRecallManager {
         let now = Utc::now();
 
         for hit in hits.iter().cloned() {
-            let age_days = now
-                .signed_duration_since(hit.turn_timestamp)
-                .num_days();
+            let age_days = now.signed_duration_since(hit.turn_timestamp).num_days();
             if age_days <= self.config.recent_bucket_days {
                 recent.push(hit);
             } else if age_days <= self.config.mid_bucket_days {
@@ -470,11 +474,7 @@ impl ConversationRecallManager {
             self.config.far_base_quota,
         );
 
-        let mut remaining = recent
-            .into_iter()
-            .chain(mid)
-            .chain(far)
-            .collect::<Vec<_>>();
+        let mut remaining = recent.into_iter().chain(mid).chain(far).collect::<Vec<_>>();
         remaining.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
@@ -507,9 +507,7 @@ impl ConversationRecallManager {
             {
                 continue;
             }
-            let age_days = now
-                .signed_duration_since(hit.turn_timestamp)
-                .num_days();
+            let age_days = now.signed_duration_since(hit.turn_timestamp).num_days();
             if age_days <= self.config.recent_bucket_days {
                 high_conf_recent.push(hit);
             } else if age_days <= self.config.mid_bucket_days {
@@ -521,7 +519,10 @@ impl ConversationRecallManager {
 
         let recent_selected = selected
             .iter()
-            .filter(|hit| now.signed_duration_since(hit.turn_timestamp).num_days() <= self.config.recent_bucket_days)
+            .filter(|hit| {
+                now.signed_duration_since(hit.turn_timestamp).num_days()
+                    <= self.config.recent_bucket_days
+            })
             .count();
         let mid_selected = selected
             .iter()
@@ -530,7 +531,9 @@ impl ConversationRecallManager {
                 age_days > self.config.recent_bucket_days && age_days <= self.config.mid_bucket_days
             })
             .count();
-        let far_selected = selected.len().saturating_sub(recent_selected + mid_selected);
+        let far_selected = selected
+            .len()
+            .saturating_sub(recent_selected + mid_selected);
 
         Self::take_bucket(
             &mut selected,
@@ -606,7 +609,10 @@ impl ConversationRecallManager {
                 selected.push(hit);
             }
         }
-        let taken_ids = selected.iter().map(|hit| hit.doc_id).collect::<HashSet<_>>();
+        let taken_ids = selected
+            .iter()
+            .map(|hit| hit.doc_id)
+            .collect::<HashSet<_>>();
         bucket.retain(|hit| !taken_ids.contains(&hit.doc_id));
     }
 
@@ -660,9 +666,9 @@ impl ConversationRecallManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Duration;
     #[cfg(feature = "libsql")]
     use crate::db::{ConversationStore, Database};
+    use chrono::Duration;
 
     #[cfg(feature = "libsql")]
     async fn test_manager() -> ConversationRecallManager {
@@ -753,7 +759,10 @@ mod tests {
         ];
 
         let selection = manager.select_for_prompt(&hits);
-        assert_eq!(selection.entries.len(), manager.config.auto_prompt_base_limit);
+        assert_eq!(
+            selection.entries.len(),
+            manager.config.auto_prompt_base_limit
+        );
     }
 
     #[cfg(feature = "libsql")]
@@ -801,9 +810,15 @@ mod tests {
             .expect("search with fallback");
 
         assert!(!results.is_empty());
-        assert!(results.iter().all(|(hit, _)| hit.conversation_id != current));
-        assert!(results
-            .iter()
-            .any(|(hit, _)| hit.preview_text.contains("论文提纲")));
+        assert!(
+            results
+                .iter()
+                .all(|(hit, _)| hit.conversation_id != current)
+        );
+        assert!(
+            results
+                .iter()
+                .any(|(hit, _)| hit.preview_text.contains("论文提纲"))
+        );
     }
 }

@@ -77,8 +77,7 @@ impl ConversationRecallConfig {
             FusionStrategy::WeightedScore => (0.3f32, 0.7f32),
         };
         let fts_weight = parse_optional_env("CONVERSATION_RECALL_FTS_WEIGHT", default_fts)?;
-        let vector_weight =
-            parse_optional_env("CONVERSATION_RECALL_VECTOR_WEIGHT", default_vec)?;
+        let vector_weight = parse_optional_env("CONVERSATION_RECALL_VECTOR_WEIGHT", default_vec)?;
 
         if !fts_weight.is_finite() || fts_weight < 0.0 {
             return Err(ConfigError::InvalidValue {
@@ -113,22 +112,13 @@ impl ConversationRecallConfig {
                 14i64,
             )?,
             mid_bucket_days: parse_optional_env("CONVERSATION_RECALL_MID_BUCKET_DAYS", 90i64)?,
-            recent_base_quota: parse_optional_env(
-                "CONVERSATION_RECALL_RECENT_BASE_QUOTA",
-                2usize,
-            )?,
+            recent_base_quota: parse_optional_env("CONVERSATION_RECALL_RECENT_BASE_QUOTA", 2usize)?,
             mid_base_quota: parse_optional_env("CONVERSATION_RECALL_MID_BASE_QUOTA", 1usize)?,
             far_base_quota: parse_optional_env("CONVERSATION_RECALL_FAR_BASE_QUOTA", 1usize)?,
-            recent_max_quota: parse_optional_env(
-                "CONVERSATION_RECALL_RECENT_MAX_QUOTA",
-                3usize,
-            )?,
+            recent_max_quota: parse_optional_env("CONVERSATION_RECALL_RECENT_MAX_QUOTA", 3usize)?,
             mid_max_quota: parse_optional_env("CONVERSATION_RECALL_MID_MAX_QUOTA", 2usize)?,
             far_max_quota: parse_optional_env("CONVERSATION_RECALL_FAR_MAX_QUOTA", 2usize)?,
-            expand_threshold: parse_optional_env(
-                "CONVERSATION_RECALL_EXPAND_THRESHOLD",
-                0.75f32,
-            )?,
+            expand_threshold: parse_optional_env("CONVERSATION_RECALL_EXPAND_THRESHOLD", 0.75f32)?,
             explicit_default_limit: parse_optional_env(
                 "CONVERSATION_RECALL_EXPLICIT_DEFAULT_LIMIT",
                 8usize,
