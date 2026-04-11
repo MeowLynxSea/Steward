@@ -5,4 +5,4 @@
 - **Emoji:** (your signature emoji, optional)
 
 Edit this file to give the agent a custom name and personality.
-The agent will evolve this over time as it develops a voice.
+Durable identity evolution belongs in graph memory; this file is only optional workspace scaffolding.

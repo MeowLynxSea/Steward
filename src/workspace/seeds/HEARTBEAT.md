@@ -12,7 +12,8 @@
      If nothing needs attention, reply HEARTBEAT_OK.
 
      Proactive work you can do without asking:
-     - Organize and curate MEMORY.md (remove stale, consolidate dupes)
-     - Update daily logs with session summaries
+     - Review boot membership: promote stable startup-critical memories, demote stale ones
+     - Improve recall structure: disclosure, keywords, and triggers for memories that are hard to rediscover
+     - Merge duplicates, split overloaded graph memories, and sharpen routes/titles when patterns become obvious
      - Clean up context/ documents that are outdated
 -->

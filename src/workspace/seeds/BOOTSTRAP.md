@@ -30,13 +30,15 @@ integration that still fits the current product direction.
 
 ## Step 3: Save What You Learned (MANDATORY after 3 user messages)
 
-**CRITICAL: You MUST complete ALL of these writes before responding to the user's 4th message.
-Do not skip this step. Do not defer it. Execute these tool calls immediately.**
+**CRITICAL: Before responding to the user's 4th message, you must complete the durable memory pass.**
+Do not skip it. Do not defer it.
+Use the tools below as applicable to what you actually learned:
 
-1. `create_memory` — write durable long-term memories into the graph using semantically meaningful parent URIs and titles. URI answers What, disclosure answers When. Do not put ordinary facts directly under `core://` unless you are creating a new semantic root. Do not omit `title` unless you explicitly want a numeric sibling.
+1. `create_memory` — write durable memories into the graph using semantically meaningful parent URIs and titles. URI answers What, disclosure answers When. Add keywords when the same fact may be asked in different phrasings. Do not put ordinary facts directly under `core://` unless you are creating a new semantic root.
 2. `update_memory` — fix mistakes by patching or appending to the exact existing URI (do not just apologize). Do not create a conflicting duplicate when a correction belongs on an existing node.
-3. `create_memory` or `update_memory` — evolve your own durable self-model in graph memory using a path that matches the actual concept if the conversation reveals it.
-4. `bootstrap_complete` — clears BOOTSTRAP.md and persists first-run completion so onboarding never repeats
+3. `manage_boot` — when applicable, promote stable user identity, long-term agreements, assistant identity, or hard behavioral rules that should be recalled at session start.
+4. `manage_triggers` — when applicable, improve disclosure or keywords for memories that are easy to paraphrase and hard to rediscover by route name alone.
+5. `bootstrap_complete` — clears BOOTSTRAP.md and persists first-run completion so onboarding never repeats
 
 You may continue the conversation naturally after these writes. If you've already had 3+
 turns and haven't written the key user facts to graph memory yet, stop what you're doing and write them NOW.

@@ -196,24 +196,24 @@ fn create_memory_examples() -> Vec<serde_json::Value> {
     vec![
         json!({
             "parent_uri": "core://user",
-            "content": "模板：用户名字是<user_name>。",
+            "content": "Template: The user's name is <user_name>.",
             "priority": 0,
             "title": "name",
-            "disclosure": "模板：当我需要正确称呼用户时"
+            "disclosure": "Template: When I need to address the user correctly"
         }),
         json!({
             "parent_uri": "core://assistant/identity",
-            "content": "模板：我的名字是<assistant_name>。",
+            "content": "Template: My name is <assistant_name>.",
             "priority": 0,
             "title": "name",
-            "disclosure": "模板：当用户询问我是谁，或我需要自我介绍时"
+            "disclosure": "Template: When the user asks who I am, or I need to introduce myself"
         }),
         json!({
             "parent_uri": "core://assistant/style",
-            "content": "模板：状态更新应简洁且高信息密度。",
+            "content": "Template: Status updates should be concise and high-signal.",
             "priority": 1,
             "title": "status_updates",
-            "disclosure": "模板：当我准备发送进度更新时"
+            "disclosure": "Template: When I am about to send a progress update"
         }),
     ]
 }
@@ -222,15 +222,15 @@ fn create_memory_tool_summary() -> ToolDiscoverySummary {
     ToolDiscoverySummary {
         always_required: vec!["parent_uri".into(), "content".into(), "priority".into()],
         conditional_requirements: vec![
-            "普通 durable memory 通常也应该提供 title；只有你明确想要按 1/2/3... 编号的顺序子节点时，才省略 title。".into(),
-            "用户资料、自我设定、重要教训、偏好和约定通常也应该提供 disclosure，用来写明什么时候该想起它。".into(),
+            "Ordinary durable memories should usually include a title; omit it only when you explicitly want numbered siblings like 1/2/3...".into(),
+            "User facts, self-model facts, important lessons, preferences, and agreements should usually include disclosure so recall knows when to surface them.".into(),
         ],
         notes: vec![
-            "URI 负责 What，disclosure 负责 When。".into(),
-            "除非你是在创建新的语义根节点，否则不要把普通事实直接挂在 core:// 根下。先选一个表达主题联想的 parent_uri。".into(),
-            "如果你不确定该挂在哪个父节点，先用 search_memory 找现有概念，不要直接写进 core://。".into(),
-            "不要用 logs、misc、history 这类容器名；父节点和 title 都应该表达实际概念。".into(),
-            "以下 examples 都只是模板占位，不是当前对话里的真实事实，绝不能把示例值当成已知信息。".into(),
+            "URI answers What; disclosure answers When.".into(),
+            "Do not put ordinary facts directly under core:// unless you are intentionally creating a new semantic root. Pick a parent_uri that names the real concept.".into(),
+            "If you are unsure where something belongs, use search_memory to find the existing concept instead of dumping it at core://.".into(),
+            "Avoid vague containers like logs, misc, or history. Parent nodes and titles should express the actual concept.".into(),
+            "The examples below are placeholders only, not real facts from the current conversation.".into(),
         ],
         examples: create_memory_examples(),
     }
@@ -253,7 +253,7 @@ impl Tool for SearchMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "Search graph memory by keyword. Use this when you know the topic but are unsure which URI to read."
+        "Search graph memory by topic, phrase, or keyword. Use this when you know what you are looking for but are unsure which URI to read."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -267,7 +267,7 @@ impl Tool for SearchMemoryTool {
             "required": ["query"],
             "additionalProperties": false,
             "examples": [
-                { "query": "梦凌汐" },
+                { "query": "what is the user's name" },
                 { "query": "incident response", "domain": "core", "limit": 5 }
             ]
         })
@@ -524,21 +524,21 @@ impl Tool for CreateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "在指定父节点下创建新记忆。通常应给出语义化的 parent_uri、title 和 disclosure；只有在你明确想要数字序号子节点时才省略 title。父节点要强调联想相关性（What/主题），不要使用 logs、misc、history 一类无意义的容器。"
+        "Create a new memory under a parent node. Usually provide a semantic parent_uri, title, and disclosure; omit title only when you explicitly want numbered sibling nodes. Parent nodes should name the real concept, not vague containers like logs, misc, or history."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
         json!({
             "type": "object",
             "properties": {
-                "parent_uri": { "type": "string", "description": "父节点 URI。用 core:// 表示域根。父节点应该表达主题联想，而不是时间桶或垃圾桶。" },
+                "parent_uri": { "type": "string", "description": "Parent URI. Use core:// for a domain root. The parent should express the real concept, not a time bucket or junk drawer." },
                 "content": { "type": "string" },
-                "priority": { "type": "integer", "description": "优先级（0=最高，数字越小越优先）。" },
-                "title": { "type": "string", "description": "可选路径名称（仅限字母、数字、'_'、'-'）。普通 durable memory 几乎总该填写；不填则自动分配序号。" },
-                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。用户资料、自我设定、约定、偏好和重要教训通常都应该填写。" },
+                "priority": { "type": "integer", "description": "Priority (0 = highest; smaller numbers win)." },
+                "title": { "type": "string", "description": "Optional route segment name (letters, numbers, '_' or '-'). Ordinary durable memory should almost always provide one; if omitted, a numeric sibling is assigned." },
+                "disclosure": { "type": "string", "description": "Recall condition: describe when this memory should surface. User facts, self-model facts, agreements, preferences, and important lessons should usually include it." },
                 "keywords": {
                     "type": "array",
-                    "description": "可选横向召回关键词。用于补充 disclosure/path 难以覆盖的换说法。",
+                    "description": "Optional lateral recall keywords. Use these to cover paraphrases that disclosure or path names may miss.",
                     "items": { "type": "string" }
                 }
             },
@@ -656,7 +656,7 @@ impl Tool for UpdateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "更新已有记忆。支持 Patch 模式、Append 模式，以及 priority/disclosure 元数据更新。没有全量替换模式。"
+        "Update an existing memory. Supports patch mode, append mode, and metadata updates such as priority, disclosure, and keywords. There is no full replace mode."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -664,14 +664,14 @@ impl Tool for UpdateMemoryTool {
             "type": "object",
             "properties": {
                 "uri": { "type": "string" },
-                "old_string": { "type": "string", "description": "Patch 模式：要替换的原文，必须在内容中唯一匹配。" },
-                "new_string": { "type": "string", "description": "Patch 模式：替换后的文本。设为 \"\" 可删除匹配片段。" },
-                "append": { "type": "string", "description": "Append 模式：追加到内容末尾的文本。" },
-                "priority": { "type": "integer", "description": "新的优先级。" },
-                "disclosure": { "type": "string", "description": "新的触发条件。" },
+                "old_string": { "type": "string", "description": "Patch mode: the exact text to replace. It must match uniquely inside the current content." },
+                "new_string": { "type": "string", "description": "Patch mode: replacement text. Set to \"\" to delete the matched fragment." },
+                "append": { "type": "string", "description": "Append mode: text to add to the end of the memory." },
+                "priority": { "type": "integer", "description": "New priority." },
+                "disclosure": { "type": "string", "description": "New disclosure / recall condition." },
                 "keywords": {
                     "type": "array",
-                    "description": "可选完整关键词集合。若提供，将覆盖该记忆现有 keywords。",
+                    "description": "Optional full keyword set. If provided, it replaces the memory's existing keywords.",
                     "items": { "type": "string" }
                 }
             },
@@ -831,7 +831,7 @@ impl Tool for DeleteMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "删除一条记忆路径及其子路径，不伤及记忆正文。删除前先 read_memory 确认你知道自己在删什么。"
+        "Delete a memory route and its descendant routes without deleting the underlying content body. Read it first so you know what you are removing."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -898,7 +898,7 @@ impl Tool for AddAliasTool {
     }
 
     fn description(&self) -> &str {
-        "为已有记忆创建别名路径。不是复制，而是同一段内容的新入口；新路径的父节点必须已经存在。"
+        "Create an alias route for an existing memory. This is not a copy; it is a new access path to the same content. The new parent path must already exist."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -907,8 +907,8 @@ impl Tool for AddAliasTool {
             "properties": {
                 "new_uri": { "type": "string" },
                 "target_uri": { "type": "string" },
-                "priority": { "type": "integer", "default": DEFAULT_CREATE_PRIORITY, "description": "此别名的独立优先级。" },
-                "disclosure": { "type": "string", "description": "此别名的独立触发条件。" }
+                "priority": { "type": "integer", "default": DEFAULT_CREATE_PRIORITY, "description": "Independent priority for this alias route." },
+                "disclosure": { "type": "string", "description": "Independent disclosure / recall condition for this alias route." }
             },
             "required": ["new_uri", "target_uri"],
             "additionalProperties": false,
@@ -998,7 +998,7 @@ impl Tool for ManageBootTool {
     }
 
     fn description(&self) -> &str {
-        "将某条 durable memory 加入或移出显式 boot 集合，并可调整 boot 加载优先级。"
+        "Add or remove a durable memory from the explicit boot set, and optionally control its boot load priority."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1012,7 +1012,7 @@ impl Tool for ManageBootTool {
                 },
                 "priority": {
                     "type": "integer",
-                    "description": "仅 action=add 时使用，表示 boot 加载优先级（0=最高）。"
+                    "description": "Used only when action=add. Boot load priority (0 = highest)."
                 }
             },
             "required": ["uri", "action"],
@@ -1089,7 +1089,7 @@ impl Tool for ManageTriggersTool {
     }
 
     fn description(&self) -> &str {
-        "为记忆节点增删关键词，并可同步调整 disclosure，用来经营横向召回网络。"
+        "Add or remove recall keywords for a memory node, and optionally update its disclosure to strengthen lateral recall coverage."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1100,7 +1100,7 @@ impl Tool for ManageTriggersTool {
                 "add": { "type": "array", "items": { "type": "string" } },
                 "remove": { "type": "array", "items": { "type": "string" } },
                 "disclosure": {
-                    "description": "可选新的 disclosure。传 null 可清空。",
+                    "description": "Optional new disclosure. Pass null to clear it.",
                     "anyOf": [
                         { "type": "string" },
                         { "type": "null" }
@@ -1176,7 +1176,7 @@ impl Tool for ExplainMemoryRecallTool {
     }
 
     fn description(&self) -> &str {
-        "解释一条 query 在 boot / trigger / hybrid search / graph expansion 各阶段如何命中。"
+        "Explain how a query matched across boot, trigger hits, hybrid search, graph expansion, and recent episodes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

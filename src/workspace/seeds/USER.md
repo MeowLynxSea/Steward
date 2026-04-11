@@ -4,5 +4,5 @@
 - **Timezone:**
 - **Preferences:**
 
-The agent will fill this in as it learns about you.
-You can also edit this directly to provide context upfront.
+Optional static workspace context for the user to fill in directly.
+Durable runtime user facts belong in graph memory, not here.

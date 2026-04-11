@@ -1214,13 +1214,13 @@ impl MemoryManager {
                 // `system://boot` is a virtual entry point; the boot node itself
                 // lives at `system://boot/memory_protocol` as a normal route.
                 Some("system://"),
-                "记忆系统 (The Native Memory System)",
+                "Memory System (The Native Memory System)",
                 MemoryNodeKind::Boot,
                 protocol,
                 "system",
                 "boot/memory_protocol",
                 0,
-                Some("当这是一个新会话开始时，或我感觉自己不再像自己时".to_string()),
+                Some("When this is a new session, or I feel unlike myself".to_string()),
                 MemoryVisibility::Session,
                 vec![
                     "memory".to_string(),
