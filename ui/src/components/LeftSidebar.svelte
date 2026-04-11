@@ -1,5 +1,6 @@
 <script lang="ts">
   import { List, LoaderCircle, Plus, Search, Settings, Trash2, Zap } from "lucide-svelte";
+  import StewardMark from "./brand/StewardMark.svelte";
   import type { SessionSummary } from "../lib/types";
 
   interface Props {
@@ -46,9 +47,7 @@
   {:else}
     <div class="sidebar-brand">
       <div class="brand-icon">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <path d="M12 2L2 19h20L12 2z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-        </svg>
+        <StewardMark size={20} />
       </div>
       <span class="brand-name">Steward</span>
     </div>
@@ -177,12 +176,10 @@
   .brand-icon {
     width: 32px;
     height: 32px;
-    border-radius: 10px;
-    background: var(--accent-primary);
-    color: var(--text-on-dark);
     display: flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
   }
 
   .brand-name {

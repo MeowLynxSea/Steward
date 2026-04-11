@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <defs>
+    <linearGradient id="facet-top" x1="360" y1="236" x2="620" y2="518" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8EFDF" />
+      <stop offset="1" stop-color="#E2D3BF" />
+    </linearGradient>
+    <linearGradient id="facet-right" x1="504" y1="320" x2="776" y2="684" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A4ACB8" />
+      <stop offset="1" stop-color="#7B848F" />
+    </linearGradient>
+    <linearGradient id="facet-bottom" x1="332" y1="476" x2="696" y2="792" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D2A051" />
+      <stop offset="1" stop-color="#B8802F" />
+    </linearGradient>
+    <linearGradient id="facet-left" x1="236" y1="360" x2="518" y2="620" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#E4CC9A" />
+      <stop offset="1" stop-color="#C7A56A" />
+    </linearGradient>
+  </defs>
+
+  <polygon points="512,214 742,444 512,558 282,444" fill="url(#facet-top)" />
+  <polygon points="810,512 580,742 466,512 580,282" fill="url(#facet-right)" />
+  <polygon points="512,810 282,580 512,466 742,580" fill="url(#facet-bottom)" />
+  <polygon points="214,512 444,282 558,512 444,742" fill="url(#facet-left)" />
+  <polygon points="512,408 616,512 512,616 408,512" fill="#171A20" />
+</svg>
