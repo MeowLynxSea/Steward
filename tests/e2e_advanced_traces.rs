@@ -1,6 +1,6 @@
 //! Advanced E2E trace tests that exercise deeper agent behaviors:
-//! multi-turn memory, tool error recovery, long chains, workspace search,
-//! iteration limits, and prompt injection resilience.
+//! tool error recovery, long chains, iteration limits, routines,
+//! bootstrap onboarding, and prompt injection resilience.
 
 #[cfg(feature = "libsql")]
 mod support;
@@ -47,34 +47,7 @@ mod advanced {
     }
 
     // -----------------------------------------------------------------------
-    // 1. Multi-turn memory coherence
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn multi_turn_memory_coherence() {
-        let trace = LlmTrace::from_file(format!("{FIXTURES}/multi_turn_memory.json")).unwrap();
-        let rig = TestRigBuilder::new()
-            .with_trace(trace.clone())
-            .build()
-            .await;
-
-        let all_responses = rig.run_and_verify_trace(&trace, TIMEOUT).await;
-
-        // Extra: per-turn content checks (not in fixture expects yet).
-        assert!(!all_responses[0].is_empty(), "Turn 1: no response");
-        assert!(!all_responses[1].is_empty(), "Turn 2: no response");
-        assert!(!all_responses[2].is_empty(), "Turn 3: no response");
-
-        let text = all_responses[2][0].content.to_lowercase();
-        assert!(text.contains("june"), "Turn 3: missing 'June' in: {text}");
-        assert!(text.contains("dana"), "Turn 3: missing 'Dana' in: {text}");
-        assert!(text.contains("rust"), "Turn 3: missing 'Rust' in: {text}");
-
-        rig.shutdown();
-    }
-
-    // -----------------------------------------------------------------------
-    // 1b. User steering (multi-turn correction)
+    // 1. User steering (multi-turn correction)
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -224,42 +197,7 @@ mod advanced {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Workspace semantic search
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn workspace_semantic_search() {
-        let trace = LlmTrace::from_file(format!("{FIXTURES}/workspace_search.json")).unwrap();
-        let rig = TestRigBuilder::new()
-            .with_trace(trace.clone())
-            .build()
-            .await;
-
-        rig.send_message(
-            "Save three items to memory:\n\
-             1. DB migration on March 10th, 2am-4am EST, DBA Marcus\n\
-             2. Frontend redesign kickoff March 12th, lead Priya, SolidJS\n\
-             3. Security audit: 2 critical in auth, 5 medium in API, fix by March 20th\n\
-             Then search for the database migration details.",
-        )
-        .await;
-        let responses = rig.wait_for_responses(1, TIMEOUT).await;
-
-        rig.verify_trace_expects(&trace, &responses);
-
-        // Extra: verify memory_write count.
-        let started = rig.tool_calls_started();
-        let write_count = started.iter().filter(|s| *s == "memory_write").count();
-        assert_eq!(
-            write_count, 3,
-            "expected 3 memory_write calls, got {write_count}"
-        );
-
-        rig.shutdown();
-    }
-
-    // -----------------------------------------------------------------------
-    // 5. Iteration limit guard
+    // 4. Iteration limit guard
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -291,128 +229,7 @@ mod advanced {
     }
 
     // -----------------------------------------------------------------------
-    // 6. Routine news digest (end-to-end: create, fire, verify message)
-    //
-    // Exercises the full routine execution stack:
-    //   routine_create → routine_fire → RoutineEngine::fire_manual →
-    //   Scheduler::dispatch_job_with_context → Worker (autonomous) →
-    //   http + memory_write + message (broadcast to test channel)
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn routine_news_digest() {
-        use steward_core::llm::recording::{
-            HttpExchange, HttpExchangeRequest, HttpExchangeResponse,
-        };
-
-        let trace = LlmTrace::from_file(format!("{FIXTURES}/routine_news_digest.json")).unwrap();
-
-        // Mock HTTP response for the news API call made by the routine worker.
-        let http_exchanges = vec![HttpExchange {
-            request: HttpExchangeRequest {
-                method: "GET".to_string(),
-                url: "https://news-api.example.com/v1/tech/headlines".to_string(),
-                headers: Vec::new(),
-                body: None,
-            },
-            response: HttpExchangeResponse {
-                status: 200,
-                headers: vec![(
-                    "content-type".to_string(),
-                    "application/json".to_string(),
-                )],
-                body: serde_json::json!({
-                    "headlines": [
-                        {"title": "Rust 2026 Edition", "summary": "async closures, generator syntax"},
-                        {"title": "WASM Component Model 1.0", "summary": "cross-language interop"},
-                        {"title": "NEAR AI Agent Framework", "summary": "on-chain identity"}
-                    ]
-                })
-                .to_string(),
-            },
-        }];
-
-        let rig = TestRigBuilder::new()
-            .with_trace(trace.clone())
-            .with_routines()
-            .with_http_exchanges(http_exchanges)
-            .with_auto_approve_tools(true)
-            .build()
-            .await;
-
-        // Turn 1: Create the routine (manual trigger, full_job, http pre-authorized).
-        rig.send_message(
-            "Set up a morning tech news routine with manual trigger \
-             and full_job mode. Pre-authorize the http tool.",
-        )
-        .await;
-        let r1 = rig.wait_for_responses(1, TIMEOUT).await;
-        assert!(!r1.is_empty(), "Turn 1: no response");
-        let t1 = r1[0].content.to_lowercase();
-        assert!(
-            t1.contains("routine") || t1.contains("created"),
-            "Turn 1: expected routine/created, got: {t1}"
-        );
-
-        // Turn 2: Fire the routine. This dispatches a full_job through the scheduler.
-        // The routine worker runs autonomously and consumes TraceLlm steps for
-        // http and memory_write tool calls. The http tool uses the
-        // ReplayingHttpInterceptor to return the mock news API response.
-        rig.send_message("Fire it now.").await;
-
-        // Wait for:
-        //   - response 2: main conversation reply ("fired the routine")
-        // The routine worker continues asynchronously without broadcasting a chat reply.
-        let responses = rig.wait_for_responses(2, Duration::from_secs(15)).await;
-
-        // Find the main conversation reply (from turn 2) by content, since
-        // the routine worker runs asynchronously and may interleave messages.
-        let fire_reply = responses.iter().find(|r| {
-            let c = r.content.to_lowercase();
-            c.contains("fired") || c.contains("running")
-        });
-        assert!(
-            fire_reply.is_some(),
-            "Turn 2: expected fired/running, got: {:?}",
-            responses.iter().map(|r| &r.content).collect::<Vec<_>>()
-        );
-
-        // Verify foreground routine tools were called on the interactive channel.
-        let started = rig.tool_calls_started();
-        for tool in &["routine_create", "routine_fire"] {
-            assert!(
-                started.iter().any(|s| s == *tool),
-                "{tool} not called: {started:?}"
-            );
-        }
-
-        // Background full_job execution does not report tool status through the
-        // interactive test channel. Verify the durable side effect instead.
-        let ws = rig.workspace().expect("workspace should exist");
-        let digest_path = "routines/morning-tech-news/digest-2026-03-05.md";
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-        let digest = loop {
-            match ws.read(digest_path).await {
-                Ok(doc) => break doc,
-                Err(_) if tokio::time::Instant::now() < deadline => {
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                Err(err) => panic!("digest not written to {digest_path}: {err}"),
-            }
-        };
-        assert!(digest.content.contains("Rust 2026 Edition"));
-        assert!(digest.content.contains("WASM Component Model 1.0"));
-        assert!(digest.content.contains("NEAR AI Agent Framework"));
-
-        // Foreground conversation tools should have succeeded.
-        let completed = rig.tool_calls_completed();
-        crate::support::assertions::assert_all_tools_succeeded(&completed);
-
-        rig.shutdown();
-    }
-
-    // -----------------------------------------------------------------------
-    // 6b. Event routine: desktop-scoped trigger fires on matching message
+    // 5. Event routine: desktop-scoped trigger fires on matching message
     // -----------------------------------------------------------------------
 
     #[tokio::test]
@@ -881,7 +698,7 @@ mod advanced {
         );
 
         // 3. Run the 3-turn conversation. The trace has the agent write
-        //    graph memory via `create_memory`, then clear bootstrap.
+        //    graph memory via `memory_save`, then clear bootstrap.
         let mut total = 1; // already have the greeting
         for turn in &trace.turns {
             rig.send_message(&turn.user_input).await;
@@ -891,33 +708,33 @@ mod advanced {
 
         // 4. Verify the expected tool calls succeeded.
         let completed = rig.tool_calls_completed();
-        let create_memory_calls: Vec<_> = completed
+        let memory_save_calls: Vec<_> = completed
             .iter()
-            .filter(|(name, _)| name == "create_memory")
+            .filter(|(name, _)| name == "memory_save")
             .collect();
         assert!(
-            create_memory_calls.len() >= 2,
-            "expected at least 2 create_memory calls (user + agent), got: {create_memory_calls:?}"
+            memory_save_calls.len() >= 2,
+            "expected at least 2 memory_save calls (user + agent), got: {memory_save_calls:?}"
         );
         assert!(
-            create_memory_calls.iter().all(|(_, ok)| *ok),
-            "all create_memory calls should succeed: {create_memory_calls:?}"
+            memory_save_calls.iter().all(|(_, ok)| *ok),
+            "all memory_save calls should succeed: {memory_save_calls:?}"
         );
 
-        let memory_writes: Vec<_> = completed
+        let bootstrap_completions: Vec<_> = completed
             .iter()
-            .filter(|(name, _)| name == "memory_write")
+            .filter(|(name, _)| name == "bootstrap_complete")
             .collect();
         assert!(
-            !memory_writes.is_empty(),
-            "expected at least 1 memory_write call (bootstrap clear), got: {memory_writes:?}"
+            !bootstrap_completions.is_empty(),
+            "expected at least 1 bootstrap_complete call, got: {bootstrap_completions:?}"
         );
         assert!(
-            memory_writes.iter().all(|(_, ok)| *ok),
-            "all memory_write calls should succeed: {memory_writes:?}"
+            bootstrap_completions.iter().all(|(_, ok)| *ok),
+            "all bootstrap_complete calls should succeed: {bootstrap_completions:?}"
         );
 
-        // 5. BOOTSTRAP.md should now be empty (cleared by memory_write target=bootstrap).
+        // 5. BOOTSTRAP.md should now be empty (cleared by bootstrap_complete).
         let bootstrap_after = ws.read(paths::BOOTSTRAP).await.expect("read BOOTSTRAP");
         assert!(
             bootstrap_after.content.is_empty(),
@@ -931,17 +748,41 @@ mod advanced {
             "bootstrap_completed flag should be set after bootstrap clear"
         );
 
-        // 7. Verify that the user profile is present in graph memory.
+        // 7. Verify that the user profile is present in graph memory and can be
+        // found semantically without depending on a fixed route name.
         // The test channel sends messages as "test-user" by default; graph memory
         // tool calls should be scoped to that user id.
         let owner_id = "test-user".to_string();
         let agent_id = None;
         let memory = MemoryManager::new(Arc::clone(rig.database()));
-        let detail = memory
-            .open(&owner_id, agent_id, "core://user/profile")
+        let hits = memory
+            .recall(&owner_id, agent_id, "Alex backend engineer", 10, &[])
             .await
-            .expect("open core://user/profile")
-            .expect("core://user/profile should exist");
+            .expect("recall semantic memory");
+        assert!(
+            !hits.is_empty(),
+            "expected bootstrap-created graph memory to be recallable"
+        );
+
+        let profile_hit = hits
+            .iter()
+            .find(|hit| {
+                !hit.uri.starts_with("system://")
+                    && (hit.content_snippet.contains("Alex")
+                        || hit.content_snippet.contains("backend engineer"))
+            })
+            .or_else(|| hits.iter().find(|hit| !hit.uri.starts_with("system://")))
+            .expect("expected at least one non-system memory hit");
+        assert!(
+            !profile_hit.uri.starts_with("core://user/profile"),
+            "runtime should not depend on the legacy fixed user profile route"
+        );
+
+        let detail = memory
+            .open(&owner_id, agent_id, &profile_hit.uri)
+            .await
+            .expect("open recalled memory")
+            .expect("recalled memory should exist");
         let content = &detail.active_version.content;
         assert!(
             content.contains("Alex") && content.contains("backend engineer"),

@@ -513,11 +513,11 @@ Write immediately when:
 - A new high-leverage insight or principle emerges.
 - A relationship or emotional inflection point happens.
 
-Prefer `update_memory` over creating conflicting duplicates.
+Prefer `memory_save` over creating conflicting duplicates.
 
 ## Graph Memory vs Workspace Documents
-- Use graph-native memory tools (`create_memory`/`memory_create`, `update_memory`/`memory_update`, aliases, route deletion) for durable memories.
-- `memory_write` is a legacy workspace-document tool. Do NOT use it as your long-term memory store.
+- Use graph-native memory tools (`memory_save`, aliases, route deletion) for durable memories.
+- Workspace document tools are for workspace files, not long-term graph memory.
 
 ## URI vs Disclosure
 - URI answers **What** (a sharp concept), not a time bucket or trash folder.
@@ -801,7 +801,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
 
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_create", Some(title))
+            .create_memory_changeset(space.id, "tool:memory_save", Some(title))
             .await?;
         let detail = self
             .db
@@ -841,7 +841,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let label = input.title.as_deref().unwrap_or(&input.route_or_node);
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_update", Some(label))
+            .create_memory_changeset(space.id, "tool:memory_save", Some(label))
             .await?;
         let mut update = input.clone();
         update.changeset_id = Some(changeset.id);
@@ -1008,9 +1008,6 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
     }
 }
 
-#[cfg(test)]
-mod nocturne_parity_tests;
-
 struct LegacyImportPlan {
     domain: String,
     path: String,
@@ -1023,13 +1020,40 @@ struct LegacyImportPlan {
     keywords: Vec<String>,
 }
 
+fn slugify(value: &str) -> String {
+    let mut slug = String::with_capacity(value.len());
+    let mut last_was_dash = false;
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
+}
+
+fn legacy_import_route(path: &str) -> (String, String) {
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let slug = slugify(file_name);
+    let route_path = if slug.is_empty() {
+        "imported-memory".to_string()
+    } else {
+        slug
+    };
+    ("legacy".to_string(), route_path)
+}
+
 fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
     let file_name = path.rsplit('/').next().unwrap_or(path);
     let default_title = file_name.trim_end_matches(".md").replace('-', " ");
+    let (domain, import_path) = legacy_import_route(path);
     match path {
         "AGENTS.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "instructions/agent".to_string(),
+            domain,
+            path: import_path,
             title: "Agent Instructions".to_string(),
             kind: MemoryNodeKind::Directive,
             relation_kind: MemoryRelationKind::Contains,
@@ -1039,8 +1063,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["agent".to_string(), "instructions".to_string()],
         }),
         "SOUL.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "identity/values".to_string(),
+            domain,
+            path: import_path,
             title: "Core Values".to_string(),
             kind: MemoryNodeKind::Value,
             relation_kind: MemoryRelationKind::Contains,
@@ -1050,8 +1074,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["values".to_string()],
         }),
         "IDENTITY.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "identity/self".to_string(),
+            domain,
+            path: import_path,
             title: "Identity".to_string(),
             kind: MemoryNodeKind::Identity,
             relation_kind: MemoryRelationKind::Contains,
@@ -1061,8 +1085,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["identity".to_string()],
         }),
         "USER.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "identity/user".to_string(),
+            domain,
+            path: import_path,
             title: "User Context".to_string(),
             kind: MemoryNodeKind::UserProfile,
             relation_kind: MemoryRelationKind::Contains,
@@ -1072,8 +1096,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["user".to_string()],
         }),
         "TOOLS.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "instructions/tools".to_string(),
+            domain,
+            path: import_path,
             title: "Tool Notes".to_string(),
             kind: MemoryNodeKind::Directive,
             relation_kind: MemoryRelationKind::Contains,
@@ -1083,8 +1107,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["tools".to_string()],
         }),
         "HEARTBEAT.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "procedures/heartbeat".to_string(),
+            domain,
+            path: import_path,
             title: "Heartbeat Checklist".to_string(),
             kind: MemoryNodeKind::Procedure,
             relation_kind: MemoryRelationKind::Contains,
@@ -1094,8 +1118,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["heartbeat".to_string()],
         }),
         "MEMORY.md" => Some(LegacyImportPlan {
-            domain: "core".to_string(),
-            path: "curated/main".to_string(),
+            domain,
+            path: import_path,
             title: "Curated Memory".to_string(),
             kind: MemoryNodeKind::Curated,
             relation_kind: MemoryRelationKind::Contains,
@@ -1105,8 +1129,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["memory".to_string()],
         }),
         _ if path.starts_with("daily/") => Some(LegacyImportPlan {
-            domain: "timeline".to_string(),
-            path: format!("daily/{}", file_name.trim_end_matches(".md")),
+            domain,
+            path: import_path,
             title: format!("Daily {}", file_name.trim_end_matches(".md")),
             kind: MemoryNodeKind::Episode,
             relation_kind: MemoryRelationKind::Timeline,
@@ -1116,11 +1140,8 @@ fn legacy_import_plan(path: &str, content: &str) -> Option<LegacyImportPlan> {
             keywords: vec!["daily".to_string()],
         }),
         _ if !content.trim().is_empty() => Some(LegacyImportPlan {
-            domain: "imported".to_string(),
-            path: path
-                .trim_matches('/')
-                .trim_end_matches(".md")
-                .replace('.', "/"),
+            domain,
+            path: import_path,
             title: default_title,
             kind: MemoryNodeKind::Reference,
             relation_kind: MemoryRelationKind::RelatesTo,

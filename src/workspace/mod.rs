@@ -84,8 +84,6 @@ use crate::safety::{Sanitizer, Severity};
 const SYSTEM_PROMPT_FILES: &[&str] = &[
     paths::SOUL,
     paths::AGENTS,
-    paths::USER,
-    paths::IDENTITY,
     paths::MEMORY,
     paths::TOOLS,
     paths::HEARTBEAT,
@@ -832,8 +830,6 @@ impl Workspace {
         let mut paths: Vec<&str> = vec![
             paths::SOUL,
             paths::AGENTS,
-            paths::USER,
-            paths::IDENTITY,
             paths::TOOLS,
         ];
         // In group chats, avoid leaking personal long-term memory into a shared context.
@@ -1623,10 +1619,8 @@ impl Workspace {
         let seed_files: &[(&str, &str)] = &[
             (paths::README, include_str!("seeds/README.md")),
             (paths::MEMORY, include_str!("seeds/MEMORY.md")),
-            (paths::IDENTITY, include_str!("seeds/IDENTITY.md")),
             (paths::SOUL, include_str!("seeds/SOUL.md")),
             (paths::AGENTS, include_str!("seeds/AGENTS.md")),
-            (paths::USER, include_str!("seeds/USER.md")),
             (paths::HEARTBEAT, HEARTBEAT_SEED),
             (paths::TOOLS, TOOLS_SEED),
         ];
@@ -1637,14 +1631,14 @@ impl Workspace {
         let is_fresh_workspace = if self.read_primary(paths::BOOTSTRAP).await.is_ok() {
             false // BOOTSTRAP already exists
         } else {
-            let (agents_res, soul_res, user_res) = tokio::join!(
+            let (agents_res, soul_res, tools_res) = tokio::join!(
                 self.read_primary(paths::AGENTS),
                 self.read_primary(paths::SOUL),
-                self.read_primary(paths::USER),
+                self.read_primary(paths::TOOLS),
             );
             matches!(agents_res, Err(WorkspaceError::DocumentNotFound { .. }))
                 && matches!(soul_res, Err(WorkspaceError::DocumentNotFound { .. }))
-                && matches!(user_res, Err(WorkspaceError::DocumentNotFound { .. }))
+                && matches!(tools_res, Err(WorkspaceError::DocumentNotFound { .. }))
         };
 
         let mut count = 0;
@@ -1882,8 +1876,8 @@ mod tests {
         let cases = vec![
             ("SOUL.md", true),
             ("AGENTS.md", true),
-            ("USER.md", true),
-            ("IDENTITY.md", true),
+            ("USER.md", false),
+            ("IDENTITY.md", false),
             ("MEMORY.md", true),
             ("HEARTBEAT.md", true),
             ("TOOLS.md", true),
@@ -1977,7 +1971,9 @@ mod seed_tests {
         let (ws, _dir) = create_test_workspace().await;
 
         // Simulate an existing user/workspace by creating an identity doc.
-        ws.write(paths::USER, "Existing user").await.expect("write USER");
+        ws.write(paths::AGENTS, "Existing agent instructions")
+            .await
+            .expect("write AGENTS");
 
         let count = ws.seed_if_empty().await.expect("seed_if_empty");
         assert!(count > 0, "should have seeded missing core files");

@@ -93,6 +93,8 @@ fn slugify(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
+const AUTO_MEMORY_DOMAIN: &str = "memory";
+
 fn parse_route_strict(route: &str) -> Result<(String, String), ToolError> {
     let (domain, path) = route.split_once("://").ok_or_else(|| {
         ToolError::InvalidParameters(format!(
@@ -143,6 +145,20 @@ fn optional_priority(params: &serde_json::Value) -> Result<Option<i32>, ToolErro
         }
         None => Ok(None),
     }
+}
+
+fn reject_legacy_param_aliases(
+    params: &serde_json::Value,
+    aliases: &[(&str, &str)],
+) -> Result<(), ToolError> {
+    for (legacy, canonical) in aliases {
+        if params.get(*legacy).is_some() {
+            return Err(ToolError::InvalidParameters(format!(
+                "'{legacy}' is no longer supported; use '{canonical}' instead"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn derive_title(content: &str, kind: MemoryNodeKind, explicit: Option<String>) -> String {
@@ -378,159 +394,156 @@ impl Tool for MemoryOpenTool {
     }
 }
 
-pub struct MemoryCreateTool {
-    memory: Arc<MemoryManager>,
-}
-
-impl MemoryCreateTool {
-    pub fn new(memory: Arc<MemoryManager>) -> Self {
-        Self { memory }
-    }
-}
-
-#[async_trait]
-impl Tool for MemoryCreateTool {
-    fn name(&self) -> &str {
-        "memory_create"
+fn build_save_route(
+    params: &serde_json::Value,
+    explicit_title: Option<&str>,
+    content: Option<&str>,
+) -> Result<(String, Option<String>), ToolError> {
+    let explicit_route = optional_string(params, "route")?;
+    let parent_route = optional_string(params, "parent_route")?;
+    if explicit_route.is_some() && parent_route.is_some() {
+        return Err(ToolError::InvalidParameters(
+            "memory_save accepts either 'route' or 'parent_route', but not both".to_string(),
+        ));
     }
 
-    fn description(&self) -> &str {
-        "Create a new graph-native memory node under a parent route. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. This writes directly to Steward's native memory graph and records a changeset snapshot (auto-applied)."
+    if let Some(route) = explicit_route {
+        return Ok((route, None));
     }
 
-    fn parameters_schema(&self) -> serde_json::Value {
-        let kind_values = kind_enum_values();
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "parent_route": { "type": "string", "description": "Parent URI to derive a child route from (domain://path or domain://). Provide this OR 'route'. (Alias: parent_uri)" },
-                "parent_uri": { "type": "string", "description": "Alias for parent_route." },
-                "content": { "type": "string" },
-                "kind": { "type": "string", "enum": kind_values, "description": "Optional memory node kind. Defaults to 'reference'. Use 'user_profile' for stable user facts like the user's name." },
-                "priority": { "type": "integer", "default": 50 },
-                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
-                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
-                "title": { "type": "string" },
-                "keywords": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "visibility": { "type": "string", "enum": ["private", "session", "shared"] },
-                "route": { "type": "string", "description": "Root creation URI (domain://path). Required when parent_route is omitted. (Alias: uri)" },
-                "uri": { "type": "string", "description": "Alias for route." }
-            },
-            "anyOf": [
-                { "required": ["route"] },
-                { "required": ["uri"] },
-                { "required": ["parent_route"] },
-                { "required": ["parent_uri"] }
-            ],
-            "required": ["content"]
-        })
-    }
+    let has_append = params.get("append").is_some();
+    let has_patch = params.get("old_string").is_some() || params.get("new_string").is_some();
 
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        ctx: &JobContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let start = Instant::now();
-        let parent_route = optional_string(&params, "parent_route")?
-            .or(optional_string(&params, "parent_uri")?);
-        let content = require_str(&params, "content")?;
-        let kind = optional_string(&params, "kind")?
-            .map(|value| parse_kind(&value))
-            .transpose()?
-            .unwrap_or(MemoryNodeKind::Reference);
-        let title = derive_title(content, kind, optional_string(&params, "title")?);
-        let priority = optional_priority(&params)?.unwrap_or(50);
-        let trigger_text = if params.get("disclosure").is_some() {
-            optional_string(&params, "disclosure")?
-        } else {
-            optional_string(&params, "trigger_text")?
-        };
-        let visibility = parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?;
-        let keywords = parse_keywords(&params)?;
-
-        let route = if let Some(route) = optional_string(&params, "route")?
-            .or(optional_string(&params, "uri")?)
-        {
-            route
-        } else if let Some(ref parent_route) = parent_route {
-            let (domain, parent_path) = parse_parent_route(parent_route)?;
-            let slug = slugify(&title);
-            if parent_path.is_empty() {
-                format!("{domain}://{slug}")
-            } else {
-                format!("{domain}://{parent_path}/{slug}")
-            }
-        } else {
+    if parent_route.is_none() {
+        if has_append {
             return Err(ToolError::InvalidParameters(
-                "memory_create requires either 'route' (for root creation) or 'parent_route' (to derive a child route)".to_string(),
+                "append mode requires an existing memory route".to_string(),
             ));
-        };
-        let (domain, path) = parse_route_strict(&route)?;
+        }
+        if has_patch {
+            return Err(ToolError::InvalidParameters(
+                "patch mode requires an existing memory route".to_string(),
+            ));
+        }
+    }
 
-        let (detail, changeset) = self
-            .memory
-            .create(
-                &ctx.user_id,
-                None,
-                parent_route.as_deref(),
-                &title,
-                kind,
-                content,
-                &domain,
-                &path,
-                priority,
-                trigger_text,
-                visibility,
-                keywords,
-                serde_json::json!({
-                    "source": "tool:memory_create",
-                    "job_id": ctx.job_id,
-                }),
+    let title_source = explicit_title
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            content.and_then(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(ToOwned::to_owned)
+            })
+        })
+        .ok_or_else(|| {
+            ToolError::InvalidParameters(
+                "memory_save needs 'title' or non-empty 'content' to derive a route"
+                    .to_string(),
             )
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory create failed: {e}")))?;
+        })?;
 
-        Ok(ToolOutput::success(
-            serde_json::json!({
-                "node": detail,
-                "changeset_id": changeset.id,
-                "review_status": changeset.status,
+    let slug = slugify(&title_source);
+    if slug.is_empty() {
+        return Err(ToolError::InvalidParameters(
+            "memory_save could not derive a route slug from the provided title/content".to_string(),
+        ));
+    }
+
+    if let Some(parent_route) = parent_route {
+        let (domain, parent_path) = parse_parent_route(&parent_route)?;
+        let route = if parent_path.is_empty() {
+            format!("{domain}://{slug}")
+        } else {
+            format!("{domain}://{parent_path}/{slug}")
+        };
+        return Ok((route, Some(parent_route)));
+    }
+
+    Ok((format!("{AUTO_MEMORY_DOMAIN}://{slug}"), None))
+}
+
+fn resolve_save_content(
+    params: &serde_json::Value,
+    current_content: Option<&str>,
+    explicit_title: Option<&str>,
+) -> Result<Option<String>, ToolError> {
+    let old_string = optional_string(params, "old_string")?;
+    let new_string = optional_string(params, "new_string")?;
+    let append = optional_string(params, "append")?;
+    let full_content = optional_string(params, "content")?;
+
+    match (old_string, new_string, append, full_content, current_content) {
+        (Some(old), Some(new), None, None, Some(current)) => {
+            let count = current.matches(&old).count();
+            if count != 1 {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "patch requires old_string to match exactly once (matched {count} times)"
+                )));
+            }
+            Ok(Some(current.replacen(&old, &new, 1)))
+        }
+        (Some(_), None, _, _, _) => Err(ToolError::InvalidParameters(
+            "patch mode requires both 'old_string' and 'new_string'".to_string(),
+        )),
+        (None, None, Some(text), None, Some(current)) => {
+            let mut updated = current.to_string();
+            if !updated.ends_with('\n') {
+                updated.push('\n');
+            }
+            updated.push('\n');
+            updated.push_str(&text);
+            Ok(Some(updated))
+        }
+        (None, None, None, Some(text), Some(_)) => Ok(Some(text)),
+        (None, None, None, None, Some(_)) => Ok(None),
+        (None, None, None, Some(text), None) => Ok(Some(text)),
+        (None, None, None, None, None) => explicit_title
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| Some(value.to_string()))
+            .ok_or_else(|| {
+                ToolError::InvalidParameters(
+                    "memory_save needs semantic content when creating a new memory".to_string(),
+                )
             }),
-            start.elapsed(),
-        ))
-    }
-
-    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::Never
-    }
-
-    fn requires_sanitization(&self) -> bool {
-        false
+        (_, _, Some(_), Some(_), _) | (Some(_), Some(_), _, Some(_), _) => Err(
+            ToolError::InvalidParameters(
+                "save modes are mutually exclusive: use either patch (old_string/new_string), append, or full 'content'".to_string(),
+            ),
+        ),
+        (_, _, Some(_), _, None) => Err(ToolError::InvalidParameters(
+            "append mode requires an existing memory route".to_string(),
+        )),
+        (Some(_), Some(_), _, _, None) => Err(ToolError::InvalidParameters(
+            "patch mode requires an existing memory route".to_string(),
+        )),
+        _ => Err(ToolError::InvalidParameters(
+            "invalid memory_save parameter combination".to_string(),
+        )),
     }
 }
 
-pub struct MemoryUpdateTool {
+pub struct MemorySaveTool {
     memory: Arc<MemoryManager>,
 }
 
-impl MemoryUpdateTool {
+impl MemorySaveTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
     }
 }
 
 #[async_trait]
-impl Tool for MemoryUpdateTool {
+impl Tool for MemorySaveTool {
     fn name(&self) -> &str {
-        "memory_update"
+        "memory_save"
     }
 
     fn description(&self) -> &str {
-        "Update an existing graph-native memory node or route metadata. Use this instead of editing legacy workspace memory files such as MEMORY.md, HEARTBEAT.md, or daily/*.md. Records the change in a changeset snapshot (auto-applied)."
+        "Create or update a graph-native memory node. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. If the target route already exists, Steward updates it; otherwise it creates a new memory there."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -538,28 +551,41 @@ impl Tool for MemoryUpdateTool {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "route_or_node_id": { "type": "string", "description": "Node id or route (domain://path). Alias: uri." },
-                "uri": { "type": "string", "description": "Alias for route_or_node_id." },
-                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace." },
-                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty)." },
-                "append": { "type": "string", "description": "Append mode: text to append to the end of content." },
-                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check; must match the active version id." },
-                "content": { "type": "string", "description": "Unsafe full replacement. Only allowed when replace_content=true." },
-                "replace_content": { "type": "boolean", "default": false },
-                "priority": { "type": "integer" },
-                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
+                "route": { "type": "string", "description": "Exact route to create or update (domain://path). Optional for new memories; if omitted, Steward derives one from the title/content." },
+                "parent_route": { "type": "string", "description": "Optional parent route to derive a child route from when creating a new memory." },
+                "content": { "type": "string", "description": "Full content for a new memory, or full replacement content for an existing one. For new memories, Steward can fall back to the title when content is omitted." },
+                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace in an existing memory. Requires route." },
+                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty). Requires route." },
+                "append": { "type": "string", "description": "Append mode: text to append to the end of an existing memory. Requires route." },
+                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check for existing memories." },
+                "kind": { "type": "string", "enum": kind_values, "description": "Optional memory node kind. Defaults to 'reference' for new memories." },
+                "priority": { "type": "integer", "default": 50 },
                 "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
+                "title": { "type": "string", "description": "Optional human-readable title. Also used for route/content derivation when creating a new memory." },
                 "keywords": {
                     "type": "array",
                     "items": { "type": "string" }
                 },
-                "title": { "type": "string" },
-                "kind": { "type": "string", "enum": kind_values, "description": "Optional node kind update (e.g. promote to 'boot')." },
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
             },
-            "anyOf": [
-                { "required": ["route_or_node_id"] },
-                { "required": ["uri"] }
+            "additionalProperties": false,
+            "examples": [
+                {
+                    "title": "Dreamer Profile",
+                    "content": "The user's name is 梦凌汐.",
+                    "kind": "user_profile"
+                },
+                {
+                    "route": "memory://dreamer-profile",
+                    "old_string": "梦凌汐",
+                    "new_string": "梦凌汐（确认）"
+                },
+                {
+                    "parent_route": "memory://profiles",
+                    "content": "Prefers concise status updates.",
+                    "kind": "user_profile",
+                    "title": "Dreamer Profile"
+                }
             ]
         })
     }
@@ -570,87 +596,46 @@ impl Tool for MemoryUpdateTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        let key = if let Some(value) = params.get("route_or_node_id").and_then(|v| v.as_str()) {
-            value
-        } else {
-            require_str(&params, "uri")?
-        };
+        reject_legacy_param_aliases(
+            &params,
+            &[
+                ("parent_uri", "parent_route"),
+                ("uri", "route"),
+                ("trigger_text", "disclosure"),
+            ],
+        )?;
 
-        if key.starts_with("system://") {
+        let explicit_title = optional_string(&params, "title")?;
+        let requested_content = optional_string(&params, "content")?;
+        let (route, parent_route) =
+            build_save_route(&params, explicit_title.as_deref(), requested_content.as_deref())?;
+
+        if route.starts_with("system://") {
             return Err(ToolError::InvalidParameters(
-                "system:// URIs are virtual entry points (read-only). Use memory_open/read_memory to inspect them, and update a concrete URI like system://boot/memory_protocol instead."
-                    .to_string(),
+                "system:// URIs are virtual entry points (read-only). Use memory_open to inspect them, and save to a concrete non-system route instead.".to_string(),
             ));
         }
 
-        let detail = self
+        let existing = self
             .memory
-            .open(&ctx.user_id, None, key)
+            .open(&ctx.user_id, None, &route)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?
-            .ok_or_else(|| ToolError::ExecutionFailed(format!("memory node not found: {key}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?;
 
-        if let Some(expected) = params.get("expected_version_id").and_then(|v| v.as_str()) {
+        if let (Some(detail), Some(expected)) = (
+            existing.as_ref(),
+            params.get("expected_version_id").and_then(|v| v.as_str()),
+        ) {
             let expected = Uuid::parse_str(expected).map_err(|_| {
                 ToolError::InvalidParameters(format!("invalid expected_version_id: {expected}"))
             })?;
             if expected != detail.active_version.id {
                 return Err(ToolError::ExecutionFailed(format!(
-                    "version mismatch for '{key}': expected {expected}, found {}",
+                    "version mismatch for '{route}': expected {expected}, found {}",
                     detail.active_version.id
                 )));
             }
         }
-
-        let old_string = optional_string(&params, "old_string")?;
-        let new_string = optional_string(&params, "new_string")?;
-        let append = optional_string(&params, "append")?;
-        let replace_content = params
-            .get("replace_content")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let full_content = optional_string(&params, "content")?;
-
-        let content = match (old_string, new_string, append, full_content) {
-            (Some(old), Some(new), None, None) => {
-                let current = &detail.active_version.content;
-                let count = current.matches(&old).count();
-                if count != 1 {
-                    return Err(ToolError::ExecutionFailed(format!(
-                        "patch requires old_string to match exactly once (matched {count} times)"
-                    )));
-                }
-                Some(current.replacen(&old, &new, 1))
-            }
-            (Some(_), None, _, _) => {
-                return Err(ToolError::InvalidParameters(
-                    "patch mode requires both 'old_string' and 'new_string'".to_string(),
-                ));
-            }
-            (None, None, Some(text), None) => {
-                let mut current = detail.active_version.content.clone();
-                if !current.ends_with('\n') {
-                    current.push('\n');
-                }
-                current.push('\n');
-                current.push_str(&text);
-                Some(current)
-            }
-            (None, None, None, Some(text)) => {
-                if !replace_content {
-                    return Err(ToolError::InvalidParameters(
-                        "full content replacement is disabled; use patch/append, or pass replace_content=true".to_string(),
-                    ));
-                }
-                Some(text)
-            }
-            (None, None, None, None) => None,
-            _ => {
-                return Err(ToolError::InvalidParameters(
-                    "update modes are mutually exclusive: use either patch (old_string/new_string), append, or (content+replace_content=true)".to_string(),
-                ));
-            }
-        };
 
         let visibility = match params.get("visibility") {
             Some(_) => Some(parse_visibility(
@@ -663,49 +648,92 @@ impl Tool for MemoryUpdateTool {
         } else {
             None
         };
-
-        let kind = match params.get("kind").and_then(|v| v.as_str()) {
+        let parsed_kind = match params.get("kind").and_then(|v| v.as_str()) {
             Some(value) => Some(parse_kind(value)?),
             None => None,
         };
-
-        let trigger_text = if params.get("disclosure").is_some() {
-            match params.get("disclosure") {
-                Some(serde_json::Value::Null) => Some(None),
-                Some(_) => Some(optional_string(&params, "disclosure")?),
-                None => None,
-            }
-        } else {
-            match params.get("trigger_text") {
-                Some(serde_json::Value::Null) => Some(None),
-                Some(_) => Some(optional_string(&params, "trigger_text")?),
-                None => None,
-            }
+        let disclosure = match params.get("disclosure") {
+            Some(serde_json::Value::Null) => Some(None),
+            Some(_) => Some(optional_string(&params, "disclosure")?),
+            None => None,
         };
 
-        let input = UpdateMemoryNodeInput {
-            route_or_node: key.to_string(),
-            title: optional_string(&params, "title")?,
-            content,
-            priority: optional_priority(&params)?,
-            trigger_text,
-            visibility,
-            metadata: Some(serde_json::json!({
-                "source": "tool:memory_update",
-                "job_id": ctx.job_id,
-            })),
-            keywords,
-            changeset_id: None,
-            kind,
-        };
+        if let Some(existing) = existing {
+            let content = resolve_save_content(
+                &params,
+                Some(&existing.active_version.content),
+                explicit_title.as_deref(),
+            )?;
+            let input = UpdateMemoryNodeInput {
+                route_or_node: route.clone(),
+                title: explicit_title,
+                content,
+                priority: optional_priority(&params)?,
+                trigger_text: disclosure,
+                visibility,
+                metadata: Some(serde_json::json!({
+                    "source": "tool:memory_save",
+                    "job_id": ctx.job_id,
+                })),
+                keywords,
+                changeset_id: None,
+                kind: parsed_kind,
+            };
+            let (detail, changeset) = self
+                .memory
+                .update(&ctx.user_id, None, &input)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("memory save failed: {e}")))?;
+
+            return Ok(ToolOutput::success(
+                serde_json::json!({
+                    "mode": "updated",
+                    "node": detail,
+                    "changeset_id": changeset.id,
+                    "review_status": changeset.status,
+                }),
+                start.elapsed(),
+            ));
+        }
+
+        let content = resolve_save_content(&params, None, explicit_title.as_deref())?;
+        let content = content.ok_or_else(|| {
+            ToolError::InvalidParameters(
+                "memory_save needs semantic content when creating a new memory".to_string(),
+            )
+        })?;
+        let kind = parsed_kind.unwrap_or(MemoryNodeKind::Reference);
+        let title = derive_title(&content, kind, explicit_title);
+        let priority = optional_priority(&params)?.unwrap_or(50);
+        let visibility = visibility.unwrap_or(MemoryVisibility::Private);
+        let (domain, path) = parse_route_strict(&route)?;
+
         let (detail, changeset) = self
             .memory
-            .update(&ctx.user_id, None, &input)
+            .create(
+                &ctx.user_id,
+                None,
+                parent_route.as_deref(),
+                &title,
+                kind,
+                &content,
+                &domain,
+                &path,
+                priority,
+                disclosure.flatten(),
+                visibility,
+                keywords.unwrap_or_default(),
+                serde_json::json!({
+                    "source": "tool:memory_save",
+                    "job_id": ctx.job_id,
+                }),
+            )
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory update failed: {e}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory save failed: {e}")))?;
 
         Ok(ToolOutput::success(
             serde_json::json!({
+                "mode": "created",
                 "node": detail,
                 "changeset_id": changeset.id,
                 "review_status": changeset.status,
@@ -750,7 +778,6 @@ impl Tool for MemoryAliasTool {
                 "new_route": { "type": "string" },
                 "target_route": { "type": "string" },
                 "priority": { "type": "integer", "default": 50 },
-                "trigger_text": { "type": ["string", "null"], "description": "Legacy name for disclosure." },
                 "disclosure": { "type": ["string", "null"], "description": "When this alias should be recalled." },
                 "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
             },
@@ -764,6 +791,7 @@ impl Tool for MemoryAliasTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
+        reject_legacy_param_aliases(&params, &[("trigger_text", "disclosure")])?;
         let new_route = require_str(&params, "new_route")?;
         let target_route = require_str(&params, "target_route")?;
         let (domain, path) = parse_route_strict(new_route)?;
@@ -774,11 +802,7 @@ impl Tool for MemoryAliasTool {
             path,
             visibility: parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?,
             priority: optional_priority(&params)?.unwrap_or(50),
-            trigger_text: if params.get("disclosure").is_some() {
-                optional_string(&params, "disclosure")?
-            } else {
-                optional_string(&params, "trigger_text")?
-            },
+            trigger_text: optional_string(&params, "disclosure")?,
             changeset_id: None,
         };
         let (route, changeset) = self
@@ -930,5 +954,176 @@ impl Tool for MemoryReviewTool {
     fn requires_approval(&self, params: &serde_json::Value) -> ApprovalRequirement {
         let _ = params;
         ApprovalRequirement::Never
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TestHarnessBuilder;
+    use crate::tools::Tool;
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_schema_exposes_only_canonical_fields() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let tool = MemorySaveTool::new(Arc::new(MemoryManager::new(Arc::clone(
+            &harness.db,
+        ))));
+        let schema = tool.parameters_schema();
+        let properties = schema["properties"]
+            .as_object()
+            .expect("memory_save schema should have properties");
+
+        assert!(properties.contains_key("route"));
+        assert!(properties.contains_key("parent_route"));
+        assert!(properties.contains_key("disclosure"));
+        assert!(!properties.contains_key("uri"));
+        assert!(!properties.contains_key("parent_uri"));
+        assert!(!properties.contains_key("trigger_text"));
+        assert!(schema.get("oneOf").is_none());
+        assert!(schema.get("not").is_none());
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_rejects_legacy_aliases_and_mutually_exclusive_routes() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        let legacy_err = tool
+            .execute(
+                serde_json::json!({
+                    "uri": "people://alex-work-style",
+                    "content": "Alex is a backend engineer"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("legacy uri alias should be rejected");
+        assert!(format!("{legacy_err}").contains("use 'route' instead"));
+
+        let both_err = tool
+            .execute(
+                serde_json::json!({
+                    "route": "people://alex-work-style",
+                    "parent_route": "people://profiles",
+                    "content": "Alex is a backend engineer"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("route and parent_route together should be rejected");
+        assert!(format!("{both_err}").contains("but not both"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_supports_route_and_parent_route_paths() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        tool.execute(
+            serde_json::json!({
+                "route": "people://alex-work-style",
+                "content": "Alex is a backend engineer",
+                "kind": "user_profile",
+                "title": "Alex Work Style"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("route-based creation should succeed");
+
+        let explicit = memory
+            .open("user1", None, "people://alex-work-style")
+            .await
+            .expect("open explicit route")
+            .expect("explicit route should exist");
+        assert!(explicit.active_version.content.contains("backend engineer"));
+
+        tool.execute(
+            serde_json::json!({
+                "route": "people://profiles",
+                "content": "Directory of people profiles.",
+                "kind": "reference",
+                "title": "Profiles"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("parent route should exist before deriving a child route");
+
+        tool.execute(
+            serde_json::json!({
+                "parent_route": "people://profiles",
+                "content": "Prefers concise status updates.",
+                "kind": "user_profile",
+                "title": "Dreamer Profile"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("parent-route creation should succeed");
+
+        let derived = memory
+            .open("user1", None, "people://profiles/dreamer-profile")
+            .await
+            .expect("open derived route")
+            .expect("derived route should exist");
+        assert!(derived.active_version.content.contains("concise status updates"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_can_auto_derive_route_for_new_memory() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        tool.execute(
+            serde_json::json!({
+                "title": "Dreamer Profile",
+                "content": "The user's name is 梦凌汐.",
+                "kind": "user_profile"
+            }),
+            &ctx,
+        )
+        .await
+        .expect("route-less creation should succeed");
+
+        let derived = memory
+            .open("user1", None, "memory://dreamer-profile")
+            .await
+            .expect("open auto-derived route")
+            .expect("auto-derived route should exist");
+        assert!(derived.active_version.content.contains("梦凌汐"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_patch_mode_still_requires_existing_route() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        let err = tool
+            .execute(
+                serde_json::json!({
+                    "old_string": "梦凌汐",
+                    "new_string": "梦凌汐（确认）"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("patch without route should fail");
+
+        assert!(format!("{err}").contains("patch mode requires an existing memory route"));
     }
 }

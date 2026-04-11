@@ -1,7 +1,7 @@
 //! E2E trace tests: tool coverage.
 //!
 //! Exercises tools that were previously untested: json, shell, list_dir,
-//! apply_patch, memory_read, and memory_tree.
+//! and apply_patch.
 
 #[cfg(feature = "libsql")]
 mod support;
@@ -173,35 +173,4 @@ mod tests {
         rig.shutdown();
     }
 
-    // -----------------------------------------------------------------------
-    // memory_read + memory_tree (full memory cycle)
-    // -----------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_memory_full_cycle() {
-        let _guard = TOOL_COVERAGE_LOCK.lock().await;
-        let trace = LlmTrace::from_file(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/llm_traces/coverage/memory_full_cycle.json"
-        ))
-        .expect("failed to load memory_full_cycle.json");
-
-        let rig = TestRigBuilder::new()
-            .with_trace(trace.clone())
-            .build()
-            .await;
-
-        rig.send_message("Exercise all four memory operations")
-            .await;
-        let responses = rig.wait_for_responses(1, Duration::from_secs(15)).await;
-
-        rig.verify_trace_expects(&trace, &responses);
-
-        // Extra: metrics checks.
-        let metrics = rig.collect_metrics().await;
-        assert!(metrics.llm_calls >= 5, "Expected >= 5 LLM calls");
-        assert!(metrics.total_tool_calls() >= 4, "Expected >= 4 tool calls");
-
-        rig.shutdown();
-    }
 }

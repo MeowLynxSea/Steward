@@ -8,7 +8,7 @@ Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace prov
 
 Steward's long-term agent memory no longer lives here as runtime truth. The native graph-based memory system now lives under `src/memory/`, backed by libSQL tables such as `memory_nodes`, `memory_versions`, and `memory_routes`.
 
-Legacy files like `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, and `daily/*.md` are imported once into the graph during migration. After that, the graph is the source of truth and the workspace copy is only legacy content.
+Legacy files like `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, `USER.md`, and `daily/*.md` are imported once into the graph during migration. After that, the graph is the source of truth and the workspace copy is only legacy content.
 
 ## Key Principles
 
@@ -92,8 +92,8 @@ When a workspace has additional read scopes (via `with_additional_read_scopes`),
 |------|------------|-----------|
 | AGENTS.md | `read_primary()` | Agent instructions are per-user |
 | SOUL.md | `read_primary()` | Core values are per-user |
-| USER.md | `read_primary()` | User context is per-user |
-| IDENTITY.md | `read_primary()` | Identity is per-user |
+| USER.md | `read_primary()` | Legacy user-context imports remain per-user |
+| IDENTITY.md | `read_primary()` | Legacy identity imports remain per-user |
 | TOOLS.md | `read_primary()` | Tool config is per-user |
 | BOOTSTRAP.md | `read_primary()` | Onboarding is per-user |
 | MEMORY.md | `read()` | Legacy import content, not runtime truth |
@@ -103,25 +103,12 @@ When a workspace has additional read scopes (via `with_additional_read_scopes`),
 
 **Design rule:** If you want shared identity across users, seed the same content into each user's scope at setup time. Don't rely on multi-scope fallback for identity files.
 
-## Legacy Heartbeat File Format
+## Heartbeat Runtime
 
-Proactive periodic execution (default: 30 minutes):
-
-1. Reads the migrated heartbeat procedure from the native memory graph (`core://procedures/heartbeat`)
-2. Falls back to `HEARTBEAT.md` only when graph memory is unavailable
-3. Runs agent turn with checklist prompt
-3. If findings, notifies via channel
-4. If nothing, agent replies "HEARTBEAT_OK" (no notification)
-
-```rust
-use crate::agent::{HeartbeatConfig, spawn_heartbeat};
-
-let config = HeartbeatConfig::default()
-    .with_interval(Duration::from_secs(60 * 30))
-    .with_notify("user_123", "desktop");
-
-spawn_heartbeat(config, workspace, llm, response_tx);
-```
+Proactive periodic execution is now routine/config driven. It no longer depends
+on a fixed graph route or on reading a workspace `HEARTBEAT.md` file as runtime
+truth. Legacy heartbeat files can still exist as workspace documents, but the
+active heartbeat behavior comes from routine prompt/config stored in the runtime.
 
 ## Chunking Strategy
 

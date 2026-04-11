@@ -1,7 +1,7 @@
 {
   "model_name": "bootstrap-onboarding-flow",
   "expects": {
-    "tools_used": ["create_memory", "memory_write"],
+    "tools_used": ["memory_save", "bootstrap_complete"],
     "all_tools_succeeded": true,
     "min_responses": 2
   },
@@ -44,9 +44,8 @@
             "tool_calls": [
               {
                 "id": "call_user_profile_create",
-                "name": "create_memory",
+                "name": "memory_save",
                 "arguments": {
-                  "uri": "core://user/profile",
                   "kind": "user_profile",
                   "title": "User Profile",
                   "content": "- Name: Alex\n- Profession: backend engineer\n- Priorities: PR management; incident response\n- Communication: direct, concise, casual\n- Working style: hands-on debugger\n- Interests: distributed systems\n",
@@ -76,9 +75,8 @@
             "tool_calls": [
               {
                 "id": "call_agent_identity_create",
-                "name": "create_memory",
+                "name": "memory_save",
                 "arguments": {
-                  "uri": "core://agent/identity",
                   "kind": "identity",
                   "title": "Agent Identity",
                   "content": "Name: Claw\nVibe: Sharp, efficient, no-nonsense\n",
@@ -99,8 +97,8 @@
             "tool_calls": [
               {
                 "id": "call_bootstrap_clear",
-                "name": "memory_write",
-                "arguments": { "content": "", "target": "bootstrap" }
+                "name": "bootstrap_complete",
+                "arguments": {}
               }
             ],
             "input_tokens": 1200,
@@ -119,4 +117,3 @@
     }
   ]
 }
-

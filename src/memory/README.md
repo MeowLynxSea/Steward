@@ -17,10 +17,10 @@
 
 - Agent prompt assembly should prefer `MemoryManager::build_prompt_context(...)`.
 - Compaction and heartbeat should write episodic/procedural findings here instead of appending to workspace markdown files.
-- Built-in graph-native tools (`memory_recall`, `memory_open`, `memory_create`, `memory_update`, `memory_alias`, `memory_delete`, `memory_review`) should target this subsystem.
+- Built-in graph-native tools (`memory_recall`, `memory_open`, `memory_save`, `memory_alias`, `memory_delete`, `memory_review`) should target this subsystem.
 
 ## Boundary With Workspace
 
 `src/workspace/` still owns mounted files, workspace search, and file-context indexing.
 
-Legacy files such as `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, and `daily/*.md` are migration inputs only. After import, the graph is the runtime truth.
+Legacy files such as `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, `USER.md`, and `daily/*.md` are migration inputs only. After import, the graph is the runtime truth, and imported routes are treated as ordinary memory nodes rather than fixed runtime entry points.

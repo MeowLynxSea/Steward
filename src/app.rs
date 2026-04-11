@@ -91,6 +91,29 @@ async fn ensure_default_memory_routines(
     db: Arc<dyn Database>,
     user_id: &str,
 ) -> Result<(), crate::error::DatabaseError> {
+    const MEMORY_REFLECTION_PROMPT: &str = r#"You are a conservative memory gardener.
+
+Input: a completed turn payload with {thread_id, user_input, assistant_output, timestamp}.
+
+Rules:
+- Only write memory on high-signal events: user corrections, outdated facts, new stable preferences, new agreements/decisions, strong emotions, or a new durable insight.
+- Use memory_save for both new memories and corrections. If correcting a known fact: locate the relevant node via memory_recall/memory_open, then save back to the same route with either a patch (old_string/new_string), append, or full replacement content.
+- When creating: choose a semantically meaningful route/title that reflects the memory's actual topic. Do not rely on fixed identity buckets or junk paths like misc/logs/history. Use disclosure to describe WHEN to recall.
+- If aliasing helps cross-link: use memory_alias. If removing: memory_delete only deletes a path, never hard-deletes content.
+- If nothing is worth storing, do nothing.
+
+Tools available: memory_recall, memory_open, memory_save, memory_alias, memory_delete, memory_review."#;
+
+    const MEMORY_MAINTENANCE_PROMPT: &str = r#"You are running daily memory maintenance.
+
+Goals:
+- Merge redundant nodes, split overly long nodes, and refine titles/routes for clarity.
+- Promote durable operating protocol or invariants into the boot set when they should be recalled at session start.
+- Improve keywords and disclosure so recall stays useful without depending on fixed route names.
+- Avoid large-scale deletion. If removing, delete only paths (memory_delete), keeping rollback possible via changesets.
+
+If nothing to do, do nothing."#;
+
     // Create only if missing; do not overwrite user edits.
     let existing = db.get_routine_by_name(user_id, "memory_reflection").await?;
     if existing.is_none() {
@@ -107,19 +130,7 @@ async fn ensure_default_memory_routines(
                 filters: std::collections::HashMap::new(),
             },
             action: RoutineAction::Lightweight {
-                prompt: r#"You are a conservative memory gardener.
-
-Input: a completed turn payload with {thread_id, user_input, assistant_output, timestamp}.
-
-Rules:
-- Only write memory on high-signal events: user corrections, outdated facts, new stable preferences, new agreements/decisions, strong emotions, or a new durable insight.
-- Prefer update over create. If correcting a known fact: read the relevant URI, then patch via update_memory with old_string/new_string (or append) and include expected_version_id when possible.
-- If creating: pick a meaningful URI path that reflects a stable mental model. Avoid junk buckets (misc/logs/history). Use disclosure to describe WHEN to recall.
-- If aliasing helps cross-link: use add_alias. If removing: delete_memory only deletes a path, never hard-deletes content.
-- If nothing is worth storing, do nothing.
-
-Tools available: read_memory, create_memory, update_memory, delete_memory, add_alias, search_memory, manage_triggers."#
-                    .to_string(),
+                prompt: MEMORY_REFLECTION_PROMPT.to_string(),
                 context_paths: Vec::new(),
                 max_tokens: 2048,
                 use_tools: true,
@@ -167,16 +178,7 @@ Tools available: read_memory, create_memory, update_memory, delete_memory, add_a
                 timezone: Some(timezone),
             },
             action: RoutineAction::Lightweight {
-                prompt: r#"You are running daily memory maintenance.
-
-Goals:
-- Merge redundant nodes, split overly long nodes, refine titles/paths for clarity.
-- Promote important durable protocol/identity/invariants to boot (by setting kind=boot or creating boot nodes).
-- Manage triggers/keywords as a glossary for horizontal recall.
-- Avoid large-scale deletion. If removing, delete only paths (delete_memory), keeping rollback possible via changesets.
-
-If nothing to do, do nothing."#
-                    .to_string(),
+                prompt: MEMORY_MAINTENANCE_PROMPT.to_string(),
                 context_paths: Vec::new(),
                 max_tokens: 2048,
                 use_tools: true,
@@ -936,7 +938,6 @@ impl AppBuilder {
                 tracing::warn!("Failed to seed default memory routines: {e}");
             }
             tools.register_graph_memory_tools(Arc::clone(&manager));
-            tools.register_nocturne_memory_tools(Arc::clone(&manager));
             Some(manager)
         } else {
             None

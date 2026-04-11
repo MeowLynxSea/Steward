@@ -425,7 +425,6 @@ impl HeartbeatRunner {
                     Some("When a recurring proactive check uncovered follow-up work".to_string()),
                     serde_json::json!({
                         "source": "heartbeat",
-                        "checklist_route": "core://procedures/heartbeat",
                     }),
                 )
                 .await
@@ -437,26 +436,6 @@ impl HeartbeatRunner {
     }
 
     async fn load_heartbeat_checklist(&self) -> Result<Option<String>, String> {
-        if let Some(memory) = self.memory.as_ref() {
-            match memory
-                .get_node(
-                    self.workspace.user_id(),
-                    None,
-                    "core://procedures/heartbeat",
-                )
-                .await
-            {
-                Ok(Some(detail)) => return Ok(Some(detail.active_version.content)),
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to load heartbeat procedure from memory graph: {}",
-                        e
-                    );
-                }
-            }
-        }
-
         self.workspace
             .heartbeat_checklist()
             .await

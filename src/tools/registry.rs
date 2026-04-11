@@ -16,16 +16,14 @@ use crate::tools::builder::{
     BuildSoftwareTool, BuilderConfig, LlmSoftwareBuilder, SoftwareBuilder,
 };
 use crate::tools::builtin::{
-    ApplyPatchTool, CancelJobTool, CreateJobTool, EchoTool, ExtensionInfoTool, HttpTool,
-    JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    MemoryAliasTool, MemoryCreateTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool,
-    MemoryReviewTool, MemoryUpdateTool, MoveFileTool, ReadFileTool, ShellTool, SkillInstallTool,
-    SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
-    ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
-    MemoryReadTool, MemorySearchTool, MemoryTreeTool, MemoryWriteTool, WorkspaceReadTool,
-    WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
-    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ManageTriggersTool, ReadMemoryTool,
-    SearchMemoryTool, UpdateMemoryTool,
+    ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool, EchoTool,
+    ExtensionInfoTool, HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool,
+    ListDirTool, ListJobsTool, MemoryAliasTool, MemoryDeleteTool, MemoryOpenTool,
+    MemoryRecallTool, MemoryReviewTool, MemorySaveTool, MoveFileTool, ReadFileTool, ShellTool,
+    SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
+    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
+    ToolSearchTool, ToolUpgradeTool, WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool,
+    WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -50,25 +48,16 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "list_dir",
     "apply_patch",
     "workspace_search",
-    "memory_search",
     "workspace_write",
-    "memory_write",
     "workspace_read",
     "workspace_tree",
+    "bootstrap_complete",
     "memory_recall",
     "memory_open",
-    "memory_create",
-    "memory_update",
+    "memory_save",
     "memory_alias",
     "memory_delete",
     "memory_review",
-    "read_memory",
-    "create_memory",
-    "update_memory",
-    "delete_memory",
-    "add_alias",
-    "search_memory",
-    "manage_triggers",
     "create_job",
     "list_jobs",
     "job_status",
@@ -347,15 +336,12 @@ impl ToolRegistry {
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
         self.register_sync(Arc::new(WorkspaceSearchTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemorySearchTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceWriteTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryWriteTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryReadTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceReadTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(MemoryTreeTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(BootstrapCompleteTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceTreeTool::new(resolver)));
 
-        tracing::debug!("Registered 8 workspace document tools (plus legacy memory_* aliases)");
+        tracing::debug!("Registered 5 workspace document tools");
     }
 
     /// Register workspace document tools with a fixed workspace.
@@ -366,53 +352,30 @@ impl ToolRegistry {
         self.register_sync(Arc::new(WorkspaceSearchTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(MemorySearchTool::from_workspace(Arc::clone(
-            &workspace,
-        ))));
         self.register_sync(Arc::new(WorkspaceWriteTool::from_workspace(Arc::clone(
-            &workspace,
-        ))));
-        self.register_sync(Arc::new(MemoryWriteTool::from_workspace(Arc::clone(
-            &workspace,
-        ))));
-        self.register_sync(Arc::new(MemoryReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));
         self.register_sync(Arc::new(WorkspaceReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(MemoryTreeTool::from_workspace(Arc::clone(
+        self.register_sync(Arc::new(BootstrapCompleteTool::from_workspace(Arc::clone(
             &workspace,
         ))));
         self.register_sync(Arc::new(WorkspaceTreeTool::from_workspace(workspace)));
 
-        tracing::debug!("Registered 8 workspace document tools (plus legacy memory_* aliases)");
+        tracing::debug!("Registered 5 workspace document tools");
     }
 
     /// Register graph-native memory tools backed by the native memory manager.
     pub fn register_graph_memory_tools(&self, memory: Arc<crate::memory::MemoryManager>) {
         self.register_sync(Arc::new(MemoryRecallTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(MemoryOpenTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryCreateTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryUpdateTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(MemorySaveTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(MemoryAliasTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(MemoryDeleteTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(MemoryReviewTool::new(memory)));
 
-        tracing::debug!("Registered 7 graph-native memory tools");
-    }
-
-    /// Register Nocturne-compatible memory tools backed by the native memory manager.
-    pub fn register_nocturne_memory_tools(&self, memory: Arc<crate::memory::MemoryManager>) {
-        self.register_sync(Arc::new(ReadMemoryTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(CreateMemoryTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(UpdateMemoryTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(DeleteMemoryTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(AddAliasTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(SearchMemoryTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(ManageTriggersTool::new(memory)));
-
-        tracing::debug!("Registered 7 Nocturne-compatible memory tools");
+        tracing::debug!("Registered 6 graph-native memory tools");
     }
 
     /// Register job management tools.
@@ -807,6 +770,9 @@ impl std::fmt::Debug for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::MemoryManager;
+    use crate::testing::TestHarnessBuilder;
+    use crate::tools::builtin::ToolInfoTool;
     use crate::tools::registry::EchoTool;
     use crate::tools::tool::ToolDiscoverySummary;
 
@@ -1090,5 +1056,38 @@ mod tests {
         registry.retain_only(&[]).await;
         let after = registry.list().await.len();
         assert_eq!(before, after);
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn memory_save_tool_info_schema_matches_registered_input_schema() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+
+        let registry = Arc::new(ToolRegistry::new());
+        registry.register_graph_memory_tools(memory);
+
+        let defs = registry.tool_definitions().await;
+        let def = defs
+            .iter()
+            .find(|tool| tool.name == "memory_save")
+            .expect("memory_save should be registered");
+
+        let tool_info = ToolInfoTool::new(Arc::downgrade(&registry));
+        let result = tool_info
+            .execute(
+                serde_json::json!({
+                    "name": "memory_save",
+                    "detail": "schema"
+                }),
+                &crate::context::JobContext::default(),
+            )
+            .await
+            .expect("tool_info should describe memory_save");
+
+        assert_eq!(
+            result.result["schema"], def.parameters,
+            "tool_info schema should match the registered tool input schema"
+        );
     }
 }

@@ -1,8 +1,8 @@
 //! Tests for identity file scope isolation in multi-scope workspaces.
 //!
 //! When a workspace has multiple read scopes (e.g., Andrew can read from
-//! "andrew", "grace", "household"), identity files (SOUL.md, USER.md,
-//! IDENTITY.md, AGENTS.md) must ONLY come from the primary scope.
+//! "andrew", "grace", "household"), identity/config files (SOUL.md,
+//! USER.md, IDENTITY.md, AGENTS.md, TOOLS.md) must ONLY come from the primary scope.
 //!
 //! Multi-scope reads are designed for memory sharing (MEMORY.md, daily logs),
 //! not identity inheritance. Silently inheriting identity from another scope
@@ -47,23 +47,11 @@ async fn system_prompt_uses_primary_scope_identity() {
 
     // Seed Alice's identity files in her own scope
     seed(&db, "alice", paths::SOUL, "Alice is kind and curious.").await;
-    seed(
-        &db,
-        "alice",
-        paths::USER,
-        "You are talking to Alice, a software engineer.",
-    )
-    .await;
+    seed(&db, "alice", paths::TOOLS, "Alice prefers concise tool usage notes.").await;
 
     // Seed Bob's identity files in his scope
     seed(&db, "bob", paths::SOUL, "Bob is analytical and precise.").await;
-    seed(
-        &db,
-        "bob",
-        paths::USER,
-        "You are talking to Bob, a marine biologist.",
-    )
-    .await;
+    seed(&db, "bob", paths::TOOLS, "Bob prefers ocean-focused tool notes.").await;
 
     // Create Alice's workspace WITH multi-scope reads including Bob
     let ws = Workspace::new_with_db("alice", db.clone())
@@ -80,8 +68,8 @@ async fn system_prompt_uses_primary_scope_identity() {
         "Primary scope SOUL.md should appear in system prompt.\nPrompt:\n{prompt}"
     );
     assert!(
-        prompt.contains("Alice, a software engineer"),
-        "Primary scope USER.md should appear in system prompt.\nPrompt:\n{prompt}"
+        prompt.contains("concise tool usage"),
+        "Primary scope TOOLS.md should appear in system prompt.\nPrompt:\n{prompt}"
     );
 
     // Bob's identity must NOT appear
@@ -90,8 +78,8 @@ async fn system_prompt_uses_primary_scope_identity() {
         "Secondary scope SOUL.md must NOT appear in system prompt.\nPrompt:\n{prompt}"
     );
     assert!(
-        !prompt.contains("Bob, a marine biologist"),
-        "Secondary scope USER.md must NOT appear in system prompt.\nPrompt:\n{prompt}"
+        !prompt.contains("ocean-focused tool notes"),
+        "Secondary scope TOOLS.md must NOT appear in system prompt.\nPrompt:\n{prompt}"
     );
 }
 
@@ -103,13 +91,7 @@ async fn missing_primary_identity_does_not_fallback_to_other_scope() {
 
     // Only seed Bob's identity — Alice has no identity files
     seed(&db, "bob", paths::SOUL, "Bob is analytical and precise.").await;
-    seed(
-        &db,
-        "bob",
-        paths::USER,
-        "You are talking to Bob, a marine biologist.",
-    )
-    .await;
+    seed(&db, "bob", paths::TOOLS, "Bob prefers ocean-focused tool notes.").await;
 
     // Create Alice's workspace with multi-scope reads including Bob
     let ws = Workspace::new_with_db("alice", db.clone())
@@ -166,7 +148,7 @@ async fn memory_files_still_use_multi_scope_reads() {
 async fn all_identity_files_are_scope_isolated() {
     let (db, _dir) = setup().await;
 
-    // Seed identity files ONLY in the "other" scope, not in Alice's
+    // Seed identity/config files ONLY in the "other" scope, not in Alice's
     seed(&db, "other", paths::AGENTS, "You are Other's agent.").await;
     seed(&db, "other", paths::SOUL, "Other's soul values.").await;
     seed(&db, "other", paths::USER, "You are talking to Other.").await;
@@ -189,7 +171,7 @@ async fn all_identity_files_are_scope_isolated() {
     assert!(
         !prompt.contains("Other"),
         "No identity or config files from secondary scope should appear.\n\
-         Every identity file (AGENTS.md, SOUL.md, USER.md, IDENTITY.md, \
+         Every identity/config file (AGENTS.md, SOUL.md, USER.md, IDENTITY.md, \
          BOOTSTRAP.md, TOOLS.md) must read from primary scope only.\nPrompt:\n{prompt}"
     );
 }

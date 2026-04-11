@@ -133,29 +133,46 @@ fn coerce_value(value: &serde_json::Value, schema: &serde_json::Value) -> serde_
             .and_then(|r| r.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
             .unwrap_or_default();
-        let mut coerced = obj.clone();
+        let mut coerced = serde_json::Map::with_capacity(obj.len());
 
-        for (key, current) in &mut coerced {
+        for (key, current) in obj {
             if let Some(prop_schema) = properties.and_then(|props| props.get(key)) {
+                // Anthropic frequently emits object skeletons where optional fields are
+                // present as explicit null. When the schema does not allow null, treat
+                // that as "field omitted" instead of forwarding an invalid value.
+                if current.is_null() && !schema_allows_type(prop_schema, "null") {
+                    continue;
+                }
+
+                let mut next = current.clone();
+
                 // LLMs send "" for optional fields instead of omitting them.
                 // Coerce to null only when the field is not required AND the schema
                 // allows null or doesn't allow string — a `type: "string"` field
                 // may legitimately accept "" as a meaningful value.
-                if current.as_str() == Some("")
+                if next.as_str() == Some("")
                     && !required.contains(key.as_str())
                     && (schema_allows_type(prop_schema, "null")
                         || !schema_allows_type(prop_schema, "string"))
                 {
-                    *current = serde_json::Value::Null;
-                    continue;
+                    next = serde_json::Value::Null;
+                } else {
+                    next = coerce_value(&next, prop_schema);
                 }
-                *current = coerce_value(current, prop_schema);
+
+                coerced.insert(key.clone(), next);
                 continue;
             }
 
             if let Some(additional_schema) = additional_schema {
-                *current = coerce_value(current, additional_schema);
+                if current.is_null() && !schema_allows_type(additional_schema, "null") {
+                    continue;
+                }
+                coerced.insert(key.clone(), coerce_value(current, additional_schema));
+                continue;
             }
+
+            coerced.insert(key.clone(), current.clone());
         }
 
         return serde_json::Value::Object(coerced);
@@ -1052,5 +1069,54 @@ mod tests {
             result["requests"],
             serde_json::json!([{ "insertText": { "text": "hello" } }])
         );
+    }
+
+    #[test]
+    fn prepare_params_does_not_synthesize_missing_fields_as_null() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "route": { "type": "string" },
+                "parent_route": { "type": "string" },
+                "content": { "type": "string" }
+            },
+            "oneOf": [
+                { "required": ["route", "content"] },
+                { "required": ["parent_route", "content"] }
+            ]
+        });
+        let params = serde_json::json!({
+            "content": "The user's name is 梦凌汐."
+        });
+
+        let result = prepare_params_for_schema(&params, &schema);
+
+        assert_eq!(result, params);
+        assert!(result.get("route").is_none());
+        assert!(result.get("parent_route").is_none());
+    }
+
+    #[test]
+    fn prepare_params_strips_non_nullable_null_fields() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "route": { "type": "string" },
+                "content": { "type": "string" },
+                "disclosure": { "type": ["string", "null"] }
+            }
+        });
+        let params = serde_json::json!({
+            "route": null,
+            "content": null,
+            "disclosure": null
+        });
+
+        let result = prepare_params_for_schema(&params, &schema);
+
+        assert!(result.get("route").is_none());
+        assert!(result.get("content").is_none());
+        assert!(result.get("disclosure").is_some());
+        assert!(result["disclosure"].is_null());
     }
 }

@@ -221,7 +221,7 @@ See `.env.example` for all environment variables. LLM backends (`nearai`, `opena
 
 ## Workspace & Memory
 
-Persistent memory with hybrid search (FTS + vector via RRF). Four tools: `memory_search`, `memory_write`, `memory_read`, `memory_tree`. Identity files (AGENTS.md, SOUL.md, USER.md, IDENTITY.md) injected into system prompt. Heartbeat system runs proactive periodic execution (default: 30 minutes), reading `HEARTBEAT.md` and notifying via channel if findings. See `src/workspace/README.md`.
+Workspace search and mounted-file context live under `src/workspace/`. Durable long-term memory lives in the graph-native system under `src/memory/` and is exposed to the agent via `memory_open`, `memory_recall`, `memory_save`, `memory_alias`, `memory_delete`, and `memory_review`. Legacy files like `USER.md`, `IDENTITY.md`, `MEMORY.md`, and `HEARTBEAT.md` are migration inputs or workspace docs, not the runtime truth for agent memory. See `src/workspace/README.md` and `src/memory/README.md`.
 
 ## Debugging
 

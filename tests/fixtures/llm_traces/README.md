@@ -137,13 +137,13 @@ Trace fixtures must produce deterministic results across runs. **Do not use tool
 - `list_dir` on directories not created by the trace itself
 - `shell` with commands that depend on system state (e.g. `date`, `ps`, `ls /var`)
 - `http` -- external endpoints may change or be unavailable
-- `memory_search` unless the trace writes the memory entry first
+- `memory_recall` unless the trace writes the memory entry first
 
 **Prefer:**
 - `echo` -- always returns its input
 - `json` -- deterministic parsing/formatting
 - `write_file` + `read_file` -- self-contained if the trace writes first
-- `memory_write` + `memory_read` -- deterministic if the trace writes first
+- `memory_save` + `memory_open` -- deterministic if the trace writes first
 - `shell` with deterministic commands (e.g. `echo "hello"`, `printf`)
 
 When a trace needs to exercise a stateful tool (like `list_dir`), have an earlier step create the expected state (e.g. `write_file` to create the directory contents first).
@@ -189,7 +189,7 @@ Returns a `ToolCompletionResponse` with `FinishReason::ToolUse`. The agent loop 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique call ID. Convention: `call_{tool}_{n}`. |
-| `name` | string | Must match a registered tool name (e.g. `echo`, `write_file`, `read_file`, `memory_write`, `shell`). |
+| `name` | string | Must match a registered tool name (e.g. `echo`, `write_file`, `read_file`, `memory_save`, `shell`). |
 | `arguments` | object | Tool parameters as JSON. Must conform to the tool's `parameters_schema()`. |
 
 #### `user_input` -- user message marker (recording only)
@@ -286,7 +286,6 @@ Example (per-turn):
 llm_traces/
   simple_text.json          # Minimal single-turn text response
   file_write_read.json      # Write then read a file
-  memory_write_read.json    # Memory write then text confirmation
   error_path.json           # Tool call with missing params, then recovery
   spot/                     # Quick smoke tests (1-3 steps each)
     smoke_greeting.json     # Simple greeting, no tools
@@ -295,7 +294,7 @@ llm_traces/
     tool_echo.json          # Single echo tool call + confirmation
     tool_json.json          # JSON parse tool call + confirmation
     chain_write_read.json   # Write file -> read file -> confirm
-    memory_save_recall.json # Memory write -> memory search -> confirm
+    memory_save_recall.json # Memory write -> memory recall -> confirm
     robust_correct_tool.json
   coverage/                 # Broader tool and feature coverage
     shell_echo.json         # Shell command execution
@@ -303,14 +302,11 @@ llm_traces/
     apply_patch_chain.json  # File patching workflow
     json_operations.json    # JSON tool usage
     injection_in_echo.json  # Prompt injection in tool output
-    memory_full_cycle.json  # Full memory write/search/read cycle
     status_events_tool_chain.json
   advanced/                 # Multi-step and edge-case scenarios
     long_tool_chain.json    # Many sequential tool calls
     tool_error_recovery.json # Failed tool call -> retry with valid path
-    multi_turn_memory.json  # Memory across multiple turns
     steering.json           # User steering: correct agent mid-conversation
-    workspace_search.json   # Workspace search workflows
     prompt_injection_resilience.json
     iteration_limit.json    # Tests agent loop iteration bounds
 ```

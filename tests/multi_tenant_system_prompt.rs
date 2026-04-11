@@ -2,8 +2,8 @@
 //!
 //! The agent must build the conversational system prompt from a workspace
 //! scoped to the incoming message's user, not from the shared owner-scope
-//! workspace created at startup. Otherwise per-user identity files
-//! (IDENTITY.md, SOUL.md, USER.md) become invisible and different users can
+//! workspace created at startup. Otherwise per-user prompt documents
+//! (SOUL.md, AGENTS.md, TOOLS.md) become invisible and different users can
 //! see the same owner-scoped prompt.
 //!
 //! These tests:
@@ -13,7 +13,7 @@
 //!    correct user's identity
 //! 4. Verify user A's identity doesn't leak into user B's prompt
 //!
-//! These tests ensure each user's identity is isolated correctly.
+//! These tests ensure each user's prompt context is isolated correctly.
 
 #[cfg(feature = "libsql")]
 mod support;
@@ -35,10 +35,8 @@ mod tests {
     const ALICE_USER_ID: &str = "alice";
     const BOB_USER_ID: &str = "bob";
 
-    const ALICE_IDENTITY: &str = "You are Alice's personal assistant. \
-        Alice is a software engineer who lives in Seattle.";
-    const BOB_IDENTITY: &str = "You are Bob's personal assistant. \
-        Bob is a marine biologist who lives in Miami.";
+    const ALICE_SOUL: &str = "Alice values careful engineering and lives in Seattle.";
+    const BOB_SOUL: &str = "Bob values ocean science and lives in Miami.";
 
     /// Create a simple trace that returns a canned text response.
     /// We need one step per message we plan to send.
@@ -69,13 +67,17 @@ mod tests {
         LlmTrace::new("test-model", turns)
     }
 
-    /// Seed identity files for a user by creating a workspace scoped to that
-    /// user and writing IDENTITY.md.
-    async fn seed_identity(db: &Arc<dyn steward_core::db::Database>, user_id: &str, content: &str) {
+    /// Seed prompt-bearing files for a user by creating a workspace scoped to that
+    /// user and writing SOUL.md.
+    async fn seed_prompt_context(
+        db: &Arc<dyn steward_core::db::Database>,
+        user_id: &str,
+        content: &str,
+    ) {
         let ws = Workspace::new_with_db(user_id, db.clone());
-        ws.write("IDENTITY.md", content)
+        ws.write("SOUL.md", content)
             .await
-            .unwrap_or_else(|e| panic!("Failed to seed IDENTITY.md for {user_id}: {e}"));
+            .unwrap_or_else(|e| panic!("Failed to seed SOUL.md for {user_id}: {e}"));
     }
 
     /// Extract the system prompt from captured LLM requests.
@@ -96,27 +98,27 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn alice_system_prompt_contains_alice_identity() {
+    async fn alice_system_prompt_contains_alice_prompt_context() {
         let trace = simple_trace(1);
         let rig = TestRigBuilder::new().with_trace(trace).build().await;
 
-        // Seed alice's identity into the database
+        // Seed alice's prompt context into the database
         let db = rig.database();
-        seed_identity(db, ALICE_USER_ID, ALICE_IDENTITY).await;
+        seed_prompt_context(db, ALICE_USER_ID, ALICE_SOUL).await;
 
         // Send a message AS alice (using her user_id)
         let msg = IncomingMessage::new("test", ALICE_USER_ID, "Hello, who am I?");
         rig.send_incoming(msg).await;
         let _responses = rig.wait_for_responses(1, TIMEOUT).await;
 
-        // The system prompt sent to the LLM should contain Alice's identity
+        // The system prompt sent to the LLM should contain Alice's prompt context
         let requests = rig.captured_llm_requests();
         let system_prompt =
             extract_system_prompt(&requests).expect("Expected a system prompt in the LLM request");
 
         assert!(
-            system_prompt.contains("Alice is a software engineer"),
-            "System prompt should contain Alice's identity when messaging as Alice.\n\
+            system_prompt.contains("careful engineering"),
+            "System prompt should contain Alice's prompt context when messaging as Alice.\n\
              Actual system prompt:\n{system_prompt}"
         );
 
@@ -129,27 +131,27 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn bob_system_prompt_contains_bob_identity() {
+    async fn bob_system_prompt_contains_bob_prompt_context() {
         let trace = simple_trace(1);
         let rig = TestRigBuilder::new().with_trace(trace).build().await;
 
-        // Seed bob's identity into the database
+        // Seed bob's prompt context into the database
         let db = rig.database();
-        seed_identity(db, BOB_USER_ID, BOB_IDENTITY).await;
+        seed_prompt_context(db, BOB_USER_ID, BOB_SOUL).await;
 
         // Send a message AS bob
         let msg = IncomingMessage::new("test", BOB_USER_ID, "Hello, who am I?");
         rig.send_incoming(msg).await;
         let _responses = rig.wait_for_responses(1, TIMEOUT).await;
 
-        // The system prompt should contain Bob's identity
+        // The system prompt should contain Bob's prompt context
         let requests = rig.captured_llm_requests();
         let system_prompt =
             extract_system_prompt(&requests).expect("Expected a system prompt in the LLM request");
 
         assert!(
-            system_prompt.contains("Bob is a marine biologist"),
-            "System prompt should contain Bob's identity when messaging as Bob.\n\
+            system_prompt.contains("ocean science"),
+            "System prompt should contain Bob's prompt context when messaging as Bob.\n\
              Actual system prompt:\n{system_prompt}"
         );
 
@@ -161,14 +163,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn alice_identity_does_not_leak_into_bob_prompt() {
+    async fn alice_prompt_context_does_not_leak_into_bob_prompt() {
         let trace = simple_trace(1);
         let rig = TestRigBuilder::new().with_trace(trace).build().await;
 
-        // Seed BOTH users' identities
+        // Seed BOTH users' prompt context
         let db = rig.database();
-        seed_identity(db, ALICE_USER_ID, ALICE_IDENTITY).await;
-        seed_identity(db, BOB_USER_ID, BOB_IDENTITY).await;
+        seed_prompt_context(db, ALICE_USER_ID, ALICE_SOUL).await;
+        seed_prompt_context(db, BOB_USER_ID, BOB_SOUL).await;
 
         // Send a message AS bob
         let msg = IncomingMessage::new("test", BOB_USER_ID, "Tell me about myself");
@@ -181,16 +183,16 @@ mod tests {
 
         if let Some(ref prompt) = system_prompt {
             assert!(
-                !prompt.contains("Alice is a software engineer"),
-                "Alice's identity LEAKED into Bob's system prompt!\n\
+                !prompt.contains("careful engineering"),
+                "Alice's prompt context LEAKED into Bob's system prompt!\n\
                  System prompt:\n{prompt}"
             );
         }
-        // Also verify Bob's identity IS present (compound check)
+        // Also verify Bob's prompt context IS present (compound check)
         let prompt = system_prompt.expect("Expected a system prompt in the LLM request");
         assert!(
-            prompt.contains("Bob is a marine biologist"),
-            "Bob's own identity should be in his system prompt.\n\
+            prompt.contains("ocean science"),
+            "Bob's own prompt context should be in his system prompt.\n\
              Actual system prompt:\n{prompt}"
         );
 
@@ -202,14 +204,14 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn bob_identity_does_not_leak_into_alice_prompt() {
+    async fn bob_prompt_context_does_not_leak_into_alice_prompt() {
         let trace = simple_trace(1);
         let rig = TestRigBuilder::new().with_trace(trace).build().await;
 
-        // Seed BOTH users' identities
+        // Seed BOTH users' prompt context
         let db = rig.database();
-        seed_identity(db, ALICE_USER_ID, ALICE_IDENTITY).await;
-        seed_identity(db, BOB_USER_ID, BOB_IDENTITY).await;
+        seed_prompt_context(db, ALICE_USER_ID, ALICE_SOUL).await;
+        seed_prompt_context(db, BOB_USER_ID, BOB_SOUL).await;
 
         // Send a message AS alice
         let msg = IncomingMessage::new("test", ALICE_USER_ID, "Tell me about myself");
@@ -222,16 +224,16 @@ mod tests {
 
         if let Some(ref prompt) = system_prompt {
             assert!(
-                !prompt.contains("Bob is a marine biologist"),
-                "Bob's identity LEAKED into Alice's system prompt!\n\
+                !prompt.contains("ocean science"),
+                "Bob's prompt context LEAKED into Alice's system prompt!\n\
                  System prompt:\n{prompt}"
             );
         }
-        // Also verify Alice's identity IS present
+        // Also verify Alice's prompt context IS present
         let prompt = system_prompt.expect("Expected a system prompt in the LLM request");
         assert!(
-            prompt.contains("Alice is a software engineer"),
-            "Alice's own identity should be in her system prompt.\n\
+            prompt.contains("careful engineering"),
+            "Alice's own prompt context should be in her system prompt.\n\
              Actual system prompt:\n{prompt}"
         );
 

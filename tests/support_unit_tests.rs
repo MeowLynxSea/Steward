@@ -228,7 +228,7 @@ mod test_channel_tests {
         channel
             .send_status(
                 StatusUpdate::ToolStarted {
-                    name: "memory_search".to_string(),
+                    name: "workspace_search".to_string(),
                     tool_call_id: "call_1".to_string(),
                     parameters: None,
                 },
@@ -253,7 +253,7 @@ mod test_channel_tests {
             .unwrap();
 
         let started = channel.tool_calls_started();
-        assert_eq!(started, vec!["memory_search", "echo"]);
+        assert_eq!(started, vec!["workspace_search", "echo"]);
     }
 
     #[tokio::test]
@@ -420,7 +420,7 @@ mod trace_llm_tests {
             "test-model",
             "search memory",
             vec![tool_calls_step(
-                vec![simple_tool_call("memory_search")],
+                vec![simple_tool_call("workspace_search")],
                 80,
                 15,
             )],
@@ -434,8 +434,8 @@ mod trace_llm_tests {
 
         assert!(resp.content.is_none());
         assert_eq!(resp.tool_calls.len(), 1);
-        assert_eq!(resp.tool_calls[0].name, "memory_search");
-        assert_eq!(resp.tool_calls[0].id, "call_memory_search");
+        assert_eq!(resp.tool_calls[0].name, "workspace_search");
+        assert_eq!(resp.tool_calls[0].id, "call_workspace_search");
         assert_eq!(
             resp.tool_calls[0].arguments,
             serde_json::json!({"key": "value"})

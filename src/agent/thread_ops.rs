@@ -21,7 +21,7 @@ use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::{ChatMessage, ToolCall};
-use crate::tools::redact_params;
+use crate::tools::{prepare_tool_params, redact_params};
 use steward_common::truncate_preview;
 use chrono::Utc;
 
@@ -1800,6 +1800,12 @@ impl Agent {
                         .await;
                     }
 
+                    let display_params = if let Some(tool) = self.tools().get(&tc.name).await {
+                        prepare_tool_params(tool.as_ref(), &tc.arguments)
+                    } else {
+                        tc.arguments.clone()
+                    };
+
                     let _ = self
                         .channels
                         .send_status(
@@ -1807,7 +1813,7 @@ impl Agent {
                             StatusUpdate::ToolStarted {
                                 name: tc.name.clone(),
                                 tool_call_id: tc.id.clone(),
-                                parameters: Some(tc.arguments.to_string()),
+                                parameters: Some(display_params.to_string()),
                             },
                             &message.metadata,
                         )
@@ -1826,7 +1832,7 @@ impl Agent {
                                 tc.name.clone(),
                                 tc.id.clone(),
                                 &result,
-                                &tc.arguments,
+                                &display_params,
                                 deferred_tool.as_deref(),
                             ),
                             &message.metadata,
@@ -1872,6 +1878,11 @@ impl Agent {
                     let tc = tc.clone();
                     let channel = message.channel.clone();
                     let metadata = message.metadata.clone();
+                    let display_params = if let Some(tool) = tools.get(&tc.name).await {
+                        prepare_tool_params(tool.as_ref(), &tc.arguments)
+                    } else {
+                        tc.arguments.clone()
+                    };
 
                     join_set.spawn(async move {
                         let _ = channels
@@ -1880,7 +1891,7 @@ impl Agent {
                                 StatusUpdate::ToolStarted {
                                     name: tc.name.clone(),
                                     tool_call_id: tc.id.clone(),
-                                    parameters: Some(tc.arguments.to_string()),
+                                    parameters: Some(display_params.to_string()),
                                 },
                                 &metadata,
                             )
@@ -1903,7 +1914,7 @@ impl Agent {
                                     tc.name.clone(),
                                     tc.id.clone(),
                                     &result,
-                                    &tc.arguments,
+                                    &display_params,
                                     par_tool.as_deref(),
                                 ),
                                 &metadata,
@@ -2044,11 +2055,12 @@ impl Agent {
 
             // Handle approval if a tool needed it
             if let Some((approval_idx, tc, tool, allow_always)) = approval_needed {
+                let normalized_params = prepare_tool_params(tool.as_ref(), &tc.arguments);
                 let new_pending = PendingApproval {
                     request_id: Uuid::new_v4(),
                     tool_name: tc.name.clone(),
-                    parameters: tc.arguments.clone(),
-                    display_parameters: redact_params(&tc.arguments, tool.sensitive_params()),
+                    parameters: normalized_params.clone(),
+                    display_parameters: redact_params(&normalized_params, tool.sensitive_params()),
                     description: tool.description().to_string(),
                     tool_call_id: tc.id.clone(),
                     context_messages: context_messages.clone(),
