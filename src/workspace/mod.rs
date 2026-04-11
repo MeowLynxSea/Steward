@@ -71,7 +71,7 @@ pub struct WriteResult {
     pub actual_layer: String,
 }
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use chrono::{NaiveDate, Utc};
 use uuid::Uuid;
@@ -470,7 +470,7 @@ pub struct Workspace {
     /// Database storage backend.
     storage: WorkspaceStorage,
     /// Embedding provider for semantic search.
-    embeddings: Option<Arc<dyn EmbeddingProvider>>,
+    embeddings: Arc<RwLock<Option<Arc<dyn EmbeddingProvider>>>>,
     /// Set by `seed_if_empty()` when BOOTSTRAP.md is freshly seeded.
     /// The agent loop checks and clears this to send a proactive greeting.
     bootstrap_pending: std::sync::atomic::AtomicBool,
@@ -498,7 +498,7 @@ impl Workspace {
             user_id: user_id_str,
             agent_id: None,
             storage: WorkspaceStorage::Db(db),
-            embeddings: None,
+            embeddings: Arc::new(RwLock::new(None)),
             bootstrap_pending: std::sync::atomic::AtomicBool::new(false),
             bootstrap_completed: std::sync::atomic::AtomicBool::new(false),
             search_defaults: SearchConfig::default(),
@@ -538,31 +538,48 @@ impl Workspace {
     /// The provider is automatically wrapped in a [`CachedEmbeddingProvider`]
     /// with the default cache size (10,000 entries; payload ~58 MB for 1536-dim,
     /// actual memory higher due to per-entry overhead).
-    pub fn with_embeddings(mut self, provider: Arc<dyn EmbeddingProvider>) -> Self {
-        self.embeddings = Some(Arc::new(CachedEmbeddingProvider::new(
-            provider,
-            EmbeddingCacheConfig::default(),
-        )));
+    pub fn with_embeddings(self, provider: Arc<dyn EmbeddingProvider>) -> Self {
+        self.set_embeddings_cached(Some(provider), EmbeddingCacheConfig::default());
         self
     }
 
     /// Set the embedding provider with a custom cache configuration.
     pub fn with_embeddings_cached(
-        mut self,
+        self,
         provider: Arc<dyn EmbeddingProvider>,
         cache_config: EmbeddingCacheConfig,
     ) -> Self {
-        self.embeddings = Some(Arc::new(CachedEmbeddingProvider::new(
-            provider,
-            cache_config,
-        )));
+        self.set_embeddings_cached(Some(provider), cache_config);
         self
     }
 
     /// Set the embedding provider **without** caching (for tests).
-    pub fn with_embeddings_uncached(mut self, provider: Arc<dyn EmbeddingProvider>) -> Self {
-        self.embeddings = Some(provider);
+    pub fn with_embeddings_uncached(self, provider: Arc<dyn EmbeddingProvider>) -> Self {
+        self.set_embeddings(Some(provider));
         self
+    }
+
+    pub fn set_embeddings(&self, provider: Option<Arc<dyn EmbeddingProvider>>) {
+        *self.embeddings.write().unwrap_or_else(|e| e.into_inner()) = provider;
+    }
+
+    pub fn set_embeddings_cached(
+        &self,
+        provider: Option<Arc<dyn EmbeddingProvider>>,
+        cache_config: EmbeddingCacheConfig,
+    ) {
+        let provider = provider.map(|provider| {
+            Arc::new(CachedEmbeddingProvider::new(provider, cache_config))
+                as Arc<dyn EmbeddingProvider>
+        });
+        self.set_embeddings(provider);
+    }
+
+    fn current_embeddings(&self) -> Option<Arc<dyn EmbeddingProvider>> {
+        self.embeddings
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Set the default search configuration from workspace search config.
@@ -1476,7 +1493,7 @@ impl Workspace {
         config: SearchConfig,
     ) -> Result<Vec<SearchResult>, WorkspaceError> {
         // Generate embedding for semantic search if provider available
-        let embedding = if let Some(ref provider) = self.embeddings {
+        let embedding = if let Some(provider) = self.current_embeddings() {
             Some(
                 provider
                     .embed(query)
@@ -1547,7 +1564,7 @@ impl Workspace {
         // Insert new chunks
         for (index, content) in chunks.into_iter().enumerate() {
             // Generate embedding if provider available
-            let embedding = if let Some(ref provider) = self.embeddings {
+            let embedding = if let Some(provider) = self.current_embeddings() {
                 match provider.embed(&content).await {
                     Ok(emb) => Some(emb),
                     Err(e) => {
@@ -1764,7 +1781,7 @@ impl Workspace {
     ///
     /// This is useful for backfilling embeddings after enabling the provider.
     pub async fn backfill_embeddings(&self) -> Result<usize, WorkspaceError> {
-        let Some(ref provider) = self.embeddings else {
+        let Some(provider) = self.current_embeddings() else {
             return Ok(0);
         };
 

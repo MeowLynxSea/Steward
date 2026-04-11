@@ -83,6 +83,27 @@ fn optional_priority(params: &serde_json::Value) -> Result<Option<i32>, ToolErro
     }
 }
 
+fn optional_string_list(
+    params: &serde_json::Value,
+    key: &str,
+) -> Result<Option<Vec<String>>, ToolError> {
+    match params.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value.as_str().map(|text| text.to_string()).ok_or_else(|| {
+                    ToolError::InvalidParameters(format!("'{key}' entries must all be strings"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(ToolError::InvalidParameters(format!(
+            "'{key}' must be an array of strings when provided"
+        ))),
+    }
+}
+
 fn validate_title(title: &str) -> Result<(), ToolError> {
     if title.is_empty() {
         return Err(ToolError::InvalidParameters(
@@ -272,13 +293,35 @@ impl Tool for SearchMemoryTool {
             .search(&ctx.user_id, None, query, limit, &domains)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("memory search failed: {e}")))?;
+        let rendered_results = results
+            .iter()
+            .map(|hit| {
+                json!({
+                    "node_id": hit.node_id,
+                    "route_id": hit.route_id,
+                    "version_id": hit.version_id,
+                    "uri": hit.uri,
+                    "title": hit.title,
+                    "kind": hit.kind,
+                    "content_snippet": hit.content_snippet,
+                    "priority": hit.priority,
+                    "trigger_text": hit.trigger_text,
+                    "score": hit.score,
+                    "fts_rank": hit.fts_rank,
+                    "vector_rank": hit.vector_rank,
+                    "is_hybrid_match": hit.fts_rank.is_some() && hit.vector_rank.is_some(),
+                    "matched_keywords": hit.matched_keywords,
+                    "updated_at": hit.updated_at,
+                })
+            })
+            .collect::<Vec<_>>();
 
         Ok(ToolOutput::success(
             json!({
                 "query": query,
                 "domain": domains.first(),
                 "limit": limit,
-                "results": results,
+                "results": rendered_results,
                 "count": results.len(),
             }),
             start.elapsed(),
@@ -339,11 +382,17 @@ impl Tool for ReadMemoryTool {
                 .boot_set(&ctx.user_id, None, None)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("boot read failed: {e}")))?;
+            let recent_changes = self
+                .memory
+                .list_recent(&ctx.user_id, None, 5, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("boot recent read failed: {e}")))?;
             return Ok(ToolOutput::success(
                 json!({
                     "uri": requested_uri,
                     "kind": "system_boot",
                     "items": items,
+                    "recent_changes": recent_changes,
                 }),
                 start.elapsed(),
             ));
@@ -486,7 +535,12 @@ impl Tool for CreateMemoryTool {
                 "content": { "type": "string" },
                 "priority": { "type": "integer", "description": "优先级（0=最高，数字越小越优先）。" },
                 "title": { "type": "string", "description": "可选路径名称（仅限字母、数字、'_'、'-'）。普通 durable memory 几乎总该填写；不填则自动分配序号。" },
-                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。用户资料、自我设定、约定、偏好和重要教训通常都应该填写。" }
+                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。用户资料、自我设定、约定、偏好和重要教训通常都应该填写。" },
+                "keywords": {
+                    "type": "array",
+                    "description": "可选横向召回关键词。用于补充 disclosure/path 难以覆盖的换说法。",
+                    "items": { "type": "string" }
+                }
             },
             "required": ["parent_uri", "content", "priority"],
             "additionalProperties": false,
@@ -514,6 +568,7 @@ impl Tool for CreateMemoryTool {
             })? as i32;
         let title = optional_string(&params, "title")?;
         let disclosure = optional_string(&params, "disclosure")?;
+        let keywords = optional_string_list(&params, "keywords")?.unwrap_or_default();
 
         if content.trim().is_empty() {
             return Err(ToolError::InvalidParameters(
@@ -552,7 +607,7 @@ impl Tool for CreateMemoryTool {
                 priority,
                 disclosure.clone(),
                 crate::memory::MemoryVisibility::Private,
-                Vec::new(),
+                keywords.clone(),
                 json!({
                     "source": "tool:create_memory",
                     "job_id": ctx.job_id,
@@ -567,6 +622,7 @@ impl Tool for CreateMemoryTool {
                 "node": detail,
                 "priority": priority,
                 "disclosure": disclosure,
+                "keywords": keywords,
                 "changeset_id": changeset.id,
                 "review_status": changeset.status,
             }),
@@ -612,7 +668,12 @@ impl Tool for UpdateMemoryTool {
                 "new_string": { "type": "string", "description": "Patch 模式：替换后的文本。设为 \"\" 可删除匹配片段。" },
                 "append": { "type": "string", "description": "Append 模式：追加到内容末尾的文本。" },
                 "priority": { "type": "integer", "description": "新的优先级。" },
-                "disclosure": { "type": "string", "description": "新的触发条件。" }
+                "disclosure": { "type": "string", "description": "新的触发条件。" },
+                "keywords": {
+                    "type": "array",
+                    "description": "可选完整关键词集合。若提供，将覆盖该记忆现有 keywords。",
+                    "items": { "type": "string" }
+                }
             },
             "required": ["uri"],
             "additionalProperties": false,
@@ -651,6 +712,7 @@ impl Tool for UpdateMemoryTool {
         let append = optional_string(&params, "append")?;
         let priority = optional_priority(&params)?;
         let disclosure = optional_string(&params, "disclosure")?;
+        let keywords = optional_string_list(&params, "keywords")?;
 
         if old_string.is_some() && append.is_some() {
             return Err(ToolError::InvalidParameters(
@@ -707,9 +769,9 @@ impl Tool for UpdateMemoryTool {
             None
         };
 
-        if content.is_none() && priority.is_none() && disclosure.is_none() {
+        if content.is_none() && priority.is_none() && disclosure.is_none() && keywords.is_none() {
             return Err(ToolError::InvalidParameters(
-                "no update fields provided; use patch mode, append mode, priority, or disclosure"
+                "no update fields provided; use patch mode, append mode, priority, disclosure, or keywords"
                     .to_string(),
             ));
         }
@@ -719,6 +781,7 @@ impl Tool for UpdateMemoryTool {
             content,
             priority,
             trigger_text: disclosure.clone().map(Some),
+            keywords,
             metadata: Some(json!({
                 "source": "tool:update_memory",
                 "job_id": ctx.job_id,
@@ -918,6 +981,247 @@ impl Tool for AddAliasTool {
     }
 }
 
+pub struct ManageBootTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl ManageBootTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for ManageBootTool {
+    fn name(&self) -> &str {
+        "manage_boot"
+    }
+
+    fn description(&self) -> &str {
+        "将某条 durable memory 加入或移出显式 boot 集合，并可调整 boot 加载优先级。"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "uri": { "type": "string" },
+                "action": {
+                    "type": "string",
+                    "enum": ["add", "remove"]
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "仅 action=add 时使用，表示 boot 加载优先级（0=最高）。"
+                }
+            },
+            "required": ["uri", "action"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let uri = require_str(&params, "uri")?;
+        let action = require_str(&params, "action")?;
+        let priority = optional_priority(&params)?.unwrap_or(DEFAULT_CREATE_PRIORITY);
+
+        let result = match action {
+            "add" => {
+                let route = self
+                    .memory
+                    .add_to_boot(&ctx.user_id, None, uri, priority)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("boot update failed: {e}")))?;
+                json!({
+                    "uri": route.uri(),
+                    "action": "add",
+                    "priority": priority,
+                })
+            }
+            "remove" => {
+                self.memory
+                    .remove_from_boot(&ctx.user_id, None, uri)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("boot update failed: {e}")))?;
+                json!({
+                    "uri": uri,
+                    "action": "remove",
+                })
+            }
+            _ => {
+                return Err(ToolError::InvalidParameters(
+                    "'action' must be 'add' or 'remove'".to_string(),
+                ));
+            }
+        };
+
+        Ok(ToolOutput::success(result, start.elapsed()))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::Never
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct ManageTriggersTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl ManageTriggersTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for ManageTriggersTool {
+    fn name(&self) -> &str {
+        "manage_triggers"
+    }
+
+    fn description(&self) -> &str {
+        "为记忆节点增删关键词，并可同步调整 disclosure，用来经营横向召回网络。"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "uri": { "type": "string" },
+                "add": { "type": "array", "items": { "type": "string" } },
+                "remove": { "type": "array", "items": { "type": "string" } },
+                "disclosure": {
+                    "description": "可选新的 disclosure。传 null 可清空。",
+                    "anyOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "required": ["uri"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let uri = require_str(&params, "uri")?;
+        let add = optional_string_list(&params, "add")?.unwrap_or_default();
+        let remove = optional_string_list(&params, "remove")?.unwrap_or_default();
+        let disclosure = match params.get("disclosure") {
+            Some(serde_json::Value::Null) => Some(None),
+            Some(_) => optional_string(&params, "disclosure")?.map(Some),
+            None => None,
+        };
+
+        if add.is_empty() && remove.is_empty() && disclosure.is_none() {
+            return Err(ToolError::InvalidParameters(
+                "provide at least one of add, remove, or disclosure".to_string(),
+            ));
+        }
+
+        let detail = self
+            .memory
+            .manage_triggers(&ctx.user_id, None, uri, &add, &remove, disclosure)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("trigger update failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            json!({
+                "uri": uri,
+                "node": detail,
+                "added": add,
+                "removed": remove,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::Never
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct ExplainMemoryRecallTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl ExplainMemoryRecallTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for ExplainMemoryRecallTool {
+    fn name(&self) -> &str {
+        "explain_memory_recall"
+    }
+
+    fn description(&self) -> &str {
+        "解释一条 query 在 boot / trigger / hybrid search / graph expansion 各阶段如何命中。"
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "group_chat": { "type": "boolean", "default": false }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let query = require_str(&params, "query")?;
+        let group_chat = params
+            .get("group_chat")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+
+        let explanation = self
+            .memory
+            .explain_recall(&ctx.user_id, None, query, group_chat)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("recall explanation failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            serde_json::to_value(explanation).map_err(|e| {
+                ToolError::ExecutionFailed(format!("recall explanation serialize failed: {e}"))
+            })?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,10 +1248,10 @@ mod tests {
         assert!(properties.contains_key("priority"));
         assert!(properties.contains_key("title"));
         assert!(properties.contains_key("disclosure"));
+        assert!(properties.contains_key("keywords"));
         assert!(!properties.contains_key("route"));
         assert!(!properties.contains_key("kind"));
         assert!(!properties.contains_key("visibility"));
-        assert!(!properties.contains_key("keywords"));
     }
 
     #[cfg(feature = "libsql")]
@@ -1372,5 +1676,142 @@ mod tests {
             .await
             .expect("search should succeed");
         assert_eq!(search_result.result["count"], json!(1));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn manage_boot_and_manage_triggers_update_recall_structure() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let manage_boot = ManageBootTool::new(Arc::clone(&memory));
+        let manage_triggers = ManageTriggersTool::new(Arc::clone(&memory));
+        let read = ReadMemoryTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://user",
+                    "content": "用户名字是梦凌汐。",
+                    "priority": 0,
+                    "title": "name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create should succeed");
+
+        manage_triggers
+            .execute(
+                json!({
+                    "uri": "core://user/name",
+                    "add": ["梦凌汐", "名字"],
+                    "disclosure": "当我需要正确称呼用户时"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("manage triggers should succeed");
+
+        manage_boot
+            .execute(
+                json!({
+                    "uri": "core://user/name",
+                    "action": "add",
+                    "priority": 1
+                }),
+                &ctx,
+            )
+            .await
+            .expect("manage boot should succeed");
+
+        let glossary = read
+            .execute(json!({ "uri": "system://glossary" }), &ctx)
+            .await
+            .expect("read glossary should succeed");
+        assert!(
+            glossary.result["entries"]
+                .as_array()
+                .expect("glossary entries")
+                .iter()
+                .any(|entry| entry["keyword"] == "梦凌汐")
+        );
+
+        let boot = read
+            .execute(json!({ "uri": "system://boot" }), &ctx)
+            .await
+            .expect("read boot should succeed");
+        assert!(
+            boot.result["items"]
+                .as_array()
+                .expect("boot items")
+                .iter()
+                .any(|entry| entry["primary_route"]["path"] == "user/name")
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn explain_memory_recall_reports_stage_breakdown() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let explain = ExplainMemoryRecallTool::new(Arc::clone(&memory));
+        let manage_boot = ManageBootTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://user",
+                    "content": "用户名字是梦凌汐。",
+                    "priority": 0,
+                    "title": "name",
+                    "keywords": ["梦凌汐", "名字"]
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create should succeed");
+
+        manage_boot
+            .execute(
+                json!({
+                    "uri": "core://user/name",
+                    "action": "add",
+                    "priority": 1
+                }),
+                &ctx,
+            )
+            .await
+            .expect("manage boot should succeed");
+
+        let result = explain
+            .execute(json!({ "query": "你记得我叫什么吗" }), &ctx)
+            .await
+            .expect("explain recall should succeed");
+
+        assert_eq!(result.result["query"], json!("你记得我叫什么吗"));
+        assert!(
+            result.result["boot"]
+                .as_array()
+                .expect("boot entries")
+                .iter()
+                .any(|entry| entry["uri"] == "core://user/name")
+        );
+        let in_relevant = result.result["relevant"]
+            .as_array()
+            .expect("relevant entries")
+            .iter()
+            .any(|entry| entry["uri"] == "core://user/name");
+        assert!(
+            in_relevant
+                || result.result["boot"]
+                    .as_array()
+                    .expect("boot entries")
+                    .iter()
+                    .any(|entry| entry["uri"] == "core://user/name")
+        );
     }
 }

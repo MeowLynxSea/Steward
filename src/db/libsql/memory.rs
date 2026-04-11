@@ -8,12 +8,15 @@ use uuid::Uuid;
 use crate::db::libsql::{fmt_ts, get_json, get_opt_text, get_text, get_ts, opt_text};
 use crate::db::{MemoryStore, libsql::LibSqlBackend};
 use crate::error::DatabaseError;
+use crate::memory::search_terms::{
+    build_search_terms, matched_keywords as collect_matched_keywords, sqlite_match_query,
+};
 use crate::memory::{
     CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry, MemoryEdge,
     MemoryGlossaryEntry, MemoryIndexEntry, MemoryNode, MemoryNodeDetail, MemoryNodeKind,
-    MemoryRelationKind, MemoryRoute, MemorySearchHit, MemorySidebarItem, MemorySidebarSection,
-    MemorySpace, MemoryTimelineEntry, MemoryVersion, MemoryVersionStatus, MemoryVisibility,
-    NewMemoryNodeInput, UpdateMemoryNodeInput,
+    MemoryRelationKind, MemoryRoute, MemorySearchDoc, MemorySearchHit, MemorySidebarItem,
+    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, MemoryVersionStatus,
+    MemoryVisibility, NewMemoryNodeInput, UpdateMemoryNodeInput,
 };
 
 fn row_to_memory_space(row: &libsql::Row) -> MemorySpace {
@@ -91,6 +94,23 @@ fn row_to_memory_keyword(row: &libsql::Row) -> crate::memory::MemoryKeyword {
     }
 }
 
+fn row_to_memory_search_doc(row: &libsql::Row) -> MemorySearchDoc {
+    MemorySearchDoc {
+        route_id: get_text(row, 0).parse().unwrap_or_default(),
+        space_id: get_text(row, 1).parse().unwrap_or_default(),
+        node_id: get_text(row, 2).parse().unwrap_or_default(),
+        version_id: get_text(row, 3).parse().unwrap_or_default(),
+        uri: get_text(row, 4),
+        title: get_text(row, 5),
+        kind: MemoryNodeKind::from_str(&get_text(row, 6)),
+        content: get_text(row, 7),
+        trigger_text: get_opt_text(row, 8),
+        keywords: split_keywords(&get_text(row, 9)),
+        search_terms: get_text(row, 10),
+        updated_at: get_ts(row, 11),
+    }
+}
+
 fn row_to_memory_changeset(row: &libsql::Row) -> MemoryChangeSet {
     MemoryChangeSet {
         id: get_text(row, 0).parse().unwrap_or_default(),
@@ -100,20 +120,6 @@ fn row_to_memory_changeset(row: &libsql::Row) -> MemoryChangeSet {
         status: get_text(row, 4),
         created_at: get_ts(row, 5),
         updated_at: get_ts(row, 6),
-    }
-}
-
-fn sqlite_match_query(query: &str) -> String {
-    let tokens = query
-        .split_whitespace()
-        .map(|token| token.replace('"', "\"\""))
-        .filter(|token| !token.is_empty())
-        .map(|token| format!("\"{token}\""))
-        .collect::<Vec<_>>();
-    if tokens.is_empty() {
-        "\"memory\"".to_string()
-    } else {
-        tokens.join(" AND ")
     }
 }
 
@@ -137,11 +143,43 @@ fn snippet(content: &str, query: &str) -> String {
     let lower = content.to_lowercase();
     let query_lower = query.to_lowercase();
     let idx = lower.find(&query_lower).unwrap_or(0);
-    let start = idx.saturating_sub(48);
-    let end = (idx + query.len() + 96).min(content.len());
+    let start = floor_char_boundary(content, idx.saturating_sub(48));
+    let end = ceil_char_boundary(content, (idx + query.len() + 96).min(content.len()));
     let prefix = if start > 0 { "..." } else { "" };
     let suffix = if end < content.len() { "..." } else { "" };
     format!("{prefix}{}{suffix}", &content[start..end])
+}
+
+fn floor_char_boundary(value: &str, mut index: usize) -> usize {
+    index = index.min(value.len());
+    while index > 0 && !value.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+fn ceil_char_boundary(value: &str, mut index: usize) -> usize {
+    index = index.min(value.len());
+    while index < value.len() && !value.is_char_boundary(index) {
+        index += 1;
+    }
+    index
+}
+
+fn split_keywords(raw: &str) -> Vec<String> {
+    raw.split_whitespace().map(ToString::to_string).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snippet;
+
+    #[test]
+    fn snippet_respects_utf8_boundaries_for_cjk_content() {
+        let content = "## 记忆系统 (The Native Memory System)\n\n你的长期记忆托管于 **Steward 的原生记忆图谱工具**。这是你与用户共同使用的层级化树状记忆系统。";
+        let result = snippet(content, "原生记忆");
+        assert!(result.contains("原生记忆"));
+    }
 }
 
 impl LibSqlBackend {
@@ -652,10 +690,24 @@ impl LibSqlBackend {
         let domain = get_text(&row, 3);
         let path = get_text(&row, 4);
         let uri = format!("{domain}://{path}");
-        conn.execute(
+        let title = get_text(&row, 5);
+        let kind = get_text(&row, 6);
+        let content = get_text(&row, 8);
+        let trigger_text = get_opt_text(&row, 9);
+        let keyword_text = keywords.join(" ");
+        let search_terms = build_search_terms(&[
+            title.as_str(),
+            path.as_str(),
+            uri.as_str(),
+            content.as_str(),
+            trigger_text.as_deref().unwrap_or(""),
+            keyword_text.as_str(),
+        ]);
+        let _rows_affected = conn
+            .execute(
             "INSERT INTO memory_search_docs
-             (route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             (route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms, embedding, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL, ?12)
              ON CONFLICT(route_id) DO UPDATE SET
                  version_id = excluded.version_id,
                  uri = excluded.uri,
@@ -664,6 +716,8 @@ impl LibSqlBackend {
                  content = excluded.content,
                  trigger_text = excluded.trigger_text,
                  keywords = excluded.keywords,
+                 search_terms = excluded.search_terms,
+                 embedding = NULL,
                  updated_at = excluded.updated_at",
             params![
                 get_text(&row, 0),
@@ -671,11 +725,12 @@ impl LibSqlBackend {
                 node_id,
                 get_text(&row, 7),
                 uri,
-                get_text(&row, 5),
-                get_text(&row, 6),
-                get_text(&row, 8),
-                opt_text(get_opt_text(&row, 9).as_deref()),
-                keywords.join(" "),
+                title,
+                kind,
+                content,
+                opt_text(trigger_text.as_deref()),
+                keyword_text,
+                search_terms,
                 get_text(&row, 11)
             ],
         )
@@ -1772,7 +1827,7 @@ impl MemoryStore for LibSqlBackend {
             Some(domains.join(","))
         };
         let sql = if domain_filter.is_some() {
-            "SELECT d.node_id, d.route_id, d.version_id, d.uri, d.title, d.kind, d.content, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+            "SELECT d.node_id, d.route_id, d.version_id, d.uri, d.title, d.kind, d.content, coalesce(e.priority, 100), d.trigger_text, d.keywords, d.updated_at
              FROM memory_search_docs_fts fts
              JOIN memory_search_docs d ON d.rowid = fts.rowid
              JOIN memory_routes r ON r.id = d.route_id
@@ -1781,7 +1836,7 @@ impl MemoryStore for LibSqlBackend {
              ORDER BY bm25(memory_search_docs_fts), e.priority ASC, d.updated_at DESC
              LIMIT ?4"
         } else {
-            "SELECT d.node_id, d.route_id, d.version_id, d.uri, d.title, d.kind, d.content, coalesce(e.priority, 100), d.trigger_text, d.updated_at
+            "SELECT d.node_id, d.route_id, d.version_id, d.uri, d.title, d.kind, d.content, coalesce(e.priority, 100), d.trigger_text, d.keywords, d.updated_at
              FROM memory_search_docs_fts fts
              JOIN memory_search_docs d ON d.rowid = fts.rowid
              JOIN memory_routes r ON r.id = d.route_id
@@ -1791,7 +1846,7 @@ impl MemoryStore for LibSqlBackend {
              LIMIT ?3"
         };
 
-        let mut rows = if let Some(filter) = domain_filter {
+        let mut rows: libsql::Rows = if let Some(filter) = domain_filter {
             conn.query(
                 sql,
                 params![space_id.to_string(), match_query, filter, limit as i64],
@@ -1814,6 +1869,7 @@ impl MemoryStore for LibSqlBackend {
             .map_err(|e| DatabaseError::Query(e.to_string()))?
         {
             let content = get_text(&row, 6);
+            let keywords = split_keywords(&get_text(&row, 9));
             hits.push(MemorySearchHit {
                 node_id: get_text(&row, 0).parse().unwrap_or_default(),
                 route_id: get_text(&row, 1).parse().unwrap_or_default(),
@@ -1825,7 +1881,75 @@ impl MemoryStore for LibSqlBackend {
                 priority: row.get::<i64>(7).unwrap_or(100) as i32,
                 trigger_text: get_opt_text(&row, 8),
                 score: 1.0 / (hits.len() as f32 + 1.0),
-                updated_at: get_ts(&row, 9),
+                fts_rank: Some(hits.len() as u32 + 1),
+                vector_rank: None,
+                matched_keywords: collect_matched_keywords(query, &keywords),
+                updated_at: get_ts(&row, 10),
+            });
+        }
+        Ok(hits)
+    }
+
+    async fn vector_search_memory_graph(
+        &self,
+        space_id: Uuid,
+        embedding: &[f32],
+        limit: usize,
+        domains: &[String],
+    ) -> Result<Vec<MemorySearchHit>, DatabaseError> {
+        let conn = self.connect().await?;
+        let vector_json = format!(
+            "[{}]",
+            embedding
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        let mut rows = conn
+            .query(
+                "SELECT d.node_id, d.route_id, d.version_id, d.uri, d.title, d.kind, d.content,
+                        coalesce(e.priority, 100), d.trigger_text, d.keywords, d.updated_at
+                 FROM vector_top_k('idx_memory_search_docs_embedding', vector(?1), ?2) AS top_k
+                 JOIN memory_search_docs d ON d.rowid = top_k.id
+                 JOIN memory_routes r ON r.id = d.route_id
+                 LEFT JOIN memory_edges e ON e.id = r.edge_id
+                 WHERE d.space_id = ?3
+                   AND (?4 = '' OR instr(?4, r.domain) > 0)",
+                params![
+                    vector_json,
+                    limit as i64,
+                    space_id.to_string(),
+                    domains.join(",")
+                ],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("memory vector query failed: {e}")))?;
+
+        let mut hits = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            let content = get_text(&row, 6);
+            let title = get_text(&row, 4);
+            hits.push(MemorySearchHit {
+                node_id: get_text(&row, 0).parse().unwrap_or_default(),
+                route_id: get_text(&row, 1).parse().unwrap_or_default(),
+                version_id: get_text(&row, 2).parse().unwrap_or_default(),
+                uri: get_text(&row, 3),
+                title: title.clone(),
+                kind: MemoryNodeKind::from_str(&get_text(&row, 5)),
+                content_snippet: snippet(&content, &title),
+                priority: row.get::<i64>(7).unwrap_or(100) as i32,
+                trigger_text: get_opt_text(&row, 8),
+                score: 1.0 / (hits.len() as f32 + 1.0),
+                fts_rank: None,
+                vector_rank: Some(hits.len() as u32 + 1),
+                matched_keywords: Vec::new(),
+                updated_at: get_ts(&row, 10),
             });
         }
         Ok(hits)
@@ -2028,14 +2152,13 @@ impl MemoryStore for LibSqlBackend {
         let conn = self.connect().await?;
         let mut rows = conn
             .query(
-                "SELECT DISTINCT n.id
-                 FROM memory_nodes n
-                 JOIN memory_routes r ON r.node_id = n.id
+                "SELECT DISTINCT r.node_id
+                 FROM memory_boot_entries b
+                 JOIN memory_routes r ON r.id = b.route_id
                  LEFT JOIN memory_edges e ON e.id = r.edge_id
-                 WHERE n.space_id = ?1
-                   AND n.kind = 'boot'
+                 WHERE b.space_id = ?1
                    AND (?2 IS NULL OR e.visibility IN ('session', 'shared'))
-                 ORDER BY n.updated_at DESC",
+                 ORDER BY b.load_priority ASC, b.updated_at DESC",
                 params![space_id.to_string(), max_visibility.map(|_| "session")],
             )
             .await
@@ -2052,6 +2175,77 @@ impl MemoryStore for LibSqlBackend {
             }
         }
         Ok(details)
+    }
+
+    async fn upsert_memory_boot_route(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+        load_priority: i32,
+    ) -> Result<MemoryRoute, DatabaseError> {
+        let route = if let Some(route) = self.fetch_memory_route(space_id, route_or_node).await? {
+            route
+        } else if let Ok(node_id) = Uuid::parse_str(route_or_node) {
+            self.fetch_memory_routes_for_node(node_id)
+                .await?
+                .into_iter()
+                .find(|route| route.is_primary)
+                .ok_or_else(|| DatabaseError::NotFound {
+                    entity: "memory_route".to_string(),
+                    id: route_or_node.to_string(),
+                })?
+        } else {
+            return Err(DatabaseError::NotFound {
+                entity: "memory_route".to_string(),
+                id: route_or_node.to_string(),
+            });
+        };
+
+        let conn = self.connect().await?;
+        conn.execute(
+            "INSERT INTO memory_boot_entries (route_id, space_id, load_priority)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(route_id) DO UPDATE SET
+                load_priority = excluded.load_priority,
+                updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![route.id.to_string(), space_id.to_string(), load_priority],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("failed to upsert memory boot entry: {e}")))?;
+        Ok(route)
+    }
+
+    async fn delete_memory_boot_route(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+    ) -> Result<(), DatabaseError> {
+        let route = if let Some(route) = self.fetch_memory_route(space_id, route_or_node).await? {
+            route
+        } else if let Ok(node_id) = Uuid::parse_str(route_or_node) {
+            self.fetch_memory_routes_for_node(node_id)
+                .await?
+                .into_iter()
+                .find(|route| route.is_primary)
+                .ok_or_else(|| DatabaseError::NotFound {
+                    entity: "memory_route".to_string(),
+                    id: route_or_node.to_string(),
+                })?
+        } else {
+            return Err(DatabaseError::NotFound {
+                entity: "memory_route".to_string(),
+                id: route_or_node.to_string(),
+            });
+        };
+
+        let conn = self.connect().await?;
+        conn.execute(
+            "DELETE FROM memory_boot_entries WHERE route_id = ?1",
+            params![route.id.to_string()],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("failed to delete memory boot entry: {e}")))?;
+        Ok(())
     }
 
     async fn list_memory_index(
@@ -2252,5 +2446,222 @@ impl MemoryStore for LibSqlBackend {
             });
         }
         Ok(out)
+    }
+
+    async fn get_memory_search_doc(
+        &self,
+        space_id: Uuid,
+        route_id: Uuid,
+    ) -> Result<Option<MemorySearchDoc>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms, updated_at
+                 FROM memory_search_docs
+                 WHERE space_id = ?1 AND route_id = ?2
+                 LIMIT 1",
+                params![space_id.to_string(), route_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_memory_search_doc(&row)))
+    }
+
+    async fn list_memory_search_docs_without_embeddings(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchDoc>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms, updated_at
+                 FROM memory_search_docs
+                 WHERE space_id = ?1 AND embedding IS NULL
+                 ORDER BY updated_at DESC
+                 LIMIT ?2",
+                params![space_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut docs = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            docs.push(row_to_memory_search_doc(&row));
+        }
+        Ok(docs)
+    }
+
+    async fn update_memory_search_doc_embedding(
+        &self,
+        route_id: Uuid,
+        embedding: &[f32],
+    ) -> Result<(), DatabaseError> {
+        let conn = self.connect().await?;
+        let mut bytes = Vec::with_capacity(embedding.len() * 4);
+        for value in embedding {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        conn.execute(
+            "UPDATE memory_search_docs SET embedding = ?2 WHERE route_id = ?1",
+            params![route_id.to_string(), bytes],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("failed to update memory embedding: {e}")))?;
+        Ok(())
+    }
+}
+
+impl LibSqlBackend {
+    /// Ensure the vector index on `memory_search_docs.embedding` matches the
+    /// configured embedding dimension for native memory recall.
+    pub async fn ensure_memory_vector_index(&self, dimension: usize) -> Result<(), DatabaseError> {
+        if dimension == 0 || dimension > 65536 {
+            return Err(DatabaseError::Migration(format!(
+                "ensure_memory_vector_index: dimension {dimension} out of valid range (1..=65536)"
+            )));
+        }
+
+        let conn = self.connect().await?;
+        let current_dim = {
+            let mut rows = conn
+                .query("SELECT name FROM _migrations WHERE version = -2", ())
+                .await
+                .map_err(|e| {
+                    DatabaseError::Migration(format!(
+                        "Failed to check memory vector index metadata: {e}"
+                    ))
+                })?;
+
+            rows.next().await.ok().flatten().and_then(|row| {
+                row.get::<String>(0)
+                    .ok()
+                    .and_then(|value| value.parse::<usize>().ok())
+            })
+        };
+
+        if current_dim == Some(dimension) {
+            return Ok(());
+        }
+
+        let expected_bytes = dimension * 4;
+        let tx = conn.transaction().await.map_err(|e| {
+            DatabaseError::Migration(format!(
+                "ensure_memory_vector_index: failed to start transaction: {e}"
+            ))
+        })?;
+
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS memory_search_docs_fts_insert;
+             DROP TRIGGER IF EXISTS memory_search_docs_fts_delete;
+             DROP TRIGGER IF EXISTS memory_search_docs_fts_update;
+             DROP TABLE IF EXISTS memory_search_docs_fts;
+             DROP INDEX IF EXISTS idx_memory_search_docs_embedding;",
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::Migration(format!(
+                "Failed to drop native memory search indexes/triggers: {e}"
+            ))
+        })?;
+
+        tx.execute_batch(&format!(
+            "CREATE TABLE IF NOT EXISTS memory_search_docs_new (
+                route_id TEXT PRIMARY KEY REFERENCES memory_routes(id) ON DELETE CASCADE,
+                space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+                version_id TEXT NOT NULL REFERENCES memory_versions(id) ON DELETE CASCADE,
+                uri TEXT NOT NULL,
+                title TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                content TEXT NOT NULL,
+                trigger_text TEXT,
+                keywords TEXT NOT NULL DEFAULT '',
+                search_terms TEXT NOT NULL DEFAULT '',
+                embedding F32_BLOB({dimension}),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+            );
+
+            INSERT OR REPLACE INTO memory_search_docs_new
+                (route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms, embedding, updated_at)
+            SELECT
+                route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms,
+                CASE WHEN length(embedding) = {expected_bytes} THEN embedding ELSE NULL END,
+                updated_at
+            FROM memory_search_docs;
+
+            DROP TABLE memory_search_docs;
+            ALTER TABLE memory_search_docs_new RENAME TO memory_search_docs;
+
+            CREATE INDEX IF NOT EXISTS idx_memory_search_docs_space_updated
+                ON memory_search_docs(space_id, updated_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_memory_search_docs_embedding
+                ON memory_search_docs(libsql_vector_idx(embedding));
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_docs_fts USING fts5(
+                title,
+                content,
+                trigger_text,
+                keywords,
+                uri,
+                search_terms,
+                content='memory_search_docs',
+                content_rowid='rowid'
+            );
+
+            INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+            SELECT rowid, title, content, coalesce(trigger_text, ''), keywords, uri, search_terms
+            FROM memory_search_docs;
+
+            CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_insert AFTER INSERT ON memory_search_docs BEGIN
+                INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+                VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_delete AFTER DELETE ON memory_search_docs BEGIN
+                INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+                VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_update AFTER UPDATE ON memory_search_docs BEGIN
+                INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+                VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
+                INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+                VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
+            END;"
+        ))
+        .await
+        .map_err(|e| {
+            DatabaseError::Migration(format!("Failed to rebuild memory search docs table: {e}"))
+        })?;
+
+        tx.execute(
+            "INSERT INTO _migrations (version, name) VALUES (-2, ?1)
+             ON CONFLICT(version) DO UPDATE SET name = excluded.name, applied_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            params![dimension.to_string()],
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::Migration(format!(
+                "Failed to record memory vector index metadata: {e}"
+            ))
+        })?;
+
+        tx.commit().await.map_err(|e| {
+            DatabaseError::Migration(format!(
+                "ensure_memory_vector_index: failed to commit transaction: {e}"
+            ))
+        })?;
+
+        Ok(())
     }
 }

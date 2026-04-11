@@ -65,6 +65,7 @@ fn build_settings_response(
         major_backend_id: settings.major_backend_id.clone(),
         cheap_backend_id: settings.cheap_backend_id.clone(),
         cheap_model_uses_primary: settings.cheap_model_uses_primary,
+        embeddings: settings.embeddings.clone(),
         llm_ready,
         llm_onboarding_required: !llm_ready,
         llm_readiness_error,
@@ -87,6 +88,8 @@ async fn sync_llm_settings_to_store(
     let cheap_backend_id = serde_json::to_value(&settings.cheap_backend_id)
         .map_err(|e| format!("serialize cheap backend: {e}"))?;
     let cheap_model_uses_primary = serde_json::json!(settings.cheap_model_uses_primary);
+    let embeddings = serde_json::to_value(&settings.embeddings)
+        .map_err(|e| format!("serialize embeddings: {e}"))?;
     let onboard_completed = serde_json::json!(settings.onboard_completed);
 
     store
@@ -110,6 +113,10 @@ async fn sync_llm_settings_to_store(
         .await
         .map_err(|e| e.to_string())?;
     store
+        .set_setting(owner_id, "embeddings", &embeddings)
+        .await
+        .map_err(|e| e.to_string())?;
+    store
         .set_setting(owner_id, "onboard_completed", &onboard_completed)
         .await
         .map_err(|e| e.to_string())?;
@@ -130,6 +137,73 @@ async fn reload_llm_runtime(
             Ok(Some(error.to_string()))
         }
     }
+}
+
+async fn reload_embedding_runtime(state: &AppState, settings: &Settings) -> Result<(), String> {
+    use steward_core::config::{EmbeddingsConfig, set_runtime_env};
+    use steward_core::workspace::EmbeddingCacheConfig;
+
+    set_runtime_env(
+        "EMBEDDING_ENABLED",
+        if settings.embeddings.enabled {
+            "true"
+        } else {
+            ""
+        },
+    );
+    set_runtime_env("EMBEDDING_PROVIDER", &settings.embeddings.provider);
+    set_runtime_env("EMBEDDING_MODEL", &settings.embeddings.model);
+    set_runtime_env(
+        "EMBEDDING_DIMENSION",
+        &settings
+            .embeddings
+            .dimension
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+    );
+
+    let config = EmbeddingsConfig::resolve(settings).map_err(|e| e.to_string())?;
+    if let Some(db) = state.db.as_ref() {
+        db.run_migrations().await.map_err(|e| e.to_string())?;
+    }
+
+    let provider = config.create_provider();
+    if let Some(workspace) = state.workspace.as_ref() {
+        workspace.set_embeddings_cached(
+            provider.clone(),
+            EmbeddingCacheConfig {
+                max_entries: config.cache_size,
+            },
+        );
+    }
+    if let Some(memory) = state.memory.as_ref() {
+        memory.set_embeddings(provider.clone());
+    }
+
+    if let Some(workspace) = state.workspace.clone() {
+        tokio::spawn(async move {
+            if let Err(error) = workspace.backfill_embeddings().await {
+                tracing::warn!(
+                    "Failed to backfill workspace embeddings after hot reload: {}",
+                    error
+                );
+            }
+        });
+    }
+
+    if let Some(memory) = state.memory.clone() {
+        let owner_id = state.owner_id.clone();
+        tokio::spawn(async move {
+            if let Err(error) = memory.backfill_embeddings(&owner_id, None, 100).await {
+                tracing::warn!(
+                    "Failed to backfill native memory embeddings after hot reload: {}",
+                    error
+                );
+            }
+        });
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -163,6 +237,9 @@ pub async fn patch_settings(
     if let Some(cheap_model_uses_primary) = payload.cheap_model_uses_primary {
         settings.cheap_model_uses_primary = cheap_model_uses_primary;
     }
+    if let Some(embeddings) = payload.embeddings {
+        settings.embeddings = embeddings;
+    }
 
     settings
         .backends
@@ -195,6 +272,7 @@ pub async fn patch_settings(
         .save_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?;
 
+    reload_embedding_runtime(&state, &settings).await?;
     let llm_readiness_error = reload_llm_runtime(&state, &settings).await?;
 
     Ok(build_settings_response(&settings, llm_readiness_error))

@@ -985,6 +985,17 @@ CREATE TABLE IF NOT EXISTS memory_routes (
 CREATE INDEX IF NOT EXISTS idx_memory_routes_space_node
     ON memory_routes(space_id, node_id, is_primary DESC);
 
+CREATE TABLE IF NOT EXISTS memory_boot_entries (
+    route_id TEXT PRIMARY KEY REFERENCES memory_routes(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    load_priority INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_boot_entries_space_priority
+    ON memory_boot_entries(space_id, load_priority, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS memory_keywords (
     id TEXT PRIMARY KEY,
     space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
@@ -1008,6 +1019,8 @@ CREATE TABLE IF NOT EXISTS memory_search_docs (
     content TEXT NOT NULL,
     trigger_text TEXT,
     keywords TEXT NOT NULL DEFAULT '',
+    search_terms TEXT NOT NULL DEFAULT '',
+    embedding BLOB,
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
@@ -1020,25 +1033,26 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_docs_fts USING fts5(
     trigger_text,
     keywords,
     uri,
+    search_terms,
     content='memory_search_docs',
     content_rowid='rowid'
 );
 
 CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_insert AFTER INSERT ON memory_search_docs BEGIN
-    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri)
-    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri);
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_delete AFTER DELETE ON memory_search_docs BEGIN
-    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri)
-    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri);
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_update AFTER UPDATE ON memory_search_docs BEGIN
-    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri)
-    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri);
-    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri)
-    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri);
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
 END;
 
 CREATE TABLE IF NOT EXISTS memory_changesets (
@@ -1067,6 +1081,107 @@ CREATE TABLE IF NOT EXISTS memory_changeset_rows (
 
 CREATE INDEX IF NOT EXISTS idx_memory_changeset_rows_changeset
     ON memory_changeset_rows(changeset_id, created_at ASC);
+"#,
+    ),
+    (
+        20,
+        "memory_recall_boot_and_search_terms",
+        r#"
+CREATE TABLE IF NOT EXISTS memory_boot_entries (
+    route_id TEXT PRIMARY KEY REFERENCES memory_routes(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    load_priority INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_boot_entries_space_priority
+    ON memory_boot_entries(space_id, load_priority, updated_at DESC);
+
+DROP TRIGGER IF EXISTS memory_search_docs_fts_insert;
+DROP TRIGGER IF EXISTS memory_search_docs_fts_delete;
+DROP TRIGGER IF EXISTS memory_search_docs_fts_update;
+DROP TABLE IF EXISTS memory_search_docs_fts;
+DROP TABLE IF EXISTS memory_search_docs_new;
+
+CREATE TABLE memory_search_docs_new (
+    route_id TEXT PRIMARY KEY REFERENCES memory_routes(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    version_id TEXT NOT NULL REFERENCES memory_versions(id) ON DELETE CASCADE,
+    uri TEXT NOT NULL,
+    title TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    content TEXT NOT NULL,
+    trigger_text TEXT,
+    keywords TEXT NOT NULL DEFAULT '',
+    search_terms TEXT NOT NULL DEFAULT '',
+    embedding BLOB,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+INSERT OR REPLACE INTO memory_search_docs_new
+    (route_id, space_id, node_id, version_id, uri, title, kind, content, trigger_text, keywords, search_terms, embedding, updated_at)
+SELECT
+    route_id,
+    space_id,
+    node_id,
+    version_id,
+    uri,
+    title,
+    kind,
+    content,
+    trigger_text,
+    keywords,
+    trim(lower(title || ' ' || uri || ' ' || content || ' ' || coalesce(trigger_text, '') || ' ' || keywords)),
+    NULL,
+    updated_at
+FROM memory_search_docs;
+
+DROP TABLE memory_search_docs;
+ALTER TABLE memory_search_docs_new RENAME TO memory_search_docs;
+
+CREATE INDEX IF NOT EXISTS idx_memory_search_docs_space_updated
+    ON memory_search_docs(space_id, updated_at DESC);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_docs_fts USING fts5(
+    title,
+    content,
+    trigger_text,
+    keywords,
+    uri,
+    search_terms,
+    content='memory_search_docs',
+    content_rowid='rowid'
+);
+
+INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+SELECT rowid, title, content, coalesce(trigger_text, ''), keywords, uri, search_terms
+FROM memory_search_docs;
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_insert AFTER INSERT ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_delete AFTER DELETE ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_search_docs_fts_update AFTER UPDATE ON memory_search_docs BEGIN
+    INSERT INTO memory_search_docs_fts(memory_search_docs_fts, rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES ('delete', old.rowid, old.title, old.content, coalesce(old.trigger_text, ''), old.keywords, old.uri, old.search_terms);
+    INSERT INTO memory_search_docs_fts(rowid, title, content, trigger_text, keywords, uri, search_terms)
+    VALUES (new.rowid, new.title, new.content, coalesce(new.trigger_text, ''), new.keywords, new.uri, new.search_terms);
+END;
+
+INSERT OR IGNORE INTO memory_boot_entries (route_id, space_id, load_priority)
+SELECT r.id, r.space_id, coalesce(e.priority, 0)
+FROM memory_routes r
+JOIN memory_nodes n ON n.id = r.node_id
+LEFT JOIN memory_edges e ON e.id = r.edge_id
+WHERE n.kind = 'boot';
 "#,
     ),
 ];

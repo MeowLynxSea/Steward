@@ -26,16 +26,12 @@ use chrono::Utc;
 /// Resolve the embedding dimension from environment variables.
 ///
 /// Reads `EMBEDDING_ENABLED`, `EMBEDDING_DIMENSION`, and `EMBEDDING_MODEL`
-/// from env vars. Returns `None` if embeddings are disabled.
+/// from env vars or runtime overrides. Returns `None` if embeddings are disabled.
 ///
-/// Note: this only reads env vars, not persisted `Settings`, because it runs
-/// during `run_migrations()` before the full config stack is available. Users
-/// who configure embeddings via the settings UI must also set
-/// `EMBEDDING_ENABLED=true` in their environment for the vector index to be
-/// created. The model→dimension mapping is shared with `EmbeddingsConfig` via
+/// The model→dimension mapping is shared with `EmbeddingsConfig` via
 /// `default_dimension_for_model()`.
 pub(crate) fn resolve_embedding_dimension() -> Option<usize> {
-    let enabled = std::env::var("EMBEDDING_ENABLED")
+    let enabled = crate::config::env_or_override("EMBEDDING_ENABLED")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
         .unwrap_or(false);
 
@@ -44,15 +40,15 @@ pub(crate) fn resolve_embedding_dimension() -> Option<usize> {
         return None;
     }
 
-    if let Ok(dim_str) = std::env::var("EMBEDDING_DIMENSION")
+    if let Some(dim_str) = crate::config::env_or_override("EMBEDDING_DIMENSION")
         && let Ok(dim) = dim_str.parse::<usize>()
         && dim > 0
     {
         return Some(dim);
     }
 
-    let model =
-        std::env::var("EMBEDDING_MODEL").unwrap_or_else(|_| "text-embedding-3-small".to_string());
+    let model = crate::config::env_or_override("EMBEDDING_MODEL")
+        .unwrap_or_else(|| "text-embedding-3-small".to_string());
 
     Some(crate::config::embeddings::default_dimension_for_model(
         &model,

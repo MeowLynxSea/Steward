@@ -17,11 +17,21 @@ export interface BackendInstance {
   request_format: string | null;
 }
 
+export interface EmbeddingsSettings {
+  enabled: boolean;
+  provider: string;
+  api_key: string | null;
+  base_url: string | null;
+  model: string;
+  dimension: number | null;
+}
+
 export interface SettingsResponse {
   backends: BackendInstance[];
   major_backend_id: string | null;
   cheap_backend_id: string | null;
   cheap_model_uses_primary: boolean;
+  embeddings: EmbeddingsSettings;
   llm_ready: boolean;
   llm_onboarding_required: boolean;
   llm_readiness_error: string | null;
@@ -32,6 +42,7 @@ export interface PatchSettingsRequest {
   major_backend_id?: string | null;
   cheap_backend_id?: string | null;
   cheap_model_uses_primary?: boolean;
+  embeddings?: EmbeddingsSettings;
 }
 
 export interface SessionSummary {
@@ -237,6 +248,10 @@ export interface MemorySearchHit {
   priority: number;
   trigger_text: string | null;
   score: number;
+  fts_rank: number | null;
+  vector_rank: number | null;
+  is_hybrid_match?: boolean;
+  matched_keywords?: string[];
   updated_at: string;
 }
 

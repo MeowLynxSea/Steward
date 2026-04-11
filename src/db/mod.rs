@@ -32,8 +32,9 @@ use crate::history::{
 };
 use crate::memory::{
     CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry,
-    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNodeDetail, MemorySearchHit, MemorySidebarSection,
-    MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput, UpdateMemoryNodeInput,
+    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNodeDetail, MemorySearchDoc, MemorySearchHit,
+    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput,
+    UpdateMemoryNodeInput,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
@@ -946,6 +947,14 @@ pub trait MemoryStore: Send + Sync {
         domains: &[String],
     ) -> Result<Vec<MemorySearchHit>, DatabaseError>;
 
+    async fn vector_search_memory_graph(
+        &self,
+        space_id: Uuid,
+        embedding: &[f32],
+        limit: usize,
+        domains: &[String],
+    ) -> Result<Vec<MemorySearchHit>, DatabaseError>;
+
     async fn list_memory_sidebar(
         &self,
         space_id: Uuid,
@@ -972,6 +981,19 @@ pub trait MemoryStore: Send + Sync {
         max_visibility: Option<crate::memory::MemoryVisibility>,
     ) -> Result<Vec<MemoryNodeDetail>, DatabaseError>;
 
+    async fn upsert_memory_boot_route(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+        load_priority: i32,
+    ) -> Result<crate::memory::MemoryRoute, DatabaseError>;
+
+    async fn delete_memory_boot_route(
+        &self,
+        space_id: Uuid,
+        route_or_node: &str,
+    ) -> Result<(), DatabaseError>;
+
     async fn list_memory_index(
         &self,
         space_id: Uuid,
@@ -996,6 +1018,24 @@ pub trait MemoryStore: Send + Sync {
         parent_node_id: Uuid,
         limit: usize,
     ) -> Result<Vec<MemoryChildEntry>, DatabaseError>;
+
+    async fn get_memory_search_doc(
+        &self,
+        space_id: Uuid,
+        route_id: Uuid,
+    ) -> Result<Option<MemorySearchDoc>, DatabaseError>;
+
+    async fn list_memory_search_docs_without_embeddings(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchDoc>, DatabaseError>;
+
+    async fn update_memory_search_doc_embedding(
+        &self,
+        route_id: Uuid,
+        embedding: &[f32],
+    ) -> Result<(), DatabaseError>;
 }
 
 #[async_trait]

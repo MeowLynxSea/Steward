@@ -138,8 +138,14 @@ pub struct EmbeddingsSettings {
     /// Provider to use: "openai" or "ollama".
     #[serde(default = "default_embeddings_provider")]
     pub provider: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
     #[serde(default = "default_embeddings_model")]
     pub model: String,
+    #[serde(default)]
+    pub dimension: Option<usize>,
 }
 
 fn default_embeddings_provider() -> String {
@@ -155,7 +161,10 @@ impl Default for EmbeddingsSettings {
         Self {
             enabled: false,
             provider: default_embeddings_provider(),
+            api_key: None,
+            base_url: None,
             model: default_embeddings_model(),
+            dimension: None,
         }
     }
 }
@@ -801,6 +810,7 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.embeddings.provider, "openai");
         assert_eq!(settings.embeddings.model, "text-embedding-3-small");
+        assert_eq!(settings.embeddings.dimension, None);
     }
 
     #[test]

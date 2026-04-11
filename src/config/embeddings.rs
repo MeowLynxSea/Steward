@@ -69,24 +69,33 @@ pub(crate) fn default_dimension_for_model(model: &str) -> usize {
 }
 
 impl EmbeddingsConfig {
-    pub(crate) fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
-        let openai_api_key = optional_env("OPENAI_API_KEY")?.map(SecretString::from);
-
+    pub fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
         let provider = optional_env("EMBEDDING_PROVIDER")?
             .unwrap_or_else(|| settings.embeddings.provider.clone());
 
         let model =
             optional_env("EMBEDDING_MODEL")?.unwrap_or_else(|| settings.embeddings.model.clone());
 
+        let configured_base_url = settings.embeddings.base_url.clone();
+        let openai_api_key = optional_env("OPENAI_API_KEY")?
+            .or_else(|| settings.embeddings.api_key.clone())
+            .map(SecretString::from);
+
         let ollama_base_url = optional_env("OLLAMA_BASE_URL")?
+            .or_else(|| configured_base_url.clone())
             .unwrap_or_else(|| "http://localhost:11434".to_string());
 
-        let dimension =
-            parse_optional_env("EMBEDDING_DIMENSION", default_dimension_for_model(&model))?;
+        let dimension = parse_optional_env(
+            "EMBEDDING_DIMENSION",
+            settings
+                .embeddings
+                .dimension
+                .unwrap_or_else(|| default_dimension_for_model(&model)),
+        )?;
 
         let enabled = parse_bool_env("EMBEDDING_ENABLED", settings.embeddings.enabled)?;
 
-        let openai_base_url = optional_env("EMBEDDING_BASE_URL")?;
+        let openai_base_url = optional_env("EMBEDDING_BASE_URL")?.or(configured_base_url);
 
         // Validate base URLs to prevent SSRF attacks (#1103).
         validate_base_url(&ollama_base_url, "OLLAMA_BASE_URL")?;
@@ -167,7 +176,9 @@ impl EmbeddingsConfig {
                     }
                     Some(Arc::new(provider))
                 } else {
-                    tracing::warn!("Embeddings configured but OPENAI_API_KEY not set");
+                    tracing::warn!(
+                        "Embeddings configured but no API key is available from settings or OPENAI_API_KEY"
+                    );
                     None
                 }
             }
@@ -189,6 +200,7 @@ mod tests {
             std::env::remove_var("EMBEDDING_ENABLED");
             std::env::remove_var("EMBEDDING_PROVIDER");
             std::env::remove_var("EMBEDDING_MODEL");
+            std::env::remove_var("EMBEDDING_DIMENSION");
             std::env::remove_var("OPENAI_API_KEY");
             std::env::remove_var("EMBEDDING_BASE_URL");
             std::env::remove_var("EMBEDDING_CACHE_SIZE");
@@ -304,6 +316,49 @@ mod tests {
             config.openai_base_url.is_none(),
             "openai_base_url should be None when EMBEDDING_BASE_URL is not set"
         );
+    }
+
+    #[test]
+    fn embedding_dimension_uses_settings_when_env_unset() {
+        let _guard = lock_env();
+        clear_embedding_env();
+
+        let settings = Settings {
+            embeddings: EmbeddingsSettings {
+                dimension: Some(1024),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = EmbeddingsConfig::resolve(&settings).expect("resolve should succeed");
+        assert_eq!(config.dimension, 1024);
+    }
+
+    #[test]
+    fn embedding_dimension_env_override_takes_precedence_over_settings() {
+        let _guard = lock_env();
+        clear_embedding_env();
+        // SAFETY: Under ENV_MUTEX.
+        unsafe {
+            std::env::set_var("EMBEDDING_DIMENSION", "2048");
+        }
+
+        let settings = Settings {
+            embeddings: EmbeddingsSettings {
+                dimension: Some(1024),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let config = EmbeddingsConfig::resolve(&settings).expect("resolve should succeed");
+        assert_eq!(config.dimension, 2048);
+
+        // SAFETY: Under ENV_MUTEX.
+        unsafe {
+            std::env::remove_var("EMBEDDING_DIMENSION");
+        }
     }
 
     #[test]

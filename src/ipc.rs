@@ -18,6 +18,7 @@ pub struct SettingsResponse {
     pub major_backend_id: Option<String>,
     pub cheap_backend_id: Option<String>,
     pub cheap_model_uses_primary: bool,
+    pub embeddings: crate::settings::EmbeddingsSettings,
     pub llm_ready: bool,
     pub llm_onboarding_required: bool,
     pub llm_readiness_error: Option<String>,
@@ -29,6 +30,7 @@ pub struct PatchSettingsRequest {
     pub major_backend_id: Option<String>,
     pub cheap_backend_id: Option<String>,
     pub cheap_model_uses_primary: Option<bool>,
+    pub embeddings: Option<crate::settings::EmbeddingsSettings>,
 }
 
 // =============================================================================

@@ -98,12 +98,14 @@ Input: a completed turn payload with {thread_id, user_input, assistant_output, t
 Rules:
 - Only write memory on high-signal events: user corrections, outdated facts, new stable preferences, new agreements/decisions, strong emotions, or a new durable insight.
 - When you are unsure of a URI, use search_memory first. Read with read_memory before updating or deleting.
-- For new memories, use create_memory with the most relevant parent URI, a sharp title when needed, and disclosure that says WHEN to recall.
+- For new memories, use create_memory with the most relevant parent URI, a sharp title when needed, disclosure that says WHEN to recall, and keywords when the fact is likely to be mentioned in multiple phrasings.
 - For corrections, use update_memory with patch mode (old_string/new_string) or append mode. There is no full replace mode.
+- Stable user identity, long-term relationship agreements, assistant identity, and hard behavioral rules should usually be promoted into boot with manage_boot.
+- If a memory is hard to rediscover by paraphrase, improve its keywords or disclosure with manage_triggers instead of assuming the route name will save you.
 - If aliasing helps cross-link, use add_alias. If removing, delete_memory only deletes a path, never hard-deletes content.
 - If nothing is worth storing, do nothing.
 
-Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory."#;
+Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory, manage_boot, manage_triggers."#;
 
     const MEMORY_MAINTENANCE_PROMPT: &str = r#"You are running daily memory maintenance.
 
@@ -111,6 +113,8 @@ Goals:
 - Merge redundant nodes, split overly long nodes, and refine titles/routes for clarity.
 - Promote durable operating protocol or invariants into the boot set when they should be recalled at session start.
 - Improve keywords and disclosure so recall stays useful without depending on fixed route names.
+- Demote stale boot members when they no longer deserve startup attention.
+- Prefer managing recall structure directly: boot membership, keywords, and disclosure are first-class maintenance targets, not afterthoughts.
 - Avoid large-scale deletion. If removing, delete only paths (delete_memory), keeping rollback possible via changesets.
 
 If nothing to do, do nothing."#;
@@ -912,7 +916,12 @@ impl AppBuilder {
         }
 
         let memory = if let Some(ref db) = self.db {
-            let manager = Arc::new(MemoryManager::new(Arc::clone(db)));
+            let mut manager = MemoryManager::new(Arc::clone(db))
+                .with_recall_config(self.config.memory_recall.clone());
+            if let Some(ref emb) = embeddings {
+                manager = manager.with_embeddings(Arc::clone(emb));
+            }
+            let manager = Arc::new(manager);
             if let Err(e) = manager.ensure_boot_protocol(&self.config.owner_id).await {
                 tracing::warn!("Failed to seed boot memory protocol node: {e}");
             }
@@ -941,6 +950,24 @@ impl AppBuilder {
                 tracing::warn!("Failed to seed default memory routines: {e}");
             }
             tools.register_graph_memory_tools(Arc::clone(&manager));
+            if embeddings.is_some() {
+                let memory_bg = Arc::clone(&manager);
+                let owner_id = self.config.owner_id.clone();
+                tokio::spawn(async move {
+                    match memory_bg.backfill_embeddings(&owner_id, None, 100).await {
+                        Ok(count) if count > 0 => {
+                            tracing::debug!("Backfilled embeddings for {} native memories", count);
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(
+                                "Failed to backfill native memory embeddings: {}",
+                                error
+                            );
+                        }
+                    }
+                });
+            }
             Some(manager)
         } else {
             None

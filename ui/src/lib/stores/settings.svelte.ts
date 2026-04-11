@@ -1,11 +1,24 @@
 import { apiClient } from "../api";
-import type { BackendInstance, PatchSettingsRequest, SettingsResponse } from "../types";
+import type {
+  BackendInstance,
+  EmbeddingsSettings,
+  PatchSettingsRequest,
+  SettingsResponse
+} from "../types";
 
 const DEFAULT_SETTINGS: SettingsResponse = {
   backends: [],
   major_backend_id: null,
   cheap_backend_id: null,
   cheap_model_uses_primary: true,
+  embeddings: {
+    enabled: false,
+    provider: "openai",
+    api_key: null,
+    base_url: null,
+    model: "text-embedding-3-small",
+    dimension: null
+  },
   llm_ready: false,
   llm_onboarding_required: true,
   llm_readiness_error: null
@@ -15,7 +28,11 @@ function normalizeSettingsResponse(value: Partial<SettingsResponse> | null | und
   return {
     ...structuredClone(DEFAULT_SETTINGS),
     ...value,
-    backends: Array.isArray(value?.backends) ? value!.backends : []
+    backends: Array.isArray(value?.backends) ? value!.backends : [],
+    embeddings: {
+      ...structuredClone(DEFAULT_SETTINGS.embeddings),
+      ...value?.embeddings
+    }
   };
 }
 
@@ -66,6 +83,16 @@ class SettingsState {
     this.data = { ...this.data, cheap_backend_id: id };
   }
 
+  setEmbeddings(patch: Partial<EmbeddingsSettings>) {
+    this.data = {
+      ...this.data,
+      embeddings: {
+        ...this.data.embeddings,
+        ...patch
+      }
+    };
+  }
+
   async save() {
     this.error = null;
     this.status = "";
@@ -73,7 +100,8 @@ class SettingsState {
       backends: this.data.backends,
       major_backend_id: this.data.major_backend_id,
       cheap_backend_id: this.data.cheap_backend_id,
-      cheap_model_uses_primary: this.data.cheap_model_uses_primary
+      cheap_model_uses_primary: this.data.cheap_model_uses_primary,
+      embeddings: this.data.embeddings
     };
 
     try {

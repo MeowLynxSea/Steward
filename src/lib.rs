@@ -66,6 +66,7 @@ pub mod memory;
 pub mod observability;
 pub mod pairing;
 pub mod registry;
+pub mod retrieval;
 pub mod runtime_events;
 pub mod safety;
 pub mod secrets;

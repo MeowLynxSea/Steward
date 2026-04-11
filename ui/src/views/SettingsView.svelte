@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    BrainCircuit,
     ChevronLeft,
     Moon,
     Palette,
@@ -40,6 +41,24 @@
     groq: "Groq",
     openrouter: "OpenRouter",
     ollama: "Ollama"
+  };
+
+  const embeddingProviderOptions = [
+    { value: "openai", label: "OpenAI Compatible" },
+    { value: "ollama", label: "Ollama" }
+  ];
+
+  const embeddingModelOptions: Record<string, Array<{ value: string; label: string }>> = {
+    openai: [
+      { value: "text-embedding-3-small", label: "text-embedding-3-small" },
+      { value: "text-embedding-3-large", label: "text-embedding-3-large" },
+      { value: "text-embedding-ada-002", label: "text-embedding-ada-002" }
+    ],
+    ollama: [
+      { value: "nomic-embed-text", label: "nomic-embed-text" },
+      { value: "mxbai-embed-large", label: "mxbai-embed-large" },
+      { value: "all-minilm", label: "all-minilm" }
+    ]
   };
 
   let { onClose }: { onClose: () => void } = $props();
@@ -246,6 +265,27 @@
     memoryReviews = response.reviews;
   }
 
+  function updateEmbeddingProvider(provider: string) {
+    const options = embeddingModelOptions[provider] ?? [];
+    const nextModel =
+      options.find((option) => option.value === settingsStore.data.embeddings.model)?.value ??
+      options[0]?.value ??
+      settingsStore.data.embeddings.model;
+    settingsStore.setEmbeddings({ provider, model: nextModel });
+  }
+
+  function updateEmbeddingDimension(rawValue: string) {
+    const value = rawValue.trim();
+    const parsed = Number.parseInt(value, 10);
+    settingsStore.setEmbeddings({
+      dimension: value === "" || !Number.isSafeInteger(parsed) || parsed <= 0 ? null : parsed
+    });
+  }
+
+  async function saveModelSettings() {
+    await settingsStore.save();
+  }
+
   function selectSection(section: SettingsSection) {
     activeSection = section;
 
@@ -259,6 +299,10 @@
       closeBackendDrawer();
     }
   }
+
+  const activeEmbeddingModelOptions = $derived(
+    embeddingModelOptions[settingsStore.data.embeddings.provider] ?? []
+  );
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -423,6 +467,149 @@
               </select>
             {/if}
           </label>
+        </div>
+
+        <div class="settings-card retrieval-settings">
+          <div class="card-copy">
+            <span class="card-kicker">Embeddings</span>
+            <h3>语义召回模型</h3>
+            <p>这套配置只用于 embedding / recall，不会替换主聊天模型或 Cheap 模型。</p>
+          </div>
+
+          <label class="checkbox-row toggle-row">
+            <input
+              type="checkbox"
+              checked={settingsStore.data.embeddings.enabled}
+              onchange={(event) =>
+                settingsStore.setEmbeddings({
+                  enabled: (event.currentTarget as HTMLInputElement).checked
+                })}
+            />
+            <span>启用 embeddings</span>
+          </label>
+
+          <div class="model-selectors embeddings-grid">
+            <label class="model-select">
+              <span class="model-select-label">Provider</span>
+              <select
+                class="model-select-input"
+                value={settingsStore.data.embeddings.provider}
+                onchange={(event) =>
+                  updateEmbeddingProvider(
+                    (event.currentTarget as HTMLSelectElement).value
+                  )}
+              >
+                {#each embeddingProviderOptions as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </label>
+
+            <label class="model-select">
+              <span class="model-select-label">Model ID</span>
+              <input
+                class="model-text-input"
+                type="text"
+                value={settingsStore.data.embeddings.model}
+                list="embedding-model-suggestions"
+                oninput={(event) =>
+                  settingsStore.setEmbeddings({
+                    model: (event.currentTarget as HTMLInputElement).value
+                  })}
+                placeholder="text-embedding-3-small"
+              />
+              <datalist id="embedding-model-suggestions">
+                {#each activeEmbeddingModelOptions as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </datalist>
+            </label>
+
+            <label class="model-select">
+              <span class="model-select-label">Base URL</span>
+              <input
+                class="model-text-input"
+                type="text"
+                value={settingsStore.data.embeddings.base_url ?? ""}
+                oninput={(event) =>
+                  settingsStore.setEmbeddings({
+                    base_url: (event.currentTarget as HTMLInputElement).value || null
+                  })}
+                placeholder={
+                  settingsStore.data.embeddings.provider === "ollama"
+                    ? "http://127.0.0.1:11434"
+                    : "https://api.openai.com"
+                }
+              />
+              <p class="field-hint">
+                {#if settingsStore.data.embeddings.provider === "ollama"}
+                  填 Ollama 服务根地址，例如 `http://127.0.0.1:11434`。
+                {:else}
+                  填 OpenAI-compatible 服务根地址，不要带 `/v1`。程序会自动请求
+                  `/v1/embeddings`。例如应填写 `https://api.siliconflow.cn`，不要填写
+                  `https://api.siliconflow.cn/v1`。
+                {/if}
+              </p>
+            </label>
+
+            <label class="model-select">
+              <span class="model-select-label">Dimensions</span>
+              <input
+                class="model-text-input"
+                type="number"
+                min="1"
+                step="1"
+                value={settingsStore.data.embeddings.dimension ?? ""}
+                oninput={(event) =>
+                  updateEmbeddingDimension((event.currentTarget as HTMLInputElement).value)}
+                placeholder="留空则按模型默认值推断"
+              />
+              <p class="field-hint">
+                只有第三方 embedding 服务要求固定维度时才填写；多数情况下可留空，由模型默认值自动推断。
+              </p>
+            </label>
+
+            <label class="model-select">
+              <span class="model-select-label">API Key</span>
+              <input
+                class="model-text-input"
+                type="password"
+                value={settingsStore.data.embeddings.api_key ?? ""}
+                oninput={(event) =>
+                  settingsStore.setEmbeddings({
+                    api_key: (event.currentTarget as HTMLInputElement).value || null
+                  })}
+                placeholder={
+                  settingsStore.data.embeddings.provider === "ollama"
+                    ? "可留空"
+                    : "sk-..."
+                }
+              />
+            </label>
+          </div>
+
+          <div class="retrieval-notes">
+            <div class="note-chip">
+              <BrainCircuit size={14} strokeWidth={2} />
+              <span>支持 OpenAI-compatible 第三方 embedding 服务。</span>
+            </div>
+            <p>
+              例如把 provider 设为 `OpenAI Compatible`，再填写第三方的 `Base URL`、`Model ID`
+              与 `API Key`。保存后会热更新当前运行时，并在后台回填向量。
+            </p>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="save-button" type="button" onclick={() => void saveModelSettings()}>
+            保存模型与 Embedding 设置
+          </button>
+          {#if settingsStore.status}
+            <p class="settings-status">{settingsStore.status}</p>
+          {/if}
+          {#if settingsStore.error}
+            <p class="settings-status error">{settingsStore.error}</p>
+          {/if}
         </div>
       </section>
     {/if}
@@ -710,9 +897,19 @@
   }
 
   .model-selectors {
+    display: flex;
     flex-direction: column;
     align-items: stretch;
     gap: 16px;
+  }
+
+  .retrieval-settings {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .embeddings-grid {
+    width: 100%;
   }
 
   .model-select {
@@ -758,8 +955,37 @@
       color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
 
+  .model-text-input {
+    width: 100%;
+    height: 40px;
+    padding: 0 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .model-text-input:hover {
+    border-color: var(--border-focus, var(--text-tertiary));
+  }
+
+  .model-text-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px
+      color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  }
+
   .cheap-toggle-row {
     margin-bottom: 4px;
+  }
+
+  .toggle-row {
+    align-self: flex-start;
   }
 
   .checkbox-row {
@@ -780,6 +1006,68 @@
     background: var(--bg-input);
     cursor: pointer;
     accent-color: var(--accent-primary);
+  }
+
+  .retrieval-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--bg-elevated) 75%, var(--bg-surface) 25%);
+    border: 1px solid var(--border-subtle, var(--border-default));
+  }
+
+  .retrieval-notes p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .note-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .settings-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .save-button {
+    height: 40px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent-primary);
+    color: var(--text-on-dark);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .save-button:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-card);
+  }
+
+  .settings-status {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .settings-status.error {
+    color: var(--accent-error, #c65a50);
   }
 
   .nested-backdrop {

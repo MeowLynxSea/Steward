@@ -17,12 +17,13 @@ use crate::tools::builder::{
 };
 use crate::tools::builtin::{
     AddAliasTool, ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool,
-    CreateMemoryTool, DeleteMemoryTool, EchoTool, ExtensionInfoTool, HttpTool, JobEventsTool,
-    JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool, MoveFileTool, ReadFileTool,
-    ReadMemoryTool, SearchMemoryTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool,
-    SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
-    ToolRemoveTool, ToolSearchTool, ToolUpgradeTool, UpdateMemoryTool, WorkspaceReadTool,
-    WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
+    CreateMemoryTool, DeleteMemoryTool, EchoTool, ExplainMemoryRecallTool, ExtensionInfoTool,
+    HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
+    ManageBootTool, ManageTriggersTool, MoveFileTool, ReadFileTool, ReadMemoryTool,
+    SearchMemoryTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool,
+    TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
+    ToolSearchTool, ToolUpgradeTool, UpdateMemoryTool, WorkspaceReadTool, WorkspaceSearchTool,
+    WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -372,9 +373,12 @@ impl ToolRegistry {
         self.register_sync(Arc::new(CreateMemoryTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(UpdateMemoryTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(DeleteMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ManageBootTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ManageTriggersTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ExplainMemoryRecallTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(AddAliasTool::new(memory)));
 
-        tracing::debug!("Registered 6 graph-native memory tools");
+        tracing::debug!("Registered 9 graph-native memory tools");
     }
 
     /// Register job management tools.

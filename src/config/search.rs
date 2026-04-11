@@ -1,6 +1,6 @@
 use crate::config::helpers::{optional_env, parse_optional_env};
 use crate::error::ConfigError;
-use crate::workspace::FusionStrategy;
+use crate::retrieval::FusionStrategy;
 
 /// Workspace search configuration resolved from environment variables.
 #[derive(Debug, Clone)]

@@ -357,6 +357,7 @@ impl Database for LibSqlBackend {
         // with the correct F32_BLOB(N) dimension inferred from env vars.
         if let Some(dimension) = workspace::resolve_embedding_dimension() {
             self.ensure_vector_index(dimension).await?;
+            self.ensure_memory_vector_index(dimension).await?;
         }
 
         Ok(())
