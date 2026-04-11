@@ -51,8 +51,8 @@ mod import_integration_tests {
         let workspace_dir = openclaw_path.join("workspace");
         std::fs::create_dir_all(&workspace_dir)?;
         std::fs::write(
-            workspace_dir.join("MEMORY.md"),
-            "# Memory\n\nTest memory content for integration test.",
+            workspace_dir.join("README.md"),
+            "# README\n\nTest workspace content for integration test.",
         )?;
         std::fs::write(
             workspace_dir.join("NOTES.md"),
@@ -173,7 +173,7 @@ mod import_integration_tests {
         let workspace_count = reader
             .list_workspace_files()
             .expect("list workspace files failed");
-        assert_eq!(workspace_count, 2); // MEMORY.md, NOTES.md
+        assert_eq!(workspace_count, 2); // README.md, NOTES.md
 
         let agent_dbs = reader.list_agent_dbs().expect("list agent dbs failed");
         assert_eq!(agent_dbs.len(), 2); // agent1, agent2

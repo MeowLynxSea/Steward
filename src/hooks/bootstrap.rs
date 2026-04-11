@@ -314,7 +314,7 @@ mod tests {
         assert!(is_workspace_hook_file("hooks/hooks.json"));
         assert!(is_workspace_hook_file("hooks/redact.hook.json"));
         assert!(!is_workspace_hook_file("hooks/readme.md"));
-        assert!(!is_workspace_hook_file("MEMORY.md"));
+        assert!(!is_workspace_hook_file("HEARTBEAT.md"));
     }
 
     #[test]

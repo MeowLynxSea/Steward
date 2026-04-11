@@ -8,14 +8,14 @@ Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace prov
 
 Steward's long-term agent memory no longer lives here as runtime truth. The native graph-based memory system now lives under `src/memory/`, backed by libSQL tables such as `memory_nodes`, `memory_versions`, and `memory_routes`.
 
-Legacy files like `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, `USER.md`, and `daily/*.md` are imported once into the graph during migration. After that, the graph is the source of truth and the workspace copy is only legacy content.
+Legacy file-based memory is no longer part of the active workspace architecture. The graph is the source of truth for long-term memory.
 
 ## Key Principles
 
 1. **Workspace means mounted files** - `workspace://...` points at real mounted project content
 2. **Agent memory is separate** - long-term memory lives in `src/memory/`, not here
 3. **Hybrid search is discovery** - workspace search helps find mounted file context
-4. **No workspace memory truth** - legacy markdown memory files are migration inputs only
+4. **No workspace memory truth** - long-term memory does not live in workspace markdown files
 
 ## Workspace Shape
 
@@ -86,18 +86,14 @@ Some legacy workspace-document helpers still exist in the Rust module to support
 
 When a workspace has additional read scopes (via `with_additional_read_scopes`), read operations can span multiple user scopes — a user with scopes `["alice", "shared"]` can read documents from both.
 
-**Legacy identity-file import helpers are exempt from multi-scope reads.** When the workspace layer reads identity/config documents during migration or profile sync, it reads them from the **primary scope only** (`read_primary()`), never from secondary scopes:
+Identity/config prompt files are exempt from multi-scope reads. When the workspace layer reads them for prompt construction or profile sync, it reads them from the **primary scope only** (`read_primary()`), never from secondary scopes:
 
 | File | Read method | Rationale |
 |------|------------|-----------|
 | AGENTS.md | `read_primary()` | Agent instructions are per-user |
 | SOUL.md | `read_primary()` | Core values are per-user |
-| USER.md | `read_primary()` | Legacy user-context imports remain per-user |
-| IDENTITY.md | `read_primary()` | Legacy identity imports remain per-user |
 | TOOLS.md | `read_primary()` | Tool config is per-user |
 | BOOTSTRAP.md | `read_primary()` | Onboarding is per-user |
-| MEMORY.md | `read()` | Legacy import content, not runtime truth |
-| daily/*.md | `read()` | Legacy episodic import content |
 
 **Why:** Without this, a user with read access to another scope could silently inherit that scope's identity if their own copy is missing. The agent would present itself as the wrong user — a correctness and security issue.
 
@@ -105,10 +101,9 @@ When a workspace has additional read scopes (via `with_additional_read_scopes`),
 
 ## Heartbeat Runtime
 
-Proactive periodic execution is now routine/config driven. It no longer depends
-on a fixed graph route or on reading a workspace `HEARTBEAT.md` file as runtime
-truth. Legacy heartbeat files can still exist as workspace documents, but the
-active heartbeat behavior comes from routine prompt/config stored in the runtime.
+Proactive periodic execution is now routine/config driven. The active heartbeat
+behavior comes from routine prompt/config stored in the runtime rather than file
+appends or daily-log style workspace memory.
 
 ## Chunking Strategy
 

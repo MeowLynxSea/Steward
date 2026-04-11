@@ -85,7 +85,7 @@ Parameters:
   - Sunday evening: `0 18 * * SUN`
 - `action_type`: "lightweight" for simple checks, "full_job" for multi-step tasks
 - `prompt`: Clear, specific instruction for what the routine should do
-- `context_paths`: Workspace files to load as context (e.g., `["USER.md", "MEMORY.md"]`)
+- `context_paths`: Workspace files to load as context (e.g., `["AGENTS.md", "context/project-brief.md"]`)
 
 ## Routine Ideas by User Type
 

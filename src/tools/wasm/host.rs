@@ -529,9 +529,8 @@ mod tests {
     #[test]
     fn test_path_validation_allows_valid_paths() {
         assert!(validate_workspace_path("context/test.md").is_ok());
-        assert!(validate_workspace_path("daily/2024-01-15.md").is_ok());
         assert!(validate_workspace_path("projects/alpha/notes.md").is_ok());
-        assert!(validate_workspace_path("MEMORY.md").is_ok());
+        assert!(validate_workspace_path("HEARTBEAT.md").is_ok());
     }
 
     #[test]

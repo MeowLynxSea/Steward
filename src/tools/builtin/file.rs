@@ -23,7 +23,7 @@ fn is_legacy_memory_workspace_path(path: &str) -> bool {
         .and_then(|f| f.to_str())
         .unwrap_or(path);
 
-    matches!(filename, ws_paths::HEARTBEAT | ws_paths::MEMORY) || path.starts_with("daily/")
+    matches!(filename, ws_paths::HEARTBEAT)
 }
 
 /// Maximum file size for reading (1MB).
@@ -220,8 +220,8 @@ impl Tool for WriteFileTool {
 
         if is_legacy_memory_workspace_path(path_str) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is a legacy workspace memory path and should not be edited as a file. \
-                 Use create_memory or update_memory so the change lands in Steward's native memory graph instead of daily/*.md, MEMORY.md, or HEARTBEAT.md.",
+                "'{}' is a workspace procedure document and should not be edited through raw filesystem tools. \
+                 Use workspace_write or workspace_read for workspace-managed documents, and use graph memory tools for Steward memory.",
                 path_str
             )));
         }
@@ -831,7 +831,7 @@ mod tests {
         let tool = WriteFileTool::new().with_base_dir(dir.path().to_path_buf());
         let ctx = JobContext::default();
 
-        let workspace_files = &["HEARTBEAT.md", "MEMORY.md"];
+        let workspace_files = &["HEARTBEAT.md"];
 
         for filename in workspace_files {
             let path = dir.path().join(filename);
@@ -852,26 +852,6 @@ mod tests {
                 "Rejection for {} should mention native memory tools, got: {}",
                 filename,
                 msg
-            );
-        }
-
-        // daily/ prefixes should also be rejected
-        for prefix_path in &["daily/2024-01-15.md"] {
-            let err = tool
-                .execute(
-                    serde_json::json!({
-                        "path": prefix_path,
-                        "content": "test"
-                    }),
-                    &ctx,
-                )
-                .await
-                .unwrap_err();
-
-            assert!(
-                err.to_string().contains("memory_"),
-                "Rejection for {} should mention native memory tools",
-                prefix_path
             );
         }
 

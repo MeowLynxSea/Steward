@@ -17,8 +17,8 @@
   },
   "memory_snapshot": [
     {
-      "path": "IDENTITY.md",
-      "content": "# Identity\n\nName: Alfred\nNature: A secure personal AI assistant\n\nEdit this file to give your agent a custom name and personality."
+      "path": "SOUL.md",
+      "content": "# Soul\n\nName: Alfred\nNature: A secure personal AI assistant\n\nEdit this file to give your agent a custom name and personality."
     }
   ],
   "steps": [

@@ -137,10 +137,7 @@ fn looks_like_filesystem_path(path: &str) -> bool {
 }
 
 fn is_legacy_memory_target(target: &str) -> bool {
-    matches!(target, "memory" | "daily_log" | "heartbeat")
-        || target == paths::MEMORY
-        || target == paths::HEARTBEAT
-        || target.starts_with("daily/")
+    matches!(target, "heartbeat") || target == paths::HEARTBEAT
 }
 
 fn is_workspace_mount_uri(path: &str) -> bool {
@@ -367,9 +364,8 @@ impl Tool for WorkspaceWriteTool {
     fn description(&self) -> &str {
         "Write to mounted workspace files via `workspace://` URIs. \
          Use this only for real mounted project files such as `workspace://<mount-id>/src/main.rs`. \
-         Do NOT use this for Steward memory, episodic recall, heartbeat procedures, or legacy \
-         memory-file paths like MEMORY.md, HEARTBEAT.md, or daily/*.md; use create_memory/update_memory for \
-         agent memory. Use write_file for raw local filesystem paths."
+         Do NOT use this for Steward memory or heartbeat procedures; use create_memory/update_memory for \
+         agent memory, and use the workspace document APIs for workspace-owned files. Use write_file for raw local filesystem paths."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -382,7 +378,7 @@ impl Tool for WorkspaceWriteTool {
                 },
                 "target": {
                     "type": "string",
-                    "description": "Mounted workspace file target, always as a `workspace://<mount-id>/...` URI. Do not pass legacy memory-file paths such as 'memory', 'daily_log', 'heartbeat', 'MEMORY.md', 'HEARTBEAT.md', or 'daily/...'."
+                    "description": "Mounted workspace file target, always as a `workspace://<mount-id>/...` URI. Do not pass legacy aliases such as 'heartbeat' or direct workspace document names like 'HEARTBEAT.md'."
                 },
                 "append": {
                     "type": "boolean",
@@ -766,8 +762,7 @@ mod tests {
 
     #[test]
     fn allows_workspace_document_paths() {
-        assert!(!looks_like_filesystem_path("MEMORY.md"));
-        assert!(!looks_like_filesystem_path("daily/2026-03-11.md"));
+        assert!(!looks_like_filesystem_path("HEARTBEAT.md"));
         assert!(!looks_like_filesystem_path("projects/alpha/notes.md"));
     }
 
@@ -776,9 +771,7 @@ mod tests {
         assert!(is_legacy_memory_target("memory"));
         assert!(is_legacy_memory_target("daily_log"));
         assert!(is_legacy_memory_target("heartbeat"));
-        assert!(is_legacy_memory_target("MEMORY.md"));
         assert!(is_legacy_memory_target("HEARTBEAT.md"));
-        assert!(is_legacy_memory_target("daily/2026-03-11.md"));
         assert!(!is_legacy_memory_target("projects/alpha/notes.md"));
         assert!(!is_legacy_memory_target("context/vision.md"));
         assert!(!is_legacy_memory_target("workspace://mount/src/main.rs"));

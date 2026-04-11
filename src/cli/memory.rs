@@ -48,7 +48,7 @@ pub enum MemoryCommand {
 
     /// Read a file from the workspace
     Read {
-        /// File path (e.g., "MEMORY.md", "daily/2024-01-15.md")
+        /// File path (e.g., "notes/idea.md", "context/project-brief.md")
         path: String,
     },
 
@@ -209,14 +209,14 @@ async fn status(workspace: &Workspace) -> anyhow::Result<()> {
 
     // Check key files
     let key_files = [
-        "MEMORY.md",
-        "HEARTBEAT.md",
-        "IDENTITY.md",
-        "SOUL.md",
         "AGENTS.md",
-        "USER.md",
+        "SOUL.md",
+        "TOOLS.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md",
+        "README.md",
     ];
-    println!("\n  Identity files:");
+    println!("\n  Key files:");
     for path in &key_files {
         let exists = workspace.exists(path).await.unwrap_or(false);
         let marker = if exists { "+" } else { "-" };

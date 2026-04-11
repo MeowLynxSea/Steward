@@ -80,7 +80,7 @@ impl Capabilities {
 /// Workspace read capability configuration.
 #[derive(Clone, Default)]
 pub struct WorkspaceCapability {
-    /// Allowed path prefixes (e.g., ["context/", "daily/"]).
+    /// Allowed path prefixes (e.g., ["context/", "projects/"]).
     /// Empty means all paths allowed (within safety constraints).
     pub allowed_prefixes: Vec<String>,
     /// Function to actually read from workspace.

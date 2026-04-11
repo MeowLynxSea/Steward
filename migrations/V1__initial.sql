@@ -162,7 +162,7 @@ CREATE INDEX idx_repair_attempts_created ON repair_attempts(created_at);
 -- ==================== Workspace: Memory Documents ====================
 -- Flexible filesystem-like structure for agent memory.
 -- Agents can create arbitrary paths like:
---   "README.md", "context/vision.md", "daily/2024-01-15.md", "projects/alpha/notes.md"
+--   "README.md", "context/vision.md", "projects/alpha/notes.md"
 
 CREATE TABLE memory_documents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

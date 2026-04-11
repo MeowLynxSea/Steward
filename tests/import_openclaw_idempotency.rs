@@ -31,8 +31,8 @@ mod idempotency_tests {
         let workspace_dir = openclaw_path.join("workspace");
         std::fs::create_dir_all(&workspace_dir)?;
         std::fs::write(
-            workspace_dir.join("MEMORY.md"),
-            "# Memory\nTest memory content",
+            workspace_dir.join("NOTES.md"),
+            "# Notes\nTest workspace content",
         )?;
 
         // Agent DB
@@ -124,7 +124,7 @@ mod idempotency_tests {
         let count2 = reader.list_workspace_files().expect("second list failed");
 
         assert_eq!(count1, count2);
-        assert_eq!(count1, 1); // MEMORY.md
+        assert_eq!(count1, 1); // NOTES.md
     }
 
     #[tokio::test]

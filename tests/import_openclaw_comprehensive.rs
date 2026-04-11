@@ -36,9 +36,9 @@ mod comprehensive_import_tests {
         let workspace_dir = openclaw_path.join("workspace");
         std::fs::create_dir_all(&workspace_dir)?;
 
-        let memory_content =
-            "# Memory\n\nThis is a test memory document.\n\n## Section 1\nSome content here.";
-        std::fs::write(workspace_dir.join("MEMORY.md"), memory_content)?;
+        let notes_content =
+            "# Notes\n\nThis is a test notes document.\n\n## Section 1\nSome content here.";
+        std::fs::write(workspace_dir.join("NOTES.md"), notes_content)?;
 
         let readme_content = "# README\n\nTest workspace README with important notes.";
         std::fs::write(workspace_dir.join("README.md"), readme_content)?;
@@ -212,7 +212,7 @@ mod comprehensive_import_tests {
             .list_workspace_files()
             .expect("failed to list workspace files");
 
-        // Should find MEMORY.md and README.md
+        // Should find NOTES.md and README.md
         assert_eq!(count, 2);
 
         let _ = temp_dir;

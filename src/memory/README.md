@@ -23,4 +23,4 @@
 
 `src/workspace/` still owns mounted files, workspace search, and file-context indexing.
 
-Legacy files such as `MEMORY.md`, `HEARTBEAT.md`, `IDENTITY.md`, `USER.md`, and `daily/*.md` are migration inputs only. After import, the graph is the runtime truth, and imported routes are treated as ordinary memory nodes rather than fixed runtime entry points.
+Legacy workspace files are no longer part of the runtime memory contract. The graph is the source of truth, and any imported content is treated as ordinary memory nodes rather than fixed runtime entry points.

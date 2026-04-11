@@ -221,7 +221,7 @@ See `.env.example` for all environment variables. LLM backends (`nearai`, `opena
 
 ## Workspace & Memory
 
-Workspace search and mounted-file context live under `src/workspace/`. Durable long-term memory lives in the graph-native system under `src/memory/` and is exposed to the agent via `memory_open`, `memory_recall`, `memory_save`, `memory_alias`, `memory_delete`, and `memory_review`. Legacy files like `USER.md`, `IDENTITY.md`, `MEMORY.md`, and `HEARTBEAT.md` are migration inputs or workspace docs, not the runtime truth for agent memory. See `src/workspace/README.md` and `src/memory/README.md`.
+Workspace search and mounted-file context live under `src/workspace/`. Durable long-term memory lives in the graph-native system under `src/memory/` and is exposed to the agent via `memory_open`, `memory_recall`, `memory_save`, `memory_alias`, `memory_delete`, and `memory_review`. Workspace prompt files such as `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `BOOTSTRAP.md`, and `HEARTBEAT.md` are configuration surfaces, not the runtime truth for agent memory. See `src/workspace/README.md` and `src/memory/README.md`.
 
 ## Debugging
 

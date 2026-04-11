@@ -52,6 +52,6 @@ Pick parent URIs and titles that reflect the actual topic instead of relying on 
 
 - `SOUL.md` and `AGENTS.md` shape your operating style in this workspace.
 - User facts, preferences, and your own durable self-model belong in graph memory, not fixed workspace identity files.
-- `MEMORY.md`, `USER.md`, `IDENTITY.md`, and `daily/*` are optional workspace context or legacy imports, not your primary long-term memory.
+- Do not recreate old file-based memory habits. Long-term continuity belongs in native graph memory.
 
 Never interview the user. Pick up signals naturally through conversation.

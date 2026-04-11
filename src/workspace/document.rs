@@ -9,22 +9,14 @@ use uuid::Uuid;
 /// These are conventional paths that have special meaning in the workspace.
 /// Agents can create arbitrary paths beyond these.
 pub mod paths {
-    /// Long-term curated memory.
-    pub const MEMORY: &str = "MEMORY.md";
-    /// Agent identity (name, nature, vibe).
-    pub const IDENTITY: &str = "IDENTITY.md";
     /// Core values and principles.
     pub const SOUL: &str = "SOUL.md";
     /// Behavior instructions.
     pub const AGENTS: &str = "AGENTS.md";
-    /// User context (name, preferences).
-    pub const USER: &str = "USER.md";
     /// Periodic checklist for heartbeat.
     pub const HEARTBEAT: &str = "HEARTBEAT.md";
     /// Root runbook/readme.
     pub const README: &str = "README.md";
-    /// Daily logs directory.
-    pub const DAILY_DIR: &str = "daily/";
     /// Context directory (for identity-related docs).
     pub const CONTEXT_DIR: &str = "context/";
     /// User-editable notes for environment-specific tool guidance.
@@ -38,14 +30,7 @@ pub mod paths {
 /// These files are always read from the primary scope only — never from
 /// secondary read scopes. This prevents silent identity inheritance
 /// (e.g., user A accidentally presenting as user B).
-pub const IDENTITY_PATHS: &[&str] = &[
-    paths::IDENTITY,
-    paths::SOUL,
-    paths::AGENTS,
-    paths::USER,
-    paths::TOOLS,
-    paths::BOOTSTRAP,
-];
+pub const IDENTITY_PATHS: &[&str] = &[paths::SOUL, paths::AGENTS, paths::TOOLS, paths::BOOTSTRAP];
 
 /// Check if a path is an identity document that must be isolated to primary scope.
 pub fn is_identity_path(path: &str) -> bool {
@@ -242,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_memory_document_word_count() {
-        let mut doc = MemoryDocument::new("user1", None, "MEMORY.md");
+        let mut doc = MemoryDocument::new("user1", None, "context/notes.md");
         assert_eq!(doc.word_count(), 0);
 
         doc.content = "Hello world, this is a test.".to_string();
@@ -251,14 +236,11 @@ mod tests {
 
     #[test]
     fn test_is_identity_document() {
-        let identity = MemoryDocument::new("user1", None, paths::IDENTITY);
-        assert!(identity.is_identity_document());
-
         let soul = MemoryDocument::new("user1", None, paths::SOUL);
         assert!(soul.is_identity_document());
 
-        let memory = MemoryDocument::new("user1", None, paths::MEMORY);
-        assert!(!memory.is_identity_document());
+        let tools = MemoryDocument::new("user1", None, paths::TOOLS);
+        assert!(tools.is_identity_document());
 
         let custom = MemoryDocument::new("user1", None, "projects/notes.md");
         assert!(!custom.is_identity_document());

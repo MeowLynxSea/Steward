@@ -2,12 +2,10 @@
 //!
 //! When the context window approaches its limit, compaction:
 //! 1. Summarizes old turns
-//! 2. Writes the summary to the workspace daily log
+//! 2. Archives the summary into native memory when available
 //! 3. Trims the context to keep only recent turns
 
 use std::sync::Arc;
-
-use chrono::Utc;
 
 use crate::agent::context_monitor::{CompactionStrategy, ContextBreakdown};
 use crate::agent::session::Thread;
@@ -47,7 +45,7 @@ impl ContextCompactor {
         &self,
         thread: &mut Thread,
         strategy: CompactionStrategy,
-        workspace: Option<&Workspace>,
+        _workspace: Option<&Workspace>,
         memory: Option<&MemoryManager>,
         owner_id: &str,
     ) -> Result<CompactionResult, Error> {
@@ -56,14 +54,14 @@ impl ContextCompactor {
 
         let result = match strategy {
             CompactionStrategy::Summarize { keep_recent } => {
-                self.compact_with_summary(thread, keep_recent, workspace, memory, owner_id)
+                self.compact_with_summary(thread, keep_recent, _workspace, memory, owner_id)
                     .await?
             }
             CompactionStrategy::Truncate { keep_recent } => {
                 self.compact_truncate(thread, keep_recent)
             }
             CompactionStrategy::MoveToWorkspace => {
-                self.compact_to_workspace(thread, workspace, memory, owner_id)
+                self.compact_to_workspace(thread, _workspace, memory, owner_id)
                     .await?
             }
         };
@@ -85,7 +83,7 @@ impl ContextCompactor {
         &self,
         thread: &mut Thread,
         keep_recent: usize,
-        workspace: Option<&Workspace>,
+        _workspace: Option<&Workspace>,
         memory: Option<&MemoryManager>,
         owner_id: &str,
     ) -> Result<CompactionPartial, Error> {
@@ -109,7 +107,7 @@ impl ContextCompactor {
         // Generate summary
         let summary = self.generate_summary(&to_summarize).await?;
 
-        // Write to workspace if available.
+        // Write to native memory graph if available.
         // If archival fails, preserve turns to avoid context loss.
         let (summary_written, turns_removed) = if let Some(manager) = memory {
             match self
@@ -125,17 +123,6 @@ impl ContextCompactor {
                         "Compaction summary memory write failed (turns preserved): {}",
                         e
                     );
-                    (false, 0)
-                }
-            }
-        } else if let Some(ws) = workspace {
-            match self.write_summary_to_workspace(ws, &summary).await {
-                Ok(()) => {
-                    thread.truncate_turns(keep_recent);
-                    (true, turns_to_remove)
-                }
-                Err(e) => {
-                    tracing::warn!("Compaction summary write failed (turns preserved): {}", e);
                     (false, 0)
                 }
             }
@@ -168,7 +155,7 @@ impl ContextCompactor {
     async fn compact_to_workspace(
         &self,
         thread: &mut Thread,
-        workspace: Option<&Workspace>,
+        _workspace: Option<&Workspace>,
         memory: Option<&MemoryManager>,
         owner_id: &str,
     ) -> Result<CompactionPartial, Error> {
@@ -184,7 +171,7 @@ impl ContextCompactor {
         // Format turns for storage
         let content = format_turns_for_storage(old_turns);
 
-        // Write to workspace. If archival fails, preserve turns.
+        // Write to native memory graph. If archival fails, preserve turns.
         let (written, turns_removed) = if let Some(manager) = memory {
             match self
                 .write_summary_to_memory(manager, owner_id, &content)
@@ -199,17 +186,6 @@ impl ContextCompactor {
                         "Compaction context memory write failed (turns preserved): {}",
                         e
                     );
-                    (false, 0)
-                }
-            }
-        } else if let Some(ws) = workspace {
-            match self.write_context_to_workspace(ws, &content).await {
-                Ok(()) => {
-                    thread.truncate_turns(keep_recent);
-                    (true, turns_to_remove)
-                }
-                Err(e) => {
-                    tracing::warn!("Compaction context write failed (turns preserved): {}", e);
                     (false, 0)
                 }
             }
@@ -274,25 +250,6 @@ Be brief but capture all important details. Use bullet points."#,
         Ok(text)
     }
 
-    /// Write a summary to the workspace daily log.
-    async fn write_summary_to_workspace(
-        &self,
-        workspace: &Workspace,
-        summary: &str,
-    ) -> Result<(), Error> {
-        let date = Utc::now().format("%Y-%m-%d");
-        let entry = format!(
-            "\n## Context Summary ({})\n\n{}\n",
-            Utc::now().format("%H:%M UTC"),
-            summary
-        );
-
-        workspace
-            .append(&format!("daily/{}.md", date), &entry)
-            .await?;
-        Ok(())
-    }
-
     async fn write_summary_to_memory(
         &self,
         memory: &MemoryManager,
@@ -308,25 +265,6 @@ Be brief but capture all important details. Use bullet points."#,
                 Some("When recent compressed context may need to be recalled".to_string()),
                 serde_json::json!({ "source": "compaction" }),
             )
-            .await?;
-        Ok(())
-    }
-
-    /// Write full context to workspace for archival.
-    async fn write_context_to_workspace(
-        &self,
-        workspace: &Workspace,
-        content: &str,
-    ) -> Result<(), Error> {
-        let date = Utc::now().format("%Y-%m-%d");
-        let entry = format!(
-            "\n## Archived Context ({})\n\n{}\n",
-            Utc::now().format("%H:%M UTC"),
-            content
-        );
-
-        workspace
-            .append(&format!("daily/{}.md", date), &entry)
             .await?;
         Ok(())
     }

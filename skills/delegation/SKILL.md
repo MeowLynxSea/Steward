@@ -52,7 +52,7 @@ If the task is recurring or has a deadline:
 
 ## 4. Use Profile Context
 
-Check `USER.md` for the user's preferences:
+Check the user's saved preferences and current workspace instructions:
 - **Proactivity level**: High = check in frequently. Low = only report on completion.
 - **Communication style**: Match their preferred tone and detail level.
 - **Focus areas**: Prioritize tasks that align with their stated goals.

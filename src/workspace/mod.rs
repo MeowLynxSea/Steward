@@ -73,7 +73,6 @@ pub struct WriteResult {
 
 use std::sync::{Arc, RwLock};
 
-use chrono::{NaiveDate, Utc};
 use uuid::Uuid;
 
 use crate::error::WorkspaceError;
@@ -84,7 +83,6 @@ use crate::safety::{Sanitizer, Severity};
 const SYSTEM_PROMPT_FILES: &[&str] = &[
     paths::SOUL,
     paths::AGENTS,
-    paths::MEMORY,
     paths::TOOLS,
     paths::HEARTBEAT,
     paths::BOOTSTRAP,
@@ -802,13 +800,10 @@ impl Workspace {
 
     /// Read a file from the **primary scope only**, ignoring additional read scopes.
     ///
-    /// Use this for identity and configuration files (AGENTS.md, SOUL.md, USER.md,
-    /// IDENTITY.md, TOOLS.md, BOOTSTRAP.md) where inheriting content from another
+    /// Use this for identity and configuration files (AGENTS.md, SOUL.md,
+    /// TOOLS.md, BOOTSTRAP.md) where inheriting content from another
     /// scope would be a correctness/security issue — the agent must never silently
     /// present itself as the wrong user.
-    ///
-    /// For memory files that should span scopes (MEMORY.md, daily logs), use
-    /// [`read`] instead.
     pub async fn read_primary(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
         let path = normalize_path(path);
         self.storage
@@ -821,8 +816,7 @@ impl Workspace {
     /// This exists primarily for tests and offline prompt construction.
     /// It intentionally relies on `read()` so that multi-scope workspaces
     /// enforce identity-file isolation via `is_identity_path()`:
-    /// identity/config files never fall back to secondary scopes, while
-    /// memory files (e.g. MEMORY.md) still benefit from shared reads.
+    /// identity/config files never fall back to secondary scopes.
     pub async fn system_prompt_for_context(
         &self,
         include_bootstrap: bool,
@@ -838,18 +832,13 @@ impl Workspace {
     pub async fn system_prompt_for_chat(
         &self,
         include_bootstrap: bool,
-        is_group_chat: bool,
+        _is_group_chat: bool,
     ) -> Result<String, WorkspaceError> {
         let mut out = String::new();
 
         // Keep this list stable and ordered: it affects the prompt.
         // NOTE: paths::* are normal "workspace document" paths, not graph memory URIs.
         let mut paths: Vec<&str> = vec![paths::SOUL, paths::AGENTS, paths::TOOLS];
-        // In group chats, avoid leaking personal long-term memory into a shared context.
-        // See `src/agent/CLAUDE.md` guidance.
-        if !is_group_chat {
-            paths.push(paths::MEMORY);
-        }
         paths.push(paths::HEARTBEAT);
         if include_bootstrap {
             paths.push(paths::BOOTSTRAP);
@@ -1347,27 +1336,6 @@ impl Workspace {
 
     // ==================== Convenience Methods ====================
 
-    /// Get the main MEMORY.md document (long-term curated memory).
-    ///
-    /// Creates it if it doesn't exist.
-    pub async fn memory(&self) -> Result<MemoryDocument, WorkspaceError> {
-        self.read_or_create(paths::MEMORY).await
-    }
-
-    /// Get today's daily log.
-    ///
-    /// Daily logs are append-only and keyed by date.
-    pub async fn today_log(&self) -> Result<MemoryDocument, WorkspaceError> {
-        let today = Utc::now().date_naive();
-        self.daily_log(today).await
-    }
-
-    /// Get a daily log for a specific date.
-    pub async fn daily_log(&self, date: NaiveDate) -> Result<MemoryDocument, WorkspaceError> {
-        let path = format!("daily/{}.md", date.format("%Y-%m-%d"));
-        self.read_or_create(&path).await
-    }
-
     /// Get the heartbeat checklist (HEARTBEAT.md).
     ///
     /// Returns the DB-stored checklist if it exists, otherwise falls back
@@ -1382,89 +1350,6 @@ impl Workspace {
             Err(WorkspaceError::DocumentNotFound { .. }) => Ok(Some(HEARTBEAT_SEED.to_string())),
             Err(e) => Err(e),
         }
-    }
-
-    /// Helper to read or create a file.
-    ///
-    /// When multi-scope reads are configured, checks all read scopes before
-    /// creating. If the file exists in any scope, returns it. If not found in
-    /// any scope, creates it in the primary (write) scope.
-    ///
-    /// **Important:** In multi-scope mode, the returned document may belong to
-    /// a secondary scope. Callers that intend to **write** to the document
-    /// (via `update_document(doc.id, ...)`) must NOT use this method — use
-    /// `storage.get_or_create_document_by_path(&self.user_id, ...)` instead
-    /// to guarantee writes target the primary scope. See `append_memory` for
-    /// the correct pattern.
-    async fn read_or_create(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
-        if self.is_multi_scope() {
-            match self
-                .storage
-                .get_document_by_path_multi(&self.read_user_ids, self.agent_id, path)
-                .await
-            {
-                Ok(doc) => return Ok(doc),
-                Err(WorkspaceError::DocumentNotFound { .. }) => {}
-                Err(e) => return Err(e),
-            }
-        }
-        self.storage
-            .get_or_create_document_by_path(&self.user_id, self.agent_id, path)
-            .await
-    }
-
-    // ==================== Memory Operations ====================
-
-    /// Append an entry to the main MEMORY.md document.
-    ///
-    /// This is for important facts, decisions, and preferences worth
-    /// remembering long-term.
-    ///
-    /// Uses `get_or_create_document_by_path` with the primary `user_id`
-    /// instead of `self.memory()` to guarantee writes always target the
-    /// primary (write) scope.  `self.memory()` delegates to `read_or_create`,
-    /// which in multi-scope mode may return a document owned by a secondary
-    /// scope; writing to that document by UUID would violate write isolation.
-    pub async fn append_memory(&self, entry: &str) -> Result<(), WorkspaceError> {
-        // Always get/create in the primary scope to preserve write isolation.
-        let doc = self
-            .storage
-            .get_or_create_document_by_path(&self.user_id, self.agent_id, paths::MEMORY)
-            .await?;
-        let new_content = if doc.content.is_empty() {
-            entry.to_string()
-        } else {
-            format!("{}\n\n{}", doc.content, entry)
-        };
-        self.storage.update_document(doc.id, &new_content).await?;
-        self.reindex_document(doc.id).await?;
-        Ok(())
-    }
-
-    /// Append an entry to today's daily log.
-    ///
-    /// Daily logs are raw, append-only notes for the current day.
-    pub async fn append_daily_log(&self, entry: &str) -> Result<(), WorkspaceError> {
-        self.append_daily_log_tz(entry, chrono_tz::Tz::UTC)
-            .await
-            .map(|_| ())
-    }
-
-    /// Append an entry to today's daily log using the given timezone.
-    ///
-    /// Returns the path that was written to (e.g. `daily/2024-01-15.md`).
-    pub async fn append_daily_log_tz(
-        &self,
-        entry: &str,
-        tz: chrono_tz::Tz,
-    ) -> Result<String, WorkspaceError> {
-        let now = crate::timezone::now_in_tz(tz);
-        let today = now.date_naive();
-        let path = format!("daily/{}.md", today.format("%Y-%m-%d"));
-        let timestamp = now.format("%H:%M:%S");
-        let timestamped_entry = format!("[{}] {}", timestamp, entry);
-        self.append(&path, &timestamped_entry).await?;
-        Ok(path)
     }
 }
 
@@ -1630,7 +1515,6 @@ impl Workspace {
     pub async fn seed_if_empty(&self) -> Result<usize, WorkspaceError> {
         let seed_files: &[(&str, &str)] = &[
             (paths::README, include_str!("seeds/README.md")),
-            (paths::MEMORY, include_str!("seeds/MEMORY.md")),
             (paths::SOUL, include_str!("seeds/SOUL.md")),
             (paths::AGENTS, include_str!("seeds/AGENTS.md")),
             (paths::HEARTBEAT, HEARTBEAT_SEED),
@@ -1888,9 +1772,6 @@ mod tests {
         let cases = vec![
             ("SOUL.md", true),
             ("AGENTS.md", true),
-            ("USER.md", false),
-            ("IDENTITY.md", false),
-            ("MEMORY.md", true),
             ("HEARTBEAT.md", true),
             ("TOOLS.md", true),
             ("BOOTSTRAP.md", true),
@@ -1898,7 +1779,6 @@ mod tests {
             ("context/profile.json", false),
             ("soul.md", true),
             ("notes/foo.md", false),
-            ("daily/2024-01-01.md", false),
             ("projects/readme.md", false),
         ];
         for (path, expected) in cases {

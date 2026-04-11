@@ -1,8 +1,7 @@
 //! Memory hygiene: automatic cleanup of stale workspace documents.
 //!
-//! Runs on a configurable cadence and deletes daily log entries and conversation
-//! documents older than their respective retention periods. Identity files
-//! (`IDENTITY.md`, `SOUL.md`, etc.) are never touched.
+//! Runs on a configurable cadence and deletes conversation documents older
+//! than their retention period. Identity/config prompt files are never touched.
 //!
 //! A global [`AtomicBool`] guard prevents concurrent hygiene passes, which
 //! avoids TOCTOU races on the state file and Windows file-locking errors
@@ -16,11 +15,9 @@
 //! │  0. Acquire RUNNING guard (skip if held)     │
 //! │  1. Check cadence (skip if ran recently)     │
 //! │  2. Save state (claim the cadence window)    │
-//! │  3. List daily/ documents                    │
-//! │  4. Delete those older than daily_retention  │
-//! │  5. List conversations/ documents            │
-//! │  6. Delete those older than conversation_ret │
-//! │  7. Log summary                              │
+//! │  3. List conversations/ documents            │
+//! │  4. Delete those older than conversation_ret │
+//! │  5. Log summary                              │
 //! └─────────────────────────────────────────────┘
 //! ```
 
@@ -38,11 +35,8 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Paths that must never be deleted by hygiene, regardless of age.
 const IDENTITY_PATHS: &[&str] = &[
-    crate::workspace::document::paths::MEMORY,
-    crate::workspace::document::paths::IDENTITY,
     crate::workspace::document::paths::SOUL,
     crate::workspace::document::paths::AGENTS,
-    crate::workspace::document::paths::USER,
     crate::workspace::document::paths::HEARTBEAT,
     crate::workspace::document::paths::README,
     crate::workspace::document::paths::TOOLS,
@@ -53,7 +47,7 @@ const IDENTITY_PATHS: &[&str] = &[
 ///
 /// Performs case-insensitive comparison to handle case-insensitive filesystems
 /// (Windows, macOS) and prevent accidental deletion of identity docs with
-/// different casing (e.g., memory.md, MEMORY.MD, Memory.md).
+/// different casing.
 fn is_identity_path(path: &str) -> bool {
     let file_name = path.rsplit('/').next().unwrap_or(path);
     let file_name_lower = file_name.to_lowercase();
@@ -67,8 +61,6 @@ fn is_identity_path(path: &str) -> bool {
 pub struct HygieneConfig {
     /// Whether hygiene is enabled at all.
     pub enabled: bool,
-    /// Documents in `daily/` older than this many days are deleted.
-    pub daily_retention_days: u32,
     /// Documents in `conversations/` older than this many days are deleted.
     pub conversation_retention_days: u32,
     /// Minimum hours between hygiene passes.
@@ -81,7 +73,6 @@ impl Default for HygieneConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            daily_retention_days: 30,
             conversation_retention_days: 7,
             cadence_hours: 12,
             state_dir: steward_base_dir(),
@@ -98,8 +89,6 @@ struct HygieneState {
 /// Summary of what a hygiene pass cleaned up.
 #[derive(Debug, Default)]
 pub struct HygieneReport {
-    /// Number of daily log documents deleted.
-    pub daily_logs_deleted: u32,
     /// Number of conversation documents deleted.
     pub conversation_docs_deleted: u32,
     /// Whether the run was skipped (cadence not yet elapsed).
@@ -109,7 +98,7 @@ pub struct HygieneReport {
 impl HygieneReport {
     /// True if any cleanup work was done.
     pub fn had_work(&self) -> bool {
-        self.daily_logs_deleted > 0 || self.conversation_docs_deleted > 0
+        self.conversation_docs_deleted > 0
     }
 }
 
@@ -169,18 +158,11 @@ pub async fn run_if_due(workspace: &Workspace, config: &HygieneConfig) -> Hygien
     save_state(&state_file);
 
     tracing::info!(
-        daily_retention_days = config.daily_retention_days,
         conversation_retention_days = config.conversation_retention_days,
         "memory hygiene: starting cleanup pass"
     );
 
     let mut report = HygieneReport::default();
-
-    // Delete old daily logs
-    match cleanup_daily_logs(workspace, config.daily_retention_days).await {
-        Ok(count) => report.daily_logs_deleted = count,
-        Err(e) => tracing::warn!("memory hygiene: failed to clean daily logs: {e}"),
-    }
 
     // Delete old conversation documents
     match cleanup_conversation_docs(workspace, config.conversation_retention_days).await {
@@ -190,7 +172,6 @@ pub async fn run_if_due(workspace: &Workspace, config: &HygieneConfig) -> Hygien
 
     if report.had_work() {
         tracing::info!(
-            daily_logs_deleted = report.daily_logs_deleted,
             conversation_docs_deleted = report.conversation_docs_deleted,
             "memory hygiene: cleanup complete"
         );
@@ -208,47 +189,6 @@ impl Drop for RunningGuard {
     fn drop(&mut self) {
         RUNNING.store(false, Ordering::SeqCst);
     }
-}
-
-/// Delete daily log documents older than `retention_days`.
-async fn cleanup_daily_logs(
-    workspace: &Workspace,
-    retention_days: u32,
-) -> Result<u32, anyhow::Error> {
-    let cutoff = Utc::now() - chrono::Duration::days(i64::from(retention_days));
-    let entries = workspace.list("daily/").await?;
-
-    let mut deleted = 0u32;
-    for entry in entries {
-        if entry.is_directory {
-            continue;
-        }
-
-        // Never delete identity documents
-        if is_identity_path(&entry.path) {
-            continue;
-        }
-
-        // Check if the document is old enough to delete
-        if let Some(updated_at) = entry.updated_at
-            && updated_at < cutoff
-        {
-            let path = if entry.path.starts_with("daily/") {
-                entry.path.clone()
-            } else {
-                format!("daily/{}", entry.path)
-            };
-
-            if let Err(e) = workspace.delete(&path).await {
-                tracing::warn!(path, "memory hygiene: failed to delete: {e}");
-            } else {
-                tracing::debug!(path, "memory hygiene: deleted old daily log");
-                deleted += 1;
-            }
-        }
-    }
-
-    Ok(deleted)
 }
 
 /// Delete conversation documents older than `retention_days`.
@@ -349,7 +289,6 @@ mod tests {
     fn default_config_is_reasonable() {
         let cfg = HygieneConfig::default();
         assert!(cfg.enabled);
-        assert_eq!(cfg.daily_retention_days, 30);
         assert_eq!(cfg.conversation_retention_days, 7);
         assert_eq!(cfg.cadence_hours, 12);
     }
@@ -364,17 +303,15 @@ mod tests {
     #[test]
     fn report_had_work_when_deleted() {
         let report = HygieneReport {
-            daily_logs_deleted: 3,
             conversation_docs_deleted: 0,
             skipped: false,
         };
-        assert!(report.had_work());
+        assert!(!report.had_work());
     }
 
     #[test]
     fn report_had_work_when_conversation_deleted() {
         let report = HygieneReport {
-            daily_logs_deleted: 0,
             conversation_docs_deleted: 2,
             skipped: false,
         };
@@ -384,11 +321,8 @@ mod tests {
     #[test]
     fn is_identity_path_excludes_sacred_docs() {
         for name in [
-            "MEMORY.md",
-            "IDENTITY.md",
             "SOUL.md",
             "AGENTS.md",
-            "USER.md",
             "HEARTBEAT.md",
             "README.md",
             "TOOLS.md",
@@ -406,22 +340,6 @@ mod tests {
     fn is_identity_path_case_insensitive() {
         // Verify case-insensitive matching for case-insensitive filesystems
         assert!(
-            is_identity_path("memory.md"),
-            "lowercase memory.md should be excluded"
-        );
-        assert!(
-            is_identity_path("Memory.md"),
-            "mixed case Memory.md should be excluded"
-        );
-        assert!(
-            is_identity_path("MEMORY.MD"),
-            "uppercase MEMORY.MD should be excluded"
-        );
-        assert!(
-            is_identity_path("identity.md"),
-            "lowercase identity.md should be excluded"
-        );
-        assert!(
             is_identity_path("conversations/soul.md"),
             "conversations/soul.md should be excluded"
         );
@@ -433,11 +351,7 @@ mod tests {
 
     #[test]
     fn is_identity_path_allows_normal_docs() {
-        for path in [
-            "daily/2024-01-01.md",
-            "conversations/chat-abc.md",
-            "notes.md",
-        ] {
+        for path in ["conversations/chat-abc.md", "notes.md"] {
             assert!(!is_identity_path(path), "{path} should not be excluded");
         }
     }
@@ -553,47 +467,6 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn cleanup_daily_logs_preserves_identity_documents() {
-            let (db, _tmp) = create_test_db().await;
-            let ws = create_workspace(&db);
-
-            // Write several regular documents (non-identity)
-            ws.write("daily/2024-01-15.md", "Old log")
-                .await
-                .expect("write log 1");
-            ws.write("daily/2024-01-20.md", "Another log")
-                .await
-                .expect("write log 2");
-
-            // Write an identity document
-            ws.write("MEMORY.md", "Long-term curated memory")
-                .await
-                .expect("write identity");
-
-            // List before cleanup
-            let before = ws.list("daily/").await.expect("list before");
-            let daily_count_before = before.iter().filter(|e| !e.is_directory).count();
-            assert!(daily_count_before >= 2, "should have at least 2 daily logs");
-
-            // Run cleanup with 0-day retention (deletes everything old)
-            // This tests that even with aggressive cleanup, identity docs survive
-            let deleted = cleanup_daily_logs(&ws, 0)
-                .await
-                .expect("cleanup_daily_logs");
-
-            // Should have deleted some documents (the daily logs)
-            assert!(deleted > 0, "should have deleted old daily documents");
-
-            // Verify identity doc still exists
-            let identity = db
-                .get_document_by_path("default", None, "MEMORY.md")
-                .await
-                .expect("get identity doc");
-            assert_eq!(identity.path, "MEMORY.md");
-            assert_eq!(identity.content, "Long-term curated memory");
-        }
-
-        #[tokio::test]
         async fn cleanup_conversation_docs_handles_empty_directory() {
             let (db, _tmp) = create_test_db().await;
             let ws = create_workspace(&db);
@@ -614,7 +487,6 @@ mod tests {
 
             let config = HygieneConfig {
                 enabled: true,
-                daily_retention_days: 30,
                 conversation_retention_days: 7,
                 cadence_hours: 12,
                 state_dir: _tmp.path().to_path_buf(),
@@ -630,8 +502,7 @@ mod tests {
 
             // Report structure should be correct
             assert_eq!(
-                report1.daily_logs_deleted + report1.conversation_docs_deleted,
-                0,
+                report1.conversation_docs_deleted, 0,
                 "first run should have clean counts"
             );
         }
@@ -642,29 +513,20 @@ mod tests {
             let ws = create_workspace(&db);
 
             // Write some documents
-            ws.write("daily/log1.md", "content 1")
-                .await
-                .expect("write doc 1");
-            ws.write("daily/log2.md", "content 2")
-                .await
-                .expect("write doc 2");
             ws.write("conversations/chat1.md", "content 3")
                 .await
                 .expect("write doc 3");
 
             // Run with 0-day retention to delete everything non-identity
-            let deleted_daily = cleanup_daily_logs(&ws, 0).await.expect("cleanup daily");
             let deleted_conv = cleanup_conversation_docs(&ws, 0)
                 .await
                 .expect("cleanup conversations");
 
-            // Both should report deletions
-            assert!(deleted_daily > 0, "should report deleted daily logs");
+            // Cleanup should report deletions
             assert_eq!(deleted_conv, 1, "should report 1 deleted conversation doc");
 
             // Create a HygieneReport and verify aggregation works
             let report = HygieneReport {
-                daily_logs_deleted: deleted_daily,
                 conversation_docs_deleted: deleted_conv,
                 skipped: false,
             };
@@ -672,14 +534,10 @@ mod tests {
             // Verify HygieneReport structure
             assert!(!report.skipped, "should not be skipped");
             assert!(report.had_work(), "report should indicate work was done");
-            assert!(
-                report.daily_logs_deleted > 0 || report.conversation_docs_deleted > 0,
-                "report should have at least one deletion count > 0"
-            );
+            assert!(report.conversation_docs_deleted > 0);
 
             // Verify had_work() correctly combines both counts
             let no_work = HygieneReport {
-                daily_logs_deleted: 0,
                 conversation_docs_deleted: 0,
                 skipped: false,
             };

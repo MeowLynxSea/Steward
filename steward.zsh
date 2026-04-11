@@ -715,7 +715,7 @@ _arguments "${_arguments_options[@]}" : \
 '--no-onboard[Skip first-run onboarding check]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':path -- File path (e.g., "MEMORY.md", "daily/2024-01-15.md"):_default' \
+':path -- File path (e.g., "notes/idea.md", "context/project-brief.md"):_default' \
 && ret=0
 ;;
 (write)

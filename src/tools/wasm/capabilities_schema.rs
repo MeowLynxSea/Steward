@@ -473,7 +473,7 @@ pub struct ToolInvokeCapabilitySchema {
 /// Workspace read capability schema.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceCapabilitySchema {
-    /// Allowed path prefixes (e.g., ["context/", "daily/"]).
+    /// Allowed path prefixes (e.g., ["context/", "projects/"]).
     #[serde(default)]
     pub allowed_prefixes: Vec<String>,
 }
@@ -904,13 +904,13 @@ mod tests {
     fn test_parse_workspace() {
         let json = r#"{
             "workspace": {
-                "allowed_prefixes": ["context/", "daily/"]
+                "allowed_prefixes": ["context/", "projects/"]
             }
         }"#;
 
         let caps = CapabilitiesFile::from_json(json).unwrap();
         let workspace = caps.workspace.unwrap();
-        assert_eq!(workspace.allowed_prefixes, vec!["context/", "daily/"]);
+        assert_eq!(workspace.allowed_prefixes, vec!["context/", "projects/"]);
     }
 
     #[test]

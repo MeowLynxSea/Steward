@@ -6,12 +6,10 @@ the graph memory system.
 
 ## Structure
 
-- `MEMORY.md` - Legacy curated notes and optional workspace document
 - `SOUL.md` - Core values and behavioral boundaries
 - `AGENTS.md` - Session routine and operational instructions
 - `TOOLS.md` - Environment-specific tool notes
 - `HEARTBEAT.md` - Periodic background task checklist
-- `daily/` - Automatic daily session logs
 - `context/` - Additional context documents
 
 Edit these files to shape how your agent thinks and acts inside this workspace.

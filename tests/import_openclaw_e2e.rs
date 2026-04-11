@@ -43,8 +43,8 @@ mod e2e_import_tests {
         std::fs::create_dir_all(&workspace_dir)?;
 
         std::fs::write(
-            workspace_dir.join("MEMORY.md"),
-            "# Memory\n\nStored memories and facts.\n\n- User prefers morning briefings\n- Key project: Alpha",
+            workspace_dir.join("NOTES.md"),
+            "# Notes\n\nStored workspace notes.\n\n- User prefers morning briefings\n- Key project: Alpha",
         )?;
 
         std::fs::write(
@@ -287,7 +287,7 @@ mod e2e_import_tests {
         let workspace_count = reader
             .list_workspace_files()
             .expect("list workspace files failed");
-        assert_eq!(workspace_count, 3); // MEMORY.md, README.md, AGENTS.md
+        assert_eq!(workspace_count, 3); // NOTES.md, README.md, AGENTS.md
 
         // Count agent databases
         let agent_dbs = reader.list_agent_dbs().expect("list agent dbs failed");

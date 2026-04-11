@@ -43,7 +43,7 @@
 <section class="settings-section">
   <div class="section-header">
     <h4>Memory Inspector</h4>
-    <p>检查 Steward 的原生记忆图谱，而不是旧的 MEMORY.md / daily 文档视图。</p>
+    <p>检查 Steward 的原生记忆图谱，而不是任何旧的文件式记忆视图。</p>
   </div>
 
   {#if memoryError}

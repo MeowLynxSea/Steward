@@ -100,7 +100,7 @@ Use the narrowest additional test that covers the change. If you touch a high-ri
 - Preserve Ask/Yolo approval enforcement for risky side effects.
 - Do not bypass safety checks, secret handling, or sandbox boundaries when adding tools or execution paths.
 - Keep Tauri IPC wrappers thin; business rules belong in the shared runtime.
-- Preserve workspace identity-file semantics. `AGENTS.md`, `SOUL.md`, `USER.md`, `IDENTITY.md`, `TOOLS.md`, and `BOOTSTRAP.md` are primary-scope files, not shared fallback content.
+- Preserve workspace identity-file semantics. `AGENTS.md`, `SOUL.md`, `TOOLS.md`, and `BOOTSTRAP.md` are primary-scope files, not shared fallback content.
 - Treat external services, tool output, and imported content as untrusted input.
 
 ## Data and Persistence Rules

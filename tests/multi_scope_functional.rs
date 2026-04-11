@@ -271,47 +271,6 @@ async fn append_stays_in_primary_scope() {
     );
 }
 
-#[tokio::test]
-async fn append_memory_stays_in_primary_scope() {
-    let (db, _dir) = setup().await;
-
-    // Write MEMORY.md as "shared"
-    let ws_shared = Workspace::new_with_db("shared", Arc::clone(&db));
-    ws_shared
-        .write("MEMORY.md", "shared memory baseline")
-        .await
-        .expect("shared write failed");
-
-    // Alice has "shared" as a read scope and appends a memory entry
-    let ws_alice = Workspace::new_with_db("alice", Arc::clone(&db))
-        .with_additional_read_scopes(vec!["shared".to_string()]);
-    ws_alice
-        .append_memory("alice remembers this")
-        .await
-        .expect("alice append_memory failed");
-
-    // Shared MEMORY.md must be unchanged
-    let shared_doc = ws_shared
-        .read("MEMORY.md")
-        .await
-        .expect("shared read failed");
-    assert_eq!(
-        shared_doc.content, "shared memory baseline",
-        "append_memory must not modify the secondary scope's document"
-    );
-
-    // Alice should have her own MEMORY.md
-    let ws_alice_plain = Workspace::new_with_db("alice", Arc::clone(&db));
-    let alice_doc = ws_alice_plain
-        .read("MEMORY.md")
-        .await
-        .expect("alice read failed");
-    assert_eq!(
-        alice_doc.content, "alice remembers this",
-        "append_memory should create in alice's scope"
-    );
-}
-
 // ==================== Identity isolation tests ====================
 
 #[tokio::test]
@@ -320,7 +279,7 @@ async fn identity_files_not_readable_from_secondary_scope() {
 
     let ws_other = Workspace::new_with_db("other-user", Arc::clone(&db));
     ws_other
-        .write("IDENTITY.md", "I am the other user")
+        .write("TOOLS.md", "Other user tool notes")
         .await
         .expect("write failed");
     ws_other
@@ -328,7 +287,7 @@ async fn identity_files_not_readable_from_secondary_scope() {
         .await
         .expect("write failed");
     ws_other
-        .write("USER.md", "Other user profile")
+        .write("BOOTSTRAP.md", "Other user bootstrap")
         .await
         .expect("write failed");
     ws_other
@@ -339,7 +298,7 @@ async fn identity_files_not_readable_from_secondary_scope() {
     let ws_primary = Workspace::new_with_db("primary", Arc::clone(&db))
         .with_additional_read_scopes(vec!["other-user".to_string()]);
 
-    for path in &["IDENTITY.md", "SOUL.md", "USER.md", "AGENTS.md"] {
+    for path in &["TOOLS.md", "SOUL.md", "BOOTSTRAP.md", "AGENTS.md"] {
         let result = ws_primary.read(path).await;
         assert!(
             result.is_err(),
@@ -391,7 +350,7 @@ async fn identity_files_not_in_list_from_secondary_scope() {
 
     let ws_other = Workspace::new_with_db("other-user", Arc::clone(&db));
     ws_other
-        .write("IDENTITY.md", "I am the other user")
+        .write("TOOLS.md", "Other user tool notes")
         .await
         .expect("write failed");
     ws_other
@@ -404,8 +363,8 @@ async fn identity_files_not_in_list_from_secondary_scope() {
 
     let paths = ws_primary.list_all().await.expect("list failed");
     assert!(
-        !paths.contains(&"IDENTITY.md".to_string()),
-        "IDENTITY.md from secondary scope should not appear"
+        !paths.contains(&"TOOLS.md".to_string()),
+        "TOOLS.md from secondary scope should not appear"
     );
     assert!(
         paths.contains(&"notes/shared-note.md".to_string()),
