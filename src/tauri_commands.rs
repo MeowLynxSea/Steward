@@ -1695,7 +1695,7 @@ pub async fn list_memory_reviews(
         .as_ref()
         .ok_or_else(|| "Memory graph not available".to_string())?;
     let reviews = memory
-        .list_reviews(&state.owner_id, None)
+        .list_review_changesets(&state.owner_id, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(steward_core::ipc::MemoryReviewsResponse { reviews })
@@ -1728,11 +1728,11 @@ pub async fn apply_memory_review(
         .as_ref()
         .ok_or_else(|| "Memory graph not available".to_string())?;
     memory
-        .review(&state.owner_id, None, id, &payload.action)
+        .review_changeset(&state.owner_id, None, id, &payload.action)
         .await
         .map_err(|e| e.to_string())?;
     let reviews = memory
-        .list_reviews(&state.owner_id, None)
+        .list_review_changesets(&state.owner_id, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(steward_core::ipc::MemoryReviewsResponse { reviews })
@@ -1748,11 +1748,11 @@ pub async fn rollback_memory_changeset(
         .as_ref()
         .ok_or_else(|| "Memory graph not available".to_string())?;
     memory
-        .review(&state.owner_id, None, id, "rollback")
+        .review_changeset(&state.owner_id, None, id, "rollback")
         .await
         .map_err(|e| e.to_string())?;
     let reviews = memory
-        .list_reviews(&state.owner_id, None)
+        .list_review_changesets(&state.owner_id, None)
         .await
         .map_err(|e| e.to_string())?;
     Ok(steward_core::ipc::MemoryReviewsResponse { reviews })

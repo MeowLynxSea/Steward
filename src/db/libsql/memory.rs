@@ -7,11 +7,11 @@ use crate::db::libsql::{fmt_ts, get_json, get_opt_text, get_text, get_ts, opt_te
 use crate::db::{MemoryStore, libsql::LibSqlBackend};
 use crate::error::DatabaseError;
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryEdge, MemoryNode,
-    MemoryNodeDetail, MemoryNodeKind, MemoryRelationKind, MemoryRoute, MemorySearchHit,
-    MemorySidebarItem, MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion,
-    MemoryVersionStatus, MemoryVisibility, NewMemoryNodeInput, UpdateMemoryNodeInput,
-    MemoryIndexEntry, MemoryGlossaryEntry, MemoryChildEntry,
+    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry, MemoryEdge,
+    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNode, MemoryNodeDetail, MemoryNodeKind,
+    MemoryRelationKind, MemoryRoute, MemorySearchHit, MemorySidebarItem, MemorySidebarSection,
+    MemorySpace, MemoryTimelineEntry, MemoryVersion, MemoryVersionStatus, MemoryVisibility,
+    NewMemoryNodeInput, UpdateMemoryNodeInput,
 };
 
 fn row_to_memory_space(row: &libsql::Row) -> MemorySpace {
@@ -366,14 +366,11 @@ impl LibSqlBackend {
                     "rebuild_search_doc_for_route: select route detail failed: {e}"
                 ))
             })?;
-        let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| {
-                DatabaseError::Query(format!(
-                    "rebuild_search_doc_for_route: read route detail row failed: {e}"
-                ))
-            })?
+        let Some(row) = rows.next().await.map_err(|e| {
+            DatabaseError::Query(format!(
+                "rebuild_search_doc_for_route: read route detail row failed: {e}"
+            ))
+        })?
         else {
             let _ = conn
                 .execute(
@@ -397,15 +394,11 @@ impl LibSqlBackend {
                 ))
             })?;
         let mut keywords = Vec::new();
-        while let Some(kw_row) = kw_rows
-            .next()
-            .await
-            .map_err(|e| {
-                DatabaseError::Query(format!(
-                    "rebuild_search_doc_for_route: read keyword row failed: {e}"
-                ))
-            })?
-        {
+        while let Some(kw_row) = kw_rows.next().await.map_err(|e| {
+            DatabaseError::Query(format!(
+                "rebuild_search_doc_for_route: read keyword row failed: {e}"
+            ))
+        })? {
             keywords.push(get_text(&kw_row, 0));
         }
 
@@ -1016,7 +1009,11 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_nodes failed: {e}")))?;
+        .map_err(|e| {
+            DatabaseError::Query(format!(
+                "create_memory_node: insert memory_nodes failed: {e}"
+            ))
+        })?;
 
         conn.execute(
             "INSERT INTO memory_versions (id, node_id, supersedes_version_id, status, content, metadata, created_at)
@@ -1066,7 +1063,11 @@ impl MemoryStore for LibSqlBackend {
             ],
         )
         .await
-        .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_routes failed: {e}")))?;
+        .map_err(|e| {
+            DatabaseError::Query(format!(
+                "create_memory_node: insert memory_routes failed: {e}"
+            ))
+        })?;
 
         for keyword in input
             .keywords
@@ -1084,7 +1085,11 @@ impl MemoryStore for LibSqlBackend {
                 ],
             )
             .await
-            .map_err(|e| DatabaseError::Query(format!("create_memory_node: insert memory_keywords failed: {e}")))?;
+            .map_err(|e| {
+                DatabaseError::Query(format!(
+                    "create_memory_node: insert memory_keywords failed: {e}"
+                ))
+            })?;
         }
 
         self.rebuild_search_doc_for_route(route_id).await?;
@@ -1879,7 +1884,9 @@ impl MemoryStore for LibSqlBackend {
             let domain = get_text(&row, 1);
             let path = get_text(&row, 2);
             let uri = format!("{domain}://{path}");
-            let entry = map.entry(keyword).or_insert_with(|| (HashSet::new(), Vec::new()));
+            let entry = map
+                .entry(keyword)
+                .or_insert_with(|| (HashSet::new(), Vec::new()));
             if entry.0.insert(uri.clone()) {
                 entry.1.push(uri);
             }

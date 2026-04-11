@@ -17,7 +17,7 @@
 
 - Agent prompt assembly should prefer `MemoryManager::build_prompt_context(...)`.
 - Compaction and heartbeat should write episodic/procedural findings here instead of appending to workspace markdown files.
-- Built-in graph-native tools (`memory_recall`, `memory_open`, `memory_save`, `memory_alias`, `memory_delete`, `memory_review`) should target this subsystem.
+- Built-in graph-native tools (`search_memory`, `read_memory`, `create_memory`, `update_memory`, `add_alias`, `delete_memory`) should target this subsystem.
 
 ## Boundary With Workspace
 

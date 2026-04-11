@@ -10,8 +10,8 @@
 use std::sync::Arc;
 
 use crate::agent::SessionManager as AgentSessionManager;
-use crate::agent::{Routine, RoutineAction, Trigger};
 use crate::agent::routine::{NotifyConfig, RoutineGuardrails, next_cron_fire};
+use crate::agent::{Routine, RoutineAction, Trigger};
 use crate::config::Config;
 use crate::context::ContextManager;
 use crate::db::Database;
@@ -97,12 +97,13 @@ Input: a completed turn payload with {thread_id, user_input, assistant_output, t
 
 Rules:
 - Only write memory on high-signal events: user corrections, outdated facts, new stable preferences, new agreements/decisions, strong emotions, or a new durable insight.
-- Use memory_save for both new memories and corrections. If correcting a known fact: locate the relevant node via memory_recall/memory_open, then save back to the same route with either a patch (old_string/new_string), append, or full replacement content.
-- When creating: choose a semantically meaningful route/title that reflects the memory's actual topic. Do not rely on fixed identity buckets or junk paths like misc/logs/history. Use disclosure to describe WHEN to recall.
-- If aliasing helps cross-link: use memory_alias. If removing: memory_delete only deletes a path, never hard-deletes content.
+- When you are unsure of a URI, use search_memory first. Read with read_memory before updating or deleting.
+- For new memories, use create_memory with the most relevant parent URI, a sharp title when needed, and disclosure that says WHEN to recall.
+- For corrections, use update_memory with patch mode (old_string/new_string) or append mode. There is no full replace mode.
+- If aliasing helps cross-link, use add_alias. If removing, delete_memory only deletes a path, never hard-deletes content.
 - If nothing is worth storing, do nothing.
 
-Tools available: memory_recall, memory_open, memory_save, memory_alias, memory_delete, memory_review."#;
+Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory."#;
 
     const MEMORY_MAINTENANCE_PROMPT: &str = r#"You are running daily memory maintenance.
 
@@ -110,7 +111,7 @@ Goals:
 - Merge redundant nodes, split overly long nodes, and refine titles/routes for clarity.
 - Promote durable operating protocol or invariants into the boot set when they should be recalled at session start.
 - Improve keywords and disclosure so recall stays useful without depending on fixed route names.
-- Avoid large-scale deletion. If removing, delete only paths (memory_delete), keeping rollback possible via changesets.
+- Avoid large-scale deletion. If removing, delete only paths (delete_memory), keeping rollback possible via changesets.
 
 If nothing to do, do nothing."#;
 
@@ -159,12 +160,13 @@ If nothing to do, do nothing."#;
         db.create_routine(&routine).await?;
     }
 
-    let existing = db.get_routine_by_name(user_id, "memory_maintenance").await?;
+    let existing = db
+        .get_routine_by_name(user_id, "memory_maintenance")
+        .await?;
     if existing.is_none() {
         let schedule = "0 3 * * *".to_string(); // daily 03:00 local time
         let timezone = crate::timezone::detect_system_timezone().to_string();
-        let next_fire = next_cron_fire(&schedule, Some(&timezone))
-            .unwrap_or(None);
+        let next_fire = next_cron_fire(&schedule, Some(&timezone)).unwrap_or(None);
 
         let routine = Routine {
             id: Uuid::new_v4(),
@@ -933,7 +935,8 @@ impl AppBuilder {
                 }
             }
 
-            if let Err(e) = ensure_default_memory_routines(Arc::clone(db), &self.config.owner_id).await
+            if let Err(e) =
+                ensure_default_memory_routines(Arc::clone(db), &self.config.owner_id).await
             {
                 tracing::warn!("Failed to seed default memory routines: {e}");
             }

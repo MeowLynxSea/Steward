@@ -1,126 +1,61 @@
-//! Graph-native tools for Steward's native memory system.
+//! Nocturne-style graph memory tools for Steward's native memory system.
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use uuid::Uuid;
+use serde_json::json;
 
 use crate::context::JobContext;
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryManager, MemoryNodeKind, MemoryVisibility, UpdateMemoryNodeInput,
+    CreateMemoryAliasInput, MemoryManager, MemoryNodeDetail, MemoryNodeKind, UpdateMemoryNodeInput,
 };
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
-fn parse_kind(value: &str) -> Result<MemoryNodeKind, ToolError> {
-    match value {
-        "boot" => Ok(MemoryNodeKind::Boot),
-        "identity" => Ok(MemoryNodeKind::Identity),
-        "value" => Ok(MemoryNodeKind::Value),
-        "user_profile" => Ok(MemoryNodeKind::UserProfile),
-        "directive" => Ok(MemoryNodeKind::Directive),
-        "curated" => Ok(MemoryNodeKind::Curated),
-        "episode" => Ok(MemoryNodeKind::Episode),
-        "procedure" => Ok(MemoryNodeKind::Procedure),
-        "reference" => Ok(MemoryNodeKind::Reference),
-        other => Err(ToolError::InvalidParameters(format!(
-            "unsupported memory kind: {other}"
-        ))),
+const DEFAULT_DOMAIN: &str = "core";
+const DEFAULT_CREATE_PRIORITY: i32 = 0;
+const DEFAULT_SEARCH_LIMIT: usize = 10;
+
+fn parse_uri(uri: &str) -> Result<(String, String), ToolError> {
+    let trimmed = uri.trim();
+    if trimmed.is_empty() {
+        return Err(ToolError::InvalidParameters(
+            "uri must not be empty".to_string(),
+        ));
     }
-}
 
-fn kind_enum_values() -> Vec<&'static str> {
-    vec![
-        "boot",
-        "identity",
-        "value",
-        "user_profile",
-        "directive",
-        "curated",
-        "episode",
-        "procedure",
-        "reference",
-    ]
-}
-
-fn parse_visibility(value: Option<&str>) -> Result<MemoryVisibility, ToolError> {
-    match value.unwrap_or("private") {
-        "private" => Ok(MemoryVisibility::Private),
-        "session" => Ok(MemoryVisibility::Session),
-        "shared" => Ok(MemoryVisibility::Shared),
-        other => Err(ToolError::InvalidParameters(format!(
-            "unsupported memory visibility: {other}"
-        ))),
-    }
-}
-
-fn parse_keywords(params: &serde_json::Value) -> Result<Vec<String>, ToolError> {
-    let Some(value) = params.get("keywords") else {
-        return Ok(Vec::new());
-    };
-    let array = value.as_array().ok_or_else(|| {
-        ToolError::InvalidParameters("'keywords' must be an array of strings".to_string())
-    })?;
-    array
-        .iter()
-        .map(|item| {
-            item.as_str()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .ok_or_else(|| {
-                    ToolError::InvalidParameters(
-                        "'keywords' must contain only non-empty strings".to_string(),
-                    )
-                })
-        })
-        .collect()
-}
-
-fn slugify(value: &str) -> String {
-    let mut slug = String::with_capacity(value.len());
-    let mut last_dash = false;
-    for ch in value.chars() {
-        let ch = ch.to_ascii_lowercase();
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch);
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('-');
-            last_dash = true;
+    if let Some((domain, path)) = trimmed.split_once("://") {
+        let domain = domain.trim().to_lowercase();
+        if domain.is_empty() {
+            return Err(ToolError::InvalidParameters(format!(
+                "invalid uri '{uri}': missing domain"
+            )));
         }
+        return Ok((domain, path.trim_matches('/').to_string()));
     }
-    slug.trim_matches('-').to_string()
+
+    Ok((
+        DEFAULT_DOMAIN.to_string(),
+        trimmed.trim_matches('/').to_string(),
+    ))
 }
 
-const AUTO_MEMORY_DOMAIN: &str = "memory";
-
-fn parse_route_strict(route: &str) -> Result<(String, String), ToolError> {
-    let (domain, path) = route.split_once("://").ok_or_else(|| {
-        ToolError::InvalidParameters(format!(
-            "expected route in the form domain://path, got: {route}"
-        ))
-    })?;
-    if domain.trim().is_empty() || path.trim().is_empty() {
+fn parse_non_root_uri(uri: &str) -> Result<(String, String), ToolError> {
+    let (domain, path) = parse_uri(uri)?;
+    if path.is_empty() {
         return Err(ToolError::InvalidParameters(format!(
-            "route must include both a domain and a path: {route}"
+            "uri must include a path: {uri}"
         )));
     }
-    Ok((domain.to_string(), path.trim_matches('/').to_string()))
+    Ok((domain, path))
 }
 
-fn parse_parent_route(route: &str) -> Result<(String, String), ToolError> {
-    let (domain, path) = route.split_once("://").ok_or_else(|| {
-        ToolError::InvalidParameters(format!(
-            "expected route in the form domain://path (or domain://), got: {route}"
-        ))
-    })?;
-    if domain.trim().is_empty() {
-        return Err(ToolError::InvalidParameters(format!(
-            "route must include a domain: {route}"
-        )));
+fn make_uri(domain: &str, path: &str) -> String {
+    if path.is_empty() {
+        format!("{domain}://")
+    } else {
+        format!("{domain}://{path}")
     }
-    Ok((domain.to_string(), path.trim_matches('/').to_string()))
 }
 
 fn optional_string(params: &serde_json::Value, key: &str) -> Result<Option<String>, ToolError> {
@@ -147,66 +82,145 @@ fn optional_priority(params: &serde_json::Value) -> Result<Option<i32>, ToolErro
     }
 }
 
-fn reject_legacy_param_aliases(
-    params: &serde_json::Value,
-    aliases: &[(&str, &str)],
-) -> Result<(), ToolError> {
-    for (legacy, canonical) in aliases {
-        if params.get(*legacy).is_some() {
-            return Err(ToolError::InvalidParameters(format!(
-                "'{legacy}' is no longer supported; use '{canonical}' instead"
-            )));
-        }
+fn validate_title(title: &str) -> Result<(), ToolError> {
+    if title.is_empty() {
+        return Err(ToolError::InvalidParameters(
+            "title must not be empty".to_string(),
+        ));
     }
-    Ok(())
+    if title
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        Ok(())
+    } else {
+        Err(ToolError::InvalidParameters(
+            "title must only contain alphanumeric characters, underscores, or hyphens".to_string(),
+        ))
+    }
 }
 
-fn derive_title(content: &str, kind: MemoryNodeKind, explicit: Option<String>) -> String {
-    explicit
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            content
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| format!("{kind:?} Memory"))
+fn is_virtual_system_view(uri: &str) -> bool {
+    let trimmed = uri.trim();
+    trimmed == "system://boot"
+        || trimmed == "system://glossary"
+        || trimmed == "system://index"
+        || trimmed.starts_with("system://index/")
+        || trimmed == "system://recent"
+        || trimmed.starts_with("system://recent/")
 }
 
-pub struct MemoryRecallTool {
+fn selected_route_metadata(
+    detail: &MemoryNodeDetail,
+    requested_uri: &str,
+) -> (Option<String>, Option<i32>, Option<String>) {
+    let route = detail
+        .routes
+        .iter()
+        .find(|route| route.uri() == requested_uri)
+        .or(detail.primary_route.as_ref());
+
+    let disclosure = route
+        .and_then(|route| route.edge_id)
+        .and_then(|edge_id| detail.edges.iter().find(|edge| edge.id == edge_id));
+
+    (
+        route.map(|route| route.uri()),
+        disclosure.map(|edge| edge.priority),
+        disclosure.and_then(|edge| edge.trigger_text.clone()),
+    )
+}
+
+fn direct_child_segment(parent_path: &str, uri: &str) -> Option<String> {
+    let (_, child_path) = parse_uri(uri).ok()?;
+    if parent_path.is_empty() {
+        if child_path.contains('/') {
+            return None;
+        }
+        return Some(child_path);
+    }
+
+    let prefix = format!("{parent_path}/");
+    let rest = child_path.strip_prefix(&prefix)?;
+    if rest.contains('/') {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+async fn next_numeric_child_name(
+    memory: &MemoryManager,
+    owner_id: &str,
+    domain: &str,
+    parent_path: &str,
+) -> Result<String, ToolError> {
+    let entries = memory
+        .list_index(owner_id, None, Some(domain))
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("memory index failed: {e}")))?;
+
+    let next = entries
+        .iter()
+        .filter_map(|entry| direct_child_segment(parent_path, &entry.uri))
+        .filter_map(|segment| segment.parse::<u32>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1;
+
+    Ok(next.to_string())
+}
+
+fn create_memory_examples() -> Vec<serde_json::Value> {
+    vec![
+        json!({
+            "parent_uri": "core://",
+            "content": "The user's name is 梦凌汐.",
+            "priority": 0,
+            "title": "user_name",
+            "disclosure": "When I need to address the user correctly"
+        }),
+        json!({
+            "parent_uri": "core://agent",
+            "content": "Keep status updates concise and high-signal.",
+            "priority": 1
+        }),
+    ]
+}
+
+pub struct SearchMemoryTool {
     memory: Arc<MemoryManager>,
 }
 
-impl MemoryRecallTool {
+impl SearchMemoryTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
     }
 }
 
 #[async_trait]
-impl Tool for MemoryRecallTool {
+impl Tool for SearchMemoryTool {
     fn name(&self) -> &str {
-        "memory_recall"
+        "search_memory"
     }
 
     fn description(&self) -> &str {
-        "Recall relevant graph-native long-term memory nodes by query. Use this for Steward's durable memory graph, not workspace files or legacy MEMORY.md/daily logs."
+        "Search graph memory by keyword. Use this when you know the topic but are unsure which URI to read."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "type": "object",
             "properties": {
                 "query": { "type": "string" },
-                "reason": { "type": "string" },
-                "limit": { "type": "integer", "default": 5, "minimum": 1, "maximum": 20 },
-                "domains": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                }
+                "domain": { "type": "string", "description": "Optional single domain filter such as 'core'." },
+                "limit": { "type": "integer", "default": DEFAULT_SEARCH_LIMIT, "minimum": 1, "maximum": 100 }
             },
-            "required": ["query", "reason"]
+            "required": ["query"],
+            "additionalProperties": false,
+            "examples": [
+                { "query": "梦凌汐" },
+                { "query": "incident response", "domain": "core", "limit": 5 }
+            ]
         })
     }
 
@@ -217,35 +231,27 @@ impl Tool for MemoryRecallTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
         let query = require_str(&params, "query")?;
-        let reason = require_str(&params, "reason")?;
+        let domain = optional_string(&params, "domain")?;
         let limit = params
             .get("limit")
             .and_then(|value| value.as_u64())
-            .unwrap_or(5)
-            .clamp(1, 20) as usize;
-        let domains = params
-            .get("domains")
-            .and_then(|value| value.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str().map(ToOwned::to_owned))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+            .unwrap_or(DEFAULT_SEARCH_LIMIT as u64)
+            .clamp(1, 100) as usize;
 
+        let domains = domain.into_iter().collect::<Vec<_>>();
         let results = self
             .memory
-            .recall(&ctx.user_id, None, query, limit, &domains)
+            .search(&ctx.user_id, None, query, limit, &domains)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory recall failed: {e}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory search failed: {e}")))?;
 
         Ok(ToolOutput::success(
-            serde_json::json!({
+            json!({
                 "query": query,
-                "reason": reason,
+                "domain": domains.first(),
+                "limit": limit,
                 "results": results,
-                "result_count": results.len(),
+                "count": results.len(),
             }),
             start.elapsed(),
         ))
@@ -256,33 +262,38 @@ impl Tool for MemoryRecallTool {
     }
 }
 
-pub struct MemoryOpenTool {
+pub struct ReadMemoryTool {
     memory: Arc<MemoryManager>,
 }
 
-impl MemoryOpenTool {
+impl ReadMemoryTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
     }
 }
 
 #[async_trait]
-impl Tool for MemoryOpenTool {
+impl Tool for ReadMemoryTool {
     fn name(&self) -> &str {
-        "memory_open"
+        "read_memory"
     }
 
     fn description(&self) -> &str {
-        "Open a memory node by route or node id from Steward's graph-native memory system."
+        "Read a memory by URI. Supports special system URIs like system://boot, system://index, system://recent, and system://glossary."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "type": "object",
             "properties": {
-                "route_or_node_id": { "type": "string" }
+                "uri": { "type": "string" }
             },
-            "required": ["route_or_node_id"]
+            "required": ["uri"],
+            "additionalProperties": false,
+            "examples": [
+                { "uri": "system://boot" },
+                { "uri": "core://agent" }
+            ]
         })
     }
 
@@ -292,98 +303,123 @@ impl Tool for MemoryOpenTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        let key = require_str(&params, "route_or_node_id")?;
+        let requested_uri = require_str(&params, "uri")?;
 
-        // Virtual system URIs (Nocturne-style entry points).
-        if key == "system://boot" {
-            let boot = self
+        if requested_uri == "system://boot" {
+            let items = self
                 .memory
                 .boot_set(&ctx.user_id, None, None)
                 .await
                 .map_err(|e| ToolError::ExecutionFailed(format!("boot read failed: {e}")))?;
             return Ok(ToolOutput::success(
-                serde_json::json!({
-                    "key": key,
-                    "detail": {
-                        "kind": "system_boot",
-                        "items": boot,
-                    }
-                }),
-                start.elapsed(),
-            ));
-        }
-        if key == "system://glossary" {
-            let glossary = self
-                .memory
-                .glossary(&ctx.user_id, None)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("glossary failed: {e}")))?;
-            return Ok(ToolOutput::success(
-                serde_json::json!({
-                    "key": key,
-                    "detail": {
-                        "kind": "system_glossary",
-                        "glossary": glossary,
-                    }
-                }),
-                start.elapsed(),
-            ));
-        }
-        if key.starts_with("system://index") {
-            let domain = key.strip_prefix("system://index").and_then(|rest| {
-                let rest = rest.trim_matches('/');
-                if rest.is_empty() { None } else { Some(rest) }
-            });
-            let index = self
-                .memory
-                .list_index(&ctx.user_id, None, domain)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("index failed: {e}")))?;
-            return Ok(ToolOutput::success(
-                serde_json::json!({
-                    "key": key,
-                    "detail": {
-                        "kind": "system_index",
-                        "domain": domain,
-                        "entries": index,
-                    }
-                }),
-                start.elapsed(),
-            ));
-        }
-        if key.starts_with("system://recent") {
-            let limit = key
-                .strip_prefix("system://recent")
-                .and_then(|rest| rest.trim_matches('/').parse::<usize>().ok())
-                .unwrap_or(10)
-                .clamp(1, 200);
-            let recent = self
-                .memory
-                .list_recent(&ctx.user_id, None, limit, None)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("recent failed: {e}")))?;
-            return Ok(ToolOutput::success(
-                serde_json::json!({
-                    "key": key,
-                    "detail": {
-                        "kind": "system_recent",
-                        "limit": limit,
-                        "entries": recent,
-                    }
+                json!({
+                    "uri": requested_uri,
+                    "kind": "system_boot",
+                    "items": items,
                 }),
                 start.elapsed(),
             ));
         }
 
+        if requested_uri == "system://glossary" {
+            let glossary = self
+                .memory
+                .glossary(&ctx.user_id, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("glossary read failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                json!({
+                    "uri": requested_uri,
+                    "kind": "system_glossary",
+                    "entries": glossary,
+                }),
+                start.elapsed(),
+            ));
+        }
+
+        if requested_uri == "system://index" || requested_uri.starts_with("system://index/") {
+            let domain = requested_uri
+                .strip_prefix("system://index")
+                .map(|suffix| suffix.trim_matches('/'))
+                .filter(|suffix| !suffix.is_empty());
+            let entries = self
+                .memory
+                .list_index(&ctx.user_id, None, domain)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("memory index failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                json!({
+                    "uri": requested_uri,
+                    "kind": "system_index",
+                    "domain": domain,
+                    "entries": entries,
+                }),
+                start.elapsed(),
+            ));
+        }
+
+        if requested_uri == "system://recent" || requested_uri.starts_with("system://recent/") {
+            let limit = requested_uri
+                .strip_prefix("system://recent")
+                .map(|suffix| suffix.trim_matches('/'))
+                .filter(|suffix| !suffix.is_empty())
+                .and_then(|suffix| suffix.parse::<usize>().ok())
+                .unwrap_or(10)
+                .clamp(1, 100);
+
+            let entries = self
+                .memory
+                .list_recent(&ctx.user_id, None, limit, None)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("recent read failed: {e}")))?;
+            return Ok(ToolOutput::success(
+                json!({
+                    "uri": requested_uri,
+                    "kind": "system_recent",
+                    "limit": limit,
+                    "entries": entries,
+                }),
+                start.elapsed(),
+            ));
+        }
+
+        let (domain, path) = parse_non_root_uri(requested_uri)?;
+        let canonical_uri = make_uri(&domain, &path);
         let detail = self
             .memory
-            .open(&ctx.user_id, None, key)
+            .get_node(&ctx.user_id, None, &canonical_uri)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory read failed: {e}")))?;
+        let detail = detail.ok_or_else(|| {
+            ToolError::ExecutionFailed(format!("memory at '{canonical_uri}' not found"))
+        })?;
+
+        let children = self
+            .memory
+            .children(&ctx.user_id, None, &canonical_uri, 200)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory child read failed: {e}")))?;
+        let (selected_uri, priority, disclosure) = selected_route_metadata(&detail, &canonical_uri);
+        let keywords = detail
+            .keywords
+            .iter()
+            .map(|keyword| keyword.keyword.clone())
+            .collect::<Vec<_>>();
+
         Ok(ToolOutput::success(
-            serde_json::json!({
-                "key": key,
-                "detail": detail,
+            json!({
+                "uri": canonical_uri,
+                "selected_uri": selected_uri,
+                "memory_id": detail.node.id,
+                "version_id": detail.active_version.id,
+                "title": detail.node.title,
+                "kind": detail.node.kind,
+                "content": detail.active_version.content,
+                "priority": priority,
+                "disclosure": disclosure,
+                "routes": detail.routes,
+                "children": children,
+                "keywords": keywords,
             }),
             start.elapsed(),
         ))
@@ -394,197 +430,169 @@ impl Tool for MemoryOpenTool {
     }
 }
 
-fn build_save_route(
-    params: &serde_json::Value,
-    explicit_title: Option<&str>,
-    content: Option<&str>,
-) -> Result<(String, Option<String>), ToolError> {
-    let explicit_route = optional_string(params, "route")?;
-    let parent_route = optional_string(params, "parent_route")?;
-    if explicit_route.is_some() && parent_route.is_some() {
-        return Err(ToolError::InvalidParameters(
-            "memory_save accepts either 'route' or 'parent_route', but not both".to_string(),
-        ));
-    }
-
-    if let Some(route) = explicit_route {
-        return Ok((route, None));
-    }
-
-    let has_append = params.get("append").is_some();
-    let has_patch = params.get("old_string").is_some() || params.get("new_string").is_some();
-
-    if parent_route.is_none() {
-        if has_append {
-            return Err(ToolError::InvalidParameters(
-                "append mode requires an existing memory route".to_string(),
-            ));
-        }
-        if has_patch {
-            return Err(ToolError::InvalidParameters(
-                "patch mode requires an existing memory route".to_string(),
-            ));
-        }
-    }
-
-    let title_source = explicit_title
-        .filter(|value| !value.trim().is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            content.and_then(|text| {
-                text.lines()
-                    .map(str::trim)
-                    .find(|line| !line.is_empty())
-                    .map(ToOwned::to_owned)
-            })
-        })
-        .ok_or_else(|| {
-            ToolError::InvalidParameters(
-                "memory_save needs 'title' or non-empty 'content' to derive a route"
-                    .to_string(),
-            )
-        })?;
-
-    let slug = slugify(&title_source);
-    if slug.is_empty() {
-        return Err(ToolError::InvalidParameters(
-            "memory_save could not derive a route slug from the provided title/content".to_string(),
-        ));
-    }
-
-    if let Some(parent_route) = parent_route {
-        let (domain, parent_path) = parse_parent_route(&parent_route)?;
-        let route = if parent_path.is_empty() {
-            format!("{domain}://{slug}")
-        } else {
-            format!("{domain}://{parent_path}/{slug}")
-        };
-        return Ok((route, Some(parent_route)));
-    }
-
-    Ok((format!("{AUTO_MEMORY_DOMAIN}://{slug}"), None))
-}
-
-fn resolve_save_content(
-    params: &serde_json::Value,
-    current_content: Option<&str>,
-    explicit_title: Option<&str>,
-) -> Result<Option<String>, ToolError> {
-    let old_string = optional_string(params, "old_string")?;
-    let new_string = optional_string(params, "new_string")?;
-    let append = optional_string(params, "append")?;
-    let full_content = optional_string(params, "content")?;
-
-    match (old_string, new_string, append, full_content, current_content) {
-        (Some(old), Some(new), None, None, Some(current)) => {
-            let count = current.matches(&old).count();
-            if count != 1 {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "patch requires old_string to match exactly once (matched {count} times)"
-                )));
-            }
-            Ok(Some(current.replacen(&old, &new, 1)))
-        }
-        (Some(_), None, _, _, _) => Err(ToolError::InvalidParameters(
-            "patch mode requires both 'old_string' and 'new_string'".to_string(),
-        )),
-        (None, None, Some(text), None, Some(current)) => {
-            let mut updated = current.to_string();
-            if !updated.ends_with('\n') {
-                updated.push('\n');
-            }
-            updated.push('\n');
-            updated.push_str(&text);
-            Ok(Some(updated))
-        }
-        (None, None, None, Some(text), Some(_)) => Ok(Some(text)),
-        (None, None, None, None, Some(_)) => Ok(None),
-        (None, None, None, Some(text), None) => Ok(Some(text)),
-        (None, None, None, None, None) => explicit_title
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| Some(value.to_string()))
-            .ok_or_else(|| {
-                ToolError::InvalidParameters(
-                    "memory_save needs semantic content when creating a new memory".to_string(),
-                )
-            }),
-        (_, _, Some(_), Some(_), _) | (Some(_), Some(_), _, Some(_), _) => Err(
-            ToolError::InvalidParameters(
-                "save modes are mutually exclusive: use either patch (old_string/new_string), append, or full 'content'".to_string(),
-            ),
-        ),
-        (_, _, Some(_), _, None) => Err(ToolError::InvalidParameters(
-            "append mode requires an existing memory route".to_string(),
-        )),
-        (Some(_), Some(_), _, _, None) => Err(ToolError::InvalidParameters(
-            "patch mode requires an existing memory route".to_string(),
-        )),
-        _ => Err(ToolError::InvalidParameters(
-            "invalid memory_save parameter combination".to_string(),
-        )),
-    }
-}
-
-pub struct MemorySaveTool {
+pub struct CreateMemoryTool {
     memory: Arc<MemoryManager>,
 }
 
-impl MemorySaveTool {
+impl CreateMemoryTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
     }
 }
 
 #[async_trait]
-impl Tool for MemorySaveTool {
+impl Tool for CreateMemoryTool {
     fn name(&self) -> &str {
-        "memory_save"
+        "create_memory"
     }
 
     fn description(&self) -> &str {
-        "Create or update a graph-native memory node. Use this instead of writing MEMORY.md, HEARTBEAT.md, or daily/*.md. If the target route already exists, Steward updates it; otherwise it creates a new memory there."
+        "Create a new memory under an existing parent URI. If title is omitted, the child URI is auto-assigned as the next numeric sibling."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        let kind_values = kind_enum_values();
-        serde_json::json!({
+        json!({
             "type": "object",
             "properties": {
-                "route": { "type": "string", "description": "Exact route to create or update (domain://path). Optional for new memories; if omitted, Steward derives one from the title/content." },
-                "parent_route": { "type": "string", "description": "Optional parent route to derive a child route from when creating a new memory." },
-                "content": { "type": "string", "description": "Full content for a new memory, or full replacement content for an existing one. For new memories, Steward can fall back to the title when content is omitted." },
-                "old_string": { "type": "string", "description": "Patch mode: uniquely-matching substring to replace in an existing memory. Requires route." },
-                "new_string": { "type": "string", "description": "Patch mode: replacement text (can be empty). Requires route." },
-                "append": { "type": "string", "description": "Append mode: text to append to the end of an existing memory. Requires route." },
-                "expected_version_id": { "type": "string", "description": "Optional optimistic concurrency check for existing memories." },
-                "kind": { "type": "string", "enum": kind_values, "description": "Optional memory node kind. Defaults to 'reference' for new memories." },
-                "priority": { "type": "integer", "default": 50 },
-                "disclosure": { "type": ["string", "null"], "description": "When this memory should be recalled." },
-                "title": { "type": "string", "description": "Optional human-readable title. Also used for route/content derivation when creating a new memory." },
-                "keywords": {
-                    "type": "array",
-                    "items": { "type": "string" }
-                },
-                "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
+                "parent_uri": { "type": "string", "description": "Parent URI. Use core:// for the root of a domain." },
+                "content": { "type": "string" },
+                "priority": { "type": "integer", "description": "Lower values are recalled earlier." },
+                "title": { "type": "string", "description": "Optional URI segment. Only alphanumeric, '_' and '-' are allowed." },
+                "disclosure": { "type": "string", "description": "Optional recall trigger for this URI." }
             },
+            "required": ["parent_uri", "content", "priority"],
+            "additionalProperties": false,
+            "examples": create_memory_examples()
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let parent_uri = require_str(&params, "parent_uri")?;
+        let content = require_str(&params, "content")?;
+        let priority = params
+            .get("priority")
+            .and_then(|value| value.as_i64())
+            .ok_or_else(|| {
+                ToolError::InvalidParameters("'priority' must be an integer".to_string())
+            })? as i32;
+        let title = optional_string(&params, "title")?;
+        let disclosure = optional_string(&params, "disclosure")?;
+
+        if content.trim().is_empty() {
+            return Err(ToolError::InvalidParameters(
+                "content must not be empty".to_string(),
+            ));
+        }
+
+        let (domain, parent_path) = parse_uri(parent_uri)?;
+        let canonical_parent = make_uri(&domain, &parent_path);
+
+        let child_name = if let Some(title) = title.as_deref() {
+            validate_title(title)?;
+            title.to_string()
+        } else {
+            next_numeric_child_name(&self.memory, &ctx.user_id, &domain, &parent_path).await?
+        };
+
+        let path = if parent_path.is_empty() {
+            child_name.clone()
+        } else {
+            format!("{parent_path}/{child_name}")
+        };
+        let uri = make_uri(&domain, &path);
+
+        let (detail, changeset) = self
+            .memory
+            .create(
+                &ctx.user_id,
+                None,
+                Some(&canonical_parent),
+                &child_name,
+                MemoryNodeKind::Reference,
+                content,
+                &domain,
+                &path,
+                priority,
+                disclosure.clone(),
+                crate::memory::MemoryVisibility::Private,
+                Vec::new(),
+                json!({
+                    "source": "tool:create_memory",
+                    "job_id": ctx.job_id,
+                }),
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory create failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            json!({
+                "uri": uri,
+                "node": detail,
+                "priority": priority,
+                "disclosure": disclosure,
+                "changeset_id": changeset.id,
+                "review_status": changeset.status,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::Never
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct UpdateMemoryTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl UpdateMemoryTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for UpdateMemoryTool {
+    fn name(&self) -> &str {
+        "update_memory"
+    }
+
+    fn description(&self) -> &str {
+        "Update an existing memory. Supports patch mode (old_string + new_string), append mode, and edge metadata updates (priority/disclosure). There is no full replace mode."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "uri": { "type": "string" },
+                "old_string": { "type": "string", "description": "Patch mode: exact text to replace." },
+                "new_string": { "type": "string", "description": "Patch mode: replacement text. Use an empty string to delete the matched section." },
+                "append": { "type": "string", "description": "Append mode: text to append to the end of the current content." },
+                "priority": { "type": "integer", "description": "Optional new priority for this URI." },
+                "disclosure": { "type": "string", "description": "Optional new disclosure for this URI." }
+            },
+            "required": ["uri"],
             "additionalProperties": false,
             "examples": [
                 {
-                    "title": "Dreamer Profile",
-                    "content": "The user's name is 梦凌汐.",
-                    "kind": "user_profile"
+                    "uri": "core://agent/my_user",
+                    "old_string": "old paragraph",
+                    "new_string": "new paragraph"
                 },
                 {
-                    "route": "memory://dreamer-profile",
-                    "old_string": "梦凌汐",
-                    "new_string": "梦凌汐（确认）"
-                },
-                {
-                    "parent_route": "memory://profiles",
-                    "content": "Prefers concise status updates.",
-                    "kind": "user_profile",
-                    "title": "Dreamer Profile"
+                    "uri": "core://agent",
+                    "append": "\\n## New Section\\nNew content..."
                 }
             ]
         })
@@ -596,144 +604,104 @@ impl Tool for MemorySaveTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        reject_legacy_param_aliases(
-            &params,
-            &[
-                ("parent_uri", "parent_route"),
-                ("uri", "route"),
-                ("trigger_text", "disclosure"),
-            ],
-        )?;
-
-        let explicit_title = optional_string(&params, "title")?;
-        let requested_content = optional_string(&params, "content")?;
-        let (route, parent_route) =
-            build_save_route(&params, explicit_title.as_deref(), requested_content.as_deref())?;
-
-        if route.starts_with("system://") {
+        let uri = require_str(&params, "uri")?;
+        if is_virtual_system_view(uri) {
             return Err(ToolError::InvalidParameters(
-                "system:// URIs are virtual entry points (read-only). Use memory_open to inspect them, and save to a concrete non-system route instead.".to_string(),
+                "virtual system views are read-only; update a concrete memory URI instead"
+                    .to_string(),
             ));
         }
 
-        let existing = self
-            .memory
-            .open(&ctx.user_id, None, &route)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory open failed: {e}")))?;
+        let (domain, path) = parse_non_root_uri(uri)?;
+        let canonical_uri = make_uri(&domain, &path);
+        let old_string = optional_string(&params, "old_string")?;
+        let new_string = optional_string(&params, "new_string")?;
+        let append = optional_string(&params, "append")?;
+        let priority = optional_priority(&params)?;
+        let disclosure = optional_string(&params, "disclosure")?;
 
-        if let (Some(detail), Some(expected)) = (
-            existing.as_ref(),
-            params.get("expected_version_id").and_then(|v| v.as_str()),
-        ) {
-            let expected = Uuid::parse_str(expected).map_err(|_| {
-                ToolError::InvalidParameters(format!("invalid expected_version_id: {expected}"))
-            })?;
-            if expected != detail.active_version.id {
-                return Err(ToolError::ExecutionFailed(format!(
-                    "version mismatch for '{route}': expected {expected}, found {}",
-                    detail.active_version.id
-                )));
-            }
+        if old_string.is_some() && append.is_some() {
+            return Err(ToolError::InvalidParameters(
+                "cannot use patch mode and append mode at the same time".to_string(),
+            ));
+        }
+        if old_string.is_some() && new_string.is_none() {
+            return Err(ToolError::InvalidParameters(
+                "old_string provided without new_string".to_string(),
+            ));
+        }
+        if new_string.is_some() && old_string.is_none() {
+            return Err(ToolError::InvalidParameters(
+                "new_string provided without old_string".to_string(),
+            ));
         }
 
-        let visibility = match params.get("visibility") {
-            Some(_) => Some(parse_visibility(
-                params.get("visibility").and_then(|v| v.as_str()),
-            )?),
-            None => None,
-        };
-        let keywords = if params.get("keywords").is_some() {
-            Some(parse_keywords(&params)?)
+        let current = self
+            .memory
+            .get_node(&ctx.user_id, None, &canonical_uri)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory read failed: {e}")))?;
+        let current = current.ok_or_else(|| {
+            ToolError::ExecutionFailed(format!("memory at '{canonical_uri}' not found"))
+        })?;
+
+        let content = if let (Some(old), Some(new)) = (old_string.as_deref(), new_string.as_deref())
+        {
+            if old == new {
+                return Err(ToolError::InvalidParameters(
+                    "old_string and new_string are identical".to_string(),
+                ));
+            }
+            let count = current.active_version.content.matches(old).count();
+            if count == 0 {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "old_string not found in memory content at '{canonical_uri}'"
+                )));
+            }
+            if count > 1 {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "old_string found {count} times in memory content at '{canonical_uri}'; provide more surrounding context"
+                )));
+            }
+            Some(current.active_version.content.replacen(old, new, 1))
+        } else if let Some(append) = append.as_deref() {
+            if append.is_empty() {
+                return Err(ToolError::InvalidParameters(
+                    "append must not be empty".to_string(),
+                ));
+            }
+            Some(format!("{}{}", current.active_version.content, append))
         } else {
             None
         };
-        let parsed_kind = match params.get("kind").and_then(|v| v.as_str()) {
-            Some(value) => Some(parse_kind(value)?),
-            None => None,
-        };
-        let disclosure = match params.get("disclosure") {
-            Some(serde_json::Value::Null) => Some(None),
-            Some(_) => Some(optional_string(&params, "disclosure")?),
-            None => None,
-        };
 
-        if let Some(existing) = existing {
-            let content = resolve_save_content(
-                &params,
-                Some(&existing.active_version.content),
-                explicit_title.as_deref(),
-            )?;
-            let input = UpdateMemoryNodeInput {
-                route_or_node: route.clone(),
-                title: explicit_title,
-                content,
-                priority: optional_priority(&params)?,
-                trigger_text: disclosure,
-                visibility,
-                metadata: Some(serde_json::json!({
-                    "source": "tool:memory_save",
-                    "job_id": ctx.job_id,
-                })),
-                keywords,
-                changeset_id: None,
-                kind: parsed_kind,
-            };
-            let (detail, changeset) = self
-                .memory
-                .update(&ctx.user_id, None, &input)
-                .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("memory save failed: {e}")))?;
-
-            return Ok(ToolOutput::success(
-                serde_json::json!({
-                    "mode": "updated",
-                    "node": detail,
-                    "changeset_id": changeset.id,
-                    "review_status": changeset.status,
-                }),
-                start.elapsed(),
+        if content.is_none() && priority.is_none() && disclosure.is_none() {
+            return Err(ToolError::InvalidParameters(
+                "no update fields provided; use patch mode, append mode, priority, or disclosure"
+                    .to_string(),
             ));
         }
 
-        let content = resolve_save_content(&params, None, explicit_title.as_deref())?;
-        let content = content.ok_or_else(|| {
-            ToolError::InvalidParameters(
-                "memory_save needs semantic content when creating a new memory".to_string(),
-            )
-        })?;
-        let kind = parsed_kind.unwrap_or(MemoryNodeKind::Reference);
-        let title = derive_title(&content, kind, explicit_title);
-        let priority = optional_priority(&params)?.unwrap_or(50);
-        let visibility = visibility.unwrap_or(MemoryVisibility::Private);
-        let (domain, path) = parse_route_strict(&route)?;
-
+        let input = UpdateMemoryNodeInput {
+            route_or_node: canonical_uri.clone(),
+            content,
+            priority,
+            trigger_text: disclosure.clone().map(Some),
+            metadata: Some(json!({
+                "source": "tool:update_memory",
+                "job_id": ctx.job_id,
+            })),
+            ..Default::default()
+        };
         let (detail, changeset) = self
             .memory
-            .create(
-                &ctx.user_id,
-                None,
-                parent_route.as_deref(),
-                &title,
-                kind,
-                &content,
-                &domain,
-                &path,
-                priority,
-                disclosure.flatten(),
-                visibility,
-                keywords.unwrap_or_default(),
-                serde_json::json!({
-                    "source": "tool:memory_save",
-                    "job_id": ctx.job_id,
-                }),
-            )
+            .update(&ctx.user_id, None, &input)
             .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory save failed: {e}")))?;
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory update failed: {e}")))?;
 
         Ok(ToolOutput::success(
-            serde_json::json!({
-                "mode": "created",
+            json!({
+                "uri": canonical_uri,
                 "node": detail,
                 "changeset_id": changeset.id,
                 "review_status": changeset.status,
@@ -751,37 +719,34 @@ impl Tool for MemorySaveTool {
     }
 }
 
-pub struct MemoryAliasTool {
+pub struct DeleteMemoryTool {
     memory: Arc<MemoryManager>,
 }
 
-impl MemoryAliasTool {
+impl DeleteMemoryTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
     }
 }
 
 #[async_trait]
-impl Tool for MemoryAliasTool {
+impl Tool for DeleteMemoryTool {
     fn name(&self) -> &str {
-        "memory_alias"
+        "delete_memory"
     }
 
     fn description(&self) -> &str {
-        "Create an alias route for an existing memory node without copying its content."
+        "Delete a memory path by URI. This removes the path from the graph; read the memory first before deleting."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "type": "object",
             "properties": {
-                "new_route": { "type": "string" },
-                "target_route": { "type": "string" },
-                "priority": { "type": "integer", "default": 50 },
-                "disclosure": { "type": ["string", "null"], "description": "When this alias should be recalled." },
-                "visibility": { "type": "string", "enum": ["private", "session", "shared"] }
+                "uri": { "type": "string" }
             },
-            "required": ["new_route", "target_route"]
+            "required": ["uri"],
+            "additionalProperties": false
         })
     }
 
@@ -791,29 +756,120 @@ impl Tool for MemoryAliasTool {
         ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = Instant::now();
-        reject_legacy_param_aliases(&params, &[("trigger_text", "disclosure")])?;
-        let new_route = require_str(&params, "new_route")?;
-        let target_route = require_str(&params, "target_route")?;
-        let (domain, path) = parse_route_strict(new_route)?;
+        let uri = require_str(&params, "uri")?;
+        if is_virtual_system_view(uri) {
+            return Err(ToolError::InvalidParameters(
+                "virtual system views cannot be deleted".to_string(),
+            ));
+        }
+
+        let (domain, path) = parse_non_root_uri(uri)?;
+        let canonical_uri = make_uri(&domain, &path);
+        let changeset = self
+            .memory
+            .delete_memory(&ctx.user_id, None, &canonical_uri)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("memory delete failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            json!({
+                "uri": canonical_uri,
+                "changeset_id": changeset.id,
+                "review_status": changeset.status,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::Never
+    }
+}
+
+pub struct AddAliasTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl AddAliasTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for AddAliasTool {
+    fn name(&self) -> &str {
+        "add_alias"
+    }
+
+    fn description(&self) -> &str {
+        "Create an alias URI pointing at the same memory as an existing target URI."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "new_uri": { "type": "string" },
+                "target_uri": { "type": "string" },
+                "priority": { "type": "integer", "default": DEFAULT_CREATE_PRIORITY },
+                "disclosure": { "type": "string" }
+            },
+            "required": ["new_uri", "target_uri"],
+            "additionalProperties": false,
+            "examples": [
+                {
+                    "new_uri": "core://timeline/2024/05/20",
+                    "target_uri": "core://agent/my_user/first_meeting",
+                    "priority": 1,
+                    "disclosure": "When I want to remember how we started"
+                }
+            ]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let new_uri = require_str(&params, "new_uri")?;
+        let target_uri = require_str(&params, "target_uri")?;
+        let priority = optional_priority(&params)?.unwrap_or(DEFAULT_CREATE_PRIORITY);
+        let disclosure = optional_string(&params, "disclosure")?;
+
+        if is_virtual_system_view(new_uri) || is_virtual_system_view(target_uri) {
+            return Err(ToolError::InvalidParameters(
+                "virtual system views cannot be used as alias endpoints".to_string(),
+            ));
+        }
+
+        let (new_domain, new_path) = parse_non_root_uri(new_uri)?;
+        let (target_domain, target_path) = parse_non_root_uri(target_uri)?;
         let input = CreateMemoryAliasInput {
-            space_id: Uuid::nil(),
-            target_route_or_node: target_route.to_string(),
-            domain,
-            path,
-            visibility: parse_visibility(params.get("visibility").and_then(|v| v.as_str()))?,
-            priority: optional_priority(&params)?.unwrap_or(50),
-            trigger_text: optional_string(&params, "disclosure")?,
+            space_id: uuid::Uuid::nil(),
+            target_route_or_node: make_uri(&target_domain, &target_path),
+            domain: new_domain.clone(),
+            path: new_path.clone(),
+            visibility: crate::memory::MemoryVisibility::Private,
+            priority,
+            trigger_text: disclosure.clone(),
             changeset_id: None,
         };
+
         let (route, changeset) = self
             .memory
-            .alias(&ctx.user_id, None, &input)
+            .add_alias(&ctx.user_id, None, &input)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("memory alias failed: {e}")))?;
 
         Ok(ToolOutput::success(
-            serde_json::json!({
-                "route": route,
+            json!({
+                "uri": route.uri(),
+                "target_uri": make_uri(&target_domain, &target_path),
+                "priority": priority,
+                "disclosure": disclosure,
                 "changeset_id": changeset.id,
                 "review_status": changeset.status,
             }),
@@ -830,133 +886,6 @@ impl Tool for MemoryAliasTool {
     }
 }
 
-pub struct MemoryDeleteTool {
-    memory: Arc<MemoryManager>,
-}
-
-impl MemoryDeleteTool {
-    pub fn new(memory: Arc<MemoryManager>) -> Self {
-        Self { memory }
-    }
-}
-
-#[async_trait]
-impl Tool for MemoryDeleteTool {
-    fn name(&self) -> &str {
-        "memory_delete"
-    }
-
-    fn description(&self) -> &str {
-        "Delete a memory route or node from the native memory graph. This is a high-impact operation and always requires approval."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "route_or_node_id": { "type": "string", "description": "Route/URI to delete (path-only delete). Node ids are not accepted." }
-            },
-            "required": ["route_or_node_id"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        ctx: &JobContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let start = Instant::now();
-        let key = require_str(&params, "route_or_node_id")?;
-        // Nocturne-style "forgetting": delete only a route/path, not the underlying node id.
-        let _ = parse_route_strict(key)?;
-        let changeset = self
-            .memory
-            .delete(&ctx.user_id, None, key)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory delete failed: {e}")))?;
-
-        Ok(ToolOutput::success(
-            serde_json::json!({
-                "deleted": key,
-                "changeset_id": changeset.id,
-                "review_status": changeset.status,
-            }),
-            start.elapsed(),
-        ))
-    }
-
-    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
-        ApprovalRequirement::Never
-    }
-}
-
-pub struct MemoryReviewTool {
-    memory: Arc<MemoryManager>,
-}
-
-impl MemoryReviewTool {
-    pub fn new(memory: Arc<MemoryManager>) -> Self {
-        Self { memory }
-    }
-}
-
-#[async_trait]
-impl Tool for MemoryReviewTool {
-    fn name(&self) -> &str {
-        "memory_review"
-    }
-
-    fn description(&self) -> &str {
-        "Apply or request rollback for a pending memory changeset."
-    }
-
-    fn parameters_schema(&self) -> serde_json::Value {
-        serde_json::json!({
-            "type": "object",
-            "properties": {
-                "changeset_id": { "type": "string" },
-                "action": { "type": "string", "enum": ["accept", "rollback"] }
-            },
-            "required": ["changeset_id", "action"]
-        })
-    }
-
-    async fn execute(
-        &self,
-        params: serde_json::Value,
-        _ctx: &JobContext,
-    ) -> Result<ToolOutput, ToolError> {
-        let start = Instant::now();
-        let changeset_id = require_str(&params, "changeset_id")?;
-        let action = require_str(&params, "action")?;
-        let id = Uuid::parse_str(changeset_id).map_err(|_| {
-            ToolError::InvalidParameters(format!("invalid changeset id: {changeset_id}"))
-        })?;
-        self.memory
-            .review(&_ctx.user_id, None, id, action)
-            .await
-            .map_err(|e| ToolError::ExecutionFailed(format!("memory review failed: {e}")))?;
-
-        Ok(ToolOutput::success(
-            serde_json::json!({
-                "changeset_id": id,
-                "action": action,
-                "status": if action == "rollback" {
-                    "rollback_requested"
-                } else {
-                    "applied"
-                }
-            }),
-            start.elapsed(),
-        ))
-    }
-
-    fn requires_approval(&self, params: &serde_json::Value) -> ApprovalRequirement {
-        let _ = params;
-        ApprovalRequirement::Never
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,165 +894,166 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn memory_save_schema_exposes_only_canonical_fields() {
+    async fn create_memory_schema_matches_nocturne_shape() {
         let harness = TestHarnessBuilder::new().build().await;
-        let tool = MemorySaveTool::new(Arc::new(MemoryManager::new(Arc::clone(
-            &harness.db,
-        ))));
+        let tool = CreateMemoryTool::new(Arc::new(MemoryManager::new(Arc::clone(&harness.db))));
         let schema = tool.parameters_schema();
+        let errors = crate::tools::tool::validate_tool_schema(&schema, "create_memory");
+        assert!(
+            errors.is_empty(),
+            "create_memory schema should validate cleanly: {errors:?}",
+        );
+
         let properties = schema["properties"]
             .as_object()
-            .expect("memory_save schema should have properties");
-
-        assert!(properties.contains_key("route"));
-        assert!(properties.contains_key("parent_route"));
+            .expect("create_memory schema should have properties");
+        assert!(properties.contains_key("parent_uri"));
+        assert!(properties.contains_key("content"));
+        assert!(properties.contains_key("priority"));
+        assert!(properties.contains_key("title"));
         assert!(properties.contains_key("disclosure"));
-        assert!(!properties.contains_key("uri"));
-        assert!(!properties.contains_key("parent_uri"));
-        assert!(!properties.contains_key("trigger_text"));
-        assert!(schema.get("oneOf").is_none());
-        assert!(schema.get("not").is_none());
+        assert!(!properties.contains_key("route"));
+        assert!(!properties.contains_key("kind"));
+        assert!(!properties.contains_key("visibility"));
+        assert!(!properties.contains_key("keywords"));
     }
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn memory_save_rejects_legacy_aliases_and_mutually_exclusive_routes() {
+    async fn create_memory_without_title_uses_numeric_child_route() {
         let harness = TestHarnessBuilder::new().build().await;
         let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
-        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
         let ctx = JobContext::with_user("user1", "thread", "desktop");
 
-        let legacy_err = tool
+        create
             .execute(
-                serde_json::json!({
-                    "uri": "people://alex-work-style",
-                    "content": "Alex is a backend engineer"
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Root parent",
+                    "priority": 0,
+                    "title": "agent"
                 }),
                 &ctx,
             )
             .await
-            .expect_err("legacy uri alias should be rejected");
-        assert!(format!("{legacy_err}").contains("use 'route' instead"));
+            .expect("parent creation should succeed");
 
-        let both_err = tool
+        let result = create
             .execute(
-                serde_json::json!({
-                    "route": "people://alex-work-style",
-                    "parent_route": "people://profiles",
-                    "content": "Alex is a backend engineer"
+                json!({
+                    "parent_uri": "core://agent",
+                    "content": "The user's name is 梦凌汐.",
+                    "priority": 1
                 }),
                 &ctx,
             )
             .await
-            .expect_err("route and parent_route together should be rejected");
-        assert!(format!("{both_err}").contains("but not both"));
+            .expect("titleless child creation should succeed");
+
+        assert_eq!(result.result["uri"], json!("core://agent/1"));
+
+        let detail = memory
+            .get_node("user1", None, "core://agent/1")
+            .await
+            .expect("open numeric route")
+            .expect("numeric route should exist");
+        assert!(detail.active_version.content.contains("梦凌汐"));
     }
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn memory_save_supports_route_and_parent_route_paths() {
+    async fn update_memory_supports_patch_and_append_only() {
         let harness = TestHarnessBuilder::new().build().await;
         let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
-        let tool = MemorySaveTool::new(Arc::clone(&memory));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let update = UpdateMemoryTool::new(Arc::clone(&memory));
         let ctx = JobContext::with_user("user1", "thread", "desktop");
 
-        tool.execute(
-            serde_json::json!({
-                "route": "people://alex-work-style",
-                "content": "Alex is a backend engineer",
-                "kind": "user_profile",
-                "title": "Alex Work Style"
-            }),
-            &ctx,
-        )
-        .await
-        .expect("route-based creation should succeed");
-
-        let explicit = memory
-            .open("user1", None, "people://alex-work-style")
-            .await
-            .expect("open explicit route")
-            .expect("explicit route should exist");
-        assert!(explicit.active_version.content.contains("backend engineer"));
-
-        tool.execute(
-            serde_json::json!({
-                "route": "people://profiles",
-                "content": "Directory of people profiles.",
-                "kind": "reference",
-                "title": "Profiles"
-            }),
-            &ctx,
-        )
-        .await
-        .expect("parent route should exist before deriving a child route");
-
-        tool.execute(
-            serde_json::json!({
-                "parent_route": "people://profiles",
-                "content": "Prefers concise status updates.",
-                "kind": "user_profile",
-                "title": "Dreamer Profile"
-            }),
-            &ctx,
-        )
-        .await
-        .expect("parent-route creation should succeed");
-
-        let derived = memory
-            .open("user1", None, "people://profiles/dreamer-profile")
-            .await
-            .expect("open derived route")
-            .expect("derived route should exist");
-        assert!(derived.active_version.content.contains("concise status updates"));
-    }
-
-    #[cfg(feature = "libsql")]
-    #[tokio::test]
-    async fn memory_save_can_auto_derive_route_for_new_memory() {
-        let harness = TestHarnessBuilder::new().build().await;
-        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
-        let tool = MemorySaveTool::new(Arc::clone(&memory));
-        let ctx = JobContext::with_user("user1", "thread", "desktop");
-
-        tool.execute(
-            serde_json::json!({
-                "title": "Dreamer Profile",
-                "content": "The user's name is 梦凌汐.",
-                "kind": "user_profile"
-            }),
-            &ctx,
-        )
-        .await
-        .expect("route-less creation should succeed");
-
-        let derived = memory
-            .open("user1", None, "memory://dreamer-profile")
-            .await
-            .expect("open auto-derived route")
-            .expect("auto-derived route should exist");
-        assert!(derived.active_version.content.contains("梦凌汐"));
-    }
-
-    #[cfg(feature = "libsql")]
-    #[tokio::test]
-    async fn memory_save_patch_mode_still_requires_existing_route() {
-        let harness = TestHarnessBuilder::new().build().await;
-        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
-        let tool = MemorySaveTool::new(Arc::clone(&memory));
-        let ctx = JobContext::with_user("user1", "thread", "desktop");
-
-        let err = tool
+        create
             .execute(
-                serde_json::json!({
-                    "old_string": "梦凌汐",
-                    "new_string": "梦凌汐（确认）"
+                json!({
+                    "parent_uri": "core://",
+                    "content": "Original content",
+                    "priority": 0,
+                    "title": "agent"
                 }),
                 &ctx,
             )
             .await
-            .expect_err("patch without route should fail");
+            .expect("create should succeed");
 
-        assert!(format!("{err}").contains("patch mode requires an existing memory route"));
+        update
+            .execute(
+                json!({
+                    "uri": "core://agent",
+                    "old_string": "Original",
+                    "new_string": "Updated"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("patch should succeed");
+
+        update
+            .execute(
+                json!({
+                    "uri": "core://agent",
+                    "append": "\nExtra note"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("append should succeed");
+
+        let detail = memory
+            .get_node("user1", None, "core://agent")
+            .await
+            .expect("open updated node")
+            .expect("node should exist");
+        assert!(detail.active_version.content.contains("Updated content"));
+        assert!(detail.active_version.content.contains("Extra note"));
+
+        let err = update
+            .execute(json!({ "uri": "core://agent" }), &ctx)
+            .await
+            .expect_err("empty update should fail");
+        assert!(format!("{err}").contains("no update fields provided"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn search_and_read_memory_use_nocturne_names() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let read = ReadMemoryTool::new(Arc::clone(&memory));
+        let search = SearchMemoryTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://",
+                    "content": "The user's name is 梦凌汐.",
+                    "priority": 0,
+                    "title": "user_name"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create should succeed");
+
+        let read_result = read
+            .execute(json!({ "uri": "core://user_name" }), &ctx)
+            .await
+            .expect("read should succeed");
+        assert_eq!(read_result.result["uri"], json!("core://user_name"));
+
+        let search_result = search
+            .execute(json!({ "query": "梦凌汐" }), &ctx)
+            .await
+            .expect("search should succeed");
+        assert_eq!(search_result.result["count"], json!(1));
     }
 }

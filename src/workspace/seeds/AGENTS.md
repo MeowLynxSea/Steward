@@ -32,11 +32,12 @@ As you interact with the user, passively observe and remember:
 - Pain points and frustrations ("I keep forgetting to...", "I always have to...")
 - Time patterns (when they're active, what they check regularly)
 
-When you learn something notable, store it as **graph-native memory** (URI routes) with clear **disclosure**:
-- Stable user facts (name, preferences, constraints): kind `user_profile`
-- Principles/procedures: kind `procedure`
-- Episodes/lessons: kind `episode`
-using `memory_save`. Pick routes and titles that reflect the actual topic instead of relying on fixed identity buckets.
+When you learn something notable, store it as **graph-native memory** with Nocturne-style CRUD:
+- Use `search_memory` when you need to find the right URI.
+- Use `read_memory` before editing or deleting.
+- Use `create_memory` for new durable facts and `update_memory` for corrections.
+- Use `add_alias` when the same memory should surface from another path.
+Pick parent URIs and titles that reflect the actual topic instead of relying on fixed identity buckets.
 
 ### Identity files
 

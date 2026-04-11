@@ -27,8 +27,8 @@ const READ_ONLY_TOOLS: &[&str] = &[
     "workspace_search",
     "workspace_read",
     "workspace_tree",
-    "memory_recall",
-    "memory_open",
+    "search_memory",
+    "read_memory",
     "time",
     "echo",
     "json",
@@ -157,7 +157,8 @@ mod tests {
             make_tool("workspace_search"),
             make_tool("workspace_read"),
             make_tool("workspace_tree"),
-            make_tool("memory_recall"),
+            make_tool("search_memory"),
+            make_tool("read_memory"),
             make_tool("time"),
             make_tool("echo"),
             make_tool("json"),
@@ -197,7 +198,8 @@ mod tests {
         assert!(!kept_names.contains(&"workspace_write"));
         assert!(kept_names.contains(&"workspace_search"));
         assert!(kept_names.contains(&"workspace_read"));
-        assert!(kept_names.contains(&"memory_recall"));
+        assert!(kept_names.contains(&"search_memory"));
+        assert!(kept_names.contains(&"read_memory"));
         assert!(kept_names.contains(&"time"));
         assert_eq!(result.min_trust, SkillTrust::Installed);
     }

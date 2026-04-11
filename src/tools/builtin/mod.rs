@@ -23,8 +23,8 @@ pub use extension_tools::{
 };
 pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFileTool};
 pub use graph_memory::{
-    MemoryAliasTool, MemoryDeleteTool, MemoryOpenTool, MemoryRecallTool, MemoryReviewTool,
-    MemorySaveTool,
+    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ReadMemoryTool, SearchMemoryTool,
+    UpdateMemoryTool,
 };
 pub use http::HttpTool;
 pub use job::{

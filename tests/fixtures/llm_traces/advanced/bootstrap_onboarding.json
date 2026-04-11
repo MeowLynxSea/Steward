@@ -1,7 +1,7 @@
 {
   "model_name": "bootstrap-onboarding-flow",
   "expects": {
-    "tools_used": ["memory_save", "bootstrap_complete"],
+    "tools_used": ["create_memory", "bootstrap_complete"],
     "all_tools_succeeded": true,
     "min_responses": 2
   },
@@ -44,24 +44,13 @@
             "tool_calls": [
               {
                 "id": "call_user_profile_create",
-                "name": "memory_save",
+                "name": "create_memory",
                 "arguments": {
-                  "kind": "user_profile",
-                  "title": "User Profile",
+                  "parent_uri": "core://",
+                  "title": "user_profile",
                   "content": "- Name: Alex\n- Profession: backend engineer\n- Priorities: PR management; incident response\n- Communication: direct, concise, casual\n- Working style: hands-on debugger\n- Interests: distributed systems\n",
-                  "priority": 90,
-                  "disclosure": "When tailoring responses to this user",
-                  "visibility": "private",
-                  "keywords": [
-                    "Alex",
-                    "user",
-                    "profile",
-                    "preferences",
-                    "backend engineer",
-                    "PR management",
-                    "incident response",
-                    "distributed systems"
-                  ]
+                  "priority": 0,
+                  "disclosure": "When tailoring responses to this user"
                 }
               }
             ],
@@ -75,15 +64,13 @@
             "tool_calls": [
               {
                 "id": "call_agent_identity_create",
-                "name": "memory_save",
+                "name": "create_memory",
                 "arguments": {
-                  "kind": "identity",
-                  "title": "Agent Identity",
+                  "parent_uri": "core://",
+                  "title": "agent_identity",
                   "content": "Name: Claw\nVibe: Sharp, efficient, no-nonsense\n",
-                  "priority": 60,
-                  "disclosure": "When calibrating persona or recovering from drift",
-                  "visibility": "session",
-                  "keywords": ["identity", "persona"]
+                  "priority": 1,
+                  "disclosure": "When calibrating persona or recovering from drift"
                 }
               }
             ],
@@ -108,7 +95,7 @@
         {
           "response": {
             "type": "text",
-            "content": "All set, Alex. I'm Claw — I'll keep things fast and direct.\n\nI've saved the key context as URI graph memory. Want me to set up a morning PR review routine for your GitHub repos?",
+            "content": "All set, Alex. I'm Claw — I'll keep things fast and direct.\n\nI've saved the key context into graph memory. Want me to set up a morning PR review routine for your GitHub repos?",
             "input_tokens": 1300,
             "output_tokens": 35
           }

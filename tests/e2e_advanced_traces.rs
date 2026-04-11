@@ -667,8 +667,8 @@ mod advanced {
     /// clears BOOTSTRAP.md, and the workspace reflects the onboarding completion.
     #[tokio::test]
     async fn bootstrap_onboarding_clears_bootstrap() {
-        use steward_core::workspace::paths;
         use steward_core::memory::MemoryManager;
+        use steward_core::workspace::paths;
 
         let trace = LlmTrace::from_file(format!("{FIXTURES}/bootstrap_onboarding.json")).unwrap();
         let rig = TestRigBuilder::new()
@@ -698,7 +698,7 @@ mod advanced {
         );
 
         // 3. Run the 3-turn conversation. The trace has the agent write
-        //    graph memory via `memory_save`, then clear bootstrap.
+        //    graph memory via `create_memory`, then clear bootstrap.
         let mut total = 1; // already have the greeting
         for turn in &trace.turns {
             rig.send_message(&turn.user_input).await;
@@ -708,17 +708,17 @@ mod advanced {
 
         // 4. Verify the expected tool calls succeeded.
         let completed = rig.tool_calls_completed();
-        let memory_save_calls: Vec<_> = completed
+        let create_memory_calls: Vec<_> = completed
             .iter()
-            .filter(|(name, _)| name == "memory_save")
+            .filter(|(name, _)| name == "create_memory")
             .collect();
         assert!(
-            memory_save_calls.len() >= 2,
-            "expected at least 2 memory_save calls (user + agent), got: {memory_save_calls:?}"
+            create_memory_calls.len() >= 2,
+            "expected at least 2 create_memory calls (user + agent), got: {create_memory_calls:?}"
         );
         assert!(
-            memory_save_calls.iter().all(|(_, ok)| *ok),
-            "all memory_save calls should succeed: {memory_save_calls:?}"
+            create_memory_calls.iter().all(|(_, ok)| *ok),
+            "all create_memory calls should succeed: {create_memory_calls:?}"
         );
 
         let bootstrap_completions: Vec<_> = completed
@@ -756,7 +756,7 @@ mod advanced {
         let agent_id = None;
         let memory = MemoryManager::new(Arc::clone(rig.database()));
         let hits = memory
-            .recall(&owner_id, agent_id, "Alex backend engineer", 10, &[])
+            .search(&owner_id, agent_id, "Alex backend engineer", 10, &[])
             .await
             .expect("recall semantic memory");
         assert!(
@@ -779,7 +779,7 @@ mod advanced {
         );
 
         let detail = memory
-            .open(&owner_id, agent_id, &profile_hit.uri)
+            .get_node(&owner_id, agent_id, &profile_hit.uri)
             .await
             .expect("open recalled memory")
             .expect("recalled memory should exist");

@@ -827,11 +827,7 @@ impl Workspace {
 
         // Keep this list stable and ordered: it affects the prompt.
         // NOTE: paths::* are normal "workspace document" paths, not graph memory URIs.
-        let mut paths: Vec<&str> = vec![
-            paths::SOUL,
-            paths::AGENTS,
-            paths::TOOLS,
-        ];
+        let mut paths: Vec<&str> = vec![paths::SOUL, paths::AGENTS, paths::TOOLS];
         // In group chats, avoid leaking personal long-term memory into a shared context.
         // See `src/agent/CLAUDE.md` guidance.
         if !is_group_chat {
@@ -1453,7 +1449,6 @@ impl Workspace {
         self.append(&path, &timestamped_entry).await?;
         Ok(path)
     }
-
 }
 
 // ==================== Search ====================

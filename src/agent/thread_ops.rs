@@ -22,8 +22,8 @@ use crate::context::JobContext;
 use crate::error::Error;
 use crate::llm::{ChatMessage, ToolCall};
 use crate::tools::{prepare_tool_params, redact_params};
-use steward_common::truncate_preview;
 use chrono::Utc;
+use steward_common::truncate_preview;
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 

@@ -137,13 +137,13 @@ Trace fixtures must produce deterministic results across runs. **Do not use tool
 - `list_dir` on directories not created by the trace itself
 - `shell` with commands that depend on system state (e.g. `date`, `ps`, `ls /var`)
 - `http` -- external endpoints may change or be unavailable
-- `memory_recall` unless the trace writes the memory entry first
+- `search_memory` unless the trace writes the memory entry first
 
 **Prefer:**
 - `echo` -- always returns its input
 - `json` -- deterministic parsing/formatting
 - `write_file` + `read_file` -- self-contained if the trace writes first
-- `memory_save` + `memory_open` -- deterministic if the trace writes first
+- `create_memory` + `read_memory` -- deterministic if the trace writes first
 - `shell` with deterministic commands (e.g. `echo "hello"`, `printf`)
 
 When a trace needs to exercise a stateful tool (like `list_dir`), have an earlier step create the expected state (e.g. `write_file` to create the directory contents first).
@@ -189,7 +189,7 @@ Returns a `ToolCompletionResponse` with `FinishReason::ToolUse`. The agent loop 
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique call ID. Convention: `call_{tool}_{n}`. |
-| `name` | string | Must match a registered tool name (e.g. `echo`, `write_file`, `read_file`, `memory_save`, `shell`). |
+| `name` | string | Must match a registered tool name (e.g. `echo`, `write_file`, `read_file`, `create_memory`, `shell`). |
 | `arguments` | object | Tool parameters as JSON. Must conform to the tool's `parameters_schema()`. |
 
 #### `user_input` -- user message marker (recording only)
@@ -294,7 +294,7 @@ llm_traces/
     tool_echo.json          # Single echo tool call + confirmation
     tool_json.json          # JSON parse tool call + confirmation
     chain_write_read.json   # Write file -> read file -> confirm
-    memory_save_recall.json # Memory write -> memory recall -> confirm
+    memory_save_recall.json # File write -> file read -> confirm
     robust_correct_tool.json
   coverage/                 # Broader tool and feature coverage
     shell_echo.json         # Shell command execution

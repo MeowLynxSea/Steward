@@ -513,10 +513,10 @@ Write immediately when:
 - A new high-leverage insight or principle emerges.
 - A relationship or emotional inflection point happens.
 
-Prefer `memory_save` over creating conflicting duplicates.
+Prefer `update_memory` over creating conflicting duplicates.
 
 ## Graph Memory vs Workspace Documents
-- Use graph-native memory tools (`memory_save`, aliases, route deletion) for durable memories.
+- Use graph-native memory tools (`create_memory`, `update_memory`, `add_alias`, `delete_memory`) for durable memories.
 - Workspace document tools are for workspace files, not long-term graph memory.
 
 ## URI vs Disclosure
@@ -537,7 +537,12 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| s == "seed:memory_protocol");
 
-            if seeded && !existing.active_version.content.contains("Graph Memory vs Workspace") {
+            if seeded
+                && !existing
+                    .active_version
+                    .content
+                    .contains("Graph Memory vs Workspace")
+            {
                 let input = UpdateMemoryNodeInput {
                     route_or_node: "system://boot/memory_protocol".to_string(),
                     content: Some(protocol.to_string()),
@@ -617,26 +622,6 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
             .await
     }
 
-    pub async fn recall(
-        &self,
-        owner_id: &str,
-        agent_id: Option<Uuid>,
-        query: &str,
-        limit: usize,
-        domains: &[String],
-    ) -> Result<Vec<MemorySearchHit>, DatabaseError> {
-        self.search(owner_id, agent_id, query, limit, domains).await
-    }
-
-    pub async fn open(
-        &self,
-        owner_id: &str,
-        agent_id: Option<Uuid>,
-        route_or_node: &str,
-    ) -> Result<Option<MemoryNodeDetail>, DatabaseError> {
-        self.get_node(owner_id, agent_id, route_or_node).await
-    }
-
     pub async fn list_timeline(
         &self,
         owner_id: &str,
@@ -688,10 +673,12 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let Some(detail) = self.db.get_memory_node(space.id, route_or_node).await? else {
             return Ok(Vec::new());
         };
-        self.db.list_memory_children(space.id, detail.node.id, limit).await
+        self.db
+            .list_memory_children(space.id, detail.node.id, limit)
+            .await
     }
 
-    pub async fn list_reviews(
+    pub async fn list_review_changesets(
         &self,
         owner_id: &str,
         agent_id: Option<Uuid>,
@@ -801,7 +788,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
 
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_save", Some(title))
+            .create_memory_changeset(space.id, "tool:create_memory", Some(title))
             .await?;
         let detail = self
             .db
@@ -841,7 +828,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let label = input.title.as_deref().unwrap_or(&input.route_or_node);
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_save", Some(label))
+            .create_memory_changeset(space.id, "tool:update_memory", Some(label))
             .await?;
         let mut update = input.clone();
         update.changeset_id = Some(changeset.id);
@@ -853,7 +840,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         Ok((detail, changeset))
     }
 
-    pub async fn alias(
+    pub async fn add_alias(
         &self,
         owner_id: &str,
         agent_id: Option<Uuid>,
@@ -863,7 +850,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let summary = format!("{}://{}", input.domain, input.path);
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_alias", Some(&summary))
+            .create_memory_changeset(space.id, "tool:add_alias", Some(&summary))
             .await?;
         let mut alias = input.clone();
         alias.space_id = space.id;
@@ -876,7 +863,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         Ok((route, changeset))
     }
 
-    pub async fn delete(
+    pub async fn delete_memory(
         &self,
         owner_id: &str,
         agent_id: Option<Uuid>,
@@ -885,7 +872,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
         let mut changeset = self
             .db
-            .create_memory_changeset(space.id, "tool:memory_delete", Some(route_or_node))
+            .create_memory_changeset(space.id, "tool:delete_memory", Some(route_or_node))
             .await?;
         self.db
             .delete_memory_node(space.id, route_or_node, Some(changeset.id))
@@ -897,7 +884,7 @@ Do not hoard. Merge, refine, and prune. Deleting should remove routes (paths), n
         Ok(changeset)
     }
 
-    pub async fn review(
+    pub async fn review_changeset(
         &self,
         owner_id: &str,
         agent_id: Option<Uuid>,
@@ -1197,27 +1184,27 @@ mod tests {
 
         assert!(
             manager
-                .open(OWNER_ID, None, "core://tests/create")
+                .get_node(OWNER_ID, None, "core://tests/create")
                 .await
                 .expect("open created node")
                 .is_some()
         );
 
         manager
-            .review(OWNER_ID, None, changeset.id, "rollback")
+            .review_changeset(OWNER_ID, None, changeset.id, "rollback")
             .await
             .expect("rollback create");
 
         assert!(
             manager
-                .open(OWNER_ID, None, "core://tests/create")
+                .get_node(OWNER_ID, None, "core://tests/create")
                 .await
                 .expect("open rolled back node")
                 .is_none()
         );
         assert!(
             manager
-                .list_reviews(OWNER_ID, None)
+                .list_review_changesets(OWNER_ID, None)
                 .await
                 .expect("list reviews")
                 .iter()
@@ -1230,7 +1217,7 @@ mod tests {
         let (manager, _dir) = test_manager().await;
         let (created, create_changeset) = create_sample_node(&manager, "tests/update").await;
         manager
-            .review(OWNER_ID, None, create_changeset.id, "accept")
+            .review_changeset(OWNER_ID, None, create_changeset.id, "accept")
             .await
             .expect("accept create changeset");
 
@@ -1265,12 +1252,12 @@ mod tests {
         assert_ne!(updated.active_version.id, original_version_id);
 
         manager
-            .review(OWNER_ID, None, update_changeset.id, "rollback")
+            .review_changeset(OWNER_ID, None, update_changeset.id, "rollback")
             .await
             .expect("rollback update");
 
         let restored = manager
-            .open(OWNER_ID, None, "core://tests/update")
+            .get_node(OWNER_ID, None, "core://tests/update")
             .await
             .expect("open restored node")
             .expect("restored node exists");
@@ -1296,14 +1283,14 @@ mod tests {
         let (manager, _dir) = test_manager().await;
         let (created, create_changeset) = create_sample_node(&manager, "tests/alias").await;
         manager
-            .review(OWNER_ID, None, create_changeset.id, "accept")
+            .review_changeset(OWNER_ID, None, create_changeset.id, "accept")
             .await
             .expect("accept create changeset");
 
         let primary_route = created.primary_route.as_ref().expect("primary route").uri();
 
         let (alias_route, alias_changeset) = manager
-            .alias(
+            .add_alias(
                 OWNER_ID,
                 None,
                 &CreateMemoryAliasInput {
@@ -1323,27 +1310,27 @@ mod tests {
         assert_eq!(alias_route.uri(), "lookup://sample-memory");
         assert!(
             manager
-                .open(OWNER_ID, None, &alias_route.uri())
+                .get_node(OWNER_ID, None, &alias_route.uri())
                 .await
                 .expect("open alias")
                 .is_some()
         );
 
         manager
-            .review(OWNER_ID, None, alias_changeset.id, "rollback")
+            .review_changeset(OWNER_ID, None, alias_changeset.id, "rollback")
             .await
             .expect("rollback alias");
 
         assert!(
             manager
-                .open(OWNER_ID, None, &alias_route.uri())
+                .get_node(OWNER_ID, None, &alias_route.uri())
                 .await
                 .expect("open rolled back alias")
                 .is_none()
         );
         assert!(
             manager
-                .open(OWNER_ID, None, &primary_route)
+                .get_node(OWNER_ID, None, &primary_route)
                 .await
                 .expect("open primary route")
                 .is_some()
@@ -1355,7 +1342,7 @@ mod tests {
         let (manager, _dir) = test_manager().await;
         let (created, create_changeset) = create_sample_node(&manager, "tests/delete").await;
         manager
-            .review(OWNER_ID, None, create_changeset.id, "accept")
+            .review_changeset(OWNER_ID, None, create_changeset.id, "accept")
             .await
             .expect("accept create changeset");
 
@@ -1363,25 +1350,25 @@ mod tests {
         let version_id = created.active_version.id;
 
         let delete_changeset = manager
-            .delete(OWNER_ID, None, &primary_route)
+            .delete_memory(OWNER_ID, None, &primary_route)
             .await
             .expect("delete primary route");
 
         assert!(
             manager
-                .open(OWNER_ID, None, &primary_route)
+                .get_node(OWNER_ID, None, &primary_route)
                 .await
                 .expect("open deleted route")
                 .is_none()
         );
 
         manager
-            .review(OWNER_ID, None, delete_changeset.id, "rollback")
+            .review_changeset(OWNER_ID, None, delete_changeset.id, "rollback")
             .await
             .expect("rollback delete");
 
         let restored = manager
-            .open(OWNER_ID, None, &primary_route)
+            .get_node(OWNER_ID, None, &primary_route)
             .await
             .expect("open restored route")
             .expect("restored route exists");

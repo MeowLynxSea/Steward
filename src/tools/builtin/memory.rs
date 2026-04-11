@@ -368,7 +368,7 @@ impl Tool for WorkspaceWriteTool {
         "Write to mounted workspace files via `workspace://` URIs. \
          Use this only for real mounted project files such as `workspace://<mount-id>/src/main.rs`. \
          Do NOT use this for Steward memory, episodic recall, heartbeat procedures, or legacy \
-         memory-file paths like MEMORY.md, HEARTBEAT.md, or daily/*.md; use memory_save for \
+         memory-file paths like MEMORY.md, HEARTBEAT.md, or daily/*.md; use create_memory/update_memory for \
          agent memory. Use write_file for raw local filesystem paths."
     }
 
@@ -425,7 +425,7 @@ impl Tool for WorkspaceWriteTool {
         if is_legacy_memory_target(target) {
             return Err(ToolError::InvalidParameters(format!(
                 "'{}' is a legacy workspace memory target and is no longer Steward's runtime memory source. \
-                 Use memory_save for durable/episodic/procedural graph memory.",
+                 Use create_memory or update_memory for durable/episodic/procedural graph memory.",
                 target
             )));
         }
@@ -433,7 +433,7 @@ impl Tool for WorkspaceWriteTool {
         if !is_workspace_mount_uri(target) {
             return Err(ToolError::InvalidParameters(format!(
                 "'{}' is not a mounted workspace URI. workspace_write only operates on mounted files via `workspace://<mount-id>/...`. \
-                 Use write_file for raw local filesystem writes, or memory_save for Steward memory.",
+                 Use write_file for raw local filesystem writes, or create_memory/update_memory for Steward memory.",
                 target
             )));
         }
@@ -545,7 +545,7 @@ impl Tool for WorkspaceReadTool {
     fn description(&self) -> &str {
         "Read a mounted workspace file via a `workspace://` URI. \
          Use this to read files shown by workspace_tree. NOT for local filesystem files \
-         (use read_file for those) and NOT for Steward memory (use memory_open or memory_recall). \
+         (use read_file for those) and NOT for Steward memory (use read_memory or search_memory). \
          Do not pass absolute paths like '/Users/...' or 'C:\\...'."
     }
 
@@ -582,7 +582,7 @@ impl Tool for WorkspaceReadTool {
         if !is_workspace_mount_uri(path) {
             return Err(ToolError::InvalidParameters(format!(
                 "'{}' is not a mounted workspace URI. workspace_read only operates on `workspace://<mount-id>/...` paths. \
-                 Use read_file for raw local filesystem access, or memory_open for graph-native Steward memory.",
+                 Use read_file for raw local filesystem access, or read_memory for graph-native Steward memory.",
                 path
             )));
         }

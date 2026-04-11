@@ -16,14 +16,13 @@ use crate::tools::builder::{
     BuildSoftwareTool, BuilderConfig, LlmSoftwareBuilder, SoftwareBuilder,
 };
 use crate::tools::builtin::{
-    ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool, EchoTool,
-    ExtensionInfoTool, HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool,
-    ListDirTool, ListJobsTool, MemoryAliasTool, MemoryDeleteTool, MemoryOpenTool,
-    MemoryRecallTool, MemoryReviewTool, MemorySaveTool, MoveFileTool, ReadFileTool, ShellTool,
-    SkillInstallTool, SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool,
-    ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool, ToolRemoveTool,
-    ToolSearchTool, ToolUpgradeTool, WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool,
-    WorkspaceWriteTool, WriteFileTool,
+    AddAliasTool, ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool,
+    CreateMemoryTool, DeleteMemoryTool, EchoTool, ExtensionInfoTool, HttpTool, JobEventsTool,
+    JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool, MoveFileTool, ReadFileTool,
+    ReadMemoryTool, SearchMemoryTool, ShellTool, SkillInstallTool, SkillListTool, SkillRemoveTool,
+    SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool, ToolInstallTool, ToolListTool,
+    ToolRemoveTool, ToolSearchTool, ToolUpgradeTool, UpdateMemoryTool, WorkspaceReadTool,
+    WorkspaceSearchTool, WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -52,12 +51,12 @@ const PROTECTED_TOOL_NAMES: &[&str] = &[
     "workspace_read",
     "workspace_tree",
     "bootstrap_complete",
-    "memory_recall",
-    "memory_open",
-    "memory_save",
-    "memory_alias",
-    "memory_delete",
-    "memory_review",
+    "search_memory",
+    "read_memory",
+    "create_memory",
+    "update_memory",
+    "delete_memory",
+    "add_alias",
     "create_job",
     "list_jobs",
     "job_status",
@@ -368,12 +367,12 @@ impl ToolRegistry {
 
     /// Register graph-native memory tools backed by the native memory manager.
     pub fn register_graph_memory_tools(&self, memory: Arc<crate::memory::MemoryManager>) {
-        self.register_sync(Arc::new(MemoryRecallTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryOpenTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemorySaveTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryAliasTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryDeleteTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(MemoryReviewTool::new(memory)));
+        self.register_sync(Arc::new(SearchMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ReadMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(CreateMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(UpdateMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(DeleteMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(AddAliasTool::new(memory)));
 
         tracing::debug!("Registered 6 graph-native memory tools");
     }
@@ -1060,7 +1059,7 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn memory_save_tool_info_schema_matches_registered_input_schema() {
+    async fn create_memory_tool_info_schema_matches_registered_input_schema() {
         let harness = TestHarnessBuilder::new().build().await;
         let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
 
@@ -1070,20 +1069,20 @@ mod tests {
         let defs = registry.tool_definitions().await;
         let def = defs
             .iter()
-            .find(|tool| tool.name == "memory_save")
-            .expect("memory_save should be registered");
+            .find(|tool| tool.name == "create_memory")
+            .expect("create_memory should be registered");
 
         let tool_info = ToolInfoTool::new(Arc::downgrade(&registry));
         let result = tool_info
             .execute(
                 serde_json::json!({
-                    "name": "memory_save",
+                    "name": "create_memory",
                     "detail": "schema"
                 }),
                 &crate::context::JobContext::default(),
             )
             .await
-            .expect("tool_info should describe memory_save");
+            .expect("tool_info should describe create_memory");
 
         assert_eq!(
             result.result["schema"], def.parameters,

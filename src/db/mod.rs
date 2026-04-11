@@ -31,9 +31,9 @@ use crate::history::{
     LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow,
 };
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryNodeDetail, MemorySearchHit,
-    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput,
-    UpdateMemoryNodeInput, MemoryIndexEntry, MemoryGlossaryEntry, MemoryChildEntry,
+    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry,
+    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNodeDetail, MemorySearchHit, MemorySidebarSection,
+    MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput, UpdateMemoryNodeInput,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;

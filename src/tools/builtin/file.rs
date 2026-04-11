@@ -221,7 +221,7 @@ impl Tool for WriteFileTool {
         if is_legacy_memory_workspace_path(path_str) {
             return Err(ToolError::InvalidParameters(format!(
                 "'{}' is a legacy workspace memory path and should not be edited as a file. \
-                 Use memory_save so the change lands in Steward's native memory graph instead of daily/*.md, MEMORY.md, or HEARTBEAT.md.",
+                 Use create_memory or update_memory so the change lands in Steward's native memory graph instead of daily/*.md, MEMORY.md, or HEARTBEAT.md.",
                 path_str
             )));
         }

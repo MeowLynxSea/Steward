@@ -47,11 +47,23 @@ async fn system_prompt_uses_primary_scope_identity() {
 
     // Seed Alice's identity files in her own scope
     seed(&db, "alice", paths::SOUL, "Alice is kind and curious.").await;
-    seed(&db, "alice", paths::TOOLS, "Alice prefers concise tool usage notes.").await;
+    seed(
+        &db,
+        "alice",
+        paths::TOOLS,
+        "Alice prefers concise tool usage notes.",
+    )
+    .await;
 
     // Seed Bob's identity files in his scope
     seed(&db, "bob", paths::SOUL, "Bob is analytical and precise.").await;
-    seed(&db, "bob", paths::TOOLS, "Bob prefers ocean-focused tool notes.").await;
+    seed(
+        &db,
+        "bob",
+        paths::TOOLS,
+        "Bob prefers ocean-focused tool notes.",
+    )
+    .await;
 
     // Create Alice's workspace WITH multi-scope reads including Bob
     let ws = Workspace::new_with_db("alice", db.clone())
@@ -91,7 +103,13 @@ async fn missing_primary_identity_does_not_fallback_to_other_scope() {
 
     // Only seed Bob's identity — Alice has no identity files
     seed(&db, "bob", paths::SOUL, "Bob is analytical and precise.").await;
-    seed(&db, "bob", paths::TOOLS, "Bob prefers ocean-focused tool notes.").await;
+    seed(
+        &db,
+        "bob",
+        paths::TOOLS,
+        "Bob prefers ocean-focused tool notes.",
+    )
+    .await;
 
     // Create Alice's workspace with multi-scope reads including Bob
     let ws = Workspace::new_with_db("alice", db.clone())
