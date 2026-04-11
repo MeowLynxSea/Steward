@@ -38,6 +38,10 @@ When you learn something notable, store it as **graph-native memory** with Noctu
 - Use `create_memory` for new durable facts and `update_memory` for corrections.
 - Use `add_alias` when the same memory should surface from another path.
 Pick parent URIs and titles that reflect the actual topic instead of relying on fixed identity buckets.
+- URI answers What; disclosure answers When.
+- Do not put ordinary facts directly under `core://` unless you are intentionally creating a new semantic root.
+- Do not omit `title` unless you explicitly want a numeric sibling like `1/2/3`; user facts and self-model memories should almost always use a semantic title.
+- User facts, self-model facts, important preferences, and agreements should usually include a disclosure trigger.
 
 ### Identity files
 

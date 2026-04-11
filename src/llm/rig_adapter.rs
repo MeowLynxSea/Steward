@@ -49,6 +49,8 @@ pub struct RigAdapter<M: CompletionModel> {
     /// Parameter names that this provider does not support (e.g., `"temperature"`).
     /// These are stripped from requests before sending to avoid 400 errors.
     unsupported_params: HashSet<String>,
+    /// Whether tool schemas should be rewritten into OpenAI-style strict mode.
+    strict_tool_schema: bool,
 }
 
 impl<M: CompletionModel> RigAdapter<M> {
@@ -64,6 +66,7 @@ impl<M: CompletionModel> RigAdapter<M> {
             output_cost,
             cache_retention: CacheRetention::None,
             unsupported_params: HashSet::new(),
+            strict_tool_schema: false,
         }
     }
 
@@ -99,6 +102,16 @@ impl<M: CompletionModel> RigAdapter<M> {
     /// Supported parameter names: `"temperature"`, `"max_tokens"`, `"stop_sequences"`.
     pub fn with_unsupported_params(mut self, params: Vec<String>) -> Self {
         self.unsupported_params = params.into_iter().collect();
+        self
+    }
+
+    /// Enable or disable OpenAI-style strict tool schema normalization.
+    ///
+    /// Anthropic and other non-OpenAI backends should generally keep the
+    /// original schema so optional fields remain truly optional instead of
+    /// becoming required-but-nullable.
+    pub fn with_strict_tool_schema(mut self, strict: bool) -> Self {
+        self.strict_tool_schema = strict;
         self
     }
 
@@ -461,13 +474,17 @@ fn normalized_tool_call_id(raw: Option<&str>, seed: usize) -> String {
 ///
 /// Applies OpenAI strict-mode schema normalization to ensure all tool
 /// parameter schemas comply with OpenAI's function calling requirements.
-fn convert_tools(tools: &[IronToolDefinition]) -> Vec<RigToolDefinition> {
+fn convert_tools(tools: &[IronToolDefinition], strict_tool_schema: bool) -> Vec<RigToolDefinition> {
     tools
         .iter()
         .map(|t| RigToolDefinition {
             name: t.name.clone(),
             description: t.description.clone(),
-            parameters: normalize_schema_strict(&t.parameters),
+            parameters: if strict_tool_schema {
+                normalize_schema_strict(&t.parameters)
+            } else {
+                t.parameters.clone()
+            },
         })
         .collect()
 }
@@ -799,7 +816,7 @@ where
         let mut messages = request.messages;
         crate::llm::provider::sanitize_tool_messages(&mut messages);
         let (preamble, history) = convert_messages(&messages);
-        let tools = convert_tools(&request.tools);
+        let tools = convert_tools(&request.tools, self.strict_tool_schema);
         let tool_choice = convert_tool_choice(request.tool_choice.as_deref());
 
         let mut rig_req = build_rig_request(
@@ -1100,10 +1117,69 @@ mod tests {
                 }
             }),
         }];
-        let rig_tools = convert_tools(&tools);
+        let rig_tools = convert_tools(&tools, true);
         assert_eq!(rig_tools.len(), 1);
         assert_eq!(rig_tools[0].name, "search");
         assert_eq!(rig_tools[0].description, "Search the web");
+    }
+
+    #[test]
+    fn test_convert_tools_keeps_optional_fields_for_non_strict_backends() {
+        let tools = vec![IronToolDefinition {
+            name: "create_memory".to_string(),
+            description: "Create memory".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "parent_uri": { "type": "string" },
+                    "content": { "type": "string" },
+                    "priority": { "type": "integer" },
+                    "title": { "type": "string" },
+                    "disclosure": { "type": "string" }
+                },
+                "required": ["parent_uri", "content", "priority"]
+            }),
+        }];
+        let rig_tools = convert_tools(&tools, false);
+        assert_eq!(
+            rig_tools[0].parameters["required"],
+            serde_json::json!(["parent_uri", "content", "priority"])
+        );
+        assert_eq!(
+            rig_tools[0].parameters["properties"]["title"]["type"],
+            "string"
+        );
+        assert_eq!(
+            rig_tools[0].parameters["properties"]["disclosure"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn test_convert_tools_makes_optional_fields_nullable_for_strict_backends() {
+        let tools = vec![IronToolDefinition {
+            name: "create_memory".to_string(),
+            description: "Create memory".to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "parent_uri": { "type": "string" },
+                    "content": { "type": "string" },
+                    "priority": { "type": "integer" },
+                    "title": { "type": "string" }
+                },
+                "required": ["parent_uri", "content", "priority"]
+            }),
+        }];
+        let rig_tools = convert_tools(&tools, true);
+        assert_eq!(
+            rig_tools[0].parameters["required"],
+            serde_json::json!(["content", "parent_uri", "priority", "title"])
+        );
+        assert_eq!(
+            rig_tools[0].parameters["properties"]["title"]["type"],
+            serde_json::json!(["string", "null"])
+        );
     }
 
     #[test]

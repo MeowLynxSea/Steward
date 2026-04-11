@@ -10,6 +10,7 @@ use crate::context::JobContext;
 use crate::memory::{
     CreateMemoryAliasInput, MemoryManager, MemoryNodeDetail, MemoryNodeKind, UpdateMemoryNodeInput,
 };
+use crate::tools::tool::ToolDiscoverySummary;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
 
 const DEFAULT_DOMAIN: &str = "core";
@@ -173,19 +174,45 @@ async fn next_numeric_child_name(
 fn create_memory_examples() -> Vec<serde_json::Value> {
     vec![
         json!({
-            "parent_uri": "core://",
-            "content": "The user's name is 梦凌汐.",
+            "parent_uri": "core://user",
+            "content": "模板：用户名字是<user_name>。",
             "priority": 0,
-            "title": "user_name",
-            "disclosure": "When I need to address the user correctly"
+            "title": "name",
+            "disclosure": "模板：当我需要正确称呼用户时"
         }),
         json!({
-            "parent_uri": "core://agent",
-            "content": "Keep status updates concise and high-signal.",
+            "parent_uri": "core://assistant/identity",
+            "content": "模板：我的名字是<assistant_name>。",
+            "priority": 0,
+            "title": "name",
+            "disclosure": "模板：当用户询问我是谁，或我需要自我介绍时"
+        }),
+        json!({
+            "parent_uri": "core://assistant/style",
+            "content": "模板：状态更新应简洁且高信息密度。",
             "priority": 1,
-            "title": "status_updates"
+            "title": "status_updates",
+            "disclosure": "模板：当我准备发送进度更新时"
         }),
     ]
+}
+
+fn create_memory_tool_summary() -> ToolDiscoverySummary {
+    ToolDiscoverySummary {
+        always_required: vec!["parent_uri".into(), "content".into(), "priority".into()],
+        conditional_requirements: vec![
+            "普通 durable memory 通常也应该提供 title；只有你明确想要按 1/2/3... 编号的顺序子节点时，才省略 title。".into(),
+            "用户资料、自我设定、重要教训、偏好和约定通常也应该提供 disclosure，用来写明什么时候该想起它。".into(),
+        ],
+        notes: vec![
+            "URI 负责 What，disclosure 负责 When。".into(),
+            "除非你是在创建新的语义根节点，否则不要把普通事实直接挂在 core:// 根下。先选一个表达主题联想的 parent_uri。".into(),
+            "如果你不确定该挂在哪个父节点，先用 search_memory 找现有概念，不要直接写进 core://。".into(),
+            "不要用 logs、misc、history 这类容器名；父节点和 title 都应该表达实际概念。".into(),
+            "以下 examples 都只是模板占位，不是当前对话里的真实事实，绝不能把示例值当成已知信息。".into(),
+        ],
+        examples: create_memory_examples(),
+    }
 }
 
 pub struct SearchMemoryTool {
@@ -448,7 +475,7 @@ impl Tool for CreateMemoryTool {
     }
 
     fn description(&self) -> &str {
-        "在指定父节点下创建新记忆。父节点要强调联想相关性（What/主题），不要使用 logs、misc、history 一类无意义的容器。"
+        "在指定父节点下创建新记忆。通常应给出语义化的 parent_uri、title 和 disclosure；只有在你明确想要数字序号子节点时才省略 title。父节点要强调联想相关性（What/主题），不要使用 logs、misc、history 一类无意义的容器。"
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -458,13 +485,17 @@ impl Tool for CreateMemoryTool {
                 "parent_uri": { "type": "string", "description": "父节点 URI。用 core:// 表示域根。父节点应该表达主题联想，而不是时间桶或垃圾桶。" },
                 "content": { "type": "string" },
                 "priority": { "type": "integer", "description": "优先级（0=最高，数字越小越优先）。" },
-                "title": { "type": "string", "description": "可选路径名称（仅限字母、数字、'_'、'-'）。不填则自动分配序号。" },
-                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。" }
+                "title": { "type": "string", "description": "可选路径名称（仅限字母、数字、'_'、'-'）。普通 durable memory 几乎总该填写；不填则自动分配序号。" },
+                "disclosure": { "type": "string", "description": "触发条件：描述什么时候该想起这条记忆。用户资料、自我设定、约定、偏好和重要教训通常都应该填写。" }
             },
             "required": ["parent_uri", "content", "priority"],
             "additionalProperties": false,
             "examples": create_memory_examples()
         })
+    }
+
+    fn discovery_summary(&self) -> Option<ToolDiscoverySummary> {
+        Some(create_memory_tool_summary())
     }
 
     async fn execute(
@@ -1056,6 +1087,68 @@ mod tests {
             .await
             .expect_err("duplicate create should fail");
         assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn create_memory_auto_scaffolds_missing_parent_chain() {
+        let harness = TestHarnessBuilder::new().build().await;
+        let memory = Arc::new(MemoryManager::new(Arc::clone(&harness.db)));
+        let create = CreateMemoryTool::new(Arc::clone(&memory));
+        let ctx = JobContext::with_user("user1", "thread", "desktop");
+
+        create
+            .execute(
+                json!({
+                    "parent_uri": "core://user/profile",
+                    "content": "模板：用户名字是<user_name>。",
+                    "priority": 0,
+                    "title": "name",
+                    "disclosure": "模板：当我需要正确称呼用户时"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("create with missing semantic parents should succeed");
+
+        let user_root = memory
+            .get_node("user1", None, "core://user")
+            .await
+            .expect("open scaffolded user root")
+            .expect("user root should exist");
+        assert_eq!(user_root.node.kind, MemoryNodeKind::Curated);
+        assert_eq!(
+            user_root
+                .node
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str()),
+            Some("tool:auto_scaffold_parent")
+        );
+
+        let profile_root = memory
+            .get_node("user1", None, "core://user/profile")
+            .await
+            .expect("open scaffolded profile root")
+            .expect("profile root should exist");
+        assert_eq!(profile_root.node.kind, MemoryNodeKind::Curated);
+
+        let detail = memory
+            .get_node("user1", None, "core://user/profile/name")
+            .await
+            .expect("open final leaf")
+            .expect("leaf should exist");
+        assert!(detail.active_version.content.contains("<user_name>"));
+    }
+
+    #[test]
+    fn create_memory_examples_use_placeholders_not_real_facts() {
+        let rendered =
+            serde_json::to_string(&create_memory_examples()).expect("serialize examples");
+        assert!(!rendered.contains("梦凌汐"));
+        assert!(!rendered.contains("钦灵"));
+        assert!(rendered.contains("<user_name>"));
+        assert!(rendered.contains("<assistant_name>"));
     }
 
     #[cfg(feature = "libsql")]

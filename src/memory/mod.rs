@@ -720,6 +720,63 @@ impl MemoryManager {
         Ok(detail)
     }
 
+    async fn ensure_parent_path_chain(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        space_id: Uuid,
+        domain: &str,
+        parent_path: &str,
+        changeset_id: Uuid,
+    ) -> Result<Option<Uuid>, DatabaseError> {
+        if parent_path.trim().is_empty() {
+            return Ok(None);
+        }
+
+        let mut current_path = String::new();
+        let mut current_parent_node_id = None;
+
+        for segment in parent_path.split('/').filter(|segment| !segment.is_empty()) {
+            if current_path.is_empty() {
+                current_path = segment.to_string();
+            } else {
+                current_path = format!("{current_path}/{segment}");
+            }
+
+            let current_uri = format!("{domain}://{current_path}");
+            if let Some(existing) = self.get_node(owner_id, agent_id, &current_uri).await? {
+                current_parent_node_id = Some(existing.node.id);
+                continue;
+            }
+
+            let detail = self
+                .db
+                .create_memory_node(&NewMemoryNodeInput {
+                    space_id,
+                    parent_node_id: current_parent_node_id,
+                    domain: domain.to_string(),
+                    path: current_path.clone(),
+                    title: segment.to_string(),
+                    kind: MemoryNodeKind::Curated,
+                    content: format!("Semantic parent node for memories under `{current_uri}`."),
+                    relation_kind: MemoryRelationKind::Contains,
+                    visibility: MemoryVisibility::Private,
+                    priority: 100,
+                    trigger_text: None,
+                    metadata: serde_json::json!({
+                        "source": "tool:auto_scaffold_parent",
+                        "scaffold": true,
+                    }),
+                    keywords: Vec::new(),
+                    changeset_id: Some(changeset_id),
+                })
+                .await?;
+            current_parent_node_id = Some(detail.node.id);
+        }
+
+        Ok(current_parent_node_id)
+    }
+
     pub async fn create(
         &self,
         owner_id: &str,
@@ -737,6 +794,10 @@ impl MemoryManager {
         metadata: serde_json::Value,
     ) -> Result<(MemoryNodeDetail, MemoryChangeSet), DatabaseError> {
         let space = self.ensure_primary_space(owner_id, agent_id).await?;
+        let mut changeset = self
+            .db
+            .create_memory_changeset(space.id, "tool:create_memory", Some(title))
+            .await?;
         let parent_node_id = if let Some(parent_route) = parent_route {
             let is_domain_root = parent_route
                 .split_once("://")
@@ -744,21 +805,26 @@ impl MemoryManager {
             if is_domain_root {
                 None
             } else {
-                let parent = self.get_node(owner_id, agent_id, parent_route).await?;
-                let parent = parent.ok_or_else(|| DatabaseError::NotFound {
-                    entity: "memory_node".to_string(),
-                    id: parent_route.to_string(),
-                })?;
-                Some(parent.node.id)
+                let (parent_domain, parent_path) = parent_route
+                    .split_once("://")
+                    .map(|(domain, path)| (domain, path.trim_matches('/')))
+                    .ok_or_else(|| DatabaseError::NotFound {
+                        entity: "memory_node".to_string(),
+                        id: parent_route.to_string(),
+                    })?;
+                self.ensure_parent_path_chain(
+                    owner_id,
+                    agent_id,
+                    space.id,
+                    parent_domain,
+                    parent_path,
+                    changeset.id,
+                )
+                .await?
             }
         } else {
             None
         };
-
-        let mut changeset = self
-            .db
-            .create_memory_changeset(space.id, "tool:create_memory", Some(title))
-            .await?;
         let detail = self
             .db
             .create_memory_node(&NewMemoryNodeInput {

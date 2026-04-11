@@ -152,6 +152,7 @@ fn create_openai_compat_from_registry(
     if config.provider_id == "openai" && matches!(config.api_format, OpenAiApiFormat::Responses) {
         Ok(Arc::new(
             RigAdapter::new(client.completion_model(&config.model), &config.model)
+                .with_strict_tool_schema(true)
                 .with_unsupported_params(config.unsupported_params.clone()),
         ))
     } else {
@@ -160,6 +161,7 @@ fn create_openai_compat_from_registry(
                 client.completions_api().completion_model(&config.model),
                 &config.model,
             )
+            .with_strict_tool_schema(true)
             .with_unsupported_params(config.unsupported_params.clone()),
         ))
     }
@@ -204,6 +206,7 @@ fn create_anthropic_from_registry(
     Ok(Arc::new(
         RigAdapter::new(client.completion_model(&config.model), &config.model)
             .with_cache_retention(config.cache_retention)
+            .with_strict_tool_schema(false)
             .with_unsupported_params(config.unsupported_params.clone()),
     ))
 }
@@ -225,6 +228,7 @@ fn create_ollama_from_registry(
 
     Ok(Arc::new(
         RigAdapter::new(client.completion_model(&config.model), &config.model)
+            .with_strict_tool_schema(false)
             .with_unsupported_params(config.unsupported_params.clone()),
     ))
 }
