@@ -47,7 +47,7 @@
   {:else}
     <div class="sidebar-brand">
       <div class="brand-icon">
-        <StewardMark size={20} />
+        <StewardMark size={32} />
       </div>
       <span class="brand-name">Steward</span>
     </div>
@@ -174,8 +174,8 @@
   }
 
   .brand-icon {
-    width: 32px;
-    height: 32px;
+    width: 46px;
+    height: 46px;
     display: flex;
     align-items: center;
     justify-content: center;
