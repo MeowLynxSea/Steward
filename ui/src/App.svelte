@@ -16,11 +16,6 @@
   import { workbenchStore } from "./lib/stores/workbench.svelte";
   import { listenForFolderDrops, pickDirectory } from "./lib/tauri";
   import type {
-    MemoryChangeSet,
-    MemoryNodeDetail,
-    MemorySearchHit,
-    MemorySidebarSection,
-    MemoryTimelineEntry,
     TaskRecord,
     WorkspaceSearchResult
   } from "./lib/types";
@@ -48,12 +43,6 @@
   let rightSidebarCollapsed = $state(false);
   let showSettings = $state(false);
   let showMountModal = $state(false);
-  let memorySections = $state<MemorySidebarSection[]>([]);
-  let memorySearchResults = $state<MemorySearchHit[]>([]);
-  let memorySelectedNode = $state<MemoryNodeDetail | null>(null);
-  let memoryTimeline = $state<MemoryTimelineEntry[]>([]);
-  let memoryReviews = $state<MemoryChangeSet[]>([]);
-  let memoryLoading = $state(false);
 
   function openSettings() {
     showSettings = true;
@@ -77,29 +66,12 @@
   let selectedMountPath = $state("");
   let selectingMountPath = $state(false);
 
-  async function loadMemoryData() {
-    memoryLoading = true;
-    try {
-      const [sidebarResponse, timelineResponse, reviewsResponse] = await Promise.all([
-        apiClient.listMemorySidebar(),
-        apiClient.listMemoryTimeline(),
-        apiClient.listMemoryReviews()
-      ]);
-      memorySections = sidebarResponse.sections;
-      memoryTimeline = timelineResponse.entries;
-      memoryReviews = reviewsResponse.reviews;
-    } finally {
-      memoryLoading = false;
-    }
-  }
-
   async function loadWorkspaceData() {
     await Promise.all([
       sessionsStore.fetchList(),
       tasksStore.fetch(),
       workspaceStore.fetch(),
-      workbenchStore.fetch(),
-      loadMemoryData()
+      workbenchStore.fetch()
     ]);
 
     if (!sessionsStore.activeId && sessionsStore.list.length > 0) {
@@ -189,42 +161,6 @@
   function handleUseWorkspaceResult(result: WorkspaceSearchResult) {
     const snippet = `Use workspace context from ${result.document_path}:\n${result.content}`;
     console.log("Using workspace result:", snippet);
-  }
-
-  function handleUseMemoryResult(result: MemorySearchHit) {
-    const snippet = `Use memory context from ${result.uri}:\n${result.content_snippet}`;
-    console.log("Using memory result:", snippet);
-  }
-
-  async function handleOpenMemory(key: string) {
-    const response = await apiClient.getMemoryNode(key);
-    memorySelectedNode = response.detail;
-  }
-
-  async function handleSearchMemory(query: string) {
-    if (!query.trim()) {
-      memorySearchResults = [];
-      return;
-    }
-    const response = await apiClient.searchMemoryGraph(query, 12);
-    memorySearchResults = response.results;
-  }
-
-  async function handleRefreshMemory() {
-    await loadMemoryData();
-    if (memorySelectedNode?.primary_route) {
-      await handleOpenMemory(
-        `${memorySelectedNode.primary_route.domain}://${memorySelectedNode.primary_route.path}`
-      );
-    }
-  }
-
-  async function handleApplyMemoryReview(id: string, action: "accept" | "rollback") {
-    const response =
-      action === "rollback"
-        ? await apiClient.rollbackMemoryChangeset(id)
-        : await apiClient.applyMemoryReview(id, action);
-    memoryReviews = response.reviews;
   }
 
   function openMountModal() {
@@ -354,24 +290,14 @@
       </div>
 
       <RightSidebar
-        currentPath={workspaceStore.path}
         entries={workspaceStore.entries}
         searchResults={workspaceStore.searchResults}
         searchQuery={workspaceStore.searchQuery}
-        memorySections={memorySections}
-        memorySearchResults={memorySearchResults}
-        memorySelectedNode={memorySelectedNode}
-        memoryTimeline={memoryTimeline}
-        memoryReviews={memoryReviews}
-        memoryLoading={memoryLoading}
         selectedMount={workspaceStore.selectedMount}
         mountDiff={workspaceStore.mountDiff}
         collapsed={rightSidebarCollapsed}
         onSearch={(query) => void workspaceStore.search(query)}
-        onSearchMemory={(query) => void handleSearchMemory(query)}
         onRefresh={() => void workspaceStore.refresh()}
-        onRefreshMemory={() => void handleRefreshMemory()}
-        onNavigate={(path) => void workspaceStore.fetch(path)}
         onRequestMount={openMountModal}
         onOpenEntry={(entry) => {
           if (entry.kind === "mount" && entry.path) {
@@ -387,9 +313,6 @@
         onResolveConflict={(mountId, path, resolution, renamedCopyPath, mergedContent) =>
           void workspaceStore.resolveConflict(mountId, path, resolution, renamedCopyPath, mergedContent)}
         onUseResult={handleUseWorkspaceResult}
-        onUseMemoryResult={handleUseMemoryResult}
-        onOpenMemory={(key) => void handleOpenMemory(key)}
-        onApplyMemoryReview={(id, action) => void handleApplyMemoryReview(id, action)}
       />
     </div>
 

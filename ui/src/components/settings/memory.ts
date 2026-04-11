@@ -3,7 +3,7 @@ import type {
   MemorySidebarItem
 } from "../../lib/types";
 
-export type MemoryPanelMode = "node" | "search" | "reviews";
+export type MemoryPanelMode = "node" | "search";
 
 export interface MemoryNavItem {
   key: string;

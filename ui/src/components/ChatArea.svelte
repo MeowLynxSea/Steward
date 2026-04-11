@@ -1,12 +1,9 @@
 <script lang="ts">
   import {
     ChevronRight,
-    Circle,
     Loader,
-    Moon,
     Plus,
     Shield,
-    Sun,
     Wrench,
     Zap,
     Image,
@@ -21,7 +18,6 @@
     TimelineToolCall
   } from "../lib/types";
   import { renderMarkdown } from "../lib/markdown";
-  import { themeStore } from "../lib/stores/theme.svelte";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { onDestroy } from "svelte";
 
@@ -86,7 +82,6 @@
       streaming.images.length > 0
     );
   });
-  const darkMode = $derived(themeStore.mode === "dark");
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
     const messages = session?.thread_messages ?? [];
     const entries: DisplayEntry[] = [];
@@ -240,10 +235,6 @@
       textareaRef.style.height = "auto";
       textareaRef.style.height = `${Math.min(textareaRef.scrollHeight, 200)}px`;
     }
-  }
-
-  function toggleTheme() {
-    themeStore.toggle();
   }
 
   function normalizeThinkingTranscript(value: string) {
@@ -514,27 +505,6 @@
 </script>
 
 <div class="chat-area">
-  <!-- Top Navigation Bar -->
-  <div class="chat-topbar">
-    <div class="topbar-left">
-      {#if session}
-        <span class="session-title">{session.session.title}</span>
-      {/if}
-    </div>
-    <div class="topbar-right">
-      <button class="topbar-icon" onclick={toggleTheme} aria-label={darkMode ? "切换到亮色模式" : "切换到暗色模式"}>
-        {#if darkMode}
-          <Moon size={16} strokeWidth={2} />
-        {:else}
-          <Sun size={16} strokeWidth={2} />
-        {/if}
-      </button>
-      <span class="status-indicator">
-        <Circle size={8} fill="#4ade80" strokeWidth={0} />
-      </span>
-    </div>
-  </div>
-
   <!-- Messages Area -->
   {#if loading}
     <div class="loading-state">
@@ -859,145 +829,6 @@
     min-height: 0;
     background: var(--bg-primary);
     height: 100%;
-  }
-
-  /* Top Navigation */
-  .chat-topbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 24px;
-    border-bottom: 1px solid var(--border-subtle);
-    background: var(--bg-primary);
-    flex-shrink: 0;
-  }
-
-  .topbar-left {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-  }
-
-  .topbar-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
-  .model-selector {
-    position: relative;
-  }
-
-  .model-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 12px;
-    border-radius: 20px;
-    background: var(--bg-elevated);
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 500;
-    border: none;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-
-  .model-badge:hover {
-    background: var(--bg-active);
-  }
-
-  .model-dropdown {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    min-width: 240px;
-    background: var(--bg-surface);
-    border-radius: 14px;
-    box-shadow: var(--shadow-dropdown);
-    padding: 6px;
-    z-index: 50;
-    animation: dropdownIn 0.15s ease;
-  }
-
-  @keyframes dropdownIn {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .dropdown-header {
-    padding: 8px 12px 6px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-  }
-
-  .dropdown-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    padding: 8px 12px;
-    border-radius: 10px;
-    background: transparent;
-    border: none;
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 0.12s ease;
-    text-align: left;
-  }
-
-  .dropdown-item:hover {
-    background: var(--bg-hover);
-  }
-
-  .dropdown-item.active {
-    background: var(--bg-active);
-    font-weight: 500;
-  }
-
-  .dropdown-item.disabled {
-    cursor: default;
-    opacity: 0.8;
-  }
-
-  .dropdown-hint {
-    padding: 6px 12px 8px;
-    font-size: 12px;
-    color: var(--text-muted);
-  }
-
-  .session-title {
-    font-size: 14px;
-    color: var(--text-primary);
-    font-weight: 500;
-  }
-
-  .topbar-icon {
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    background: transparent;
-    border: none;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    transition: background 0.15s ease;
-  }
-
-  .topbar-icon:hover {
-    background: var(--bg-hover);
-  }
-
-  .status-indicator {
-    display: inline-flex;
-    align-items: center;
-    color: var(--accent-green);
   }
 
   /* Loading */

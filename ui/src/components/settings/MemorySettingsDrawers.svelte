@@ -2,14 +2,11 @@
   import {
     ChevronLeft,
     ChevronRight,
-    Check,
     History,
-    Search,
-    Undo2
+    Search
   } from "lucide-svelte";
   import { fade, fly } from "svelte/transition";
   import type {
-    MemoryChangeSet,
     MemoryNodeDetail,
     MemorySearchHit,
     MemoryVersion
@@ -29,7 +26,6 @@
     activeMemoryItem,
     selectedNode,
     selectedVersions,
-    memoryReviews,
     memoryPanelLoading,
     memoryError,
     memorySearchQuery,
@@ -40,15 +36,13 @@
     onCloseMemoryDrawer,
     onMemorySearchQueryChange,
     onRunMemorySearch,
-    onOpenMemoryKey,
-    onApplyMemoryReview
+    onOpenMemoryKey
   }: {
     showMemoryDrawer: boolean;
     memoryDrawerMode: MemoryPanelMode;
     activeMemoryItem: MemoryNavItem | null;
     selectedNode: MemoryNodeDetail | null;
     selectedVersions: MemoryVersion[];
-    memoryReviews: MemoryChangeSet[];
     memoryPanelLoading: boolean;
     memoryError: string | null;
     memorySearchQuery: string;
@@ -60,7 +54,6 @@
     onMemorySearchQueryChange: (value: string) => void;
     onRunMemorySearch: () => Promise<void> | void;
     onOpenMemoryKey: (key: string) => Promise<void> | void;
-    onApplyMemoryReview: (id: string, action: "accept" | "rollback") => Promise<void> | void;
   } = $props();
 </script>
 
@@ -138,48 +131,6 @@
                     <ChevronRight size={14} strokeWidth={2} />
                   </div>
                 </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      {:else if memoryDrawerMode === "reviews"}
-        <div class="drawer-intro">
-          <p>{activeMemoryItem?.description}</p>
-        </div>
-
-        {#if memoryReviews.length === 0}
-          <p class="memory-status">当前没有待处理的 memory changeset。</p>
-        {:else}
-          <div class="drawer-scroll">
-            <div class="memory-list" role="list">
-              {#each memoryReviews as review (review.id)}
-                <div class="review-row" role="listitem">
-                  <div class="memory-row-main">
-                    <div class="memory-row-head">
-                      <strong>{review.summary ?? "Pending memory review"}</strong>
-                      <span>{formatMemoryTimestamp(review.updated_at)}</span>
-                    </div>
-                    <p>{review.origin}</p>
-                  </div>
-                  <div class="review-actions">
-                    <button
-                      class="inline-action success"
-                      type="button"
-                      onclick={() => void onApplyMemoryReview(review.id, "accept")}
-                    >
-                      <Check size={13} strokeWidth={2} />
-                      <span>接受</span>
-                    </button>
-                    <button
-                      class="inline-action danger"
-                      type="button"
-                      onclick={() => void onApplyMemoryReview(review.id, "rollback")}
-                    >
-                      <Undo2 size={13} strokeWidth={2} />
-                      <span>回滚</span>
-                    </button>
-                  </div>
-                </div>
               {/each}
             </div>
           </div>
@@ -437,8 +388,7 @@
     font-size: 13px;
   }
 
-  .inline-tool-btn,
-  .inline-action {
+  .inline-tool-btn {
     height: 38px;
     padding: 0 14px;
     border-radius: 12px;
@@ -451,13 +401,8 @@
     cursor: pointer;
   }
 
-  .inline-tool-btn.primary,
-  .inline-action.success {
+  .inline-tool-btn.primary {
     background: color-mix(in srgb, var(--accent-primary, #5f8cff) 14%, var(--bg-input));
-  }
-
-  .inline-action.danger {
-    background: color-mix(in srgb, var(--accent-danger, #c8594f) 12%, var(--bg-input));
   }
 
   .memory-list,
@@ -467,8 +412,7 @@
     gap: 10px;
   }
 
-  .memory-row,
-  .review-row {
+  .memory-row {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -518,14 +462,8 @@
     word-break: break-word;
   }
 
-  .memory-row-tail,
-  .review-actions {
+  .memory-row-tail {
     flex-shrink: 0;
-  }
-
-  .review-actions {
-    display: flex;
-    gap: 8px;
   }
 
   .document-view {
@@ -619,8 +557,7 @@
       width: 100vw;
     }
 
-    .memory-search-row,
-    .review-actions {
+    .memory-search-row {
       flex-direction: column;
     }
   }

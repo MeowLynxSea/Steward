@@ -1,161 +1,62 @@
 <script lang="ts">
   import {
-    CalendarDays,
     ChevronRight,
-    FileText,
-    GitBranch,
+    Network,
     Search
   } from "lucide-svelte";
-  import type {
-    MemoryChangeSet,
-    MemorySidebarItem,
-    MemorySidebarSection,
-    MemoryTimelineEntry
-  } from "../../lib/types";
-  import {
-    formatMemoryTimestamp,
-    memoryItemLabel,
-    memoryKindLabel,
-    memoryRouteKey
-  } from "./memory";
 
   let {
-    memorySections = [],
-    memoryTimeline = [],
-    memoryReviews = [],
     memoryError = null,
-    onOpenItem,
-    onOpenSearch,
-    onOpenReviews
+    onOpenGraph,
+    onOpenSearch
   }: {
-    memorySections?: MemorySidebarSection[];
-    memoryTimeline?: MemoryTimelineEntry[];
-    memoryReviews?: MemoryChangeSet[];
     memoryError?: string | null;
-    onOpenItem: (item: MemorySidebarItem) => Promise<void> | void;
+    onOpenGraph: () => Promise<void> | void;
     onOpenSearch: () => Promise<void> | void;
-    onOpenReviews: () => Promise<void> | void;
   } = $props();
-
-  const contentSections = $derived(memorySections.filter((section) => section.key !== "reviews"));
 </script>
 
 <section class="settings-section">
   <div class="section-header">
     <h4>Memory Inspector</h4>
-    <p>检查 Steward 的原生记忆图谱，而不是任何旧的文件式记忆视图。</p>
+    <p>只保留图谱查看和 Recall Search 两个入口，其他列表内容不再在设置页里展开。</p>
   </div>
 
   {#if memoryError}
     <p class="memory-status error">{memoryError}</p>
   {/if}
 
-  {#each contentSections as section (section.key)}
-    <section class="memory-block">
-      <div class="block-header compact">
-        <div>
-          <span class="block-kicker">Memory</span>
-          <h5>{section.title}</h5>
-        </div>
+  <div class="memory-list" role="list">
+    <button class="memory-row" type="button" onclick={() => void onOpenGraph()}>
+      <div class="memory-row-icon">
+        <Network size={15} strokeWidth={2} />
       </div>
-
-      <div class="memory-list" role="list">
-        {#each section.items as item (memoryRouteKey(item))}
-          <button class="memory-row" type="button" onclick={() => void onOpenItem(item)}>
-            <div class="memory-row-icon">
-              {#if item.kind === "episode"}
-                <CalendarDays size={15} strokeWidth={2} />
-              {:else}
-                <FileText size={15} strokeWidth={2} />
-              {/if}
-            </div>
-            <div class="memory-row-main">
-              <div class="memory-row-head">
-                <strong>{memoryItemLabel(item)}</strong>
-                <span>{memoryKindLabel(item.kind)}</span>
-              </div>
-              <p>{item.subtitle ?? "打开节点详情"}</p>
-            </div>
-            <div class="memory-row-tail">
-              <ChevronRight size={14} strokeWidth={2} />
-            </div>
-          </button>
-        {/each}
+      <div class="memory-row-main">
+        <div class="memory-row-head">
+          <strong>Memory Graph</strong>
+        </div>
+        <p>打开接近全屏的图谱模态框，以真正的节点连线方式浏览记忆图。</p>
       </div>
-    </section>
-  {/each}
-
-  <section class="memory-block">
-    <div class="block-header compact">
-      <div>
-        <span class="block-kicker">Timeline</span>
-        <h5>Recent Episodes</h5>
+      <div class="memory-row-tail">
+        <ChevronRight size={14} strokeWidth={2} />
       </div>
-    </div>
+    </button>
 
-    {#if memoryTimeline.length === 0}
-      <p class="memory-status">最近还没有时间线记忆。</p>
-    {:else}
-      <div class="timeline-list" role="list">
-        {#each memoryTimeline.slice(0, 4) as entry (entry.node_id)}
-          <div class="timeline-row" role="listitem">
-            <div class="timeline-head">
-              <strong>{entry.title}</strong>
-              <span>{formatMemoryTimestamp(entry.updated_at)}</span>
-            </div>
-            <p>{entry.content_snippet}</p>
-          </div>
-        {/each}
+    <button class="memory-row" type="button" onclick={() => void onOpenSearch()}>
+      <div class="memory-row-icon">
+        <Search size={15} strokeWidth={2} />
       </div>
-    {/if}
-  </section>
-
-  <section class="memory-block">
-    <div class="block-header compact">
-      <div>
-        <span class="block-kicker">Review</span>
-        <h5>变更审查</h5>
+      <div class="memory-row-main">
+        <div class="memory-row-head">
+          <strong>Recall Search</strong>
+        </div>
+        <p>继续使用现有侧边栏抽屉，调试 route、keywords 和 recall 命中结果。</p>
       </div>
-    </div>
-
-    <div class="memory-list" role="list">
-      <button class="memory-row" type="button" onclick={() => void onOpenReviews()}>
-        <div class="memory-row-icon">
-          <GitBranch size={15} strokeWidth={2} />
-        </div>
-        <div class="memory-row-main">
-          <div class="memory-row-head">
-            <strong>Review Queue</strong>
-          </div>
-          <p>
-            {#if memoryReviews.length > 0}
-              {memoryReviews.length} 个待处理 changeset
-            {:else}
-              当前没有待审查的记忆变更
-            {/if}
-          </p>
-        </div>
-        <div class="memory-row-tail">
-          <ChevronRight size={14} strokeWidth={2} />
-        </div>
-      </button>
-
-      <button class="memory-row" type="button" onclick={() => void onOpenSearch()}>
-        <div class="memory-row-icon">
-          <Search size={15} strokeWidth={2} />
-        </div>
-        <div class="memory-row-main">
-          <div class="memory-row-head">
-            <strong>Recall Search</strong>
-          </div>
-          <p>使用 graph memory 的检索入口调试 route、trigger 和 recall 结果。</p>
-        </div>
-        <div class="memory-row-tail">
-          <ChevronRight size={14} strokeWidth={2} />
-        </div>
-      </button>
-    </div>
-  </section>
+      <div class="memory-row-tail">
+        <ChevronRight size={14} strokeWidth={2} />
+      </div>
+    </button>
+  </div>
 </section>
 
 <style>
@@ -179,62 +80,40 @@
     line-height: 1.5;
   }
 
-  .memory-block {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-subtle, var(--border-default));
-  }
-
-  .block-header.compact {
-    gap: 2px;
-  }
-
-  .block-kicker {
+  .memory-status {
     margin: 0;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--text-secondary);
   }
 
-  .block-header h5 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
+  .memory-status.error {
+    color: var(--accent-danger, #c8594f);
   }
 
-  .memory-list,
-  .timeline-list {
+  .memory-list {
     display: flex;
     flex-direction: column;
     border-top: 1px solid var(--border-subtle, var(--border-default));
   }
 
-  .memory-row,
-  .timeline-row {
+  .memory-row {
     width: 100%;
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 13px 0;
+    padding: 16px 0;
     border: none;
     border-bottom: 1px solid var(--border-subtle, var(--border-default));
     background: transparent;
     text-align: left;
     color: inherit;
-  }
-
-  .memory-row {
     cursor: pointer;
   }
 
   .memory-row-icon {
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     border-radius: 10px;
     display: inline-flex;
     align-items: center;
@@ -244,56 +123,46 @@
     flex-shrink: 0;
   }
 
-  .memory-row-main,
-  .timeline-row {
+  .memory-row-main {
     min-width: 0;
     flex: 1;
   }
 
-  .memory-row-head,
-  .timeline-head {
+  .memory-row-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
   }
 
-  .memory-row-head strong,
-  .timeline-head strong {
-    min-width: 0;
-    font-size: 13px;
+  .memory-row-head strong {
+    font-size: 14px;
     font-weight: 650;
     color: var(--text-primary);
   }
 
-  .memory-row-head span,
-  .timeline-head span {
-    flex-shrink: 0;
-    font-size: 11px;
-    color: var(--text-tertiary);
-  }
-
-  .memory-row-main p,
-  .timeline-row p {
+  .memory-row-main p {
     margin: 4px 0 0;
     font-size: 12px;
-    line-height: 1.55;
+    line-height: 1.6;
     color: var(--text-secondary);
-    word-break: break-word;
   }
 
   .memory-row-tail {
+    width: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: var(--text-tertiary);
     flex-shrink: 0;
   }
 
-  .memory-status {
-    margin: 0;
-    font-size: 12px;
-    color: var(--text-secondary);
+  .memory-row:hover .memory-row-icon {
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-input));
   }
 
-  .memory-status.error {
-    color: var(--accent-danger, #c8594f);
+  .memory-row:hover .memory-row-tail {
+    color: var(--text-primary);
+    transform: translateX(2px);
   }
 </style>

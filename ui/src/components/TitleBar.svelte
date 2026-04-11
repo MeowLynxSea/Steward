@@ -1,7 +1,8 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { AlignJustify, Check, ChevronDown, Minus, Settings, Square, X } from "lucide-svelte";
+  import { AlignJustify, Check, ChevronDown, Minus, Moon, Settings, Square, Sun, X } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
+  import { themeStore } from "../lib/stores/theme.svelte";
 
   type ModelOption = {
     value: string;
@@ -38,6 +39,7 @@
   const appWindow = getCurrentWindow();
   const isMac = navigator.platform.toLowerCase().includes("mac");
   let showModelDropdown = $state(false);
+  const darkMode = $derived(themeStore.mode === "dark");
 
   async function minimize() {
     await appWindow.minimize();
@@ -58,6 +60,10 @@
   function selectModel(modelValue: string) {
     showModelDropdown = false;
     onSelectModel?.(modelValue);
+  }
+
+  function toggleTheme() {
+    themeStore.toggle();
   }
 
   const displayModelName = $derived(
@@ -153,6 +159,18 @@
   </div>
 
   <div class="titlebar-side titlebar-side-right">
+    <button
+      class="titlebar-icon-button"
+      onclick={toggleTheme}
+      aria-label={darkMode ? "切换到亮色模式" : "切换到暗色模式"}
+    >
+      {#if darkMode}
+        <Moon size={15} strokeWidth={2} />
+      {:else}
+        <Sun size={15} strokeWidth={2} />
+      {/if}
+    </button>
+
     <button class="sidebar-toggle" onclick={onToggleRight} aria-label={rightSidebarCollapsed ? "展开右侧边栏" : "收起右侧边栏"}>
       <AlignJustify size={16} strokeWidth={2} />
     </button>
@@ -264,6 +282,27 @@
     justify-content: center;
   }
 
+  .titlebar-icon-button {
+    min-width: 30px;
+    height: 30px;
+    padding: 0 10px;
+    border: none;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 14px;
+    font-weight: 600;
+    transition: background 0.15s ease, color 0.15s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .titlebar-icon-button {
+    padding: 0 8px;
+  }
+
+  .titlebar-icon-button:hover,
   .sidebar-toggle:hover {
     background: var(--bg-hover);
     color: var(--text-primary);

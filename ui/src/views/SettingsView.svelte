@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import {
     BrainCircuit,
     ChevronLeft,
@@ -11,6 +12,7 @@
   } from "lucide-svelte";
   import { fade, fly } from "svelte/transition";
   import LlmConfigurationPanel from "../components/LlmConfigurationPanel.svelte";
+  import MemoryGraphModal from "../components/settings/MemoryGraphModal.svelte";
   import MemorySettingsDrawers from "../components/settings/MemorySettingsDrawers.svelte";
   import MemorySettingsPanel from "../components/settings/MemorySettingsPanel.svelte";
   import {
@@ -23,12 +25,10 @@
   import { settingsStore } from "../lib/stores/settings.svelte";
   import { themeStore } from "../lib/stores/theme.svelte";
   import type {
-    MemoryChangeSet,
     MemoryNodeDetail,
     MemorySearchHit,
     MemorySidebarItem,
     MemorySidebarSection,
-    MemoryTimelineEntry,
     MemoryVersion
   } from "../lib/types";
 
@@ -61,16 +61,19 @@
     ]
   };
 
+  function memoryGraphDebug(message: string, payload?: Record<string, unknown>) {
+    console.log("[memory-graph][SettingsView]", message, payload ?? {});
+  }
+
   let { onClose }: { onClose: () => void } = $props();
 
   let activeSection = $state<SettingsSection>("general");
   let showBackendDrawer = $state(false);
+  let showMemoryGraphModal = $state(false);
   let showMemoryDrawer = $state(false);
   let memoryDrawerMode = $state<MemoryPanelMode>("node");
   let activeMemoryItem = $state<MemoryNavItem | null>(null);
   let memorySections = $state<MemorySidebarSection[]>([]);
-  let memoryTimeline = $state<MemoryTimelineEntry[]>([]);
-  let memoryReviews = $state<MemoryChangeSet[]>([]);
   let selectedNode = $state<MemoryNodeDetail | null>(null);
   let selectedVersions = $state<MemoryVersion[]>([]);
   let memoryPanelLoading = $state(false);
@@ -80,6 +83,7 @@
   let memorySearchLoading = $state(false);
   let memorySearchHasSearched = $state(false);
   let memorySearchError = $state<string | null>(null);
+  let modelSaveTimer: ReturnType<typeof setTimeout> | null = $state(null);
 
   const backendOptions = $derived(
     settingsStore.data.backends.map((backend) => ({
@@ -110,6 +114,11 @@
       return;
     }
 
+    if (showMemoryGraphModal) {
+      closeMemoryGraphModal();
+      return;
+    }
+
     if (showBackendDrawer) {
       showBackendDrawer = false;
       return;
@@ -135,18 +144,29 @@
     memoryError = null;
   }
 
+  function openMemoryGraphModal() {
+    memoryGraphDebug("openMemoryGraphModal()", {
+      activeSection,
+      currentValue: showMemoryGraphModal,
+      sections: memorySections.length
+    });
+    showMemoryGraphModal = true;
+  }
+
+  function closeMemoryGraphModal() {
+    memoryGraphDebug("closeMemoryGraphModal()", {
+      activeSection,
+      currentValue: showMemoryGraphModal
+    });
+    showMemoryGraphModal = false;
+  }
+
   async function loadMemoryOverview() {
     memoryPanelLoading = true;
     memoryError = null;
     try {
-      const [sidebarResponse, timelineResponse, reviewsResponse] = await Promise.all([
-        apiClient.listMemorySidebar(),
-        apiClient.listMemoryTimeline(),
-        apiClient.listMemoryReviews()
-      ]);
+      const sidebarResponse = await apiClient.listMemorySidebar();
       memorySections = sidebarResponse.sections;
-      memoryTimeline = timelineResponse.entries;
-      memoryReviews = reviewsResponse.reviews;
     } catch (error) {
       memoryError = errorMessage(error, "Failed to load memory graph");
     } finally {
@@ -156,16 +176,6 @@
 
   async function openMemoryItem(item: MemorySidebarItem) {
     showMemoryDrawer = true;
-    if (item.uri?.startsWith("review://")) {
-      activeMemoryItem = {
-        key: item.uri,
-        title: "Review Queue",
-        description: "检查 AI 对记忆图谱的结构化修改，并决定接受还是回滚。",
-        kind: "reviews"
-      };
-      memoryDrawerMode = "reviews";
-      return;
-    }
 
     activeMemoryItem = {
       key: memoryRouteKey(item),
@@ -232,18 +242,6 @@
     memoryError = null;
   }
 
-  async function openMemoryReviewsDrawer() {
-    activeMemoryItem = {
-      key: "reviews",
-      title: "Review Queue",
-      description: "查看待审查的 changeset，并决定接受还是回滚。",
-      kind: "reviews"
-    };
-    memoryDrawerMode = "reviews";
-    showMemoryDrawer = true;
-    memoryError = null;
-  }
-
   async function openMemoryKey(key: string) {
     const syntheticItem: MemorySidebarItem = {
       node_id: key,
@@ -257,14 +255,6 @@
     await openMemoryItem(syntheticItem);
   }
 
-  async function handleApplyMemoryReview(id: string, action: "accept" | "rollback") {
-    const response =
-      action === "rollback"
-        ? await apiClient.rollbackMemoryChangeset(id)
-        : await apiClient.applyMemoryReview(id, action);
-    memoryReviews = response.reviews;
-  }
-
   function updateEmbeddingProvider(provider: string) {
     const options = embeddingModelOptions[provider] ?? [];
     const nextModel =
@@ -272,6 +262,7 @@
       options[0]?.value ??
       settingsStore.data.embeddings.model;
     settingsStore.setEmbeddings({ provider, model: nextModel });
+    scheduleModelSettingsSave();
   }
 
   function updateEmbeddingDimension(rawValue: string) {
@@ -280,17 +271,60 @@
     settingsStore.setEmbeddings({
       dimension: value === "" || !Number.isSafeInteger(parsed) || parsed <= 0 ? null : parsed
     });
+    scheduleModelSettingsSave();
   }
 
   async function saveModelSettings() {
+    if (modelSaveTimer !== null) {
+      clearTimeout(modelSaveTimer);
+      modelSaveTimer = null;
+    }
     await settingsStore.save();
   }
 
+  function scheduleModelSettingsSave(delay = 360) {
+    if (modelSaveTimer !== null) {
+      clearTimeout(modelSaveTimer);
+    }
+    settingsStore.error = null;
+    settingsStore.status = "正在保存...";
+    modelSaveTimer = setTimeout(() => {
+      modelSaveTimer = null;
+      void saveModelSettings();
+    }, delay);
+  }
+
+  function updateEmbeddings(patch: Partial<typeof settingsStore.data.embeddings>) {
+    settingsStore.setEmbeddings(patch);
+    scheduleModelSettingsSave();
+  }
+
+  function updateMajorBackend(value: string) {
+    settingsStore.setMajorBackend(value || null);
+    scheduleModelSettingsSave();
+  }
+
+  function updateCheapBackend(value: string) {
+    settingsStore.setCheapBackend(value || null);
+    scheduleModelSettingsSave();
+  }
+
+  function updateCheapModelUsesPrimary(checked: boolean) {
+    settingsStore.setCheapModelUsesPrimary(checked);
+    scheduleModelSettingsSave();
+  }
+
   function selectSection(section: SettingsSection) {
+    memoryGraphDebug("selectSection()", {
+      from: activeSection,
+      to: section,
+      showMemoryGraphModal
+    });
     activeSection = section;
 
     if (section !== "memory") {
       closeMemoryDrawer();
+      closeMemoryGraphModal();
     } else if (memorySections.length === 0 && !memoryPanelLoading) {
       void loadMemoryOverview();
     }
@@ -303,6 +337,21 @@
   const activeEmbeddingModelOptions = $derived(
     embeddingModelOptions[settingsStore.data.embeddings.provider] ?? []
   );
+
+  onDestroy(() => {
+    if (modelSaveTimer !== null) {
+      clearTimeout(modelSaveTimer);
+      modelSaveTimer = null;
+      void settingsStore.save();
+    }
+  });
+
+  $effect(() => {
+    memoryGraphDebug("showMemoryGraphModal changed", {
+      value: showMemoryGraphModal,
+      activeSection
+    });
+  });
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -367,39 +416,43 @@
       <section class="settings-section">
         <div class="section-header">
           <h4>外观</h4>
-          <p>选择应用主题，仅保存在当前设备。</p>
+          <p>标题栏和设置页都可以切换主题，模式会立即保存在当前设备。</p>
         </div>
 
-        <div class="theme-toggle-group" role="group" aria-label="主题">
-          <button
-            class:active={themeStore.mode === "light"}
-            class="theme-option"
-            type="button"
-            onclick={() => themeStore.setMode("light")}
-          >
-            <Sun size={15} strokeWidth={2} />
-            <span>浅色</span>
-          </button>
-          <button
-            class:active={themeStore.mode === "dark"}
-            class="theme-option"
-            type="button"
-            onclick={() => themeStore.setMode("dark")}
-          >
-            <Moon size={15} strokeWidth={2} />
-            <span>深色</span>
-          </button>
+        <div class="settings-card">
+          <div class="card-copy">
+            <span class="card-kicker">Theme</span>
+            <h3>明暗模式</h3>
+            <p>保留顶部标题栏切换，同时也可以在这里直接选择浅色或深色。</p>
+          </div>
+
+          <div class="theme-toggle-group" role="group" aria-label="主题">
+            <button
+              class:active={themeStore.mode === "light"}
+              class="theme-option"
+              type="button"
+              onclick={() => themeStore.setMode("light")}
+            >
+              <Sun size={15} strokeWidth={2} />
+              <span>浅色</span>
+            </button>
+            <button
+              class:active={themeStore.mode === "dark"}
+              class="theme-option"
+              type="button"
+              onclick={() => themeStore.setMode("dark")}
+            >
+              <Moon size={15} strokeWidth={2} />
+              <span>深色</span>
+            </button>
+          </div>
         </div>
       </section>
     {:else if activeSection === "memory"}
       <MemorySettingsPanel
-        {memorySections}
-        {memoryTimeline}
-        {memoryReviews}
         {memoryError}
-        onOpenItem={openMemoryItem}
+        onOpenGraph={openMemoryGraphModal}
         onOpenSearch={openMemorySearchDrawer}
-        onOpenReviews={openMemoryReviewsDrawer}
       />
     {:else}
       <section class="settings-section">
@@ -424,9 +477,8 @@
               class="model-select-input"
               value={settingsStore.data.major_backend_id ?? ""}
               onchange={(event) =>
-                settingsStore.setMajorBackend(
-                  (event.currentTarget as HTMLSelectElement).value || null
-                )}
+                updateMajorBackend((event.currentTarget as HTMLSelectElement).value)
+              }
             >
               <option value="">选择主模型...</option>
               {#each backendOptions as option (option.value)}
@@ -442,11 +494,10 @@
                 <input
                   type="checkbox"
                   checked={settingsStore.data.cheap_model_uses_primary}
-                  onchange={(event) => {
-                    settingsStore.data.cheap_model_uses_primary = (
-                      event.currentTarget as HTMLInputElement
-                    ).checked;
-                  }}
+                  onchange={(event) =>
+                    updateCheapModelUsesPrimary(
+                      (event.currentTarget as HTMLInputElement).checked
+                    )}
                 />
                 <span>使用主模型</span>
               </label>
@@ -456,9 +507,8 @@
                 class="model-select-input"
                 value={settingsStore.data.cheap_backend_id ?? ""}
                 onchange={(event) =>
-                  settingsStore.setCheapBackend(
-                    (event.currentTarget as HTMLSelectElement).value || null
-                  )}
+                  updateCheapBackend((event.currentTarget as HTMLSelectElement).value)
+                }
               >
                 <option value="">选择 Cheap 模型...</option>
                 {#each backendOptions as option (option.value)}
@@ -481,7 +531,7 @@
               type="checkbox"
               checked={settingsStore.data.embeddings.enabled}
               onchange={(event) =>
-                settingsStore.setEmbeddings({
+                updateEmbeddings({
                   enabled: (event.currentTarget as HTMLInputElement).checked
                 })}
             />
@@ -513,7 +563,7 @@
                 value={settingsStore.data.embeddings.model}
                 list="embedding-model-suggestions"
                 oninput={(event) =>
-                  settingsStore.setEmbeddings({
+                  updateEmbeddings({
                     model: (event.currentTarget as HTMLInputElement).value
                   })}
                 placeholder="text-embedding-3-small"
@@ -532,7 +582,7 @@
                 type="text"
                 value={settingsStore.data.embeddings.base_url ?? ""}
                 oninput={(event) =>
-                  settingsStore.setEmbeddings({
+                  updateEmbeddings({
                     base_url: (event.currentTarget as HTMLInputElement).value || null
                   })}
                 placeholder={
@@ -576,7 +626,7 @@
                 type="password"
                 value={settingsStore.data.embeddings.api_key ?? ""}
                 oninput={(event) =>
-                  settingsStore.setEmbeddings({
+                  updateEmbeddings({
                     api_key: (event.currentTarget as HTMLInputElement).value || null
                   })}
                 placeholder={
@@ -601,9 +651,6 @@
         </div>
 
         <div class="settings-actions">
-          <button class="save-button" type="button" onclick={() => void saveModelSettings()}>
-            保存模型与 Embedding 设置
-          </button>
           {#if settingsStore.status}
             <p class="settings-status">{settingsStore.status}</p>
           {/if}
@@ -646,13 +693,19 @@
   {/if}
 </div>
 
+{#if showMemoryGraphModal}
+  <MemoryGraphModal
+    {memorySections}
+    onClose={closeMemoryGraphModal}
+  />
+{/if}
+
 <MemorySettingsDrawers
   {showMemoryDrawer}
   {memoryDrawerMode}
   {activeMemoryItem}
   {selectedNode}
   {selectedVersions}
-  {memoryReviews}
   {memoryPanelLoading}
   {memoryError}
   {memorySearchQuery}
@@ -664,7 +717,6 @@
   onMemorySearchQueryChange={updateMemorySearchQuery}
   onRunMemorySearch={runMemorySearch}
   onOpenMemoryKey={openMemoryKey}
-  onApplyMemoryReview={handleApplyMemoryReview}
 />
 
 <style>
@@ -801,13 +853,25 @@
     line-height: 1.5;
   }
 
+  .settings-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px;
+    border-radius: 18px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+  }
+
   .theme-toggle-group {
     display: inline-flex;
     gap: 6px;
     padding: 6px;
     border-radius: 16px;
     background: var(--bg-input);
-    border: 1px solid var(--border-input);
+    border: 1px solid var(--border-input, var(--border-default));
+    flex-shrink: 0;
   }
 
   .theme-option {
@@ -834,17 +898,6 @@
     background: var(--accent-primary);
     color: var(--text-on-dark);
     box-shadow: var(--shadow-card);
-  }
-
-  .settings-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 16px;
-    border-radius: 18px;
-    border: 1px solid var(--border-default);
-    background: var(--bg-surface);
   }
 
   .settings-card-button {
@@ -1039,25 +1092,6 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
-  }
-
-  .save-button {
-    height: 40px;
-    padding: 0 16px;
-    border: none;
-    border-radius: 12px;
-    background: var(--accent-primary);
-    color: var(--text-on-dark);
-    font: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-  }
-
-  .save-button:hover {
-    transform: translateY(-1px);
-    box-shadow: var(--shadow-card);
   }
 
   .settings-status {
