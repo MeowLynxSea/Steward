@@ -28,6 +28,24 @@ function mountDisplayNameFromPath(path: string): string {
   return segments.at(-1) ?? path;
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "message" in error &&
+    typeof (error as { message?: unknown }).message === "string"
+  ) {
+    return (error as { message: string }).message;
+  }
+  return fallback;
+}
+
 class WorkspaceState {
   currentPath = $state("workspace://");
   entries = $state<WorkspaceEntry[]>([]);
@@ -56,7 +74,11 @@ class WorkspaceState {
       this.currentPath = response.path;
       this.entries = response.entries;
       this.status = response.entries.length > 0 ? "工作区已就绪" : "这里还没有内容";
-      await this.#refreshAllMountChanges();
+      try {
+        await this.#refreshAllMountChanges();
+      } catch (changesError) {
+        this.error = errorMessage(changesError, "变更列表刷新失败");
+      }
       if (previousPath !== response.path) {
         this.selectedFile = null;
         this.selectedDocument = null;
@@ -66,7 +88,7 @@ class WorkspaceState {
         this.mountDiff = [];
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Failed to load workspace";
+      this.error = errorMessage(e, "Failed to load workspace");
     } finally {
       this.loading = false;
     }
@@ -109,7 +131,7 @@ class WorkspaceState {
       const response = await apiClient.searchWorkspace(trimmed);
       this.searchResults = response.results;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Workspace search failed";
+      this.error = errorMessage(e, "Workspace search failed");
     } finally {
       this.searchLoading = false;
     }
@@ -150,7 +172,7 @@ class WorkspaceState {
       await this.fetch("workspace://");
       this.status = `已挂载 ${mount.mount.display_name}`;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Failed to create mount";
+      this.error = errorMessage(e, "Failed to create mount");
     } finally {
       this.loading = false;
     }
@@ -223,7 +245,7 @@ class WorkspaceState {
       this.status = `Previewing ${path}`;
     } catch (e) {
       if (requestId === this.#previewRequestId) {
-        this.error = e instanceof Error ? e.message : "Failed to load file preview";
+        this.error = errorMessage(e, "Failed to load file preview");
       }
     } finally {
       if (requestId === this.#previewRequestId) {
@@ -247,7 +269,7 @@ class WorkspaceState {
       this.status = `Previewing ${path}`;
     } catch (e) {
       if (requestId === this.#previewRequestId) {
-        this.error = e instanceof Error ? e.message : "Failed to load workspace document";
+        this.error = errorMessage(e, "Failed to load workspace document");
       }
     } finally {
       if (requestId === this.#previewRequestId) {
@@ -327,18 +349,36 @@ class WorkspaceState {
       return;
     }
 
-    const groups = await Promise.all(
+    const results = await Promise.all(
       mounts.mounts.map(async ({ mount }) => {
         const [detail, diff] = await Promise.all([
           apiClient.getWorkspaceMount(mount.id),
           apiClient.getWorkspaceMountDiff(mount.id)
         ]);
         return {
+          ok: true as const,
           mount: detail,
           entries: diff.entries
         };
-      })
+      }).map((promise) =>
+        promise.catch((error) => ({
+          ok: false as const,
+          error
+        }))
+      )
     );
+
+    const failedResult = results.find((result) => !result.ok);
+    if (failedResult && !this.error) {
+      this.error = errorMessage(failedResult.error, "变更列表刷新失败");
+    }
+
+    const groups = results
+      .filter((result): result is { ok: true; mount: WorkspaceMountDetail; entries: MountedFileDiff[] } => result.ok)
+      .map((result) => ({
+        mount: result.mount,
+        entries: result.entries
+      }));
 
     this.changeGroups = groups
       .filter((group) => group.entries.length > 0 || group.mount.checkpoints.length > 0)
@@ -380,7 +420,7 @@ class WorkspaceState {
       await action();
       this.status = label;
     } catch (e) {
-      this.error = e instanceof Error ? e.message : "Workspace action failed";
+      this.error = errorMessage(e, "Workspace action failed");
     } finally {
       this.busyAction = null;
     }

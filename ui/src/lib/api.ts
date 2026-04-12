@@ -162,9 +162,11 @@ export const apiClient = {
 
   createWorkspaceMount(path: string, display_name?: string, bypass_write = true) {
     return invoke<WorkspaceMountSummary>("create_workspace_mount", {
-      path,
-      display_name: display_name ?? null,
-      bypass_write
+      payload: {
+        path,
+        display_name: display_name ?? null,
+        bypass_write
+      }
     });
   },
 
