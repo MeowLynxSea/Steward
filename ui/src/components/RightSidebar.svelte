@@ -109,6 +109,14 @@
         left.mount.summary.mount.display_name.localeCompare(right.mount.summary.mount.display_name)
       )
   );
+  const sortedEntries = $derived(
+    [...entries].sort((left, right) => {
+      if (left.is_directory !== right.is_directory) {
+        return left.is_directory ? -1 : 1;
+      }
+      return entryLabel(left).localeCompare(entryLabel(right), undefined, { numeric: true });
+    })
+  );
 
   const breadcrumbs = $derived(buildBreadcrumbs(currentPath, selectedMount?.summary.mount.display_name ?? null));
   const previewOpen = $derived(fileLoading || Boolean(selectedDocument) || Boolean(selectedFile));
@@ -156,7 +164,7 @@
   }
 
   function buildBreadcrumbs(path: string, mountName: string | null) {
-    const root = [{ label: "工作区", path: "workspace://" }];
+    const root = [{ label: "Workspace", path: "workspace://" }];
     if (path === "workspace://") {
       return root;
     }
@@ -310,16 +318,18 @@
         {/if}
       </div>
 
-      <div class="breadcrumb-row">
-        {#each breadcrumbs as crumb, index}
-          <button class="breadcrumb" onclick={() => onNavigate(crumb.path)}>
-            {crumb.label}
-          </button>
-          {#if index < breadcrumbs.length - 1}
-            <ChevronRight size={12} strokeWidth={2} />
-          {/if}
-        {/each}
-      </div>
+      {#if breadcrumbs.length > 0}
+        <div class="breadcrumb-row">
+          {#each breadcrumbs as crumb, index}
+            <button class="breadcrumb" onclick={() => onNavigate(crumb.path)}>
+              {crumb.label}
+            </button>
+            {#if index < breadcrumbs.length - 1}
+              <ChevronRight size={12} strokeWidth={2} />
+            {/if}
+          {/each}
+        </div>
+      {/if}
 
       <div class="files-panel">
         <div class="file-tree">
@@ -338,9 +348,9 @@
           {:else if loading}
             <div class="empty-hint">正在加载目录...</div>
           {:else if entries.length === 0}
-            <div class="empty-hint">这里还没有内容。挂载本地文件夹后，会和工作区文件一起显示在这里。</div>
+            <div class="empty-hint">这里还没有内容。</div>
           {:else}
-            {#each entries as entry}
+            {#each sortedEntries as entry}
               {@const Icon = treeIcon(entry)}
               <button
                 class="tree-item {isEntryActive(entry) ? 'active' : ''}"

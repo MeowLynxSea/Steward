@@ -209,7 +209,12 @@
     }, 5000);
 
     const workspaceInterval = window.setInterval(() => {
-      if (showMountModal || workspaceStore.loading || workspaceStore.busyAction) {
+      if (
+        showMountModal ||
+        workspaceStore.loading ||
+        workspaceStore.refreshing ||
+        workspaceStore.busyAction
+      ) {
         return;
       }
       void workspaceStore.refresh();

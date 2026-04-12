@@ -57,6 +57,7 @@ class WorkspaceState {
   mountDiff = $state<MountedFileDiff[]>([]);
   changeGroups = $state<WorkspaceChangeGroup[]>([]);
   loading = $state(false);
+  refreshing = $state(false);
   fileLoading = $state(false);
   searchLoading = $state(false);
   error = $state<string | null>(null);
@@ -64,10 +65,21 @@ class WorkspaceState {
   busyAction = $state<string | null>(null);
   #previewRequestId = 0;
 
-  async fetch(path = this.currentPath) {
+  async fetch(
+    path = this.currentPath,
+    options: {
+      silent?: boolean;
+    } = {}
+  ) {
     const previousPath = this.currentPath;
     const nextMountId = mountIdFromUri(path);
-    this.loading = true;
+    const silent = options.silent ?? false;
+    const showLoading = !silent || this.entries.length === 0 || previousPath !== path;
+    if (showLoading) {
+      this.loading = true;
+    } else {
+      this.refreshing = true;
+    }
     this.error = null;
     try {
       const response = await apiClient.getWorkspaceTree(path);
@@ -91,17 +103,22 @@ class WorkspaceState {
       this.error = errorMessage(e, "Failed to load workspace");
     } finally {
       this.loading = false;
+      this.refreshing = false;
     }
   }
 
   async refresh() {
+    if (this.loading || this.refreshing || this.busyAction) {
+      return;
+    }
+
     const mountId =
       this.selectedMount?.summary.mount.id ?? mountIdFromUri(this.currentPath) ?? null;
     const selectedFilePath = this.selectedFile?.path ?? null;
     const selectedDocumentPath = this.selectedDocument?.path ?? null;
 
     this.error = null;
-    await this.fetch(this.currentPath);
+    await this.fetch(this.currentPath, { silent: true });
 
     if (mountId) {
       await this.#refreshMountState(mountId);
