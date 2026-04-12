@@ -1221,9 +1221,36 @@ impl Workspace {
     }
 
     pub async fn list_tree(&self, uri: &str) -> Result<Vec<WorkspaceTreeEntry>, WorkspaceError> {
-        self.storage
-            .list_workspace_tree(&self.user_id, self.agent_id, uri)
-            .await
+        if WorkspaceUri::parse(uri)?.is_some() {
+            return self
+                .storage
+                .list_workspace_tree(&self.user_id, self.agent_id, uri)
+                .await;
+        }
+
+        Ok(self
+            .list(uri)
+            .await?
+            .into_iter()
+            .map(|entry| WorkspaceTreeEntry {
+                name: entry.name().to_string(),
+                path: entry.path.clone(),
+                uri: entry.path,
+                is_directory: entry.is_directory,
+                kind: if entry.is_directory {
+                    WorkspaceTreeEntryKind::MemoryDirectory
+                } else {
+                    WorkspaceTreeEntryKind::MemoryFile
+                },
+                status: None,
+                updated_at: entry.updated_at,
+                content_preview: entry.content_preview,
+                bypass_write: None,
+                dirty_count: 0,
+                conflict_count: 0,
+                pending_delete_count: 0,
+            })
+            .collect())
     }
 
     pub async fn create_mount(
@@ -1249,6 +1276,16 @@ impl Workspace {
     pub async fn get_mount(&self, mount_id: Uuid) -> Result<WorkspaceMountDetail, WorkspaceError> {
         self.storage
             .get_workspace_mount(&self.user_id, mount_id)
+            .await
+    }
+
+    pub async fn read_mount_file(
+        &self,
+        mount_id: Uuid,
+        path: &str,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        self.storage
+            .read_workspace_mount_file(&self.user_id, mount_id, path)
             .await
     }
 

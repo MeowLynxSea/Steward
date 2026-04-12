@@ -2609,12 +2609,13 @@ fn status_update_to_app_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        chat_tool_execution_metadata, is_single_message_console, resolve_routine_notification_user,
+        chat_tool_execution_metadata, desktop_app_event_for_outgoing_response,
+        is_single_message_console, resolve_routine_notification_user,
         should_fallback_routine_notification, split_into_stream_chunks, truncate_for_preview,
     };
     #[cfg(feature = "libsql")]
     use crate::agent::{Agent, AgentDeps};
-    use crate::channels::IncomingMessage;
+    use crate::channels::{IncomingMessage, OutgoingResponse};
     #[cfg(feature = "libsql")]
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::error::ChannelError;

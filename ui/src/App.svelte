@@ -6,14 +6,12 @@
   import RightSidebar from "./components/RightSidebar.svelte";
   import TitleBar from "./components/TitleBar.svelte";
   import { FolderPlus, FolderSearch, X } from "lucide-svelte";
-  import { apiClient } from "./lib/api";
   import { router } from "./lib/router.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
   import { sessionsStore } from "./lib/stores/sessions.svelte";
   import { themeStore } from "./lib/stores/theme.svelte";
   import { tasksStore } from "./lib/stores/tasks.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
-  import { workbenchStore } from "./lib/stores/workbench.svelte";
   import { listenForFolderDrops, pickDirectory } from "./lib/tauri";
   import type {
     TaskRecord,
@@ -43,6 +41,7 @@
   let rightSidebarCollapsed = $state(false);
   let showSettings = $state(false);
   let showMountModal = $state(false);
+  let composerSeed = $state<{ id: string; content: string } | null>(null);
 
   function openSettings() {
     showSettings = true;
@@ -70,8 +69,7 @@
     await Promise.all([
       sessionsStore.fetchList(),
       tasksStore.fetch(),
-      workspaceStore.fetch(),
-      workbenchStore.fetch()
+      workspaceStore.fetch()
     ]);
 
     if (!sessionsStore.activeId && sessionsStore.list.length > 0) {
@@ -159,8 +157,10 @@
   }
 
   function handleUseWorkspaceResult(result: WorkspaceSearchResult) {
-    const snippet = `Use workspace context from ${result.document_path}:\n${result.content}`;
-    console.log("Using workspace result:", snippet);
+    composerSeed = {
+      id: crypto.randomUUID(),
+      content: `Use workspace context from ${result.document_path}:\n${result.content}`
+    };
   }
 
   function openMountModal() {
@@ -180,6 +180,7 @@
       const selected = await pickDirectory();
       if (selected) {
         selectedMountPath = selected;
+        mountDisplayName = defaultMountName(selected);
       }
     } finally {
       selectingMountPath = false;
@@ -194,6 +195,11 @@
     }
   }
 
+  function defaultMountName(path: string) {
+    const segments = path.split(/[\\/]/).filter(Boolean);
+    return segments.at(-1) ?? path;
+  }
+
   onMount(async () => {
     themeStore.init();
     await bootstrap();
@@ -202,12 +208,20 @@
       void tasksStore.refresh();
     }, 5000);
 
+    const workspaceInterval = window.setInterval(() => {
+      if (showMountModal || workspaceStore.loading || workspaceStore.busyAction) {
+        return;
+      }
+      void workspaceStore.refresh();
+    }, 4000);
+
     const unlistenDrops = await listenForFolderDrops(async (path) => {
-      await workspaceStore.index(path);
+      await workspaceStore.createMount(path, defaultMountName(path));
     });
 
     return () => {
       window.clearInterval(taskInterval);
+      window.clearInterval(workspaceInterval);
       tasksStore.dispose();
       sessionsStore.disconnect();
       workspaceStore.dispose();
@@ -281,6 +295,7 @@
           streaming={sessionsStore.streaming}
           loading={sessionsStore.loading}
           noBackend={noBackend}
+          {composerSeed}
           onSendMessage={handleSendMessage}
           onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}
@@ -290,23 +305,25 @@
       </div>
 
       <RightSidebar
+        currentPath={workspaceStore.currentPath}
         entries={workspaceStore.entries}
         searchResults={workspaceStore.searchResults}
         searchQuery={workspaceStore.searchQuery}
         selectedMount={workspaceStore.selectedMount}
-        mountDiff={workspaceStore.mountDiff}
+        selectedFile={workspaceStore.selectedFile}
+        selectedDocument={workspaceStore.selectedDocument}
+        changeGroups={workspaceStore.changeGroups}
+        loading={workspaceStore.loading}
+        fileLoading={workspaceStore.fileLoading}
+        searchLoading={workspaceStore.searchLoading}
+        busyAction={workspaceStore.busyAction}
         collapsed={rightSidebarCollapsed}
         onSearch={(query) => void workspaceStore.search(query)}
-        onRefresh={() => void workspaceStore.refresh()}
+        onClearSearch={() => workspaceStore.clearSearch()}
+        onClearPreview={() => workspaceStore.clearPreview()}
         onRequestMount={openMountModal}
-        onOpenEntry={(entry) => {
-          if (entry.kind === "mount" && entry.path) {
-            void workspaceStore.loadMount(entry.path);
-            void workspaceStore.fetch(entry.uri ?? "workspace://");
-          } else if (entry.is_directory && entry.uri) {
-            void workspaceStore.fetch(entry.uri);
-          }
-        }}
+        onNavigate={(path) => void workspaceStore.openPath(path)}
+        onOpenEntry={(entry) => void workspaceStore.openEntry(entry)}
         onKeepMount={(mountId, scopePath, checkpointId) => void workspaceStore.keepMount(mountId, scopePath, checkpointId)}
         onRevertMount={(mountId, scopePath, checkpointId) => void workspaceStore.revertMount(mountId, scopePath, checkpointId)}
         onCreateCheckpoint={(mountId, label, summary) => void workspaceStore.createCheckpoint(mountId, label, summary)}
@@ -370,6 +387,12 @@
                 创建挂载
               </button>
             </div>
+
+            {#if workspaceStore.error}
+              <p class="mount-modal-feedback error">{workspaceStore.error}</p>
+            {:else if workspaceStore.status}
+              <p class="mount-modal-feedback">{workspaceStore.status}</p>
+            {/if}
           </div>
         </div>
       </div>
@@ -532,6 +555,16 @@
     font-size: 13px;
     color: var(--text-primary);
     word-break: break-word;
+  }
+
+  .mount-modal-feedback {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .mount-modal-feedback.error {
+    color: var(--accent-danger);
   }
 
   .mount-name-input {

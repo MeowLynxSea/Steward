@@ -2,22 +2,24 @@
   import {
     AlertTriangle,
     Check,
-    ChevronDown,
     ChevronRight,
     FileText,
     Folder,
     FolderPlus,
     GitBranch,
-    HardDrive,
-    RefreshCw,
     Save,
     Search,
-    Undo2
+    Undo2,
+    X
   } from "lucide-svelte";
   import type {
     MountedFileDiff,
+    WorkspaceChangeGroup,
+    MountedFileStatus,
+    WorkspaceDocumentView,
     WorkspaceEntry,
     WorkspaceMountDetail,
+    WorkspaceMountFileView,
     WorkspaceSearchResult
   } from "../lib/types";
 
@@ -25,14 +27,23 @@
   type WorkspaceTab = "files" | "changes";
 
   interface Props {
+    currentPath: string;
     entries: WorkspaceEntry[];
     searchResults: WorkspaceSearchResult[];
     searchQuery: string;
     selectedMount: WorkspaceMountDetail | null;
-    mountDiff: MountedFileDiff[];
+    selectedFile: WorkspaceMountFileView | null;
+    selectedDocument: WorkspaceDocumentView | null;
+    changeGroups: WorkspaceChangeGroup[];
+    loading: boolean;
+    fileLoading: boolean;
+    searchLoading: boolean;
+    busyAction: string | null;
     collapsed?: boolean;
     onSearch: (query: string) => void;
-    onRefresh: () => void;
+    onClearSearch: () => void;
+    onClearPreview: () => void;
+    onNavigate: (path: string) => void;
     onOpenEntry: (entry: WorkspaceEntry) => void;
     onRequestMount: () => void;
     onKeepMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
@@ -49,14 +60,23 @@
   }
 
   let {
+    currentPath,
     entries,
     searchResults,
     searchQuery,
     selectedMount,
-    mountDiff,
+    selectedFile,
+    selectedDocument,
+    changeGroups,
+    loading,
+    fileLoading,
+    searchLoading,
+    busyAction,
     collapsed = false,
     onSearch,
-    onRefresh,
+    onClearSearch,
+    onClearPreview,
+    onNavigate,
     onOpenEntry,
     onRequestMount,
     onKeepMount,
@@ -68,38 +88,100 @@
 
   let localQuery = $state("");
   let activeTab = $state<WorkspaceTab>("files");
-  let expandedSections = $state<Record<string, boolean>>({ "临时空间": true });
   let mergeDrafts = $state<Record<string, string>>({});
   let copyDrafts = $state<Record<string, string>>({});
 
-  const sortedDiffs = $derived(
-    [...mountDiff].sort((left, right) => {
-      const weight = (status: string) => {
-        if (status === "conflicted") return 0;
-        if (status === "pending_delete") return 1;
-        if (status === "binary_modified") return 2;
-        return 3;
-      };
-      return weight(left.status) - weight(right.status) || left.path.localeCompare(right.path);
-    })
+  const sortedChangeGroups = $derived(
+    [...changeGroups]
+      .map((group) => ({
+        ...group,
+        entries: [...group.entries].sort((left, right) => {
+          const weight = (status: MountedFileStatus) => {
+            if (status === "conflicted") return 0;
+            if (status === "pending_delete") return 1;
+            if (status === "binary_modified") return 2;
+            return 3;
+          };
+          return weight(left.status) - weight(right.status) || left.path.localeCompare(right.path);
+        })
+      }))
+      .sort((left, right) =>
+        left.mount.summary.mount.display_name.localeCompare(right.mount.summary.mount.display_name)
+      )
   );
 
-  const visibleEntries = $derived(entries.filter((entry) => entry.kind !== "memory_root"));
+  const breadcrumbs = $derived(buildBreadcrumbs(currentPath, selectedMount?.summary.mount.display_name ?? null));
+  const previewOpen = $derived(fileLoading || Boolean(selectedDocument) || Boolean(selectedFile));
 
   $effect(() => {
     localQuery = searchQuery;
-    for (const diff of mountDiff) {
-      if (diff.status === "conflicted" && !mergeDrafts[diff.path]) {
-        mergeDrafts[diff.path] = createMergeDraft(diff);
-      }
-      if (diff.status === "conflicted" && !copyDrafts[diff.path]) {
-        copyDrafts[diff.path] = `${diff.path}.workspace-copy`;
+    for (const group of changeGroups) {
+      for (const diff of group.entries) {
+        const key = `${group.mount.summary.mount.id}:${diff.path}`;
+        if (diff.status === "conflicted" && !mergeDrafts[key]) {
+          mergeDrafts[key] = createMergeDraft(diff);
+        }
+        if (diff.status === "conflicted" && !copyDrafts[key]) {
+          copyDrafts[key] = `${diff.path}.workspace-copy`;
+        }
       }
     }
   });
 
   function handleSearch() {
     onSearch(localQuery);
+  }
+
+  function closePreview() {
+    onClearPreview();
+  }
+
+  function jumpToChanges() {
+    activeTab = "changes";
+    closePreview();
+  }
+
+  function mountIdFromUri(uri: string) {
+    if (!uri.startsWith("workspace://")) {
+      return null;
+    }
+
+    const remainder = uri.slice("workspace://".length);
+    if (!remainder) {
+      return null;
+    }
+
+    const [mountId] = remainder.split("/", 1);
+    return mountId || null;
+  }
+
+  function buildBreadcrumbs(path: string, mountName: string | null) {
+    const root = [{ label: "工作区", path: "workspace://" }];
+    if (path === "workspace://") {
+      return root;
+    }
+
+    if (!path.startsWith("workspace://")) {
+      const trail = [...root];
+      const segments = path.split("/").filter(Boolean);
+      let cursor = "";
+      for (const segment of segments) {
+        cursor = cursor ? `${cursor}/${segment}` : segment;
+        trail.push({ label: segment, path: cursor });
+      }
+      return trail;
+    }
+
+    const remainder = path.slice("workspace://".length);
+    const segments = remainder.split("/").filter(Boolean);
+    const [mountId, ...subpaths] = segments;
+    const trail = [...root, { label: mountName ?? mountId, path: `workspace://${mountId}` }];
+    let cursor = `workspace://${mountId}`;
+    for (const segment of subpaths) {
+      cursor = `${cursor}/${segment}`;
+      trail.push({ label: segment, path: cursor });
+    }
+    return trail;
   }
 
   function createMergeDraft(diff: MountedFileDiff) {
@@ -117,97 +199,151 @@
     ].join("\n");
   }
 
-  function statusLabel(status: string) {
+  function statusLabel(status: MountedFileStatus) {
     switch (status) {
+      case "clean": return "已同步";
       case "conflicted": return "冲突";
       case "pending_delete": return "待删除";
       case "binary_modified": return "二进制修改";
       case "added": return "新增";
       case "modified": return "修改";
-      default: return status;
     }
   }
 
   function entryLabel(entry: WorkspaceEntry) {
-    if (entry.kind === "mounts_root") return "Mounts";
     return entry.name ?? entry.path;
   }
 
   function treeIcon(entry: WorkspaceEntry) {
-    if (entry.kind === "mount") return HardDrive;
+    if (entry.kind === "mount") return Folder;
     return entry.is_directory ? Folder : FileText;
   }
 
-  function toggleSection(name: string) {
-    expandedSections[name] = !expandedSections[name];
+  function isEntryActive(entry: WorkspaceEntry) {
+    const uri = entry.uri ?? entry.path;
+    if (entry.kind === "mount") {
+      return currentPath === uri || currentPath.startsWith(`${uri}/`);
+    }
+    if (entry.is_directory) {
+      return currentPath === uri || currentPath.startsWith(`${uri}/`);
+    }
+    if (uri.startsWith("workspace://")) {
+      const mountId = mountIdFromUri(uri);
+      return selectedFile?.mount_id === mountId && selectedFile.path === entry.path;
+    }
+    return selectedDocument?.path === uri;
+  }
+
+  function previewHeadline(file: WorkspaceMountFileView) {
+    switch (file.status) {
+      case "clean":
+        return "当前磁盘内容";
+      case "modified":
+        return "文件有未提交变更";
+      case "added":
+        return "文件是工作区新增内容";
+      case "pending_delete":
+        return "文件标记为删除";
+      case "conflicted":
+        return "文件存在冲突";
+      case "binary_modified":
+        return "二进制文件已修改";
+    }
+  }
+
+  function previewBody(file: WorkspaceMountFileView) {
+    switch (file.status) {
+      case "clean":
+        return file.is_binary
+          ? "这是一个二进制文件，当前预览不可用。"
+          : "只读预览来自当前挂载文件。";
+      case "modified":
+        return "请切换到 Changes 标签页查看 diff，并决定保留或撤销。";
+      case "added":
+        return "这个文件还没有提交到磁盘基线，请在 Changes 标签页完成处理。";
+      case "pending_delete":
+        return "这个文件已被标记为删除，正文预览已停用。";
+      case "conflicted":
+        return "这个文件同时发生了磁盘变更和工作区变更，请到 Changes 标签页解决冲突。";
+      case "binary_modified":
+        return "这是一个二进制改动，正文预览不可用，请在 Changes 标签页决定保留或撤销。";
+    }
+  }
+
+  function diffKey(mountId: string, path: string) {
+    return `${mountId}:${path}`;
   }
 </script>
 
 <aside class="right-sidebar {collapsed ? 'collapsed' : ''}">
   <div class="right-sidebar-inner">
-    <!-- Header -->
-    <div class="workspace-header">
-      <span class="workspace-title">工作空间</span>
-      <div class="header-actions">
-        <button class="icon-btn" onclick={onRequestMount} aria-label="挂载目录">
-          <FolderPlus size={15} strokeWidth={2} />
-        </button>
-        <button class="icon-btn" onclick={onRefresh} aria-label="刷新">
-          <RefreshCw size={15} strokeWidth={2} />
-        </button>
-      </div>
-    </div>
-
-    <!-- Tabs -->
     <div class="tab-bar">
-      <button class="tab {activeTab === 'files' ? 'active' : ''}" onclick={() => activeTab = 'files'}>
-        文件
-      </button>
-      <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={() => activeTab = 'changes'}>
-        变更
+      <div class="tab-actions">
+        <button class="tab {activeTab === 'files' ? 'active' : ''}" onclick={() => activeTab = 'files'}>
+          文件
+        </button>
+        <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={() => activeTab = 'changes'}>
+          变更
+        </button>
+        {#if busyAction}
+          <span class="workspace-status">{busyAction}</span>
+        {/if}
+      </div>
+      <button class="icon-btn" onclick={onRequestMount} aria-label="挂载目录">
+        <FolderPlus size={15} strokeWidth={2} />
       </button>
     </div>
 
     {#if activeTab === "files"}
-      <!-- Search -->
       <div class="search-box">
         <Search size={14} strokeWidth={2} />
         <input
           type="text"
-          placeholder="搜索文件..."
+          placeholder="搜索工作区内容..."
           bind:value={localQuery}
           onkeydown={(event) => event.key === "Enter" && handleSearch()}
         />
+        {#if localQuery.trim()}
+          <button class="clear-search" onclick={onClearSearch} aria-label="清空搜索">
+            <X size={12} strokeWidth={2} />
+          </button>
+        {/if}
       </div>
 
-      <!-- File tree -->
-      <div class="file-tree">
-        {#if searchResults.length > 0}
-          {#each searchResults.slice(0, 10) as result}
-            <button class="tree-item" onclick={() => onUseResult(result)}>
-              <Search size={13} strokeWidth={2} />
-              <span class="tree-item-name">{result.document_path}</span>
-            </button>
-          {/each}
-        {:else}
-          <!-- Group entries by sections -->
-          {#each visibleEntries as entry}
-            {@const Icon = treeIcon(entry)}
-            {#if entry.kind === "mounts_root"}
-              <button
-                class="section-header"
-                onclick={() => toggleSection(entryLabel(entry))}
-              >
-                {#if expandedSections[entryLabel(entry)]}
-                  <ChevronDown size={14} strokeWidth={2} />
-                {:else}
-                  <ChevronRight size={14} strokeWidth={2} />
-                {/if}
-                <span>{entryLabel(entry)}</span>
+      <div class="breadcrumb-row">
+        {#each breadcrumbs as crumb, index}
+          <button class="breadcrumb" onclick={() => onNavigate(crumb.path)}>
+            {crumb.label}
+          </button>
+          {#if index < breadcrumbs.length - 1}
+            <ChevronRight size={12} strokeWidth={2} />
+          {/if}
+        {/each}
+      </div>
+
+      <div class="files-panel">
+        <div class="file-tree">
+          {#if searchLoading}
+            <div class="empty-hint">正在搜索...</div>
+          {:else if searchResults.length > 0}
+            {#each searchResults.slice(0, 10) as result}
+              <button class="search-result" onclick={() => onUseResult(result)}>
+                <div class="search-result-head">
+                  <Search size={13} strokeWidth={2} />
+                  <span>{result.document_path}</span>
+                </div>
+                <p>{result.content}</p>
               </button>
-            {:else}
+            {/each}
+          {:else if loading}
+            <div class="empty-hint">正在加载目录...</div>
+          {:else if entries.length === 0}
+            <div class="empty-hint">这里还没有内容。挂载本地文件夹后，会和工作区文件一起显示在这里。</div>
+          {:else}
+            {#each entries as entry}
+              {@const Icon = treeIcon(entry)}
               <button
-                class="tree-item {selectedMount?.summary.mount.id === entry.path && entry.kind === 'mount' ? 'active' : ''}"
+                class="tree-item {isEntryActive(entry) ? 'active' : ''}"
                 onclick={() => onOpenEntry(entry)}
               >
                 <span class="tree-item-icon {entry.is_directory ? 'folder' : ''}">
@@ -222,184 +358,246 @@
                     {#if entry.dirty_count}
                       <span class="badge">{entry.dirty_count}</span>
                     {/if}
+                    {#if entry.pending_delete_count}
+                      <span class="badge muted">{entry.pending_delete_count}</span>
+                    {/if}
                   </span>
                 {/if}
               </button>
-            {/if}
-          {/each}
-
-          {#if visibleEntries.length === 0}
-            <div class="empty-hint">这里还没有内容</div>
+            {/each}
           {/if}
-        {/if}
+        </div>
       </div>
-    {:else if activeTab === "changes"}
-      <!-- Changes tab -->
+    {:else}
       <div class="changes-panel">
-        {#if selectedMount}
-          <div class="mount-info">
-            <strong>{selectedMount.summary.mount.display_name}</strong>
-            <div class="mount-stats">
-              <span>{selectedMount.summary.dirty_count} 变更</span>
-              <span>{selectedMount.summary.conflict_count} 冲突</span>
-            </div>
-          </div>
-
-          <div class="mount-actions">
-            <button
-              class="action-btn"
-              onclick={() => onCreateCheckpoint(
-                selectedMount.summary.mount.id,
-                "Manual checkpoint",
-                "Created from workspace rail"
-              )}
-              aria-label="创建 checkpoint"
-            >
-              <GitBranch size={14} strokeWidth={2} />
-            </button>
-            <button class="action-btn primary" onclick={() => onKeepMount(selectedMount.summary.mount.id)}>
-              <Check size={13} strokeWidth={2} />
-              保留全部
-            </button>
-            <button class="action-btn" onclick={() => onRevertMount(selectedMount.summary.mount.id)}>
-              <Undo2 size={13} strokeWidth={2} />
-              撤销全部
-            </button>
-          </div>
-
-          {#if selectedMount.checkpoints.length > 0}
-            <div class="checkpoint-row">
-              {#each selectedMount.checkpoints.slice(0, 4) as checkpoint}
-                <button
-                  class="checkpoint-pill {checkpoint.is_auto ? 'auto' : 'manual'}"
-                  onclick={() => onRevertMount(selectedMount.summary.mount.id, undefined, checkpoint.id)}
-                >
-                  <span>{checkpoint.label ?? (checkpoint.is_auto ? "Auto" : "Checkpoint")}</span>
-                  <small>{checkpoint.changed_files.length} files</small>
-                </button>
-              {/each}
-            </div>
-          {/if}
-
+        {#if sortedChangeGroups.length === 0}
+          <div class="empty-hint">当前没有待处理变更</div>
+        {:else}
           <div class="diff-list">
-            {#if sortedDiffs.length === 0}
-              <div class="empty-hint">当前没有待处理变更</div>
-            {:else}
-              {#each sortedDiffs as diff}
-                <article class="diff-card {diff.status === 'conflicted' ? 'conflicted' : ''}">
-                  <div class="diff-card-head">
-                    <div>
-                      <strong>{diff.path}</strong>
-                      <p class="diff-status">{statusLabel(diff.status)}</p>
+            {#each sortedChangeGroups as group}
+              <section class="mount-group">
+                <div class="mount-info">
+                  <div>
+                    <strong>{group.mount.summary.mount.display_name}</strong>
+                    <div class="mount-stats">
+                      <span>{group.mount.summary.dirty_count} 变更</span>
+                      <span>{group.mount.summary.conflict_count} 冲突</span>
+                      <span>{group.mount.summary.pending_delete_count} 删除</span>
                     </div>
-                    {#if diff.status === "conflicted"}
-                      <span class="conflict-chip">
-                        <AlertTriangle size={12} strokeWidth={2} />
-                        需要处理
-                      </span>
-                    {/if}
                   </div>
+                  <div class="mount-actions">
+                    <button
+                      class="action-btn"
+                      onclick={() => onCreateCheckpoint(
+                        group.mount.summary.mount.id,
+                        "Manual checkpoint",
+                        "Created from workspace rail"
+                      )}
+                      aria-label="创建 checkpoint"
+                    >
+                      <GitBranch size={13} strokeWidth={2} />
+                    </button>
+                    <button class="action-btn primary" onclick={() => onKeepMount(group.mount.summary.mount.id)}>
+                      <Check size={12} strokeWidth={2} />
+                      保留全部
+                    </button>
+                    <button class="action-btn" onclick={() => onRevertMount(group.mount.summary.mount.id)}>
+                      <Undo2 size={12} strokeWidth={2} />
+                      撤销全部
+                    </button>
+                  </div>
+                </div>
 
-                  {#if diff.conflict_reason}
-                    <div class="notice danger">{diff.conflict_reason}</div>
-                  {/if}
+                {#if group.mount.checkpoints.length > 0}
+                  <div class="checkpoint-row">
+                    {#each group.mount.checkpoints.slice(0, 4) as checkpoint}
+                      <button
+                        class="checkpoint-pill {checkpoint.is_auto ? 'auto' : 'manual'}"
+                        onclick={() => onRevertMount(group.mount.summary.mount.id, undefined, checkpoint.id)}
+                      >
+                        <span>{checkpoint.label ?? (checkpoint.is_auto ? "Auto" : "Checkpoint")}</span>
+                        <small>{checkpoint.changed_files.length} files</small>
+                      </button>
+                    {/each}
+                  </div>
+                {/if}
 
-                  {#if diff.status === "conflicted"}
-                    <div class="conflict-actions">
-                      <button class="action-btn" onclick={() => onResolveConflict(selectedMount.summary.mount.id, diff.path, "keep_disk")}>
-                        保留磁盘版本
-                      </button>
-                      <button class="action-btn" onclick={() => onResolveConflict(selectedMount.summary.mount.id, diff.path, "keep_workspace")}>
-                        保留工作区版本
-                      </button>
+                {#each group.entries as diff}
+                  {@const key = diffKey(group.mount.summary.mount.id, diff.path)}
+                  <article class="diff-card {diff.status === 'conflicted' ? 'conflicted' : ''}">
+                    <div class="diff-card-head">
+                      <div class="diff-card-meta">
+                        <strong>{diff.path}</strong>
+                        <p class="diff-status">{statusLabel(diff.status)}</p>
+                      </div>
+                      {#if diff.status === "conflicted"}
+                        <span class="conflict-chip">
+                          <AlertTriangle size={12} strokeWidth={2} />
+                          需要处理
+                        </span>
+                      {/if}
                     </div>
 
-                    {#if diff.is_binary}
-                      <div class="binary-notice">二进制冲突无法自动 merge</div>
-                    {:else}
-                      <div class="conflict-columns">
-                        <section>
-                          <span>Base</span>
-                          <pre>{diff.base_content ?? "(empty)"}</pre>
-                        </section>
-                        <section>
-                          <span>Disk</span>
-                          <pre>{diff.remote_content ?? "(empty)"}</pre>
-                        </section>
-                        <section>
-                          <span>Workspace</span>
-                          <pre>{diff.working_content ?? "(empty)"}</pre>
-                        </section>
+                    {#if diff.conflict_reason}
+                      <div class="notice danger">{diff.conflict_reason}</div>
+                    {/if}
+
+                    {#if diff.status === "conflicted"}
+                      <div class="conflict-actions">
+                        <button class="action-btn" onclick={() => onResolveConflict(group.mount.summary.mount.id, diff.path, "keep_disk")}>
+                          保留磁盘版本
+                        </button>
+                        <button class="action-btn" onclick={() => onResolveConflict(group.mount.summary.mount.id, diff.path, "keep_workspace")}>
+                          保留工作区版本
+                        </button>
                       </div>
 
-                      <div class="manual-merge">
-                        <div class="merge-head">
-                          <strong>手工合并</strong>
-                          <button class="action-btn" onclick={() => (mergeDrafts[diff.path] = createMergeDraft(diff))}>
-                            重置草稿
+                      {#if diff.is_binary}
+                        <div class="binary-notice">二进制冲突无法自动 merge</div>
+                      {:else}
+                        <div class="conflict-columns">
+                          <section>
+                            <span>Base</span>
+                            <pre>{diff.base_content ?? "(empty)"}</pre>
+                          </section>
+                          <section>
+                            <span>Disk</span>
+                            <pre>{diff.remote_content ?? "(empty)"}</pre>
+                          </section>
+                          <section>
+                            <span>Workspace</span>
+                            <pre>{diff.working_content ?? "(empty)"}</pre>
+                          </section>
+                        </div>
+
+                        <div class="manual-merge">
+                          <div class="merge-head">
+                            <strong>手工合并</strong>
+                            <button class="action-btn" onclick={() => (mergeDrafts[key] = createMergeDraft(diff))}>
+                              重置草稿
+                            </button>
+                          </div>
+                          <textarea bind:value={mergeDrafts[key]} rows="10"></textarea>
+                          <button
+                            class="action-btn primary"
+                            onclick={() => onResolveConflict(
+                              group.mount.summary.mount.id,
+                              diff.path,
+                              "manual_merge",
+                              undefined,
+                              mergeDrafts[key]
+                            )}
+                          >
+                            <Save size={13} strokeWidth={2} />
+                            保存合并结果
                           </button>
                         </div>
-                        <textarea bind:value={mergeDrafts[diff.path]} rows="12"></textarea>
-                        <button
-                          class="action-btn primary"
-                          onclick={() => onResolveConflict(
-                            selectedMount.summary.mount.id,
-                            diff.path,
-                            "manual_merge",
-                            undefined,
-                            mergeDrafts[diff.path]
-                          )}
-                        >
-                          <Save size={13} strokeWidth={2} />
-                          保存合并结果
+                      {/if}
+
+                      <div class="copy-row">
+                        <input type="text" bind:value={copyDrafts[key]} placeholder="冲突副本路径..." />
+                        <button class="action-btn" onclick={() => onResolveConflict(
+                          group.mount.summary.mount.id,
+                          diff.path,
+                          "write_copy",
+                          copyDrafts[key]
+                        )}>
+                          写为副本
+                        </button>
+                      </div>
+                    {:else}
+                      {#if diff.diff_text}
+                        <pre>{diff.diff_text}</pre>
+                      {:else if diff.working_content}
+                        <pre>{diff.working_content}</pre>
+                      {:else}
+                        <div class="binary-notice">二进制或删除变更</div>
+                      {/if}
+
+                      <div class="diff-item-actions">
+                        <button class="action-btn primary" onclick={() => onKeepMount(group.mount.summary.mount.id, diff.path)}>
+                          保留文件
+                        </button>
+                        <button class="action-btn" onclick={() => onRevertMount(group.mount.summary.mount.id, diff.path)}>
+                          撤销文件
                         </button>
                       </div>
                     {/if}
-
-                    <div class="copy-row">
-                      <input type="text" bind:value={copyDrafts[diff.path]} placeholder="冲突副本路径..." />
-                      <button class="action-btn" onclick={() => onResolveConflict(
-                        selectedMount.summary.mount.id,
-                        diff.path,
-                        "write_copy",
-                        copyDrafts[diff.path]
-                      )}>
-                        写为副本
-                      </button>
-                    </div>
-                  {:else}
-                    {#if diff.diff_text}
-                      <pre>{diff.diff_text}</pre>
-                    {:else if diff.working_content}
-                      <pre>{diff.working_content}</pre>
-                    {:else}
-                      <div class="binary-notice">二进制或删除变更</div>
-                    {/if}
-
-                    <div class="diff-item-actions">
-                      <button class="action-btn primary" onclick={() => onKeepMount(selectedMount.summary.mount.id, diff.path)}>
-                        保留文件
-                      </button>
-                      <button class="action-btn" onclick={() => onRevertMount(selectedMount.summary.mount.id, diff.path)}>
-                        撤销文件
-                      </button>
-                    </div>
-                  {/if}
-                </article>
-              {/each}
-            {/if}
+                  </article>
+                {/each}
+              </section>
+            {/each}
           </div>
-        {:else}
-          <div class="empty-hint">选择一个挂载目录查看变更</div>
         {/if}
       </div>
     {/if}
   </div>
 </aside>
 
+{#if previewOpen}
+  <div
+    class="preview-modal-backdrop"
+    role="presentation"
+    onclick={closePreview}
+    onkeydown={(event) => event.key === "Escape" && closePreview()}
+  >
+    <div
+      class="preview-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="文件预览"
+      tabindex="-1"
+    >
+      <div class="preview-modal-inner" role="presentation" onclick={(event) => event.stopPropagation()}>
+        <div class="preview-modal-head">
+          <div class="preview-modal-title">
+            <strong>{selectedDocument?.path ?? selectedFile?.path ?? "文件预览"}</strong>
+            <span>
+              {#if selectedDocument}
+                工作区文件
+              {:else if selectedFile}
+                {statusLabel(selectedFile.status)}
+              {:else}
+                正在加载
+              {/if}
+            </span>
+          </div>
+          <button class="icon-btn" onclick={closePreview} aria-label="关闭预览">
+            <X size={16} strokeWidth={2} />
+          </button>
+        </div>
+
+        <div class="preview-modal-body">
+          {#if fileLoading}
+            <div class="preview-empty">正在加载文件预览...</div>
+          {:else if selectedDocument}
+            <p class="preview-meta">只读预览当前工作区文档内容。</p>
+            <pre>{selectedDocument.content || "(empty file)"}</pre>
+          {:else if selectedFile}
+            <p class="preview-meta">{previewHeadline(selectedFile)}</p>
+
+            {#if selectedFile.status === "clean" && !selectedFile.is_binary}
+              <pre>{selectedFile.content ?? "(empty file)"}</pre>
+            {:else}
+              <div class="preview-summary">
+                <p>{previewBody(selectedFile)}</p>
+                {#if selectedFile.status !== "clean"}
+                  <button class="jump-button" onclick={jumpToChanges}>
+                    跳到 Changes
+                  </button>
+                {/if}
+              </div>
+            {/if}
+          {/if}
+        </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .right-sidebar {
-    width: 300px;
+    width: 340px;
     background: var(--bg-sidebar);
     border-left: 1px solid var(--border-default);
     display: flex;
@@ -421,70 +619,89 @@
     flex: 1;
     flex-direction: column;
     min-height: 0;
-    min-width: 280px;
-    padding: 16px;
-    gap: 12px;
+    min-width: 300px;
+    padding: 12px;
+    gap: 8px;
   }
 
-  /* Header */
-  .workspace-header {
+  .mount-actions,
+  .merge-head,
+  .diff-item-actions,
+  .conflict-actions,
+  .copy-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 8px;
   }
 
-  .workspace-title {
-    font-size: 15px;
-    font-weight: 700;
-    color: var(--text-primary);
+  .workspace-status,
+  .preview-meta,
+  .mount-stats,
+  .diff-status,
+  .empty-hint,
+  .preview-empty {
+    color: var(--text-muted);
+    font-size: 12px;
   }
 
-  .header-actions {
+  .tree-item-badges,
+  .tab-actions {
     display: flex;
     gap: 6px;
   }
 
-  .icon-btn {
+  .icon-btn,
+  .tab,
+  .tree-item,
+  .search-result,
+  .action-btn,
+  .checkpoint-pill,
+  .breadcrumb,
+  .clear-search,
+  .jump-button {
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
+  }
+
+  .icon-btn,
+  .clear-search {
     width: 30px;
     height: 30px;
     border-radius: 8px;
     background: transparent;
-    border: none;
     color: var(--text-tertiary);
-    cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s ease;
   }
 
-  .icon-btn:hover {
+  .icon-btn:hover,
+  .clear-search:hover,
+  .tree-item:hover,
+  .search-result:hover,
+  .action-btn:hover,
+  .checkpoint-pill:hover,
+  .jump-button:hover {
     background: var(--bg-hover);
   }
 
-  /* Tabs */
   .tab-bar {
     display: flex;
-    gap: 2px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0;
     border-bottom: 1px solid var(--border-default);
-    padding-bottom: 0;
   }
 
   .tab {
-    padding: 6px 16px;
-    font-size: 13px;
-    font-weight: 500;
+    padding: 6px 12px;
+    font-size: 12px;
     color: var(--text-tertiary);
     background: transparent;
-    border: none;
     border-bottom: 2px solid transparent;
-    cursor: pointer;
-    transition: color 0.15s ease, border-color 0.15s ease;
     margin-bottom: -1px;
-  }
-
-  .tab:hover {
-    color: var(--text-primary);
   }
 
   .tab.active {
@@ -492,79 +709,83 @@
     border-bottom-color: var(--accent-primary);
   }
 
-  /* Search */
   .search-box {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    border-radius: 10px;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 9px;
     background: var(--bg-input);
     color: var(--text-tertiary);
   }
 
-  .search-box input {
+  .search-box input,
+  .copy-row input,
+  .manual-merge textarea {
     flex: 1;
     background: transparent;
     border: none;
     color: var(--text-primary);
-    font-size: 13px;
+    font: inherit;
     outline: none;
+  }
+
+  .search-box input {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .breadcrumb-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+    min-height: 22px;
+  }
+
+  .breadcrumb {
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
     padding: 0;
   }
 
-  .search-box input::placeholder {
-    color: var(--text-muted);
+  .files-panel,
+  .changes-panel,
+  .diff-list {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    gap: 8px;
   }
 
-  /* File tree */
-  .file-tree {
-    flex: 1;
+  .file-tree,
+  .diff-list {
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 6px;
   }
 
-  .section-header {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 8px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    background: transparent;
-    border: none;
-    cursor: pointer;
+  .file-tree {
+    flex: 1;
+  }
+
+  .tree-item,
+  .search-result {
     width: 100%;
     text-align: left;
-    transition: background 0.15s ease;
-  }
-
-  .section-header:hover {
-    background: var(--bg-hover);
-    border-radius: 8px;
+    border-radius: 10px;
+    padding: 8px 10px;
+    background: transparent;
+    color: var(--text-primary);
   }
 
   .tree-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px 6px 24px;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: transparent;
-    border: none;
-    cursor: pointer;
-    width: 100%;
-    text-align: left;
-    border-radius: 8px;
-    transition: background 0.15s ease;
-  }
-
-  .tree-item:hover {
-    background: var(--bg-hover);
   }
 
   .tree-item.active {
@@ -572,9 +793,9 @@
   }
 
   .tree-item-icon {
+    color: var(--text-tertiary);
     display: inline-flex;
     align-items: center;
-    color: var(--text-tertiary);
     flex-shrink: 0;
   }
 
@@ -586,13 +807,10 @@
     flex: 1;
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .tree-item-badges {
-    display: flex;
-    gap: 4px;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    line-height: 1.3;
   }
 
   .badge {
@@ -614,72 +832,106 @@
     color: var(--accent-danger-text);
   }
 
-  .empty-hint {
-    padding: 16px 8px;
-    color: var(--text-muted);
-    font-size: 12px;
+  .badge.muted {
+    background: var(--bg-hover);
   }
 
-  /* Changes tab */
-  .changes-panel {
-    flex: 1;
+  .search-result {
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+  }
+
+  .search-result-head {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
-    min-height: 0;
-    overflow-y: auto;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
   }
 
-  .mount-info {
-    padding: 0 4px;
+  .search-result p {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
   }
 
-  .mount-info strong {
-    font-size: 14px;
+  .mount-info,
+  .mount-group,
+  .diff-card,
+  .notice,
+  .binary-notice,
+  .manual-merge,
+  .copy-row,
+  .preview-summary {
+    border: 1px solid var(--border-default);
+    border-radius: 12px;
+    background: var(--bg-surface);
+  }
+
+  .search-result-head,
+  .diff-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .preview-modal-body pre,
+  .diff-card pre,
+  .conflict-columns pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+    font-size: 12px;
+    line-height: 1.55;
     color: var(--text-primary);
   }
 
-  .mount-stats {
-    display: flex;
-    gap: 12px;
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--text-tertiary);
+  .preview-summary,
+  .preview-empty {
+    padding: 12px;
   }
 
-  .mount-actions {
-    display: flex;
-    gap: 6px;
-    flex-wrap: wrap;
-  }
-
-  .action-btn {
+  .jump-button,
+  .action-btn,
+  .checkpoint-pill {
+    border-radius: 9px;
+    padding: 7px 9px;
+    background: var(--bg-hover);
+    color: var(--text-primary);
     display: inline-flex;
     align-items: center;
-    gap: 5px;
-    padding: 5px 10px;
-    border-radius: 8px;
-    font-size: 12px;
-    font-weight: 500;
-    background: var(--bg-hover);
-    color: var(--text-secondary);
-    border: none;
-    cursor: pointer;
-    transition: background 0.15s ease, transform 0.1s ease;
+    justify-content: center;
+    gap: 6px;
+    font-size: 11px;
   }
 
-  .action-btn:hover {
-    background: var(--bg-active);
-    transform: translateY(-1px);
-  }
-
-  .action-btn.primary {
+  .action-btn.primary,
+  .jump-button {
     background: var(--accent-primary);
     color: var(--text-on-dark);
   }
 
-  .action-btn.primary:hover {
-    opacity: 0.9;
+  .mount-info,
+  .diff-card,
+  .manual-merge,
+  .copy-row {
+    padding: 10px;
+  }
+
+  .mount-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .mount-stats {
+    display: flex;
+    gap: 8px;
+    margin-top: 2px;
   }
 
   .checkpoint-row {
@@ -690,170 +942,88 @@
   }
 
   .checkpoint-pill {
-    display: inline-flex;
     flex-direction: column;
-    gap: 2px;
-    min-width: 90px;
-    padding: 8px 10px;
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.04);
-    color: #5c5c5c;
-    font-size: 12px;
-    border: none;
-    cursor: pointer;
-    transition: background 0.15s ease;
-  }
-
-  .checkpoint-pill:hover {
-    background: var(--bg-active);
-  }
-
-  .checkpoint-pill.auto {
-    background: rgba(121, 123, 185, 0.1);
-    color: #4a4f88;
-  }
-
-  .checkpoint-pill.manual {
-    background: rgba(203, 162, 71, 0.12);
-    color: #845f16;
+    align-items: flex-start;
+    min-width: 112px;
   }
 
   .checkpoint-pill small {
+    color: var(--text-muted);
     font-size: 10px;
-    opacity: 0.7;
   }
 
-  .diff-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    overflow-y: auto;
+  .checkpoint-pill.auto {
+    border: 1px dashed var(--border-input);
   }
 
   .diff-card {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    padding: 12px;
-    border-radius: 12px;
-    background: var(--bg-hover);
+    gap: 8px;
+  }
+
+  .diff-card-meta {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .diff-card-meta strong,
+  .mount-info strong {
+    font-size: 12px;
+    line-height: 1.3;
   }
 
   .diff-card.conflicted {
-    box-shadow: inset 0 0 0 1px var(--accent-danger);
-    background: var(--accent-danger);
-  }
-
-  .diff-card-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-  }
-
-  .diff-card-head strong {
-    font-size: 13px;
-    color: var(--text-primary);
-  }
-
-  .diff-status {
-    font-size: 12px;
-    color: var(--text-tertiary);
-    margin-top: 2px;
+    border-color: var(--accent-danger);
   }
 
   .conflict-chip {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
-    border-radius: 999px;
+    gap: 6px;
     padding: 4px 8px;
-    background: var(--accent-danger);
-    color: var(--accent-danger-text);
+    border-radius: 999px;
+    background: rgba(220, 38, 38, 0.12);
+    color: var(--accent-danger);
     font-size: 11px;
-    font-weight: 600;
-    white-space: nowrap;
+    font-weight: 700;
   }
 
-  .notice {
-    border-radius: 10px;
+  .notice,
+  .binary-notice {
     padding: 8px 10px;
-    font-size: 12px;
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .notice.danger {
-    background: var(--accent-danger);
-    color: var(--accent-danger-text);
-  }
-
-  .conflict-actions,
-  .diff-item-actions,
-  .copy-row,
-  .merge-head {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    align-items: center;
+    border-color: rgba(220, 38, 38, 0.25);
+    background: rgba(220, 38, 38, 0.08);
   }
 
   .conflict-columns {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 8px;
+    gap: 6px;
   }
 
   .conflict-columns section {
     border-radius: 10px;
-    background: var(--bg-surface);
-    border: 1px solid var(--border-default);
-    padding: 8px;
-  }
-
-  .conflict-columns section span {
-    display: inline-block;
-    margin-bottom: 6px;
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-tertiary);
-  }
-
-  .binary-notice {
-    border-radius: 10px;
     background: var(--bg-hover);
-    border: 1px solid var(--border-default);
-    padding: 10px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .conflict-columns span,
+  .merge-head strong {
     font-size: 12px;
-    color: var(--text-tertiary);
-  }
-
-  pre,
-  textarea,
-  input {
-    box-sizing: border-box;
-    width: 100%;
-    border: 1px solid var(--border-input);
-    border-radius: 10px;
-    background: var(--bg-surface);
-    padding: 8px 10px;
-    font: inherit;
-    color: var(--text-primary);
-  }
-
-  pre,
-  textarea {
-    overflow: auto;
-    font-family: "SF Mono", "JetBrains Mono", monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  textarea {
-    min-height: 180px;
-    resize: vertical;
+    font-weight: 700;
+    color: var(--text-secondary);
   }
 
   .manual-merge {
@@ -862,13 +1032,97 @@
     gap: 8px;
   }
 
-  @media (max-width: 1024px) {
+  .manual-merge textarea {
+    min-height: 180px;
+    resize: vertical;
+  }
+
+  .copy-row {
+    gap: 8px;
+  }
+
+  .preview-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background: rgba(9, 12, 20, 0.44);
+    backdrop-filter: blur(10px);
+  }
+
+  .preview-modal {
+    width: min(1100px, calc(100vw - 56px));
+    height: min(82vh, 900px);
+    border-radius: 24px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-dropdown);
+    overflow: hidden;
+  }
+
+  .preview-modal-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .preview-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .preview-modal-title {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .preview-modal-title strong {
+    color: var(--text-primary);
+    font-size: 15px;
+  }
+
+  .preview-modal-title span {
+    color: var(--text-muted);
+    font-size: 12px;
+  }
+
+  .preview-modal-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 20px 20px;
+    overflow: auto;
+  }
+
+  @media (max-width: 1100px) {
     .right-sidebar {
-      width: min(40vw, 300px);
+      width: 320px;
     }
 
     .conflict-columns {
       grid-template-columns: 1fr;
+    }
+
+    .preview-modal {
+      width: calc(100vw - 24px);
+      height: calc(100vh - 24px);
+      border-radius: 18px;
+    }
+
+    .preview-modal-backdrop {
+      padding: 12px;
     }
   }
 </style>

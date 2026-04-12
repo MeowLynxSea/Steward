@@ -155,21 +155,13 @@ export interface WorkspaceEntry {
   pending_delete_count?: number;
 }
 
-export interface WorkspaceIndexJob {
+export interface WorkspaceDocumentView {
   id: string;
   path: string;
-  import_root: string;
-  manifest_path: string;
-  status: string;
-  phase: string;
-  total_files: number;
-  processed_files: number;
-  indexed_files: number;
-  skipped_files: number;
-  error: string | null;
-  started_at: string;
+  content: string;
   updated_at: string;
-  completed_at: string | null;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface WorkspaceSearchResult {
@@ -341,10 +333,18 @@ export interface WorkspaceMountCheckpoint {
   changed_files: string[];
 }
 
+export type MountedFileStatus =
+  | "clean"
+  | "modified"
+  | "added"
+  | "pending_delete"
+  | "conflicted"
+  | "binary_modified";
+
 export interface MountedFileDiff {
   path: string;
   uri: string;
-  status: string;
+  status: MountedFileStatus;
   is_binary: boolean;
   base_content: string | null;
   working_content: string | null;
@@ -362,6 +362,21 @@ export interface WorkspaceMountDetail {
   summary: WorkspaceMountSummary;
   checkpoints: WorkspaceMountCheckpoint[];
   open_change_count: number;
+}
+
+export interface WorkspaceChangeGroup {
+  mount: WorkspaceMountDetail;
+  entries: MountedFileDiff[];
+}
+
+export interface WorkspaceMountFileView {
+  mount_id: string;
+  path: string;
+  uri: string;
+  status: MountedFileStatus;
+  is_binary: boolean;
+  content: string | null;
+  updated_at: string;
 }
 
 export interface WorkbenchMcpServer {

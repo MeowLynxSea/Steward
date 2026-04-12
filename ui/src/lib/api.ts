@@ -14,11 +14,12 @@ import type {
   TaskDetail,
   TaskRecord,
   WorkbenchCapabilities,
+  WorkspaceDocumentView,
   WorkspaceEntry,
-  WorkspaceIndexJob,
   WorkspaceMountCheckpoint,
   WorkspaceMountDetail,
   WorkspaceMountDiff,
+  WorkspaceMountFileView,
   WorkspaceMountSummary,
   WorkspaceSearchResult
 } from "./types";
@@ -106,18 +107,14 @@ export const apiClient = {
 
   // -- Workspace --
 
-  indexWorkspace(path: string) {
-    return invoke<{ job: WorkspaceIndexJob }>("index_workspace", { path });
-  },
-
-  getWorkspaceIndexJob(id: string) {
-    return invoke<WorkspaceIndexJob>("get_workspace_index_job", { id });
-  },
-
   getWorkspaceTree(path = "") {
     return invoke<{ path: string; entries: WorkspaceEntry[] }>("get_workspace_tree", {
       path
     });
+  },
+
+  getWorkspaceDocument(path: string) {
+    return invoke<WorkspaceDocumentView>("get_workspace_document", { path });
   },
 
   searchWorkspace(query: string) {
@@ -177,6 +174,10 @@ export const apiClient = {
 
   getWorkspaceMount(id: string) {
     return invoke<WorkspaceMountDetail>("get_workspace_mount", { id });
+  },
+
+  getWorkspaceMountFile(id: string, path: string) {
+    return invoke<WorkspaceMountFileView>("get_workspace_mount_file", { id, path });
   },
 
   getWorkspaceMountDiff(id: string, scopePath?: string) {

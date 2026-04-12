@@ -1615,32 +1615,66 @@ impl WorkspaceStore for LibSqlBackend {
     async fn list_workspace_tree(
         &self,
         user_id: &str,
-        _agent_id: Option<Uuid>,
+        agent_id: Option<Uuid>,
         uri: &str,
     ) -> Result<Vec<WorkspaceTreeEntry>, WorkspaceError> {
         let parsed = WorkspaceUri::parse(uri)?.ok_or_else(|| WorkspaceError::InvalidDocType {
             doc_type: uri.to_string(),
         })?;
         match parsed {
-            WorkspaceUri::Root => Ok(self
-                .list_mount_summaries_internal(user_id)
-                .await?
-                .into_iter()
-                .map(|summary| WorkspaceTreeEntry {
-                    name: summary.mount.display_name.clone(),
-                    path: summary.mount.id.to_string(),
-                    uri: WorkspaceUri::mount_uri(summary.mount.id, None),
-                    is_directory: true,
-                    kind: WorkspaceTreeEntryKind::Mount,
-                    status: None,
-                    updated_at: Some(summary.mount.updated_at),
-                    content_preview: None,
-                    bypass_write: Some(summary.mount.bypass_write),
-                    dirty_count: summary.dirty_count,
-                    conflict_count: summary.conflict_count,
-                    pending_delete_count: summary.pending_delete_count,
-                })
-                .collect()),
+            WorkspaceUri::Root => {
+                let mut entries: Vec<WorkspaceTreeEntry> = self
+                    .list_directory(user_id, agent_id, "")
+                    .await?
+                    .into_iter()
+                    .map(|entry| WorkspaceTreeEntry {
+                        name: entry.name().to_string(),
+                        path: entry.path.clone(),
+                        uri: entry.path.clone(),
+                        is_directory: entry.is_directory,
+                        kind: if entry.is_directory {
+                            WorkspaceTreeEntryKind::MemoryDirectory
+                        } else {
+                            WorkspaceTreeEntryKind::MemoryFile
+                        },
+                        status: None,
+                        updated_at: entry.updated_at,
+                        content_preview: entry.content_preview,
+                        bypass_write: None,
+                        dirty_count: 0,
+                        conflict_count: 0,
+                        pending_delete_count: 0,
+                    })
+                    .collect();
+
+                entries.extend(
+                    self.list_mount_summaries_internal(user_id)
+                        .await?
+                        .into_iter()
+                        .map(|summary| WorkspaceTreeEntry {
+                            name: summary.mount.display_name.clone(),
+                            path: summary.mount.id.to_string(),
+                            uri: WorkspaceUri::mount_uri(summary.mount.id, None),
+                            is_directory: true,
+                            kind: WorkspaceTreeEntryKind::Mount,
+                            status: None,
+                            updated_at: Some(summary.mount.updated_at),
+                            content_preview: None,
+                            bypass_write: Some(summary.mount.bypass_write),
+                            dirty_count: summary.dirty_count,
+                            conflict_count: summary.conflict_count,
+                            pending_delete_count: summary.pending_delete_count,
+                        }),
+                );
+
+                entries.sort_by(|left, right| match (left.is_directory, right.is_directory) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => left.name.cmp(&right.name),
+                });
+
+                Ok(entries)
+            }
             WorkspaceUri::MountRoot(mount_id) => {
                 let mount = self.fetch_mount(user_id, mount_id).await?;
                 let prefix = String::new();
@@ -2894,6 +2928,14 @@ mod tests {
         let (backend, dir) = setup_backend().await;
         let mount_root = dir.path().join("root-project");
         std::fs::create_dir_all(&mount_root).expect("create mount root");
+        let agents = backend
+            .get_or_create_document_by_path("default", None, "AGENTS.md")
+            .await
+            .expect("create AGENTS");
+        backend
+            .update_document(agents.id, "# agent rules")
+            .await
+            .expect("update AGENTS");
 
         let mount = backend
             .create_workspace_mount(&CreateMountRequest {
@@ -2909,22 +2951,31 @@ mod tests {
             .list_workspace_tree("default", None, "workspace://")
             .await
             .expect("list workspace root");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].kind, WorkspaceTreeEntryKind::Mount);
-        assert_eq!(entries[0].path, mount.mount.id.to_string());
-        assert_eq!(
-            entries[0].uri,
-            WorkspaceUri::mount_uri(mount.mount.id, None)
+        assert!(
+            entries.iter().any(|entry| {
+                entry.kind == WorkspaceTreeEntryKind::Mount
+                    && entry.path == mount.mount.id.to_string()
+                    && entry.uri == WorkspaceUri::mount_uri(mount.mount.id, None)
+            }),
+            "workspace root should include mounted folders"
+        );
+        assert!(
+            entries.iter().any(|entry| {
+                entry.kind == WorkspaceTreeEntryKind::MemoryFile && entry.path == "AGENTS.md"
+            }),
+            "workspace root should include workspace-owned files"
         );
 
         let legacy_entries = backend
             .list_workspace_tree("default", None, "workspace://mounts")
             .await
             .expect("list legacy workspace root");
-        assert_eq!(legacy_entries.len(), 1);
-        assert_eq!(
-            legacy_entries[0].uri,
-            WorkspaceUri::mount_uri(mount.mount.id, None)
+        assert!(
+            legacy_entries.iter().any(|entry| {
+                entry.kind == WorkspaceTreeEntryKind::Mount
+                    && entry.uri == WorkspaceUri::mount_uri(mount.mount.id, None)
+            }),
+            "legacy root alias should still expose mounted folders"
         );
     }
 

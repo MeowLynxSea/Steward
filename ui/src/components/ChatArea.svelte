@@ -27,6 +27,7 @@
     streaming: StreamingState;
     loading: boolean;
     noBackend?: boolean;
+    composerSeed?: { id: string; content: string } | null;
     onSendMessage: (content: string) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
@@ -43,6 +44,7 @@
     task,
     streaming,
     loading,
+    composerSeed = null,
     onSendMessage,
     onSuggestionClick,
     onApproveTask,
@@ -65,6 +67,7 @@
   let thinkingTypingTimer: ReturnType<typeof setTimeout> | null = null;
   let settlingAuxiliarySummaries = $state<Set<string>>(new Set());
   let lastLiveThinkingId = $state<string | null>(null);
+  let lastComposerSeedId = $state<string | null>(null);
 
   const auxiliarySummaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -183,6 +186,19 @@
     void streaming.thinkingMessage;
     void session?.thread_messages.length;
     scrollToBottom();
+  });
+
+  $effect(() => {
+    if (!composerSeed || composerSeed.id === lastComposerSeedId) {
+      return;
+    }
+
+    draftMessage = draftMessage.trim()
+      ? `${draftMessage.trim()}\n\n${composerSeed.content}`
+      : composerSeed.content;
+    lastComposerSeedId = composerSeed.id;
+    autoResize();
+    textareaRef?.focus();
   });
 
   function toggleToolCallExpand(id: string) {

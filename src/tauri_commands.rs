@@ -15,8 +15,7 @@ use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
     CreateWorkspaceMountRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
     PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
-    SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceIndexRequest,
-    WorkspaceSearchRequest,
+    SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceSearchRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -1689,63 +1688,6 @@ pub async fn patch_task_mode(
 // =============================================================================
 
 #[tauri::command]
-pub async fn index_workspace(
-    state: State<'_, AppState>,
-    payload: WorkspaceIndexRequest,
-) -> Result<steward_core::ipc::WorkspaceIndexResponse, String> {
-    let workspace = state
-        .workspace
-        .as_ref()
-        .ok_or_else(|| "Workspace not available".to_string())?;
-
-    let job_id = Uuid::new_v4();
-    let now = chrono::Utc::now();
-
-    let result = workspace.index_all().await;
-
-    let (status, indexed_files, error) = match result {
-        Ok(count) => ("completed".to_string(), count, None),
-        Err(e) => ("failed".to_string(), 0, Some(e.to_string())),
-    };
-
-    Ok(steward_core::ipc::WorkspaceIndexResponse {
-        job: steward_core::ipc::WorkspaceIndexJobResponse {
-            id: job_id,
-            path: payload.path,
-            import_root: String::new(),
-            manifest_path: String::new(),
-            status,
-            phase: if error.is_some() {
-                "error".to_string()
-            } else {
-                "completed".to_string()
-            },
-            total_files: indexed_files,
-            processed_files: indexed_files,
-            indexed_files,
-            skipped_files: 0,
-            error,
-            started_at: now,
-            updated_at: chrono::Utc::now(),
-            completed_at: Some(chrono::Utc::now()),
-        },
-    })
-}
-
-#[tauri::command]
-pub async fn get_workspace_index_job(
-    _state: State<'_, AppState>,
-    id: Uuid,
-) -> Result<steward_core::ipc::WorkspaceIndexJobResponse, String> {
-    Err(format!(
-        "Job tracking by ID not fully implemented. \
-         Call index_workspace to trigger indexing and get immediate results. \
-         Job ID: {}",
-        id
-    ))
-}
-
-#[tauri::command]
 pub async fn get_workspace_tree(
     state: State<'_, AppState>,
     path: Option<String>,
@@ -1759,6 +1701,19 @@ pub async fn get_workspace_tree(
     let entries = workspace.list_tree(&uri).await.map_err(|e| e.to_string())?;
 
     Ok(steward_core::ipc::WorkspaceTreeResponse { path: uri, entries })
+}
+
+#[tauri::command]
+pub async fn get_workspace_document(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<steward_core::workspace::MemoryDocument, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace.read(&path).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1991,6 +1946,31 @@ pub async fn get_workspace_mount(
     Ok(detail)
 }
 
+async fn get_workspace_mount_file_impl(
+    state: &AppState,
+    id: Uuid,
+    path: &str,
+) -> Result<steward_core::workspace::WorkspaceMountFileView, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .read_mount_file(id, path)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workspace_mount_file(
+    state: State<'_, AppState>,
+    id: Uuid,
+    path: String,
+) -> Result<steward_core::workspace::WorkspaceMountFileView, String> {
+    get_workspace_mount_file_impl(&state, id, &path).await
+}
+
 #[tauri::command]
 pub async fn get_workspace_mount_diff(
     state: State<'_, AppState>,
@@ -2126,7 +2106,8 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        build_thread_messages_from_db_messages, reload_llm_runtime, sync_llm_settings_to_store,
+        build_thread_messages_from_db_messages, get_workspace_mount_file_impl,
+        reload_llm_runtime, sync_llm_settings_to_store,
     };
     use steward_core::agent::SessionManager;
     use steward_core::desktop_runtime::AppState;
@@ -2138,6 +2119,7 @@ mod tests {
     use steward_core::task_runtime::TaskRuntime;
     use steward_core::tools::ToolRegistry;
     use steward_core::tools::mcp::McpSessionManager;
+    use steward_core::workspace::Workspace;
 
     #[test]
     fn build_thread_messages_from_db_messages_keeps_persisted_turn_cost() {
@@ -2339,5 +2321,72 @@ mod tests {
 
         assert!(reload_error.is_none());
         assert_eq!(state.title_llm.active_model_name(), "gpt-5-mini");
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn get_workspace_mount_file_impl_reads_text_mount_file() {
+        use steward_core::db::Database;
+        use steward_core::db::libsql::LibSqlBackend;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("workspace.db");
+        let mount_root = dir.path().join("mounted");
+        std::fs::create_dir_all(&mount_root).expect("create mount root");
+        std::fs::write(mount_root.join("notes.txt"), "mounted workspace file")
+            .expect("write mount fixture");
+
+        let db_backend = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("create db"));
+        db_backend.run_migrations().await.expect("run migrations");
+        let db: Arc<dyn Database> = db_backend;
+        let workspace = Arc::new(Workspace::new_with_db("test-user", Arc::clone(&db)));
+        let summary = workspace
+            .create_mount(
+                "Fixture Mount",
+                mount_root.to_string_lossy().to_string(),
+                true,
+            )
+            .await
+            .expect("create mount");
+
+        let session =
+            create_session_manager(steward_core::config::LlmConfig::for_testing().session).await;
+        let disabled: Arc<dyn LlmProvider> = Arc::new(DisabledLlmProvider::new());
+        let reloadable_state = Arc::new(ReloadableLlmState::new(disabled.clone(), disabled));
+        let primary_llm: Arc<dyn LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+            Arc::clone(&reloadable_state),
+            ReloadableSlot::Primary,
+        ));
+        let llm_reloader = Arc::new(RuntimeLlmReloader::new(
+            Arc::clone(&reloadable_state),
+            session,
+            "test-user".to_string(),
+            None,
+        ));
+        let (message_inject_tx, _message_inject_rx) = tokio::sync::mpsc::channel(1);
+        let state = AppState::new(
+            "test-user".to_string(),
+            Some(Arc::clone(&db)),
+            Some(workspace),
+            None,
+            None,
+            llm_reloader,
+            Arc::new(SessionManager::new()),
+            Arc::clone(&primary_llm),
+            Arc::new(TaskRuntime::new()),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(McpSessionManager::new()),
+            None,
+            message_inject_tx,
+        );
+
+        let file = get_workspace_mount_file_impl(&state, summary.mount.id, "notes.txt")
+            .await
+            .expect("read mount file");
+
+        assert_eq!(file.path, "notes.txt");
+        assert_eq!(file.content.as_deref(), Some("mounted workspace file"));
+        assert!(!file.is_binary);
+        assert_eq!(file.status, steward_core::workspace::MountedFileStatus::Clean);
     }
 }
