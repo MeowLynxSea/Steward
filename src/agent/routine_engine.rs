@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
@@ -50,6 +50,31 @@ enum EventMatcher {
 struct TriggeredRoutine {
     routine: Routine,
     detail: String,
+}
+
+struct RoutineExecutionReport {
+    status: RunStatus,
+    summary: Option<String>,
+    tokens_used: Option<i32>,
+    executed_tools: Vec<String>,
+    tool_traces: Vec<RoutineToolTrace>,
+}
+
+#[derive(Clone, Debug)]
+struct RoutineToolTrace {
+    call_id: String,
+    name: String,
+    parameters: serde_json::Value,
+    rationale: Option<String>,
+    result_preview: Option<String>,
+    error: Option<String>,
+    started_at: DateTime<Utc>,
+    completed_at: Option<DateTime<Utc>>,
+}
+
+struct RoutineToolExecution {
+    llm_content: String,
+    result_preview: String,
 }
 
 /// Check whether an event-triggered routine's user/channel filters match an
@@ -200,7 +225,12 @@ impl RoutineEngine {
         let triggered = self.matching_event_triggers(message, content).await;
         let fired = triggered.len();
         for triggered in triggered {
-            std::mem::drop(self.spawn_fire(triggered.routine, "event", Some(triggered.detail)));
+            std::mem::drop(self.spawn_fire(
+                triggered.routine,
+                "event",
+                Some(triggered.detail),
+                None,
+            ));
         }
         fired
     }
@@ -218,7 +248,9 @@ impl RoutineEngine {
         let fired = triggered.len();
         let handles: Vec<JoinHandle<()>> = triggered
             .into_iter()
-            .map(|triggered| self.spawn_fire(triggered.routine, "event", Some(triggered.detail)))
+            .map(|triggered| {
+                self.spawn_fire(triggered.routine, "event", Some(triggered.detail), None)
+            })
             .collect();
 
         for handle in handles {
@@ -431,7 +463,12 @@ impl RoutineEngine {
             }
 
             let detail = truncate(&format!("{source}:{event_type}"), 200);
-            self.spawn_fire(routine.clone(), "system_event", Some(detail));
+            self.spawn_fire(
+                routine.clone(),
+                "system_event",
+                Some(detail),
+                Some(payload.clone()),
+            );
             fired += 1;
         }
 
@@ -485,7 +522,7 @@ impl RoutineEngine {
                 None
             };
 
-            self.spawn_fire(routine, "cron", detail);
+            self.spawn_fire(routine, "cron", detail, None);
         }
     }
 
@@ -756,6 +793,7 @@ impl RoutineEngine {
             routine_id: routine.id,
             trigger_type: "manual".to_string(),
             trigger_detail: None,
+            trigger_payload: None,
             started_at: Utc::now(),
             completed_at: None,
             status: RunStatus::Running,
@@ -852,6 +890,7 @@ impl RoutineEngine {
             routine_id: routine.id,
             trigger_type: "webhook".to_string(),
             trigger_detail: Some(webhook_path.to_string()),
+            trigger_payload: None,
             started_at: Utc::now(),
             completed_at: None,
             status: RunStatus::Running,
@@ -894,12 +933,14 @@ impl RoutineEngine {
         routine: Routine,
         trigger_type: &str,
         trigger_detail: Option<String>,
+        trigger_payload: Option<serde_json::Value>,
     ) -> JoinHandle<()> {
         let run = RoutineRun {
             id: Uuid::new_v4(),
             routine_id: routine.id,
             trigger_type: trigger_type.to_string(),
             trigger_detail,
+            trigger_payload,
             started_at: Utc::now(),
             completed_at: None,
             status: RunStatus::Running,
@@ -1089,6 +1130,8 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
             execute_lightweight(
                 &ctx,
                 &routine,
+                run.trigger_detail.as_deref(),
+                run.trigger_payload.as_ref(),
                 prompt,
                 context_paths,
                 *max_tokens,
@@ -1107,7 +1150,15 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
                 description,
                 max_iterations: *max_iterations,
             };
-            execute_full_job(&ctx, &routine, &run, &execution).await
+            execute_full_job(&ctx, &routine, &run, &execution)
+                .await
+                .map(|(status, summary, tokens_used)| RoutineExecutionReport {
+                    status,
+                    summary,
+                    tokens_used,
+                    executed_tools: Vec::new(),
+                    tool_traces: Vec::new(),
+                })
         }
     };
 
@@ -1115,13 +1166,33 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
     ctx.running_count.fetch_sub(1, Ordering::Relaxed);
 
     // Process result
-    let (status, summary, tokens) = match result {
+    let RoutineExecutionReport {
+        status,
+        mut summary,
+        tokens_used: tokens,
+        executed_tools,
+        tool_traces,
+    } = match result {
         Ok(execution) => execution,
         Err(e) => {
             tracing::error!(routine = %routine.name, "Execution failed: {}", e);
-            (RunStatus::Failed, Some(e.to_string()), None)
+            RoutineExecutionReport {
+                status: RunStatus::Failed,
+                summary: Some(e.to_string()),
+                tokens_used: None,
+                executed_tools: Vec::new(),
+                tool_traces: Vec::new(),
+            }
         }
     };
+
+    if routine.name == "memory_reflection" && status != RunStatus::Failed {
+        summary = Some(summarize_memory_reflection_run(
+            run.trigger_payload.as_ref(),
+            &executed_tools,
+            summary.as_deref(),
+        ));
+    }
 
     // Complete the run record
     if let Err(e) = ctx
@@ -1163,6 +1234,19 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
         .await
     {
         tracing::error!(routine = %routine.name, "Failed to update runtime state: {}", e);
+    }
+
+    if routine.name == "memory_reflection" && status != RunStatus::Failed && !tool_traces.is_empty()
+    {
+        mirror_memory_reflection_tool_calls_to_source_thread(&ctx, &routine, &run, &tool_traces)
+            .await;
+    }
+
+    if routine.name == "memory_reflection"
+        && status != RunStatus::Failed
+        && let Some(summary_text) = summary.as_deref()
+    {
+        mirror_memory_reflection_to_source_thread(&ctx, &routine, &run, summary_text).await;
     }
 
     // Persist routine result to its dedicated conversation thread
@@ -1209,6 +1293,179 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
         thread_id.as_deref(),
     )
     .await;
+}
+
+async fn mirror_memory_reflection_to_source_thread(
+    ctx: &EngineContext,
+    routine: &Routine,
+    run: &RoutineRun,
+    summary: &str,
+) {
+    let Some(thread_id) = source_thread_id_from_trigger_payload(run) else {
+        return;
+    };
+
+    if let Err(e) = ctx
+        .store
+        .add_conversation_message(thread_id, "reflection", summary)
+        .await
+    {
+        tracing::error!(
+            routine = %routine.name,
+            thread_id = %thread_id,
+            "Failed to append memory reflection to source thread history: {}", e
+        );
+        return;
+    }
+
+    let mut response = crate::channels::OutgoingResponse::text(summary.to_string());
+    response.thread_id = Some(thread_id.to_string());
+    response.metadata = serde_json::json!({
+        "source": "routine",
+        "routine_name": routine.name,
+        "owner_id": routine.user_id,
+        "display_kind": "reflection",
+    });
+
+    if let Err(e) = ctx.notify_tx.send(response).await {
+        tracing::warn!(
+            routine = %routine.name,
+            thread_id = %thread_id,
+            "Failed to emit mirrored memory reflection to UI channel: {}", e
+        );
+    }
+}
+
+fn source_thread_id_from_trigger_payload(run: &RoutineRun) -> Option<Uuid> {
+    let thread_id_text = run
+        .trigger_payload
+        .as_ref()
+        .and_then(|payload| payload.get("thread_id"))
+        .and_then(|value| value.as_str())?;
+
+    match Uuid::parse_str(thread_id_text) {
+        Ok(thread_id) => Some(thread_id),
+        Err(_) => {
+            tracing::debug!(
+                thread_id = thread_id_text,
+                "Skipping memory reflection mirror: trigger thread_id is not a UUID"
+            );
+            None
+        }
+    }
+}
+
+async fn mirror_memory_reflection_tool_calls_to_source_thread(
+    ctx: &EngineContext,
+    routine: &Routine,
+    run: &RoutineRun,
+    tool_traces: &[RoutineToolTrace],
+) {
+    let Some(thread_id) = source_thread_id_from_trigger_payload(run) else {
+        return;
+    };
+
+    for trace in tool_traces {
+        let persisted = serde_json::json!({
+            "name": trace.name,
+            "call_id": trace.call_id,
+            "tool_call_id": trace.call_id,
+            "parameters": trace.parameters,
+            "started_at": trace.started_at,
+            "completed_at": trace.completed_at,
+            "result_preview": trace.result_preview,
+            "result": trace.result_preview,
+            "error": trace.error,
+            "rationale": trace.rationale,
+        });
+
+        if let Err(e) = ctx
+            .store
+            .add_conversation_message(thread_id, "tool_call", &persisted.to_string())
+            .await
+        {
+            tracing::error!(
+                routine = %routine.name,
+                thread_id = %thread_id,
+                tool = %trace.name,
+                "Failed to append memory reflection tool call to source thread history: {}", e
+            );
+            continue;
+        }
+
+        let parameters = format_tool_parameters_for_display(&trace.parameters);
+
+        let started_response = OutgoingResponse {
+            content: String::new(),
+            thread_id: Some(thread_id.to_string()),
+            attachments: Vec::new(),
+            metadata: serde_json::json!({
+                "source": "routine",
+                "routine_name": routine.name,
+                "owner_id": routine.user_id,
+                "display_kind": "tool_started",
+                "tool_name": trace.name,
+                "tool_call_id": trace.call_id,
+                "parameters": parameters.clone(),
+            }),
+        };
+        let _ = ctx.notify_tx.send(started_response).await;
+
+        if let Some(preview) = trace.result_preview.as_ref() {
+            let result_response = OutgoingResponse {
+                content: String::new(),
+                thread_id: Some(thread_id.to_string()),
+                attachments: Vec::new(),
+                metadata: serde_json::json!({
+                    "source": "routine",
+                    "routine_name": routine.name,
+                    "owner_id": routine.user_id,
+                    "display_kind": "tool_result",
+                    "tool_name": trace.name,
+                    "tool_call_id": trace.call_id,
+                    "preview": sanitize_summary(preview),
+                }),
+            };
+            let _ = ctx.notify_tx.send(result_response).await;
+        }
+
+        let completed_response = OutgoingResponse {
+            content: String::new(),
+            thread_id: Some(thread_id.to_string()),
+            attachments: Vec::new(),
+            metadata: serde_json::json!({
+                "source": "routine",
+                "routine_name": routine.name,
+                "owner_id": routine.user_id,
+                "display_kind": "tool_completed",
+                "tool_name": trace.name,
+                "tool_call_id": trace.call_id,
+                "success": trace.error.is_none(),
+                "error": trace.error,
+                "parameters": parameters.clone(),
+            }),
+        };
+        let _ = ctx.notify_tx.send(completed_response).await;
+    }
+}
+
+fn format_tool_parameters_for_display(parameters: &serde_json::Value) -> Option<String> {
+    if parameters.is_null() {
+        return None;
+    }
+
+    match parameters {
+        serde_json::Value::Object(map) if map.is_empty() => None,
+        serde_json::Value::String(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        other => serde_json::to_string_pretty(other).ok(),
+    }
 }
 
 /// Sanitize a routine name for use in workspace paths.
@@ -1320,12 +1577,14 @@ async fn execute_full_job(
 async fn execute_lightweight(
     ctx: &EngineContext,
     routine: &Routine,
+    trigger_detail: Option<&str>,
+    trigger_payload: Option<&serde_json::Value>,
     prompt: &str,
     context_paths: &[String],
     max_tokens: u32,
     use_tools: bool,
     max_tool_rounds: u32,
-) -> Result<(RunStatus, Option<String>, Option<i32>), RoutineError> {
+) -> Result<RoutineExecutionReport, RoutineError> {
     // Load context from workspace
     let mut context_parts = Vec::new();
     for path in context_paths {
@@ -1352,6 +1611,8 @@ async fn execute_lightweight(
 
     let full_prompt = build_lightweight_prompt(
         prompt,
+        trigger_detail,
+        trigger_payload,
         &context_parts,
         state_content.as_deref(),
         &routine.notify,
@@ -1429,6 +1690,8 @@ fn sanitize_prompt_field(value: &str) -> String {
 
 fn build_lightweight_prompt(
     prompt: &str,
+    trigger_detail: Option<&str>,
+    trigger_payload: Option<&serde_json::Value>,
     context_parts: &[String],
     state_content: Option<&str>,
     notify: &NotifyConfig,
@@ -1436,6 +1699,19 @@ fn build_lightweight_prompt(
 ) -> String {
     let mut full_prompt = String::new();
     full_prompt.push_str(prompt);
+
+    if let Some(detail) = trigger_detail {
+        full_prompt.push_str("\n\n---\n\n# Trigger Detail\n\n");
+        full_prompt.push_str(detail);
+    }
+
+    if let Some(payload) = trigger_payload {
+        full_prompt.push_str("\n\n---\n\n# Trigger Payload\n\n```json\n");
+        let rendered =
+            serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string());
+        full_prompt.push_str(&rendered);
+        full_prompt.push_str("\n```");
+    }
 
     if notify.on_attention {
         full_prompt.push_str("\n\n---\n\n# Delivery\n\n");
@@ -1495,7 +1771,7 @@ async fn execute_lightweight_no_tools(
     system_prompt: &str,
     full_prompt: &str,
     effective_max_tokens: u32,
-) -> Result<(RunStatus, Option<String>, Option<i32>), RoutineError> {
+) -> Result<RoutineExecutionReport, RoutineError> {
     let messages = if system_prompt.is_empty() {
         vec![ChatMessage::user(full_prompt)]
     } else {
@@ -1533,7 +1809,7 @@ fn handle_text_response(
     finish_reason: FinishReason,
     total_input_tokens: u32,
     total_output_tokens: u32,
-) -> Result<(RunStatus, Option<String>, Option<i32>), RoutineError> {
+) -> Result<RoutineExecutionReport, RoutineError> {
     let content = content.trim();
 
     // Empty content guard
@@ -1547,16 +1823,22 @@ fn handle_text_response(
 
     // Check for the "nothing to do" sentinel (exact match on trimmed content).
     if content == "ROUTINE_OK" {
-        let total_tokens = Some((total_input_tokens + total_output_tokens) as i32);
-        return Ok((RunStatus::Ok, None, total_tokens));
+        return Ok(RoutineExecutionReport {
+            status: RunStatus::Ok,
+            summary: None,
+            tokens_used: Some((total_input_tokens + total_output_tokens) as i32),
+            executed_tools: Vec::new(),
+            tool_traces: Vec::new(),
+        });
     }
 
-    let total_tokens = Some((total_input_tokens + total_output_tokens) as i32);
-    Ok((
-        RunStatus::Attention,
-        Some(content.to_string()),
-        total_tokens,
-    ))
+    Ok(RoutineExecutionReport {
+        status: RunStatus::Attention,
+        summary: Some(content.to_string()),
+        tokens_used: Some((total_input_tokens + total_output_tokens) as i32),
+        executed_tools: Vec::new(),
+        tool_traces: Vec::new(),
+    })
 }
 
 /// Execute a lightweight routine with tool execution support (agentic loop).
@@ -1574,7 +1856,7 @@ async fn execute_lightweight_with_tools(
     full_prompt: &str,
     effective_max_tokens: u32,
     max_tool_rounds: u32,
-) -> Result<(RunStatus, Option<String>, Option<i32>), RoutineError> {
+) -> Result<RoutineExecutionReport, RoutineError> {
     let mut messages = if system_prompt.is_empty() {
         vec![ChatMessage::user(full_prompt)]
     } else {
@@ -1590,6 +1872,8 @@ async fn execute_lightweight_with_tools(
     let mut iteration = 0;
     let mut total_input_tokens = 0;
     let mut total_output_tokens = 0;
+    let mut executed_tools = Vec::new();
+    let mut tool_traces = Vec::new();
 
     // Create a minimal job context for tool execution with unique run ID
     let run_id = Uuid::new_v4();
@@ -1630,12 +1914,15 @@ async fn execute_lightweight_with_tools(
             total_input_tokens += response.input_tokens;
             total_output_tokens += response.output_tokens;
 
-            return handle_text_response(
+            let mut report = handle_text_response(
                 &response.content,
                 response.finish_reason,
                 total_input_tokens,
                 total_output_tokens,
-            );
+            )?;
+            report.executed_tools = executed_tools;
+            report.tool_traces = tool_traces;
+            return Ok(report);
         } else {
             // Tool-enabled iteration
             let tool_defs = ctx
@@ -1663,12 +1950,15 @@ async fn execute_lightweight_with_tools(
             // Check if LLM returned text (no tool calls)
             if response.tool_calls.is_empty() {
                 let content = response.content.unwrap_or_default();
-                return handle_text_response(
+                let mut report = handle_text_response(
                     &content,
                     response.finish_reason,
                     total_input_tokens,
                     total_output_tokens,
-                );
+                )?;
+                report.executed_tools = executed_tools;
+                report.tool_traces = tool_traces;
+                return Ok(report);
             }
 
             // LLM returned tool calls: add assistant message and execute tools
@@ -1679,18 +1969,33 @@ async fn execute_lightweight_with_tools(
 
             // Execute tools sequentially
             for tc in response.tool_calls {
+                if !executed_tools.iter().any(|name| name == &tc.name) {
+                    executed_tools.push(tc.name.clone());
+                }
+                let started_at = Utc::now();
                 let result = execute_routine_tool(ctx, &job_ctx, &allowed_tools, &tc).await;
+                let completed_at = Utc::now();
 
                 // Sanitize and wrap result (including errors)
-                let result_content = match result {
+                let (result_content, result_preview, error) = match result {
                     Ok(output) => {
-                        let sanitized = ctx.safety.sanitize_tool_output(&tc.name, &output);
-                        ctx.safety.wrap_for_llm(&tc.name, &sanitized.content)
+                        let sanitized = ctx
+                            .safety
+                            .sanitize_tool_output(&tc.name, &output.llm_content);
+                        (
+                            ctx.safety.wrap_for_llm(&tc.name, &sanitized.content),
+                            Some(output.result_preview),
+                            None,
+                        )
                     }
                     Err(e) => {
                         let error_msg = format!("Tool '{}' failed: {}", tc.name, e);
                         let sanitized = ctx.safety.sanitize_tool_output(&tc.name, &error_msg);
-                        ctx.safety.wrap_for_llm(&tc.name, &sanitized.content)
+                        (
+                            ctx.safety.wrap_for_llm(&tc.name, &sanitized.content),
+                            None,
+                            Some(error_msg),
+                        )
                     }
                 };
 
@@ -1708,11 +2013,64 @@ async fn execute_lightweight_with_tools(
 
                 // Add tool result to context
                 messages.push(ChatMessage::tool_result(&tc.id, &tc.name, &result_content));
+                tool_traces.push(RoutineToolTrace {
+                    call_id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    parameters: tc.arguments.clone(),
+                    rationale: tc.reasoning.clone(),
+                    result_preview,
+                    error,
+                    started_at,
+                    completed_at: Some(completed_at),
+                });
             }
 
             // Continue loop to next LLM call
         }
     }
+}
+
+fn summarize_memory_reflection_run(
+    trigger_payload: Option<&serde_json::Value>,
+    executed_tools: &[String],
+    summary: Option<&str>,
+) -> String {
+    let base_outcome = if executed_tools.iter().any(|tool| tool == "manage_boot") {
+        "boot_promoted"
+    } else if executed_tools.iter().any(|tool| {
+        matches!(
+            tool.as_str(),
+            "update_memory" | "manage_triggers" | "delete_memory"
+        )
+    }) {
+        "updated"
+    } else if executed_tools
+        .iter()
+        .any(|tool| matches!(tool.as_str(), "create_memory" | "add_alias"))
+    {
+        "created"
+    } else {
+        "no_op"
+    };
+
+    let mut parts = vec![format!("memory_reflection outcome={base_outcome}")];
+    if let Some(thread_id) = trigger_payload
+        .and_then(|payload| payload.get("thread_id"))
+        .and_then(|value| value.as_str())
+    {
+        parts.push(format!("thread_id={thread_id}"));
+    }
+
+    if let Some(detail) = summary
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty() && *detail != "ROUTINE_OK")
+        .map(sanitize_summary)
+        .filter(|detail| !detail.is_empty())
+    {
+        parts.push(format!("detail={detail}"));
+    }
+
+    parts.join(" | ")
 }
 
 // Bound per-iteration context copy cost for lightweight tool loops.
@@ -1746,7 +2104,7 @@ async fn execute_routine_tool(
     job_ctx: &JobContext,
     allowed_tools: &std::collections::HashSet<String>,
     tc: &ToolCall,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<RoutineToolExecution, Box<dyn std::error::Error + Send + Sync>> {
     if !allowed_tools.contains(&tc.name) {
         let message = autonomous_unavailable_message(&tc.name, &job_ctx.user_id);
         return Err(message.into());
@@ -1820,9 +2178,17 @@ async fn execute_routine_tool(
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
     // Serialize result to JSON string
-    let result_str =
+    let llm_content =
         serde_json::to_string(&result.result).unwrap_or_else(|_| "<serialize error>".to_string());
-    Ok(result_str)
+    let result_preview = match result.result {
+        serde_json::Value::String(text) => text,
+        other => serde_json::to_string_pretty(&other).unwrap_or_else(|_| other.to_string()),
+    };
+
+    Ok(RoutineToolExecution {
+        llm_content,
+        result_preview,
+    })
 }
 
 /// Send a notification based on the routine's notify config and run status.
@@ -1932,7 +2298,6 @@ fn truncate(s: &str, max: usize) -> String {
 /// 2. Strip HTML tags to prevent injection in web-rendered notifications
 /// 3. Collapse multiple whitespace/newlines to single spaces for cleaner output
 /// 4. Truncate to 500 chars to prevent oversized notifications
-#[cfg(test)]
 fn sanitize_summary(s: &str) -> String {
     // Strip control characters (keep newline for now, collapse later)
     let no_control: String = s
@@ -1960,7 +2325,6 @@ fn sanitize_summary(s: &str) -> String {
 }
 
 /// Remove HTML/XML tags from a string.
-#[cfg(test)]
 fn strip_html_tags(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut in_tag = false;
@@ -1977,7 +2341,11 @@ fn strip_html_tags(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
     use chrono::Utc;
+    use tokio::sync::mpsc;
     use uuid::Uuid;
 
     use crate::agent::routine::{
@@ -2088,6 +2456,8 @@ mod tests {
 
         let prompt = super::build_lightweight_prompt(
             "Send a desktop reminder message to the user.",
+            None,
+            None,
             &[],
             None,
             &notify,
@@ -2119,7 +2489,8 @@ mod tests {
             ..NotifyConfig::default()
         };
 
-        let prompt = super::build_lightweight_prompt("Check inbox.", &[], None, &notify, true);
+        let prompt =
+            super::build_lightweight_prompt("Check inbox.", None, None, &[], None, &notify, true);
 
         assert!(
             !prompt.contains("# Delivery"),
@@ -2129,6 +2500,60 @@ mod tests {
             !prompt.contains("Tools are disabled for this routine run"),
             "prompt should not claim tools are disabled when they are enabled: {prompt}",
         );
+    }
+
+    #[test]
+    fn test_build_lightweight_prompt_includes_trigger_payload_block() {
+        let payload = serde_json::json!({
+            "thread_id": "abc",
+            "user_input": "Please avoid emoji in future replies.",
+            "assistant_output": "Got it, I'll remember that."
+        });
+
+        let prompt = super::build_lightweight_prompt(
+            "Reflect on the completed turn.",
+            Some("agent:turn_completed"),
+            Some(&payload),
+            &[],
+            None,
+            &NotifyConfig::default(),
+            true,
+        );
+
+        assert!(prompt.contains("# Trigger Detail"));
+        assert!(prompt.contains("# Trigger Payload"));
+        assert!(prompt.contains("\"user_input\": \"Please avoid emoji in future replies.\""));
+        assert!(prompt.contains("\"assistant_output\": \"Got it, I'll remember that.\""));
+    }
+
+    #[test]
+    fn test_summarize_memory_reflection_reports_mismatch_for_high_signal_noop() {
+        let payload = serde_json::json!({
+            "thread_id": "thread-1"
+        });
+
+        let summary =
+            super::summarize_memory_reflection_run(Some(&payload), &[], Some("ROUTINE_OK"));
+
+        assert!(summary.contains("outcome=no_op"));
+        assert!(summary.contains("thread_id=thread-1"));
+    }
+
+    #[test]
+    fn test_summarize_memory_reflection_reports_created_after_write_tools() {
+        let payload = serde_json::json!({
+            "thread_id": "thread-2"
+        });
+
+        let summary = super::summarize_memory_reflection_run(
+            Some(&payload),
+            &[String::from("create_memory")],
+            Some("Stored a reusable reminder about checking constraints first."),
+        );
+
+        assert!(summary.contains("outcome=created"));
+        assert!(summary.contains("thread_id=thread-2"));
+        assert!(summary.contains("detail=Stored a reusable reminder"));
     }
 
     #[test]
@@ -2521,5 +2946,133 @@ mod tests {
         let result = sanitize_summary(&s);
         assert!(result.len() <= 503);
         assert!(result.ends_with("..."));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_emit_system_event_persists_trigger_payload_for_routine_runs() {
+        use crate::db::Database;
+        use crate::tenant::AdminScope;
+        use crate::testing::StubLlm;
+        use crate::testing::test_db;
+        use crate::workspace::Workspace;
+        use steward_safety::{SafetyConfig, SafetyLayer};
+
+        let (db, _tmp_dir): (Arc<dyn Database>, tempfile::TempDir) = test_db().await;
+        let user_id = "memory-user";
+        let source_thread_id = Uuid::new_v4();
+        db.ensure_conversation(
+            source_thread_id,
+            "desktop",
+            user_id,
+            Some(&source_thread_id.to_string()),
+        )
+        .await
+        .expect("seed source conversation");
+
+        let routine = Routine {
+            id: Uuid::new_v4(),
+            name: "memory_reflection".to_string(),
+            description: "test".to_string(),
+            user_id: user_id.to_string(),
+            enabled: true,
+            trigger: Trigger::SystemEvent {
+                source: "agent".to_string(),
+                event_type: "turn_completed".to_string(),
+                filters: std::collections::HashMap::new(),
+            },
+            action: RoutineAction::Lightweight {
+                prompt: "Inspect trigger payload and do nothing unless needed.".to_string(),
+                context_paths: vec![],
+                max_tokens: 256,
+                use_tools: false,
+                max_tool_rounds: 1,
+            },
+            guardrails: RoutineGuardrails::default(),
+            notify: NotifyConfig::default(),
+            last_run_at: None,
+            next_fire_at: None,
+            run_count: 0,
+            consecutive_failures: 0,
+            state: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db.create_routine(&routine).await.expect("create routine");
+
+        let (notify_tx, mut notify_rx) = mpsc::channel(4);
+        let engine = super::RoutineEngine::new(
+            RoutineConfig::default(),
+            AdminScope::new(Arc::clone(&db)),
+            Arc::new(StubLlm::new("ROUTINE_OK")),
+            Arc::new(Workspace::new_with_db(user_id, Arc::clone(&db))),
+            None,
+            notify_tx,
+            None,
+            None,
+            Arc::new(crate::tools::ToolRegistry::new()),
+            Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+        );
+        engine.refresh_event_cache().await;
+
+        let payload = serde_json::json!({
+            "thread_id": source_thread_id.to_string(),
+            "user_input": "Actually, use cargo test",
+            "assistant_output": "I'll remember that.",
+            "timestamp": "2026-04-12T00:00:00Z"
+        });
+        let fired = engine
+            .emit_system_event("agent", "turn_completed", &payload, Some(user_id))
+            .await;
+        assert_eq!(fired, 1);
+
+        let mut found = None;
+        for _ in 0..20 {
+            let runs = db
+                .list_routine_runs(routine.id, 5)
+                .await
+                .expect("list runs");
+            if let Some(run) = runs.into_iter().next()
+                && run.trigger_payload.is_some()
+            {
+                found = run.trigger_payload;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+
+        let stored = found.expect("trigger payload should be persisted");
+        assert_eq!(stored["thread_id"], payload["thread_id"]);
+        assert_eq!(stored["user_input"], payload["user_input"]);
+        assert_eq!(stored["assistant_output"], payload["assistant_output"]);
+
+        let source_messages = db
+            .list_conversation_messages(source_thread_id)
+            .await
+            .expect("list source messages");
+        assert!(
+            source_messages.iter().any(|message| {
+                message.role == "reflection"
+                    && message.content.contains("memory_reflection outcome=")
+            }),
+            "memory reflection should be mirrored into the source thread history"
+        );
+
+        let mirrored = tokio::time::timeout(Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("memory reflection should notify the UI channel")
+            .expect("memory reflection UI notification should exist");
+        let source_thread_id_text = source_thread_id.to_string();
+        assert_eq!(
+            mirrored.thread_id.as_deref(),
+            Some(source_thread_id_text.as_str())
+        );
+        assert!(mirrored.content.contains("memory_reflection outcome="));
+        assert_eq!(mirrored.metadata["source"], "routine");
+        assert_eq!(mirrored.metadata["routine_name"], "memory_reflection");
+        assert_eq!(mirrored.metadata["display_kind"], "reflection");
     }
 }

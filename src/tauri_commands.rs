@@ -877,6 +877,18 @@ fn build_thread_messages_from_db_messages(
                     tool_call: None,
                 });
             }
+            "reflection" => {
+                messages.push(steward_core::ipc::ThreadMessageResponse {
+                    id: msg.id,
+                    kind: "reflection".to_string(),
+                    role: None,
+                    content: Some(msg.content.clone()),
+                    created_at: msg.created_at,
+                    turn_number: active_turn_number,
+                    turn_cost: None,
+                    tool_call: None,
+                });
+            }
             "tool_call" => {
                 let call = match serde_json::from_str::<serde_json::Value>(&msg.content) {
                     Ok(value) => value,
@@ -2166,6 +2178,43 @@ mod tests {
         assert_eq!(turn_cost.input_tokens, 512);
         assert_eq!(turn_cost.output_tokens, 96);
         assert_eq!(turn_cost.cost_usd, "$0.0034");
+    }
+
+    #[test]
+    fn build_thread_messages_from_db_messages_maps_reflection_role_to_reflection_kind() {
+        let user_id = uuid::Uuid::new_v4();
+        let reflection_id = uuid::Uuid::new_v4();
+        let created_at = Utc::now();
+        let messages = vec![
+            steward_core::history::ConversationMessage {
+                id: user_id,
+                role: "user".to_string(),
+                content: "以后少发点 emoji".to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: reflection_id,
+                role: "reflection".to_string(),
+                content: "memory_reflection outcome=created | detail=Stored style preference."
+                    .to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+        ];
+
+        let thread_messages = build_thread_messages_from_db_messages(&messages);
+        let reflection = thread_messages
+            .iter()
+            .find(|message| message.kind == "reflection")
+            .expect("reflection message");
+
+        assert_eq!(reflection.role, None);
+        assert_eq!(
+            reflection.content.as_deref(),
+            Some("memory_reflection outcome=created | detail=Stored style preference.")
+        );
+        assert_eq!(reflection.turn_number, 0);
     }
 
     fn backend(id: &str) -> BackendInstance {

@@ -24,7 +24,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `submission.rs` | Parses all user submissions into typed variants before routing. |
 | `undo.rs` | Turn-based undo/redo with checkpoints. Checkpoints store message lists (max 20 by default). |
 | `routine.rs` | `Routine` types: `Trigger` (cron/event/system_event/manual) + `RoutineAction` (lightweight/full_job) + `RoutineGuardrails`. |
-| `routine_engine.rs` | Cron ticker and event matcher. Fires routines when triggers match. Lightweight runs inline; full_job dispatches to `Scheduler`. |
+| `routine_engine.rs` | Cron ticker and event matcher. Fires routines when triggers match. Lightweight runs inline; full_job dispatches to `Scheduler`. System-event runs now persist the full trigger payload on `RoutineRun` so lightweight routines can inspect structured event context instead of only a short detail string. |
 | `task.rs` | Task types for the scheduler: `Job`, `ToolExec`, `Background`. Used by `spawn_subtask` and `spawn_batch`. |
 | `cost_guard.rs` | LLM spend and action-rate enforcement. Tracks daily budget (cents) and hourly call rate. Lives in `AgentDeps`. |
 | `job_monitor.rs` | Subscribes to runtime job events and injects Claude Code job output back into the agent loop as `IncomingMessage`. |
@@ -71,6 +71,8 @@ run_agentic_loop(delegate, reasoning, reason_ctx, config)
 **Tool approval:** Tools flagged `requires_approval` pause the loop — `ChatDelegate` returns `LoopOutcome::NeedApproval(pending)`. The desktop runtime stores the `PendingApproval` in thread/session state and emits an `approval_needed` runtime event. The user's approval/deny resumes the loop.
 
 **Prompt context assembly:** conversational turns now compose `workspace prompt + native memory prompt + conversation history prompt`. The history block is intentionally light, excludes the current thread by default, and shows absolute timestamps plus conversation identifiers so the model gets time sense without drowning the active chat.
+
+**Turn-complete memory reflection:** completed chat turns emit a structured `agent:turn_completed` system event containing `{thread_id, user_input, assistant_output, timestamp}`. The default `memory_reflection` routine consumes that payload asynchronously, relies on prompt-level interpretation instead of rule-based keyword tagging, and mirrors its summary back into the source thread so the result appears in live desktop UI updates and persisted chat history.
 
 **Conversation history tools:** `search_conversation_history` returns matched canonical turns plus adjacent preview turns. `read_conversation_context` expands a selected `conversation_id` into a slice or full canonical thread. Both default to excluding `thinking`; tool-call summaries are opt-in on context reads.
 

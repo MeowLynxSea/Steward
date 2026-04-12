@@ -493,6 +493,7 @@ pub struct RoutineRun {
     pub routine_id: Uuid,
     pub trigger_type: String,
     pub trigger_detail: Option<String>,
+    pub trigger_payload: Option<serde_json::Value>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub status: RunStatus,

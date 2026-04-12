@@ -1291,6 +1291,13 @@ CREATE TRIGGER IF NOT EXISTS conversation_recall_docs_fts_update AFTER UPDATE ON
 END;
 "#,
     ),
+    (
+        22,
+        "routine_run_trigger_payload",
+        r#"
+ALTER TABLE routine_runs ADD COLUMN trigger_payload TEXT;
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

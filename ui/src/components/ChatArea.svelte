@@ -100,7 +100,13 @@
     };
 
     for (const message of messages) {
-      if (message.kind === "thinking" || (message.kind === "tool_call" && message.tool_call)) {
+      if (message.kind === "reflection") {
+        continue;
+      }
+      if (
+        message.kind === "thinking" ||
+        (message.kind === "tool_call" && message.tool_call)
+      ) {
         auxBuffer.push(message);
         continue;
       }

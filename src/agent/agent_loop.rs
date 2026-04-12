@@ -152,6 +152,98 @@ fn should_fallback_routine_notification(error: &ChannelError) -> bool {
     !matches!(error, ChannelError::MissingRoutingTarget { .. })
 }
 
+fn desktop_app_event_for_outgoing_response(
+    response: &OutgoingResponse,
+) -> steward_common::AppEvent {
+    let thread_id = response.thread_id.clone().unwrap_or_default();
+    let display_kind = response
+        .metadata
+        .get("display_kind")
+        .and_then(|value| value.as_str());
+
+    match display_kind {
+        Some("reflection") => steward_common::AppEvent::Reflection {
+            content: response.content.clone(),
+            thread_id,
+        },
+        Some("tool_started") => steward_common::AppEvent::ToolStarted {
+            name: response
+                .metadata
+                .get("tool_name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            tool_call_id: response
+                .metadata
+                .get("tool_call_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            parameters: response
+                .metadata
+                .get("parameters")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            thread_id: Some(thread_id),
+        },
+        Some("tool_result") => steward_common::AppEvent::ToolResult {
+            name: response
+                .metadata
+                .get("tool_name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            tool_call_id: response
+                .metadata
+                .get("tool_call_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            preview: response
+                .metadata
+                .get("preview")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            thread_id: Some(thread_id),
+        },
+        Some("tool_completed") => steward_common::AppEvent::ToolCompleted {
+            name: response
+                .metadata
+                .get("tool_name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            tool_call_id: response
+                .metadata
+                .get("tool_call_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string(),
+            success: response
+                .metadata
+                .get("success")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(true),
+            error: response
+                .metadata
+                .get("error")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            parameters: response
+                .metadata
+                .get("parameters")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            thread_id: Some(thread_id),
+        },
+        _ => steward_common::AppEvent::Response {
+            content: response.content.clone(),
+            thread_id,
+        },
+    }
+}
+
 fn preferred_desktop_session_id(message: &IncomingMessage) -> Option<Uuid> {
     message
         .metadata
@@ -1455,13 +1547,7 @@ impl Agent {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         &user,
-                                        steward_common::AppEvent::Response {
-                                            content: response.content.clone(),
-                                            thread_id: response
-                                                .thread_id
-                                                .clone()
-                                                .unwrap_or_default(),
-                                        },
+                                        desktop_app_event_for_outgoing_response(&response),
                                     );
                                 }
                                 match channels.broadcast(channel, &user, response.clone()).await {
@@ -1490,13 +1576,7 @@ impl Agent {
                                 if let Some(ref emitter) = emitter {
                                     emitter.emit_for_user(
                                         &user,
-                                        steward_common::AppEvent::Response {
-                                            content: response.content.clone(),
-                                            thread_id: response
-                                                .thread_id
-                                                .clone()
-                                                .unwrap_or_default(),
-                                        },
+                                        desktop_app_event_for_outgoing_response(&response),
                                     );
                                 }
                             }
@@ -2777,6 +2857,70 @@ mod tests {
         };
 
         assert!(!should_fallback_routine_notification(&error)); // safety: test-only assertion
+    }
+
+    #[test]
+    fn desktop_app_event_for_outgoing_response_uses_reflection_variant() {
+        let mut response = OutgoingResponse::text("memory_reflection outcome=created");
+        response.thread_id = Some("thread-42".to_string());
+        response.metadata = serde_json::json!({
+            "display_kind": "reflection"
+        });
+
+        let event = desktop_app_event_for_outgoing_response(&response);
+        match event {
+            steward_common::AppEvent::Reflection { content, thread_id } => {
+                assert_eq!(content, "memory_reflection outcome=created");
+                assert_eq!(thread_id, "thread-42");
+            }
+            other => panic!("expected reflection event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_app_event_for_outgoing_response_defaults_to_response_variant() {
+        let mut response = OutgoingResponse::text("hello");
+        response.thread_id = Some("thread-7".to_string());
+
+        let event = desktop_app_event_for_outgoing_response(&response);
+        match event {
+            steward_common::AppEvent::Response { content, thread_id } => {
+                assert_eq!(content, "hello");
+                assert_eq!(thread_id, "thread-7");
+            }
+            other => panic!("expected response event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_app_event_for_outgoing_response_uses_tool_started_variant() {
+        let response = OutgoingResponse {
+            content: String::new(),
+            thread_id: Some("thread-99".to_string()),
+            attachments: Vec::new(),
+            metadata: serde_json::json!({
+                "display_kind": "tool_started",
+                "tool_name": "create_memory",
+                "tool_call_id": "call_mem_1",
+                "parameters": "{\"title\":\"No emoji\"}",
+            }),
+        };
+
+        let event = desktop_app_event_for_outgoing_response(&response);
+        match event {
+            steward_common::AppEvent::ToolStarted {
+                name,
+                tool_call_id,
+                parameters,
+                thread_id,
+            } => {
+                assert_eq!(name, "create_memory");
+                assert_eq!(tool_call_id, "call_mem_1");
+                assert_eq!(parameters.as_deref(), Some("{\"title\":\"No emoji\"}"));
+                assert_eq!(thread_id.as_deref(), Some("thread-99"));
+            }
+            other => panic!("expected tool_started event, got {other:?}"),
+        }
     }
 
     #[test]

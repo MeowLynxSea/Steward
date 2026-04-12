@@ -93,7 +93,7 @@ async fn ensure_default_memory_routines(
     db: Arc<dyn Database>,
     user_id: &str,
 ) -> Result<(), crate::error::DatabaseError> {
-    const MEMORY_REFLECTION_PROMPT: &str = r#"You are a conservative memory gardener.
+    const LEGACY_MEMORY_REFLECTION_PROMPT: &str = r#"You are a conservative memory gardener.
 
 Input: a completed turn payload with {thread_id, user_input, assistant_output, timestamp}.
 
@@ -106,6 +106,36 @@ Rules:
 - If a memory is hard to rediscover by paraphrase, improve its keywords or disclosure with manage_triggers instead of assuming the route name will save you.
 - If aliasing helps cross-link, use add_alias. If removing, delete_memory only deletes a path, never hard-deletes content.
 - If nothing is worth storing, do nothing.
+
+Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory, manage_boot, manage_triggers."#;
+
+    const MEMORY_REFLECTION_PROMPT: &str = r#"You are an aggressive memory keeper.
+
+Input: the completed turn payload in `# Trigger Payload`, including
+`thread_id`, `user_input`, `assistant_output`, and `timestamp`.
+
+Core orientation:
+- Prefer writing memory over skipping it.
+- Do not wait for a fact to look globally permanent before storing it. If future-you would respond differently, pay attention differently, or show better continuity because this turn was remembered, it is probably memory-worthy.
+- Optimize for recall usefulness, not for an impossibly strict notion of permanence. A recoverable extra memory is cheaper than losing context that should have carried forward.
+- When uncertain between "maybe worth remembering" and "probably fine to drop", lean toward remembering.
+- If the assistant expressed understanding, alignment, acknowledgement, adaptation, or any future-facing commitment, assume memory work is likely needed unless an existing memory already covers it well.
+- Do not treat "temporary", "recent", "situational", "it may pass", or "it may not matter long-term" as sufficient reasons to skip memory work.
+
+Decision rule:
+- Ask: if this turn vanished, would future-you be more likely to misunderstand the user, repeat a mistake, miss a cue, break continuity, or fail to adapt style/behavior appropriately?
+- If yes or maybe, do memory work.
+- Only reply `ROUTINE_OK` when you are genuinely confident that losing this turn would have little or no cost because it contains no reusable context or the relevant memory already exists in adequate form.
+- A statement like "this is only temporary, so I will not remember it" is usually incorrect reasoning. Temporary context can still matter if it should influence subsequent attention, tone, planning, prioritization, or continuity.
+
+Execution rules:
+- First decide whether an existing memory probably already covers the turn. When unsure, search before assuming.
+- If the turn changes, clarifies, or sharpens existing understanding, use `search_memory` or `read_memory` before `update_memory`.
+- If the turn creates any new context that future-you should carry forward, prefer `create_memory`.
+- If the memory should be recalled at session start, promote it with `manage_boot`.
+- If recall would benefit from better routing, aliasing, or disclosure, use `manage_triggers` or `add_alias`.
+- Be willing to store small but behavior-shaping context. Do not reject something merely because it is subtle, recent, personal, or hard to classify.
+- If you do memory work, finish with one concise summary line describing what changed and why.
 
 Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory, manage_boot, manage_triggers."#;
 
@@ -164,6 +194,17 @@ If nothing to do, do nothing."#;
             updated_at: Utc::now(),
         };
         db.create_routine(&routine).await?;
+    } else if let Some(mut routine) = existing {
+        let should_upgrade_prompt = match &routine.action {
+            RoutineAction::Lightweight { prompt, .. } => prompt == LEGACY_MEMORY_REFLECTION_PROMPT,
+            RoutineAction::FullJob { .. } => false,
+        };
+        if should_upgrade_prompt {
+            if let RoutineAction::Lightweight { prompt, .. } = &mut routine.action {
+                *prompt = MEMORY_REFLECTION_PROMPT.to_string();
+            }
+            db.update_routine(&routine).await?;
+        }
     }
 
     let existing = db

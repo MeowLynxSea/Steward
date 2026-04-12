@@ -1220,6 +1220,7 @@ mod tests {
             routine_id,
             trigger_type: "cron".to_string(),
             trigger_detail: Some("0 * * * *".to_string()),
+            trigger_payload: None,
             started_at: chrono::Utc::now(),
             completed_at: None,
             status: RunStatus::Running,

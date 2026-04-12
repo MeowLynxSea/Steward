@@ -315,15 +315,20 @@ impl RoutineStore for LibSqlBackend {
         conn.execute(
             r#"
                 INSERT INTO routine_runs (
-                    id, routine_id, trigger_type, trigger_detail,
+                    id, routine_id, trigger_type, trigger_detail, trigger_payload,
                     started_at, status, job_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                 "#,
             params![
                 run.id.to_string(),
                 run.routine_id.to_string(),
                 run.trigger_type.as_str(),
                 opt_text(run.trigger_detail.as_deref()),
+                run.trigger_payload
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|e| DatabaseError::Serialization(e.to_string()))?,
                 fmt_ts(&run.started_at),
                 run.status.to_string(),
                 opt_text_owned(run.job_id.map(|id| id.to_string())),

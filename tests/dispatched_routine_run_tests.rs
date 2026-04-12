@@ -68,6 +68,7 @@ mod tests {
             routine_id,
             trigger_type: "manual".to_string(),
             trigger_detail: None,
+            trigger_payload: None,
             started_at: Utc::now(),
             completed_at: None,
             status: RunStatus::Running,

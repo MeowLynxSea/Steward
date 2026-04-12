@@ -45,6 +45,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
         // Extract thread_id and payload data from AppEvent to match frontend StreamEnvelope format
         let thread_id: Option<String> = match &event {
             steward_common::AppEvent::Response { thread_id, .. } => Some(thread_id.clone()),
+            steward_common::AppEvent::Reflection { thread_id, .. } => Some(thread_id.clone()),
             steward_common::AppEvent::Thinking { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ToolStarted { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ToolCompleted { thread_id, .. } => thread_id.clone(),
@@ -63,6 +64,9 @@ impl RuntimeEventEmitter for TauriEventEmitter {
 
         let payload_data = match &event {
             steward_common::AppEvent::Response { content, .. } => {
+                serde_json::json!({ "content": content })
+            }
+            steward_common::AppEvent::Reflection { content, .. } => {
                 serde_json::json!({ "content": content })
             }
             steward_common::AppEvent::Thinking {

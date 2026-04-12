@@ -395,6 +395,14 @@ class SessionsState {
         break;
       }
 
+      case "session.reflection": {
+        const { content } = event.payload as { content: string };
+        this.#stopPollFallback();
+        this.#streamingThinkingId = null;
+        this.#appendReflectionMessage(content);
+        break;
+      }
+
       case "session.thinking": {
         const { message, message_id } = event.payload as {
           message: string;
@@ -820,6 +828,20 @@ class SessionsState {
       turn_number: this.#ensureLiveTurnNumber(),
       turn_cost: null,
       tool_call: tool
+    });
+  }
+
+  #appendReflectionMessage(content: string) {
+    if (!this.active || !content.trim()) return;
+    this.#appendMessage({
+      id: crypto.randomUUID(),
+      kind: "reflection",
+      role: null,
+      content,
+      created_at: new Date().toISOString(),
+      turn_number: this.#ensureLiveTurnNumber(),
+      turn_cost: null,
+      tool_call: null
     });
   }
 

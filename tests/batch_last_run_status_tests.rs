@@ -70,6 +70,7 @@ mod tests {
             routine_id,
             trigger_type: "manual".to_string(),
             trigger_detail: None,
+            trigger_payload: None,
             started_at,
             completed_at: if status == RunStatus::Running {
                 None

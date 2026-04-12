@@ -38,6 +38,8 @@ impl ToolDecisionDto {
 pub enum AppEvent {
     #[serde(rename = "response")]
     Response { content: String, thread_id: String },
+    #[serde(rename = "reflection")]
+    Reflection { content: String, thread_id: String },
     #[serde(rename = "thinking")]
     Thinking {
         message: String,
@@ -232,6 +234,7 @@ impl AppEvent {
     pub fn event_type(&self) -> &'static str {
         match self {
             Self::Response { .. } => "response",
+            Self::Reflection { .. } => "reflection",
             Self::Thinking { .. } => "thinking",
             Self::ToolStarted { .. } => "tool_started",
             Self::ToolCompleted { .. } => "tool_completed",
@@ -271,6 +274,10 @@ mod tests {
     fn event_type_matches_serde_type_field() {
         let variants: Vec<AppEvent> = vec![
             AppEvent::Response {
+                content: String::new(),
+                thread_id: String::new(),
+            },
+            AppEvent::Reflection {
                 content: String::new(),
                 thread_id: String::new(),
             },
@@ -421,5 +428,16 @@ mod tests {
         let json = serde_json::to_string(&original).unwrap();
         let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.event_type(), "response");
+    }
+
+    #[test]
+    fn reflection_round_trip_deserialize() {
+        let original = AppEvent::Reflection {
+            content: "memory_reflection outcome=created".to_string(),
+            thread_id: "t2".to_string(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: AppEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.event_type(), "reflection");
     }
 }

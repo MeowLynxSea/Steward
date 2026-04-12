@@ -58,7 +58,7 @@ export interface SessionSummary {
 
 export interface ThreadMessage {
   id: string;
-  kind: "message" | "tool_call" | "thinking";
+  kind: "message" | "tool_call" | "thinking" | "reflection";
   role: string | null;
   content: string | null;
   created_at: string;

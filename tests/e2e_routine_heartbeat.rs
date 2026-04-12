@@ -1253,6 +1253,7 @@ mod tests {
             routine_id: routine.id,
             trigger_type: "cron".to_string(),
             trigger_detail: None,
+            trigger_payload: None,
             started_at: Utc::now(),
             completed_at: None,
             status: RunStatus::Running,

@@ -187,7 +187,7 @@
               <p>Describe the task, constraints, and what outcome you want back.</p>
             </div>
           {:else}
-            {#each sessionsStore.active.thread_messages as message}
+            {#each sessionsStore.active.thread_messages.filter((message) => message.kind !== "reflection") as message}
               <article class={`message-bubble ${message.role === "user" ? "user" : "assistant"}`}>
                 <header>
                   <strong>{message.kind === "tool_call" ? "tool" : message.kind === "thinking" ? "thinking" : message.role}</strong>
