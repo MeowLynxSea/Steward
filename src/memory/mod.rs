@@ -23,6 +23,87 @@ use crate::workspace::EmbeddingProvider;
 pub const PRIMARY_SPACE_SLUG: &str = "primary";
 const NOCTURNE_NATIVE_SYSTEM_PROMPT: &str = include_str!("nocturne_system_prompt_native.md");
 
+fn is_low_signal_trigger_term(term: &str) -> bool {
+    if term.is_empty() {
+        return true;
+    }
+
+    if !term.is_ascii() {
+        return false;
+    }
+
+    if term.len() <= 2 {
+        return true;
+    }
+
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "are"
+            | "but"
+            | "for"
+            | "from"
+            | "how"
+            | "i"
+            | "if"
+            | "in"
+            | "into"
+            | "it"
+            | "me"
+            | "my"
+            | "of"
+            | "on"
+            | "or"
+            | "our"
+            | "that"
+            | "the"
+            | "their"
+            | "them"
+            | "then"
+            | "there"
+            | "these"
+            | "they"
+            | "this"
+            | "those"
+            | "to"
+            | "up"
+            | "us"
+            | "was"
+            | "we"
+            | "what"
+            | "when"
+            | "where"
+            | "which"
+            | "who"
+            | "why"
+            | "with"
+            | "you"
+            | "your"
+    )
+}
+
+fn meaningful_trigger_terms(text: &str) -> Vec<String> {
+    search_terms::tokenize_text(text)
+        .into_iter()
+        .map(|term| {
+            if term.is_ascii() {
+                term.to_ascii_lowercase()
+            } else {
+                term
+            }
+        })
+        .filter(|term| !is_low_signal_trigger_term(term))
+        .collect()
+}
+
+fn disclosure_overlap_terms(query_terms: &HashSet<String>, disclosure: &str) -> Vec<String> {
+    meaningful_trigger_terms(disclosure)
+        .into_iter()
+        .filter(|term| query_terms.contains(term))
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryNodeKind {
@@ -707,7 +788,11 @@ impl MemoryManager {
         let glossary = self.db.list_memory_glossary(space_id).await?;
         let index = self.db.list_memory_index(space_id, None).await?;
         let mut keyword_hits: HashMap<String, Vec<String>> = HashMap::new();
-        let mut disclosure_hits: HashMap<String, String> = HashMap::new();
+        let mut disclosure_hits: HashMap<String, Vec<String>> = HashMap::new();
+        let query_terms = search_terms::expand_query_terms(user_input)
+            .into_iter()
+            .filter(|term| !is_low_signal_trigger_term(term))
+            .collect::<HashSet<_>>();
 
         let keywords = glossary
             .iter()
@@ -733,30 +818,20 @@ impl MemoryManager {
             }
         }
 
-        let disclosures = index
-            .iter()
-            .filter_map(|entry| {
-                entry
+        if !query_terms.is_empty() {
+            for entry in &index {
+                let Some(disclosure) = entry
                     .disclosure
                     .as_ref()
                     .filter(|text| !text.trim().is_empty())
-                    .map(|text| (entry.uri.clone(), text.clone()))
-            })
-            .collect::<Vec<_>>();
-        if !disclosures.is_empty() {
-            let patterns = disclosures
-                .iter()
-                .map(|(_, disclosure)| disclosure.as_str())
-                .collect::<Vec<_>>();
-            let matcher = AhoCorasickBuilder::new()
-                .ascii_case_insensitive(true)
-                .build(&patterns)
-                .map_err(|error| {
-                    DatabaseError::Query(format!("disclosure matcher failed: {error}"))
-                })?;
-            for matched in matcher.find_iter(user_input) {
-                let (uri, disclosure) = &disclosures[matched.pattern().as_usize()];
-                disclosure_hits.insert(uri.clone(), disclosure.clone());
+                else {
+                    continue;
+                };
+
+                let overlap = disclosure_overlap_terms(&query_terms, disclosure);
+                if !overlap.is_empty() {
+                    disclosure_hits.insert(entry.uri.clone(), overlap);
+                }
             }
         }
 
@@ -787,8 +862,11 @@ impl MemoryManager {
             };
 
             let keywords = keyword_hits.get(&uri).cloned().unwrap_or_default();
-            let reason = if let Some(disclosure) = disclosure_hits.get(&uri) {
-                format!("Disclosure matched user input: {disclosure}")
+            let reason = if let Some(overlap) = disclosure_hits.get(&uri) {
+                format!(
+                    "Disclosure terms overlapped user input: {}",
+                    overlap.join(", ")
+                )
             } else if !keywords.is_empty() {
                 format!("Matched glossary keywords: {}", keywords.join(", "))
             } else {
@@ -2504,6 +2582,86 @@ mod tests {
         assert!(
             !explanation.recent.is_empty(),
             "recent episodes should be present in recall explanation"
+        );
+    }
+
+    #[tokio::test]
+    async fn explain_recall_uses_disclosure_term_overlap_for_triggered_recall() {
+        let (manager, _dir) = test_manager().await;
+        let (_detail, changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://assistant"),
+                "tone",
+                MemoryNodeKind::Directive,
+                "当用户明确要求时，回应语气要更温柔、更耐心。",
+                "core",
+                "assistant/tone",
+                1,
+                Some("当用户希望语气更温柔时".to_string()),
+                MemoryVisibility::Private,
+                vec!["语气".to_string(), "温柔".to_string()],
+                json!({"source": "test"}),
+            )
+            .await
+            .expect("create tone memory");
+        manager
+            .review_changeset(OWNER_ID, None, changeset.id, "accept")
+            .await
+            .expect("accept tone memory");
+
+        let explanation = manager
+            .explain_recall(OWNER_ID, None, "你这次可以语气温柔一点吗", false)
+            .await
+            .expect("explain recall");
+
+        assert!(
+            explanation
+                .triggered
+                .iter()
+                .any(|entry| entry.uri == "core://assistant/tone"),
+            "disclosure term overlap should trigger recall: {explanation:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn explain_recall_does_not_trigger_from_stopword_only_overlap() {
+        let (manager, _dir) = test_manager().await;
+        let (_detail, changeset) = manager
+            .create(
+                OWNER_ID,
+                None,
+                Some("core://assistant"),
+                "follow_up",
+                MemoryNodeKind::Directive,
+                "Ask a follow-up question when the user sounds uncertain.",
+                "core",
+                "assistant/follow_up",
+                1,
+                Some("When the user sounds uncertain".to_string()),
+                MemoryVisibility::Private,
+                Vec::new(),
+                json!({"source": "test"}),
+            )
+            .await
+            .expect("create follow-up memory");
+        manager
+            .review_changeset(OWNER_ID, None, changeset.id, "accept")
+            .await
+            .expect("accept follow-up memory");
+
+        let explanation = manager
+            .explain_recall(OWNER_ID, None, "When are we meeting tomorrow?", false)
+            .await
+            .expect("explain recall");
+
+        assert!(
+            explanation
+                .triggered
+                .iter()
+                .all(|entry| entry.uri != "core://assistant/follow_up"),
+            "low-signal stopwords alone should not trigger recall: {explanation:#?}"
         );
     }
 }

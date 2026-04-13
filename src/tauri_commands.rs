@@ -1431,7 +1431,10 @@ mod db_message_tests {
         assert!(matches!(plan, DesktopDispatchPlan::QueueOnly));
         assert_eq!(thread.pending_messages.len(), 1);
         assert_eq!(
-            thread.pending_messages.front().map(|msg| msg.content.as_str()),
+            thread
+                .pending_messages
+                .front()
+                .map(|msg| msg.content.as_str()),
             Some("hello")
         );
     }

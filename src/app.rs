@@ -121,6 +121,7 @@ Core orientation:
 - When uncertain between "maybe worth remembering" and "probably fine to drop", lean toward remembering.
 - If the assistant expressed understanding, alignment, acknowledgement, adaptation, or any future-facing commitment, assume memory work is likely needed unless an existing memory already covers it well.
 - Do not treat "temporary", "recent", "situational", "it may pass", or "it may not matter long-term" as sufficient reasons to skip memory work.
+- Do not narrow memory work to user preferences only. Task progress, plans, constraints, decisions, failures, lessons, relationship stance, and continuity-critical short-term context can all be memory-worthy.
 
 Decision rule:
 - Ask: if this turn vanished, would future-you be more likely to misunderstand the user, repeat a mistake, miss a cue, break continuity, or fail to adapt style/behavior appropriately?

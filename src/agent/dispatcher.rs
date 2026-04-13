@@ -23,6 +23,25 @@ use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
 use crate::task_runtime::TaskMode;
 use crate::tools::redact_params;
 
+const MEMORY_WRITE_NUDGE_PROMPT: &str = r#"## Turn Memory Discipline
+
+For every turn, actively ask yourself whether future-you would be worse off if this exchange disappeared after the session ends.
+
+If the answer is yes or maybe, do memory work before you finish the turn.
+
+This applies broadly, not just to user preferences:
+- factual corrections
+- ongoing task state, plans, and commitments
+- constraints, priorities, and decision criteria
+- relationship stance, tone calibration, and interaction patterns
+- mistakes, failed attempts, and lessons that should change future behavior
+- short-term but continuity-critical context that should shape the next few turns
+
+Do not wait for the user to explicitly say "remember this".
+Do not settle for a bare acknowledgement when the turn changed what future-you should know, notice, or do.
+Use `search_memory` / `read_memory` when checking whether the understanding already exists, and use the graph memory write tools when it should persist.
+"#;
+
 fn merge_streamed_thinking_segment(existing: &str, incoming: &str) -> String {
     if existing.is_empty() {
         return incoming.to_string();
@@ -173,10 +192,13 @@ impl Agent {
             None
         };
 
+        let memory_write_nudge = self.memory().map(|_| MEMORY_WRITE_NUDGE_PROMPT.to_string());
+
         let system_prompt_parts = [
             workspace_prompt,
             memory_prompt,
             conversation_history_prompt,
+            memory_write_nudge,
         ]
         .into_iter()
         .flatten()
