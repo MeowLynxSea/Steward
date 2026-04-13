@@ -13,13 +13,13 @@
     X
   } from "lucide-svelte";
   import type {
-    MountedFileDiff,
+    AllowlistedFileDiff,
     WorkspaceChangeGroup,
-    MountedFileStatus,
+    AllowlistedFileStatus,
     WorkspaceDocumentView,
     WorkspaceEntry,
-    WorkspaceMountDetail,
-    WorkspaceMountFileView,
+    WorkspaceAllowlistDetail,
+    WorkspaceAllowlistFileView,
     WorkspaceSearchResult
   } from "../lib/types";
 
@@ -31,8 +31,8 @@
     entries: WorkspaceEntry[];
     searchResults: WorkspaceSearchResult[];
     searchQuery: string;
-    selectedMount: WorkspaceMountDetail | null;
-    selectedFile: WorkspaceMountFileView | null;
+    selectedAllowlist: WorkspaceAllowlistDetail | null;
+    selectedFile: WorkspaceAllowlistFileView | null;
     selectedDocument: WorkspaceDocumentView | null;
     changeGroups: WorkspaceChangeGroup[];
     loading: boolean;
@@ -46,12 +46,12 @@
     onNavigate: (path: string) => void;
     onOpenEntry: (entry: WorkspaceEntry) => void;
     onOpenChangesTab?: () => void;
-    onRequestMount: () => void;
-    onKeepMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
-    onRevertMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
-    onCreateCheckpoint: (mountId: string, label?: string, summary?: string) => void;
+    onRequestAllowlist: () => void;
+    onKeepAllowlist: (allowlistId: string, scopePath?: string, checkpointId?: string) => void;
+    onRevertAllowlist: (allowlistId: string, scopePath?: string, checkpointId?: string) => void;
+    onCreateCheckpoint: (allowlistId: string, label?: string, summary?: string) => void;
     onResolveConflict: (
-      mountId: string,
+      allowlistId: string,
       path: string,
       resolution: ConflictResolution,
       renamedCopyPath?: string,
@@ -65,7 +65,7 @@
     entries,
     searchResults,
     searchQuery,
-    selectedMount,
+    selectedAllowlist,
     selectedFile,
     selectedDocument,
     changeGroups,
@@ -80,9 +80,9 @@
     onNavigate,
     onOpenEntry,
     onOpenChangesTab,
-    onRequestMount,
-    onKeepMount,
-    onRevertMount,
+    onRequestAllowlist,
+    onKeepAllowlist,
+    onRevertAllowlist,
     onCreateCheckpoint,
     onResolveConflict,
     onUseResult
@@ -98,7 +98,7 @@
       .map((group) => ({
         ...group,
         entries: [...group.entries].sort((left, right) => {
-          const weight = (status: MountedFileStatus) => {
+          const weight = (status: AllowlistedFileStatus) => {
             if (status === "conflicted") return 0;
             if (status === "deleted") return 1;
             if (status === "binary_modified") return 2;
@@ -108,7 +108,7 @@
         })
       }))
       .sort((left, right) =>
-        left.mount.summary.mount.display_name.localeCompare(right.mount.summary.mount.display_name)
+        left.allowlist.summary.allowlist.display_name.localeCompare(right.allowlist.summary.allowlist.display_name)
       )
   );
   const sortedEntries = $derived(
@@ -120,14 +120,14 @@
     })
   );
 
-  const breadcrumbs = $derived(buildBreadcrumbs(currentPath, selectedMount?.summary.mount.display_name ?? null));
+  const breadcrumbs = $derived(buildBreadcrumbs(currentPath, selectedAllowlist?.summary.allowlist.display_name ?? null));
   const previewOpen = $derived(fileLoading || Boolean(selectedDocument) || Boolean(selectedFile));
 
   $effect(() => {
     localQuery = searchQuery;
     for (const group of changeGroups) {
       for (const diff of group.entries) {
-        const key = `${group.mount.summary.mount.id}:${diff.path}`;
+        const key = `${group.allowlist.summary.allowlist.id}:${diff.path}`;
         if (diff.status === "conflicted" && !mergeDrafts[key]) {
           mergeDrafts[key] = createMergeDraft(diff);
         }
@@ -157,7 +157,7 @@
     onOpenChangesTab?.();
   }
 
-  function mountIdFromUri(uri: string) {
+  function allowlistIdFromUri(uri: string) {
     if (!uri.startsWith("workspace://")) {
       return null;
     }
@@ -167,11 +167,11 @@
       return null;
     }
 
-    const [mountId] = remainder.split("/", 1);
-    return mountId || null;
+    const [allowlistId] = remainder.split("/", 1);
+    return allowlistId || null;
   }
 
-  function buildBreadcrumbs(path: string, mountName: string | null) {
+  function buildBreadcrumbs(path: string, allowlistName: string | null) {
     const root = [{ label: "Workspace", path: "workspace://" }];
     if (path === "workspace://") {
       return root;
@@ -190,9 +190,9 @@
 
     const remainder = path.slice("workspace://".length);
     const segments = remainder.split("/").filter(Boolean);
-    const [mountId, ...subpaths] = segments;
-    const trail = [...root, { label: mountName ?? mountId, path: `workspace://${mountId}` }];
-    let cursor = `workspace://${mountId}`;
+    const [allowlistId, ...subpaths] = segments;
+    const trail = [...root, { label: allowlistName ?? allowlistId, path: `workspace://${allowlistId}` }];
+    let cursor = `workspace://${allowlistId}`;
     for (const segment of subpaths) {
       cursor = `${cursor}/${segment}`;
       trail.push({ label: segment, path: cursor });
@@ -200,7 +200,7 @@
     return trail;
   }
 
-  function createMergeDraft(diff: MountedFileDiff) {
+  function createMergeDraft(diff: AllowlistedFileDiff) {
     if (!diff.base_content || !diff.remote_content || !diff.working_content) {
       return diff.working_content ?? diff.remote_content ?? "";
     }
@@ -215,7 +215,7 @@
     ].join("\n");
   }
 
-  function statusLabel(status: MountedFileStatus) {
+  function statusLabel(status: AllowlistedFileStatus) {
     switch (status) {
       case "clean": return "已同步";
       case "conflicted": return "冲突";
@@ -231,26 +231,26 @@
   }
 
   function treeIcon(entry: WorkspaceEntry) {
-    if (entry.kind === "mount") return Folder;
+    if (entry.kind === "allowlist") return Folder;
     return entry.is_directory ? Folder : FileText;
   }
 
   function isEntryActive(entry: WorkspaceEntry) {
     const uri = entry.uri ?? entry.path;
-    if (entry.kind === "mount") {
+    if (entry.kind === "allowlist") {
       return currentPath === uri || currentPath.startsWith(`${uri}/`);
     }
     if (entry.is_directory) {
       return currentPath === uri || currentPath.startsWith(`${uri}/`);
     }
     if (uri.startsWith("workspace://")) {
-      const mountId = mountIdFromUri(uri);
-      return selectedFile?.mount_id === mountId && selectedFile.path === entry.path;
+      const allowlistId = allowlistIdFromUri(uri);
+      return selectedFile?.allowlist_id === allowlistId && selectedFile.path === entry.path;
     }
     return selectedDocument?.path === uri;
   }
 
-  function previewHeadline(file: WorkspaceMountFileView) {
+  function previewHeadline(file: WorkspaceAllowlistFileView) {
     switch (file.status) {
       case "clean":
         return "当前磁盘内容";
@@ -267,12 +267,12 @@
     }
   }
 
-  function previewBody(file: WorkspaceMountFileView) {
+  function previewBody(file: WorkspaceAllowlistFileView) {
     switch (file.status) {
       case "clean":
         return file.is_binary
           ? "这是一个二进制文件，当前预览不可用。"
-          : "只读预览来自当前挂载文件。";
+          : "只读预览来自当前授权目录文件。";
       case "modified":
         return "请切换到 Changes 标签页查看 diff，并决定保留或撤销。";
       case "added":
@@ -286,8 +286,8 @@
     }
   }
 
-  function diffKey(mountId: string, path: string) {
-    return `${mountId}:${path}`;
+  function diffKey(allowlistId: string, path: string) {
+    return `${allowlistId}:${path}`;
   }
 </script>
 
@@ -305,7 +305,7 @@
           <span class="workspace-status">{busyAction}</span>
         {/if}
       </div>
-      <button class="icon-btn" onclick={onRequestMount} aria-label="挂载目录">
+      <button class="icon-btn" onclick={onRequestAllowlist} aria-label="授权目录">
         <FolderPlus size={15} strokeWidth={2} />
       </button>
     </div>
@@ -393,21 +393,21 @@
         {:else}
           <div class="diff-list">
             {#each sortedChangeGroups as group}
-              <section class="mount-group">
-                <div class="mount-info">
+              <section class="allowlist-group">
+                <div class="allowlist-info">
                   <div>
-                    <strong>{group.mount.summary.mount.display_name}</strong>
-                    <div class="mount-stats">
-                      <span>{group.mount.summary.dirty_count} 变更</span>
-                      <span>{group.mount.summary.conflict_count} 冲突</span>
-                      <span>{group.mount.summary.pending_delete_count} 删除</span>
+                    <strong>{group.allowlist.summary.allowlist.display_name}</strong>
+                    <div class="allowlist-stats">
+                      <span>{group.allowlist.summary.dirty_count} 变更</span>
+                      <span>{group.allowlist.summary.conflict_count} 冲突</span>
+                      <span>{group.allowlist.summary.pending_delete_count} 删除</span>
                     </div>
                   </div>
-                  <div class="mount-actions">
+                  <div class="allowlist-actions">
                     <button
                       class="action-btn"
                       onclick={() => onCreateCheckpoint(
-                        group.mount.summary.mount.id,
+                        group.allowlist.summary.allowlist.id,
                         "Manual checkpoint",
                         "Created from workspace rail"
                       )}
@@ -415,23 +415,23 @@
                     >
                       <GitBranch size={13} strokeWidth={2} />
                     </button>
-                    <button class="action-btn primary" onclick={() => onKeepMount(group.mount.summary.mount.id)}>
+                    <button class="action-btn primary" onclick={() => onKeepAllowlist(group.allowlist.summary.allowlist.id)}>
                       <Check size={12} strokeWidth={2} />
                       保留全部
                     </button>
-                    <button class="action-btn" onclick={() => onRevertMount(group.mount.summary.mount.id)}>
+                    <button class="action-btn" onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id)}>
                       <Undo2 size={12} strokeWidth={2} />
                       撤销全部
                     </button>
                   </div>
                 </div>
 
-                {#if group.mount.checkpoints.length > 0}
+                {#if group.allowlist.checkpoints.length > 0}
                   <div class="checkpoint-row">
-                    {#each group.mount.checkpoints.slice(0, 4) as checkpoint}
+                    {#each group.allowlist.checkpoints.slice(0, 4) as checkpoint}
                       <button
                         class="checkpoint-pill {checkpoint.is_auto ? 'auto' : 'manual'}"
-                        onclick={() => onRevertMount(group.mount.summary.mount.id, undefined, checkpoint.id)}
+                        onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id, undefined, checkpoint.id)}
                       >
                         <span>{checkpoint.label ?? (checkpoint.is_auto ? "Auto" : "Checkpoint")}</span>
                         <small>{checkpoint.changed_files.length} files</small>
@@ -441,7 +441,7 @@
                 {/if}
 
                 {#each group.entries as diff}
-                  {@const key = diffKey(group.mount.summary.mount.id, diff.path)}
+                  {@const key = diffKey(group.allowlist.summary.allowlist.id, diff.path)}
                   <article class="diff-card {diff.status === 'conflicted' ? 'conflicted' : ''}">
                     <div class="diff-card-head">
                       <div class="diff-card-meta">
@@ -462,10 +462,10 @@
 
                     {#if diff.status === "conflicted"}
                       <div class="conflict-actions">
-                        <button class="action-btn" onclick={() => onResolveConflict(group.mount.summary.mount.id, diff.path, "keep_disk")}>
+                        <button class="action-btn" onclick={() => onResolveConflict(group.allowlist.summary.allowlist.id, diff.path, "keep_disk")}>
                           保留磁盘版本
                         </button>
-                        <button class="action-btn" onclick={() => onResolveConflict(group.mount.summary.mount.id, diff.path, "keep_workspace")}>
+                        <button class="action-btn" onclick={() => onResolveConflict(group.allowlist.summary.allowlist.id, diff.path, "keep_workspace")}>
                           保留工作区版本
                         </button>
                       </div>
@@ -499,7 +499,7 @@
                           <button
                             class="action-btn primary"
                             onclick={() => onResolveConflict(
-                              group.mount.summary.mount.id,
+                              group.allowlist.summary.allowlist.id,
                               diff.path,
                               "manual_merge",
                               undefined,
@@ -515,7 +515,7 @@
                       <div class="copy-row">
                         <input type="text" bind:value={copyDrafts[key]} placeholder="冲突副本路径..." />
                         <button class="action-btn" onclick={() => onResolveConflict(
-                          group.mount.summary.mount.id,
+                          group.allowlist.summary.allowlist.id,
                           diff.path,
                           "write_copy",
                           copyDrafts[key]
@@ -533,10 +533,10 @@
                       {/if}
 
                       <div class="diff-item-actions">
-                        <button class="action-btn primary" onclick={() => onKeepMount(group.mount.summary.mount.id, diff.path)}>
+                        <button class="action-btn primary" onclick={() => onKeepAllowlist(group.allowlist.summary.allowlist.id, diff.path)}>
                           保留文件
                         </button>
-                        <button class="action-btn" onclick={() => onRevertMount(group.mount.summary.mount.id, diff.path)}>
+                        <button class="action-btn" onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id, diff.path)}>
                           撤销文件
                         </button>
                       </div>
@@ -642,7 +642,7 @@
     gap: 8px;
   }
 
-  .mount-actions,
+  .allowlist-actions,
   .merge-head,
   .diff-item-actions,
   .conflict-actions,
@@ -655,7 +655,7 @@
 
   .workspace-status,
   .preview-meta,
-  .mount-stats,
+  .allowlist-stats,
   .diff-status,
   .empty-hint,
   .preview-empty {
@@ -874,8 +874,8 @@
     line-height: 1.5;
   }
 
-  .mount-info,
-  .mount-group,
+  .allowlist-info,
+  .allowlist-group,
   .diff-card,
   .notice,
   .binary-notice,
@@ -932,21 +932,21 @@
     color: var(--text-on-dark);
   }
 
-  .mount-info,
+  .allowlist-info,
   .diff-card,
   .manual-merge,
   .copy-row {
     padding: 10px;
   }
 
-  .mount-group {
+  .allowlist-group {
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding: 8px;
   }
 
-  .mount-stats {
+  .allowlist-stats {
     display: flex;
     gap: 8px;
     margin-top: 2px;
@@ -988,7 +988,7 @@
   }
 
   .diff-card-meta strong,
-  .mount-info strong {
+  .allowlist-info strong {
     font-size: 12px;
     line-height: 1.3;
   }

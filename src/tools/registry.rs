@@ -349,24 +349,26 @@ impl ToolRegistry {
         &self,
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
-        self.register_sync(Arc::new(ReadFileTool::new().with_workspace_resolver(
-            Arc::clone(&resolver),
-        )));
-        self.register_sync(Arc::new(WriteFileTool::new().with_workspace_resolver(
-            Arc::clone(&resolver),
-        )));
-        self.register_sync(Arc::new(MoveFileTool::new().with_workspace_resolver(
-            Arc::clone(&resolver),
-        )));
-        self.register_sync(Arc::new(ListDirTool::new().with_workspace_resolver(
-            Arc::clone(&resolver),
-        )));
-        self.register_sync(Arc::new(ApplyPatchTool::new().with_workspace_resolver(
-            Arc::clone(&resolver),
-        )));
+        self.register_sync(Arc::new(
+            ReadFileTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
+        self.register_sync(Arc::new(
+            WriteFileTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
+        self.register_sync(Arc::new(
+            MoveFileTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
+        self.register_sync(Arc::new(
+            ListDirTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
+        self.register_sync(Arc::new(
+            ApplyPatchTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
         self.register_sync(Arc::new(WorkspaceSearchTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceWriteTool::new(Arc::clone(&resolver))));
-        self.register_sync(Arc::new(WorkspaceApplyPatchTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceApplyPatchTool::new(Arc::clone(
+            &resolver,
+        ))));
         self.register_sync(Arc::new(WorkspaceMoveTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceDeleteTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceDeleteTreeTool::new(Arc::clone(
@@ -384,12 +386,10 @@ impl ToolRegistry {
         self.register_sync(Arc::new(WorkspaceBaselineSetTool::new(Arc::clone(
             &resolver,
         ))));
-        self.register_sync(Arc::new(WorkspaceRefreshTool::new(Arc::clone(
-            &resolver,
-        ))));
-        self.register_sync(Arc::new(ShellTool::new().with_workspace_resolver(Arc::clone(
-            &resolver,
-        ))));
+        self.register_sync(Arc::new(WorkspaceRefreshTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(
+            ShellTool::new().with_workspace_resolver(Arc::clone(&resolver)),
+        ));
         self.register_sync(Arc::new(WorkspaceReadTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(BootstrapCompleteTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceTreeTool::new(resolver)));
@@ -423,18 +423,18 @@ impl ToolRegistry {
         self.register_sync(Arc::new(WorkspaceWriteTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(WorkspaceApplyPatchTool::from_workspace(Arc::clone(
-            &workspace,
-        ))));
+        self.register_sync(Arc::new(WorkspaceApplyPatchTool::from_workspace(
+            Arc::clone(&workspace),
+        )));
         self.register_sync(Arc::new(WorkspaceMoveTool::from_workspace(Arc::clone(
             &workspace,
         ))));
         self.register_sync(Arc::new(WorkspaceDeleteTool::from_workspace(Arc::clone(
             &workspace,
         ))));
-        self.register_sync(Arc::new(WorkspaceDeleteTreeTool::from_workspace(Arc::clone(
-            &workspace,
-        ))));
+        self.register_sync(Arc::new(WorkspaceDeleteTreeTool::from_workspace(
+            Arc::clone(&workspace),
+        )));
         self.register_sync(Arc::new(WorkspaceDiffTool::from_workspace(Arc::clone(
             &workspace,
         ))));

@@ -481,7 +481,7 @@ impl Agent {
         }
     }
 
-    fn mount_scope_roots(&self, tool_name: &str, paths: &[PathBuf]) -> Vec<PathBuf> {
+    fn allowlist_scope_roots(&self, tool_name: &str, paths: &[PathBuf]) -> Vec<PathBuf> {
         let mut roots = Vec::new();
         for path in paths {
             let candidate = if tool_name == "list_dir" {
@@ -499,7 +499,7 @@ impl Agent {
         roots
     }
 
-    async fn filesystem_paths_are_mounted(&self, user_id: &str, paths: &[PathBuf]) -> bool {
+    async fn filesystem_paths_are_allowlisted(&self, user_id: &str, paths: &[PathBuf]) -> bool {
         let _ = (user_id, paths);
         false
     }
@@ -526,10 +526,10 @@ impl Agent {
                 return true;
             }
         }
-        self.filesystem_paths_are_mounted(user_id, &paths).await
+        self.filesystem_paths_are_allowlisted(user_id, &paths).await
     }
 
-    pub(super) async fn mounted_workspace_redirect_for_tool(
+    pub(super) async fn allowlist_workspace_redirect_for_tool(
         &self,
         user_id: &str,
         tool_name: &str,
@@ -583,7 +583,7 @@ impl Agent {
         let paths = self
             .resolve_filesystem_access_paths(tool_name, params)
             .map_err(Error::from)?;
-        let roots = self.mount_scope_roots(tool_name, &paths);
+        let roots = self.allowlist_scope_roots(tool_name, &paths);
 
         {
             let mut sess = session.lock().await;
@@ -2808,26 +2808,26 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn mounted_workspace_redirect_allows_raw_disk_paths() {
+    async fn allowlist_workspace_redirect_allows_raw_disk_paths() {
         let (db, _db_dir) = test_db().await;
         let agent = make_test_agent_with_db(db);
-        let user_id = "mount-redirect-user";
+        let user_id = "allowlist-redirect-user";
 
-        let mount_dir = tempfile::tempdir().expect("mount tempdir");
-        let nested_dir = mount_dir.path().join("src");
+        let allowlist_dir = tempfile::tempdir().expect("allowlist tempdir");
+        let nested_dir = allowlist_dir.path().join("src");
         std::fs::create_dir_all(&nested_dir).expect("create nested dir");
         let raw_file = nested_dir.join("lib.rs");
-        std::fs::write(&raw_file, "pub fn mounted() {}\n").expect("write mounted file");
+        std::fs::write(&raw_file, "pub fn allowlisted() {}\n").expect("write allowlisted file");
 
         let tenant = agent.tenant_ctx(user_id).await;
         let workspace = tenant.workspace().cloned().expect("workspace");
         workspace
-            .create_mount("project", mount_dir.path().display().to_string(), true)
+            .create_allowlist("project", allowlist_dir.path().display().to_string(), true)
             .await
-            .expect("create mount");
+            .expect("create allowlist");
 
         let redirect = agent
-            .mounted_workspace_redirect_for_tool(
+            .allowlist_workspace_redirect_for_tool(
                 user_id,
                 "read_file",
                 &serde_json::json!({ "path": raw_file.display().to_string() }),
@@ -2836,7 +2836,7 @@ mod tests {
 
         assert!(
             redirect.is_none(),
-            "mounted raw filesystem paths should no longer be redirected"
+            "allowlisted raw filesystem paths should no longer be redirected"
         );
     }
 }

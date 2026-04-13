@@ -4,7 +4,7 @@
 
      Examples:
      - SSH hosts: dev-box (Ubuntu 22.04, username: alice)
-     - Camera: Canon R6 mounted at /Volumes/EOS_R
+     - Camera: Canon R6 available at /Volumes/EOS_R
      - Default shell on remote: bash, no zsh
 
      Add your environment notes below (outside the comment block).

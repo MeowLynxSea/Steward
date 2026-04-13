@@ -261,11 +261,11 @@ pub struct MemoryReviewActionRequest {
 }
 
 // =============================================================================
-// Workspace Mounts (8 commands)
+// Workspace Allowlists (8 commands)
 // =============================================================================
 
 #[derive(Debug, Deserialize)]
-pub struct CreateWorkspaceMountRequest {
+pub struct CreateWorkspaceAllowlistRequest {
     pub path: String,
     pub display_name: Option<String>,
     #[serde(default = "default_true")]
@@ -346,8 +346,8 @@ pub struct ResolveWorkspaceConflictRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct WorkspaceMountListResponse {
-    pub mounts: Vec<crate::workspace::WorkspaceMountSummary>,
+pub struct WorkspaceAllowlistListResponse {
+    pub allowlists: Vec<crate::workspace::WorkspaceAllowlistSummary>,
 }
 
 // =============================================================================

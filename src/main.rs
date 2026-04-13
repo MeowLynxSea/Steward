@@ -413,7 +413,7 @@ fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
             "-e",
             "try",
             "-e",
-            "POSIX path of (choose folder with prompt \"Select a folder to mount\")",
+            "POSIX path of (choose folder with prompt \"Select a folder to allowlist\")",
             "-e",
             "on error number -128",
             "-e",
@@ -476,7 +476,7 @@ fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-async fn pick_mount_directory() -> Result<Option<String>, String> {
+async fn pick_allowlist_directory() -> Result<Option<String>, String> {
     pick_directory_with_system_dialog()
 }
 
@@ -488,7 +488,7 @@ fn main() {
             notify,
             start_openai_codex_login,
             get_openai_codex_login_status,
-            pick_mount_directory,
+            pick_allowlist_directory,
             tauri_commands::get_settings,
             tauri_commands::patch_settings,
             tauri_commands::list_sessions,
@@ -513,20 +513,20 @@ fn main() {
             tauri_commands::apply_memory_review,
             tauri_commands::rollback_memory_changeset,
             tauri_commands::get_memory_versions,
-            tauri_commands::list_workspace_mounts,
-            tauri_commands::create_workspace_mount,
-            tauri_commands::get_workspace_mount,
-            tauri_commands::get_workspace_mount_file,
-            tauri_commands::get_workspace_mount_diff,
+            tauri_commands::list_workspace_allowlists,
+            tauri_commands::create_workspace_allowlist,
+            tauri_commands::get_workspace_allowlist,
+            tauri_commands::get_workspace_allowlist_file,
+            tauri_commands::get_workspace_allowlist_diff,
             tauri_commands::create_workspace_checkpoint,
-            tauri_commands::list_workspace_mount_checkpoints,
-            tauri_commands::get_workspace_mount_history,
-            tauri_commands::keep_workspace_mount,
-            tauri_commands::revert_workspace_mount,
-            tauri_commands::restore_workspace_mount,
-            tauri_commands::set_workspace_mount_baseline,
-            tauri_commands::refresh_workspace_mount,
-            tauri_commands::resolve_workspace_mount_conflict,
+            tauri_commands::list_workspace_allowlist_checkpoints,
+            tauri_commands::get_workspace_allowlist_history,
+            tauri_commands::keep_workspace_allowlist,
+            tauri_commands::revert_workspace_allowlist,
+            tauri_commands::restore_workspace_allowlist,
+            tauri_commands::set_workspace_allowlist_baseline,
+            tauri_commands::refresh_workspace_allowlist,
+            tauri_commands::resolve_workspace_allowlist_conflict,
             tauri_commands::get_workbench_capabilities
         ])
         .setup(|app| {

@@ -794,7 +794,7 @@
   }
 
   onMount(() => {
-    memoryGraphDebug("mounted", {
+    memoryGraphDebug("initialized", {
       sections: memorySections.length
     });
   });

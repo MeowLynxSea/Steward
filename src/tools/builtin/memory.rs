@@ -90,9 +90,9 @@ impl WorkspacePool {
         }
 
         ws.with_memory_layers(self.workspace_config.memory_layers.clone())
-            .with_mount_watch_config(
-                self.workspace_config.mount_watch_enabled,
-                self.workspace_config.mount_watch_interval_ms,
+            .with_allowlist_watch_config(
+                self.workspace_config.allowlist_watch_enabled,
+                self.workspace_config.allowlist_watch_interval_ms,
             )
     }
 }
@@ -144,21 +144,23 @@ fn is_legacy_memory_target(target: &str) -> bool {
     matches!(target, "heartbeat") || target == paths::HEARTBEAT
 }
 
-fn is_workspace_mount_uri(path: &str) -> bool {
+fn is_workspace_allowlist_uri(path: &str) -> bool {
     path.starts_with("workspace://")
 }
 
-fn parse_workspace_mount_target(path: &str) -> Result<(uuid::Uuid, Option<String>), ToolError> {
+fn parse_workspace_allowlist_target(path: &str) -> Result<(uuid::Uuid, Option<String>), ToolError> {
     match WorkspaceUri::parse(path)
         .map_err(|e| ToolError::ExecutionFailed(format!("Path parse failed: {e}")))?
     {
-        Some(WorkspaceUri::MountRoot(mount_id)) => Ok((mount_id, None)),
-        Some(WorkspaceUri::MountPath(mount_id, mount_path)) => Ok((mount_id, Some(mount_path))),
+        Some(WorkspaceUri::AllowlistRoot(allowlist_id)) => Ok((allowlist_id, None)),
+        Some(WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path)) => {
+            Ok((allowlist_id, Some(allowlist_path)))
+        }
         Some(WorkspaceUri::Root) => Err(ToolError::InvalidParameters(
-            "workspace:// root is not a valid mount target for this tool".to_string(),
+            "workspace:// root is not a valid allowlist target for this tool".to_string(),
         )),
         None => Err(ToolError::InvalidParameters(format!(
-            "'{}' is not a mounted workspace URI",
+            "'{}' is not a allowlisted workspace URI",
             path
         ))),
     }
@@ -259,9 +261,9 @@ impl Tool for BootstrapCompleteTool {
     }
 }
 
-/// Tool for searching mounted workspace content.
+/// Tool for searching allowlisted workspace content.
 ///
-/// Performs hybrid search (FTS + semantic) across indexed mounted workspace content.
+/// Performs hybrid search (FTS + semantic) across indexed allowlisted workspace content.
 pub struct WorkspaceSearchTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -287,8 +289,8 @@ impl Tool for WorkspaceSearchTool {
     }
 
     fn description(&self) -> &str {
-        "Search indexed mounted workspace content. Use this when you need \
-         project context from mounted files rather than graph-native long-term memory. \
+        "Search indexed allowlisted workspace content. Use this when you need \
+         project context from allowlisted files rather than graph-native long-term memory. \
          Returns relevant snippets with relevance scores."
     }
 
@@ -358,9 +360,9 @@ impl Tool for WorkspaceSearchTool {
     }
 }
 
-/// Tool for writing mounted workspace files.
+/// Tool for writing allowlisted workspace files.
 ///
-/// Use this to create or update mounted workspace files via `workspace://` URIs.
+/// Use this to create or update allowlisted workspace files via `workspace://` URIs.
 pub struct WorkspaceWriteTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -386,8 +388,8 @@ impl Tool for WorkspaceWriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write to mounted workspace files via `workspace://` URIs. \
-         Use this only for real mounted project files such as `workspace://<mount-id>/src/main.rs`. \
+        "Write to allowlisted workspace files via `workspace://` URIs. \
+         Use this only for real allowlisted project files such as `workspace://<allowlist-id>/src/main.rs`. \
          Do NOT use this for Steward memory or heartbeat procedures; use create_memory/update_memory for \
          agent memory, and use the workspace document APIs for workspace-owned files. Use write_file for raw local filesystem paths."
     }
@@ -402,7 +404,7 @@ impl Tool for WorkspaceWriteTool {
                 },
                 "target": {
                     "type": "string",
-                    "description": "Mounted workspace file target, always as a `workspace://<mount-id>/...` URI. Do not pass legacy aliases such as 'heartbeat' or direct workspace document names like 'HEARTBEAT.md'."
+                    "description": "Allowlisted workspace file target, always as a `workspace://<allowlist-id>/...` URI. Do not pass legacy aliases such as 'heartbeat' or direct workspace document names like 'HEARTBEAT.md'."
                 },
                 "append": {
                     "type": "boolean",
@@ -441,9 +443,9 @@ impl Tool for WorkspaceWriteTool {
             )));
         }
 
-        if !is_workspace_mount_uri(target) {
+        if !is_workspace_allowlist_uri(target) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is not a mounted workspace URI. workspace_write only operates on mounted files via `workspace://<mount-id>/...`. \
+                "'{}' is not a allowlisted workspace URI. workspace_write only operates on allowlisted files via `workspace://<allowlist-id>/...`. \
                  Use write_file for raw local filesystem writes, or create_memory/update_memory for Steward memory.",
                 target
             )));
@@ -463,7 +465,7 @@ impl Tool for WorkspaceWriteTool {
             .unwrap_or(true);
 
         let resolved_path = target.to_string();
-        // Mounted workspace files now map directly to the real filesystem.
+        // Allowlisted workspace files now map directly to the real filesystem.
         // Append uses an explicit read-modify-write so workspace:// paths behave
         // the same way as raw filesystem append semantics.
         if append {
@@ -510,9 +512,9 @@ impl Tool for WorkspaceWriteTool {
     }
 }
 
-/// Tool for reading mounted workspace files.
+/// Tool for reading allowlisted workspace files.
 ///
-/// Use this to read the full content of a mounted workspace file.
+/// Use this to read the full content of a allowlisted workspace file.
 pub struct WorkspaceReadTool {
     resolver: Arc<dyn WorkspaceResolver>,
 }
@@ -538,7 +540,7 @@ impl Tool for WorkspaceReadTool {
     }
 
     fn description(&self) -> &str {
-        "Read a mounted workspace file via a `workspace://` URI. \
+        "Read a allowlisted workspace file via a `workspace://` URI. \
          Use this to read files shown by workspace_tree. NOT for local filesystem files \
          (use read_file for those) and NOT for Steward memory (use read_memory or search_memory). \
          Do not pass absolute paths like '/Users/...' or 'C:\\...'."
@@ -550,7 +552,7 @@ impl Tool for WorkspaceReadTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Mounted workspace URI to read, e.g. `workspace://<mount-id>/src/main.rs`"
+                    "description": "Allowlisted workspace URI to read, e.g. `workspace://<allowlist-id>/src/main.rs`"
                 }
             },
             "required": ["path"]
@@ -568,15 +570,15 @@ impl Tool for WorkspaceReadTool {
 
         if looks_like_filesystem_path(path) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' looks like a local filesystem path. workspace_read only works with mounted workspace URIs. \
+                "'{}' looks like a local filesystem path. workspace_read only works with allowlisted workspace URIs. \
                  Use read_file for filesystem reads. For opening files in an editor, use shell with: open \"<absolute_path>\".",
                 path
             )));
         }
 
-        if !is_workspace_mount_uri(path) {
+        if !is_workspace_allowlist_uri(path) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is not a mounted workspace URI. workspace_read only operates on `workspace://<mount-id>/...` paths. \
+                "'{}' is not a allowlisted workspace URI. workspace_read only operates on `workspace://<allowlist-id>/...` paths. \
                  Use read_file for raw local filesystem access, or read_memory for graph-native Steward memory.",
                 path
             )));
@@ -683,10 +685,10 @@ impl Tool for WorkspaceTreeTool {
     }
 
     fn description(&self) -> &str {
-        "View mounted workspace trees under `workspace://`. \
+        "View allowlisted workspace trees under `workspace://`. \
          Use workspace_read to read files shown here, NOT read_file. \
          The workspace tree is separate from the local filesystem and represents \
-         mounted working directories."
+         allowlisted working directories."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -721,9 +723,9 @@ impl Tool for WorkspaceTreeTool {
             .and_then(|v| v.as_str())
             .unwrap_or("workspace://");
 
-        if !is_workspace_mount_uri(path) {
+        if !is_workspace_allowlist_uri(path) {
             return Err(ToolError::InvalidParameters(format!(
-                "'{}' is not a mounted workspace URI. workspace_tree only operates on `workspace://` roots and mount paths.",
+                "'{}' is not a allowlisted workspace URI. workspace_tree only operates on `workspace://` roots and allowlist paths.",
                 path
             )));
         }
@@ -776,7 +778,7 @@ impl Tool for WorkspaceApplyPatchTool {
     }
 
     fn description(&self) -> &str {
-        "Apply a targeted string replacement to a mounted workspace file on the real filesystem."
+        "Apply a targeted string replacement to a allowlisted workspace file on the real filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -867,7 +869,7 @@ impl Tool for WorkspaceMoveTool {
     }
 
     fn description(&self) -> &str {
-        "Move or rename a file inside a mounted workspace on the real filesystem."
+        "Move or rename a file inside a allowlisted workspace on the real filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -894,17 +896,18 @@ impl Tool for WorkspaceMoveTool {
             .get("overwrite")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
-        let (source_mount, source_rel) = parse_workspace_mount_target(source_path)?;
-        let (destination_mount, destination_rel) = parse_workspace_mount_target(destination_path)?;
-        if source_mount != destination_mount {
+        let (source_allowlist, source_rel) = parse_workspace_allowlist_target(source_path)?;
+        let (destination_allowlist, destination_rel) =
+            parse_workspace_allowlist_target(destination_path)?;
+        if source_allowlist != destination_allowlist {
             return Err(ToolError::InvalidParameters(
-                "workspace_move only supports moves within the same mount".to_string(),
+                "workspace_move only supports moves within the same allowlist".to_string(),
             ));
         }
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let view = workspace
-            .move_mount_file(
-                source_mount,
+            .move_allowlist_file(
+                source_allowlist,
                 source_rel.as_deref().unwrap_or(""),
                 destination_rel.as_deref().unwrap_or(""),
                 overwrite,
@@ -950,7 +953,7 @@ impl Tool for WorkspaceDeleteTool {
     }
 
     fn description(&self) -> &str {
-        "Delete a file from a mounted workspace on the real filesystem."
+        "Delete a file from a allowlisted workspace on the real filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1013,7 +1016,7 @@ impl Tool for WorkspaceDeleteTreeTool {
     }
 
     fn description(&self) -> &str {
-        "Delete a directory tree from a mounted workspace on the real filesystem."
+        "Delete a directory tree from a allowlisted workspace on the real filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1038,10 +1041,14 @@ impl Tool for WorkspaceDeleteTreeTool {
             .get("missing_ok")
             .and_then(|value| value.as_bool())
             .unwrap_or(false);
-        let (mount_id, mount_path) = parse_workspace_mount_target(path)?;
+        let (allowlist_id, allowlist_path) = parse_workspace_allowlist_target(path)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let detail = workspace
-            .delete_mount_tree(mount_id, mount_path.as_deref().unwrap_or(""), missing_ok)
+            .delete_allowlist_tree(
+                allowlist_id,
+                allowlist_path.as_deref().unwrap_or(""),
+                missing_ok,
+            )
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Delete tree failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1111,13 +1118,29 @@ impl Tool for WorkspaceDiffTool {
             .get("include_content")
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
-        let max_files = params.get("max_files").and_then(|value| value.as_u64()).map(|v| v as usize);
-        let from = params.get("from").and_then(|value| value.as_str()).map(ToString::to_string);
-        let to = params.get("to").and_then(|value| value.as_str()).map(ToString::to_string);
-        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let max_files = params
+            .get("max_files")
+            .and_then(|value| value.as_u64())
+            .map(|v| v as usize);
+        let from = params
+            .get("from")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
+        let to = params
+            .get("to")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
+        let (allowlist_id, scope_path) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let diff = workspace
-            .diff_mount_between(mount_id, scope_path, from, to, include_content, max_files)
+            .diff_allowlist_between(
+                allowlist_id,
+                scope_path,
+                from,
+                to,
+                include_content,
+                max_files,
+            )
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Diff failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1159,7 +1182,7 @@ impl Tool for WorkspaceHistoryTool {
     }
 
     fn description(&self) -> &str {
-        "List revisions and checkpoints for a mounted workspace."
+        "List revisions and checkpoints for a allowlisted workspace."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1189,10 +1212,10 @@ impl Tool for WorkspaceHistoryTool {
             .get("include_checkpoints")
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
-        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let (allowlist_id, scope_path) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let history = workspace
-            .mount_history(mount_id, scope_path, limit, None, include_checkpoints)
+            .allowlist_history(allowlist_id, scope_path, limit, None, include_checkpoints)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("History failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1257,7 +1280,10 @@ impl Tool for WorkspaceCheckpointCreateTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let scope = require_str(&params, "scope")?;
-        let label = params.get("label").and_then(|value| value.as_str()).map(ToString::to_string);
+        let label = params
+            .get("label")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
         let summary = params
             .get("summary")
             .and_then(|value| value.as_str())
@@ -1266,10 +1292,10 @@ impl Tool for WorkspaceCheckpointCreateTool {
             .get("revision")
             .and_then(|value| value.as_str())
             .and_then(|value| uuid::Uuid::parse_str(value).ok());
-        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let (allowlist_id, _) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let checkpoint = workspace
-            .create_checkpoint(mount_id, label, summary, "agent", false, revision)
+            .create_checkpoint(allowlist_id, label, summary, "agent", false, revision)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Checkpoint failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1311,7 +1337,7 @@ impl Tool for WorkspaceCheckpointListTool {
     }
 
     fn description(&self) -> &str {
-        "List checkpoints for a mounted workspace."
+        "List checkpoints for a allowlisted workspace."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1332,11 +1358,14 @@ impl Tool for WorkspaceCheckpointListTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let scope = require_str(&params, "scope")?;
-        let limit = params.get("limit").and_then(|value| value.as_u64()).map(|v| v as usize);
-        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let limit = params
+            .get("limit")
+            .and_then(|value| value.as_u64())
+            .map(|v| v as usize);
+        let (allowlist_id, _) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let checkpoints = workspace
-            .list_mount_checkpoints(mount_id, limit)
+            .list_allowlist_checkpoints(allowlist_id, limit)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Checkpoint list failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1378,7 +1407,7 @@ impl Tool for WorkspaceRestoreTool {
     }
 
     fn description(&self) -> &str {
-        "Restore a mounted workspace or subtree to a baseline, revision, or checkpoint."
+        "Restore a allowlisted workspace or subtree to a baseline, revision, or checkpoint."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1415,11 +1444,11 @@ impl Tool for WorkspaceRestoreTool {
             .get("create_checkpoint_before_restore")
             .and_then(|value| value.as_bool())
             .unwrap_or(true);
-        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let (allowlist_id, scope_path) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let detail = workspace
-            .restore_mount(
-                mount_id,
+            .restore_allowlist(
+                allowlist_id,
                 target,
                 scope_path,
                 set_as_baseline,
@@ -1468,7 +1497,7 @@ impl Tool for WorkspaceBaselineSetTool {
     }
 
     fn description(&self) -> &str {
-        "Set the baseline revision for a mounted workspace without changing disk contents."
+        "Set the baseline revision for a allowlisted workspace without changing disk contents."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1490,10 +1519,10 @@ impl Tool for WorkspaceBaselineSetTool {
         let start = std::time::Instant::now();
         let scope = require_str(&params, "scope")?;
         let target = require_str(&params, "target")?;
-        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let (allowlist_id, _) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let detail = workspace
-            .set_mount_baseline(mount_id, target)
+            .set_allowlist_baseline(allowlist_id, target)
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Set baseline failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1535,7 +1564,7 @@ impl Tool for WorkspaceRefreshTool {
     }
 
     fn description(&self) -> &str {
-        "Force a refresh of a mounted workspace from the real filesystem."
+        "Force a refresh of a allowlisted workspace from the real filesystem."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -1555,10 +1584,10 @@ impl Tool for WorkspaceRefreshTool {
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
         let scope = require_str(&params, "scope")?;
-        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let (allowlist_id, scope_path) = parse_workspace_allowlist_target(scope)?;
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let detail = workspace
-            .refresh_mount(mount_id, scope_path.as_deref())
+            .refresh_allowlist(allowlist_id, scope_path.as_deref())
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Refresh failed: {e}")))?;
         Ok(ToolOutput::success(
@@ -1605,7 +1634,9 @@ mod tests {
         assert!(is_legacy_memory_target("HEARTBEAT.md"));
         assert!(!is_legacy_memory_target("projects/alpha/notes.md"));
         assert!(!is_legacy_memory_target("context/vision.md"));
-        assert!(!is_legacy_memory_target("workspace://mount/src/main.rs"));
+        assert!(!is_legacy_memory_target(
+            "workspace://allowlist/src/main.rs"
+        ));
     }
 
     #[cfg(feature = "libsql")]

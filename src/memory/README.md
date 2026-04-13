@@ -21,6 +21,6 @@
 
 ## Boundary With Workspace
 
-`src/workspace/` still owns mounted files, workspace search, and file-context indexing.
+`src/workspace/` still owns allowlisted files, workspace search, and file-context indexing.
 
 Legacy workspace files are no longer part of the runtime memory contract. The graph is the source of truth, and any imported content is treated as ordinary memory nodes rather than fixed runtime entry points.

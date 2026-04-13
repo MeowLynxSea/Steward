@@ -40,7 +40,7 @@
   let leftSidebarCollapsed = $state(false);
   let rightSidebarCollapsed = $state(false);
   let showSettings = $state(false);
-  let showMountModal = $state(false);
+  let showAllowlistModal = $state(false);
   let composerSeed = $state<{ id: string; content: string } | null>(null);
 
   function openSettings() {
@@ -61,9 +61,9 @@
       showSettings = true;
     }
   });
-  let mountDisplayName = $state("");
-  let selectedMountPath = $state("");
-  let selectingMountPath = $state(false);
+  let allowlistDisplayName = $state("");
+  let selectedAllowlistPath = $state("");
+  let selectingAllowlistPath = $state(false);
 
   async function loadWorkspaceData() {
     await Promise.all([
@@ -163,39 +163,39 @@
     };
   }
 
-  function openMountModal() {
-    showMountModal = true;
+  function openAllowlistModal() {
+    showAllowlistModal = true;
   }
 
-  function closeMountModal() {
-    showMountModal = false;
-    mountDisplayName = "";
-    selectedMountPath = "";
-    selectingMountPath = false;
+  function closeAllowlistModal() {
+    showAllowlistModal = false;
+    allowlistDisplayName = "";
+    selectedAllowlistPath = "";
+    selectingAllowlistPath = false;
   }
 
-  async function handlePickMountDirectory() {
-    selectingMountPath = true;
+  async function handlePickAllowlistDirectory() {
+    selectingAllowlistPath = true;
     try {
       const selected = await pickDirectory();
       if (selected) {
-        selectedMountPath = selected;
-        mountDisplayName = defaultMountName(selected);
+        selectedAllowlistPath = selected;
+        allowlistDisplayName = defaultAllowlistName(selected);
       }
     } finally {
-      selectingMountPath = false;
+      selectingAllowlistPath = false;
     }
   }
 
-  async function handleCreateMount() {
-    if (!selectedMountPath) return;
-    await workspaceStore.createMount(selectedMountPath, mountDisplayName.trim() || undefined);
+  async function handleCreateAllowlist() {
+    if (!selectedAllowlistPath) return;
+    await workspaceStore.createAllowlist(selectedAllowlistPath, allowlistDisplayName.trim() || undefined);
     if (!workspaceStore.error) {
-      closeMountModal();
+      closeAllowlistModal();
     }
   }
 
-  function defaultMountName(path: string) {
+  function defaultAllowlistName(path: string) {
     const segments = path.split(/[\\/]/).filter(Boolean);
     return segments.at(-1) ?? path;
   }
@@ -210,7 +210,7 @@
 
     const workspaceInterval = window.setInterval(() => {
       if (
-        showMountModal ||
+        showAllowlistModal ||
         workspaceStore.loading ||
         workspaceStore.refreshing ||
         workspaceStore.busyAction
@@ -221,7 +221,7 @@
     }, 4000);
 
     const unlistenDrops = await listenForFolderDrops(async (path) => {
-      await workspaceStore.createMount(path, defaultMountName(path));
+      await workspaceStore.createAllowlist(path, defaultAllowlistName(path));
     });
 
     return () => {
@@ -314,7 +314,7 @@
         entries={workspaceStore.entries}
         searchResults={workspaceStore.searchResults}
         searchQuery={workspaceStore.searchQuery}
-        selectedMount={workspaceStore.selectedMount}
+        selectedAllowlist={workspaceStore.selectedAllowlist}
         selectedFile={workspaceStore.selectedFile}
         selectedDocument={workspaceStore.selectedDocument}
         changeGroups={workspaceStore.changeGroups}
@@ -326,78 +326,78 @@
         onSearch={(query) => void workspaceStore.search(query)}
         onClearSearch={() => workspaceStore.clearSearch()}
         onClearPreview={() => workspaceStore.clearPreview()}
-        onRequestMount={openMountModal}
+        onRequestAllowlist={openAllowlistModal}
         onNavigate={(path) => void workspaceStore.openPath(path)}
         onOpenEntry={(entry) => void workspaceStore.openEntry(entry)}
-        onOpenChangesTab={() => void workspaceStore.refreshMountChanges()}
-        onKeepMount={(mountId, scopePath, checkpointId) => void workspaceStore.keepMount(mountId, scopePath, checkpointId)}
-        onRevertMount={(mountId, scopePath, checkpointId) => void workspaceStore.revertMount(mountId, scopePath, checkpointId)}
-        onCreateCheckpoint={(mountId, label, summary) => void workspaceStore.createCheckpoint(mountId, label, summary)}
-        onResolveConflict={(mountId, path, resolution, renamedCopyPath, mergedContent) =>
-          void workspaceStore.resolveConflict(mountId, path, resolution, renamedCopyPath, mergedContent)}
+        onOpenChangesTab={() => void workspaceStore.refreshAllowlistChanges()}
+        onKeepAllowlist={(allowlistId, scopePath, checkpointId) => void workspaceStore.keepAllowlist(allowlistId, scopePath, checkpointId)}
+        onRevertAllowlist={(allowlistId, scopePath, checkpointId) => void workspaceStore.revertAllowlist(allowlistId, scopePath, checkpointId)}
+        onCreateCheckpoint={(allowlistId, label, summary) => void workspaceStore.createCheckpoint(allowlistId, label, summary)}
+        onResolveConflict={(allowlistId, path, resolution, renamedCopyPath, mergedContent) =>
+          void workspaceStore.resolveConflict(allowlistId, path, resolution, renamedCopyPath, mergedContent)}
         onUseResult={handleUseWorkspaceResult}
       />
     </div>
 
-    {#if showMountModal}
+    {#if showAllowlistModal}
       <div
         class="global-modal-backdrop"
         role="presentation"
-        onclick={closeMountModal}
+        onclick={closeAllowlistModal}
         transition:fade={{ duration: 180 }}
-        onkeydown={(event) => event.key === "Escape" && closeMountModal()}
+        onkeydown={(event) => event.key === "Escape" && closeAllowlistModal()}
       >
         <div
-          class="global-mount-modal"
+          class="global-allowlist-modal"
           role="dialog"
           aria-modal="true"
-          aria-label="挂载目录"
+          aria-label="授权目录"
           tabindex="-1"
           in:scale={{ duration: 220, start: 0.92 }}
           out:scale={{ duration: 150, start: 0.96 }}
         >
-          <div class="global-mount-modal-inner" role="presentation" onclick={(event) => event.stopPropagation()}>
-            <div class="mount-modal-head">
-              <strong>挂载目录</strong>
-              <button class="modal-icon-button" onclick={closeMountModal} aria-label="关闭">
+          <div class="global-allowlist-modal-inner" role="presentation" onclick={(event) => event.stopPropagation()}>
+            <div class="allowlist-modal-head">
+              <strong>授权目录</strong>
+              <button class="modal-icon-button" onclick={closeAllowlistModal} aria-label="关闭">
                 <X size={18} strokeWidth={2} />
               </button>
             </div>
 
-            <button class="folder-picker-button" onclick={() => void handlePickMountDirectory()}>
+            <button class="folder-picker-button" onclick={() => void handlePickAllowlistDirectory()}>
               <FolderSearch size={18} strokeWidth={2} />
-              {selectingMountPath ? "正在打开选择器..." : selectedMountPath ? "重新选择文件夹" : "选择文件夹"}
+              {selectingAllowlistPath ? "正在打开选择器..." : selectedAllowlistPath ? "重新选择文件夹" : "选择文件夹"}
             </button>
 
-            <div class="picked-folder {selectedMountPath ? 'selected' : ''}">
+            <div class="picked-folder {selectedAllowlistPath ? 'selected' : ''}">
               <span class="picked-folder-label">已选目录</span>
-              <span class="picked-folder-path">{selectedMountPath || "尚未选择文件夹"}</span>
+              <span class="picked-folder-path">{selectedAllowlistPath || "尚未选择文件夹"}</span>
             </div>
 
             <input
-              class="mount-name-input"
+              class="allowlist-name-input"
               type="text"
-              bind:value={mountDisplayName}
+              bind:value={allowlistDisplayName}
               placeholder="显示名称（可选）"
-              onkeydown={(event) => event.key === "Enter" && void handleCreateMount()}
+              onkeydown={(event) => event.key === "Enter" && void handleCreateAllowlist()}
             />
 
-            <div class="mount-modal-actions">
-              <button class="modal-action secondary" onclick={closeMountModal}>取消</button>
+            <div class="allowlist-modal-actions">
+              <button class="modal-action secondary" onclick={closeAllowlistModal}>取消</button>
               <button
                 class="modal-action primary"
-                onclick={() => void handleCreateMount()}
-                disabled={!selectedMountPath || workspaceStore.loading}
+                onclick={() => void handleCreateAllowlist()}
+                disabled={!selectedAllowlistPath || workspaceStore.loading}
               >
                 <FolderPlus size={16} strokeWidth={2} />
-                创建挂载
+                创建授权
               </button>
             </div>
 
             {#if workspaceStore.error}
-              <p class="mount-modal-feedback error">{workspaceStore.error}</p>
+              <p class="allowlist-modal-feedback error">{workspaceStore.error}</p>
             {:else if workspaceStore.status}
-              <p class="mount-modal-feedback">{workspaceStore.status}</p>
+              <p class="allowlist-modal-feedback">{workspaceStore.status}</p>
             {/if}
           </div>
         </div>
@@ -462,7 +462,7 @@
     backdrop-filter: blur(10px);
   }
 
-  .global-mount-modal {
+  .global-allowlist-modal {
     width: min(100%, 420px);
     border-radius: 24px;
     border: 1px solid var(--border-default);
@@ -473,22 +473,22 @@
     gap: 14px;
   }
 
-  .global-mount-modal-inner {
+  .global-allowlist-modal-inner {
     padding: 18px;
     display: flex;
     flex-direction: column;
     gap: 14px;
   }
 
-  .mount-modal-head,
-  .mount-modal-actions {
+  .allowlist-modal-head,
+  .allowlist-modal-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
   }
 
-  .mount-modal-head strong {
+  .allowlist-modal-head strong {
     font-size: 16px;
     color: var(--text-primary);
   }
@@ -563,17 +563,17 @@
     word-break: break-word;
   }
 
-  .mount-modal-feedback {
+  .allowlist-modal-feedback {
     margin: 0;
     font-size: 12px;
     color: var(--text-secondary);
   }
 
-  .mount-modal-feedback.error {
+  .allowlist-modal-feedback.error {
     color: var(--accent-danger);
   }
 
-  .mount-name-input {
+  .allowlist-name-input {
     width: 100%;
     box-sizing: border-box;
     border: 1px solid var(--border-input);
@@ -584,7 +584,7 @@
     color: var(--text-primary);
   }
 
-  .mount-modal-actions {
+  .allowlist-modal-actions {
     justify-content: flex-end;
   }
 

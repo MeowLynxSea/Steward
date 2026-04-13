@@ -16,12 +16,12 @@ import type {
   WorkbenchCapabilities,
   WorkspaceDocumentView,
   WorkspaceEntry,
-  WorkspaceMountCheckpoint,
-  WorkspaceMountDetail,
-  WorkspaceMountDiff,
-  WorkspaceMountFileView,
-  WorkspaceMountHistory,
-  WorkspaceMountSummary,
+  WorkspaceAllowlistCheckpoint,
+  WorkspaceAllowlistDetail,
+  WorkspaceAllowlistDiff,
+  WorkspaceAllowlistFileView,
+  WorkspaceAllowlistHistory,
+  WorkspaceAllowlistSummary,
   WorkspaceSearchResult
 } from "./types";
 
@@ -161,8 +161,8 @@ export const apiClient = {
     return invoke<{ versions: MemoryVersion[] }>("get_memory_versions", { key });
   },
 
-  createWorkspaceMount(path: string, display_name?: string, bypass_write = true) {
-    return invoke<WorkspaceMountSummary>("create_workspace_mount", {
+  createWorkspaceAllowlist(path: string, display_name?: string, bypass_write = true) {
+    return invoke<WorkspaceAllowlistSummary>("create_workspace_allowlist", {
       payload: {
         path,
         display_name: display_name ?? null,
@@ -171,19 +171,19 @@ export const apiClient = {
     });
   },
 
-  listWorkspaceMounts() {
-    return invoke<{ mounts: WorkspaceMountSummary[] }>("list_workspace_mounts");
+  listWorkspaceAllowlists() {
+    return invoke<{ allowlists: WorkspaceAllowlistSummary[] }>("list_workspace_allowlists");
   },
 
-  getWorkspaceMount(id: string) {
-    return invoke<WorkspaceMountDetail>("get_workspace_mount", { id });
+  getWorkspaceAllowlist(id: string) {
+    return invoke<WorkspaceAllowlistDetail>("get_workspace_allowlist", { id });
   },
 
-  getWorkspaceMountFile(id: string, path: string) {
-    return invoke<WorkspaceMountFileView>("get_workspace_mount_file", { id, path });
+  getWorkspaceAllowlistFile(id: string, path: string) {
+    return invoke<WorkspaceAllowlistFileView>("get_workspace_allowlist_file", { id, path });
   },
 
-  getWorkspaceMountDiff(
+  getWorkspaceAllowlistDiff(
     id: string,
     options?: {
       scopePath?: string;
@@ -193,7 +193,7 @@ export const apiClient = {
       maxFiles?: number;
     }
   ) {
-    return invoke<WorkspaceMountDiff>("get_workspace_mount_diff", {
+    return invoke<WorkspaceAllowlistDiff>("get_workspace_allowlist_diff", {
       id,
       payload: {
         scope_path: options?.scopePath ?? null,
@@ -211,7 +211,7 @@ export const apiClient = {
     summary?: string,
     revisionId?: string
   ) {
-    return invoke<WorkspaceMountCheckpoint>("create_workspace_checkpoint", {
+    return invoke<WorkspaceAllowlistCheckpoint>("create_workspace_checkpoint", {
       id,
       payload: {
         revision_id: revisionId ?? null,
@@ -223,8 +223,8 @@ export const apiClient = {
     });
   },
 
-  listWorkspaceMountCheckpoints(id: string, limit?: number) {
-    return invoke<WorkspaceMountCheckpoint[]>("list_workspace_mount_checkpoints", {
+  listWorkspaceAllowlistCheckpoints(id: string, limit?: number) {
+    return invoke<WorkspaceAllowlistCheckpoint[]>("list_workspace_allowlist_checkpoints", {
       id,
       payload: {
         limit: limit ?? null
@@ -232,7 +232,7 @@ export const apiClient = {
     });
   },
 
-  getWorkspaceMountHistory(
+  getWorkspaceAllowlistHistory(
     id: string,
     options?: {
       scopePath?: string;
@@ -241,7 +241,7 @@ export const apiClient = {
       includeCheckpoints?: boolean;
     }
   ) {
-    return invoke<WorkspaceMountHistory>("get_workspace_mount_history", {
+    return invoke<WorkspaceAllowlistHistory>("get_workspace_allowlist_history", {
       id,
       payload: {
         scope_path: options?.scopePath ?? null,
@@ -252,8 +252,8 @@ export const apiClient = {
     });
   },
 
-  keepWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
-    return invoke<WorkspaceMountDetail>("keep_workspace_mount", {
+  keepWorkspaceAllowlist(id: string, scopePath?: string, checkpointId?: string) {
+    return invoke<WorkspaceAllowlistDetail>("keep_workspace_allowlist", {
       id,
       payload: {
         scope_path: scopePath ?? null,
@@ -263,8 +263,8 @@ export const apiClient = {
     });
   },
 
-  revertWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
-    return invoke<WorkspaceMountDetail>("revert_workspace_mount", {
+  revertWorkspaceAllowlist(id: string, scopePath?: string, checkpointId?: string) {
+    return invoke<WorkspaceAllowlistDetail>("revert_workspace_allowlist", {
       id,
       payload: {
         scope_path: scopePath ?? null,
@@ -274,7 +274,7 @@ export const apiClient = {
     });
   },
 
-  restoreWorkspaceMount(
+  restoreWorkspaceAllowlist(
     id: string,
     target: string,
     options?: {
@@ -284,7 +284,7 @@ export const apiClient = {
       createCheckpointBeforeRestore?: boolean;
     }
   ) {
-    return invoke<WorkspaceMountDetail>("restore_workspace_mount", {
+    return invoke<WorkspaceAllowlistDetail>("restore_workspace_allowlist", {
       id,
       payload: {
         target,
@@ -298,15 +298,15 @@ export const apiClient = {
     });
   },
 
-  setWorkspaceMountBaseline(id: string, target: string) {
-    return invoke<WorkspaceMountDetail>("set_workspace_mount_baseline", {
+  setWorkspaceAllowlistBaseline(id: string, target: string) {
+    return invoke<WorkspaceAllowlistDetail>("set_workspace_allowlist_baseline", {
       id,
       payload: { target }
     });
   },
 
-  refreshWorkspaceMount(id: string, scopePath?: string) {
-    return invoke<WorkspaceMountDetail>("refresh_workspace_mount", {
+  refreshWorkspaceAllowlist(id: string, scopePath?: string) {
+    return invoke<WorkspaceAllowlistDetail>("refresh_workspace_allowlist", {
       id,
       payload: {
         scope_path: scopePath ?? null,
@@ -316,14 +316,14 @@ export const apiClient = {
     });
   },
 
-  resolveWorkspaceMountConflict(
+  resolveWorkspaceAllowlistConflict(
     id: string,
     path: string,
     resolution: "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge",
     renamedCopyPath?: string,
     mergedContent?: string
   ) {
-    return invoke<WorkspaceMountDetail>("resolve_workspace_mount_conflict", {
+    return invoke<WorkspaceAllowlistDetail>("resolve_workspace_allowlist_conflict", {
       id,
       payload: {
         path,

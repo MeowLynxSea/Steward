@@ -1,7 +1,7 @@
 //! Native graph-based memory system for Steward.
 //!
 //! This module models agent memory as durable graph entities rather than
-//! workspace documents. The workspace remains responsible for mounted files
+//! workspace documents. The workspace remains responsible for allowlisted files
 //! and ad-hoc content indexing; long-term agent memory lives here.
 
 pub(crate) mod search_terms;

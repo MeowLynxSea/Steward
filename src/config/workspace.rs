@@ -16,11 +16,11 @@ pub struct WorkspaceConfig {
     /// additional user scopes while writes remain isolated to the primary
     /// `user_id`. Parsed from `WORKSPACE_READ_SCOPES` (comma-separated).
     pub read_scopes: Vec<String>,
-    /// Whether mounted workspace trees should be polled in the background so
+    /// Whether allowlisted workspace trees should be polled in the background so
     /// external filesystem edits are reconciled into revisions automatically.
-    pub mount_watch_enabled: bool,
-    /// Poll interval for mounted workspace reconciliation, in milliseconds.
-    pub mount_watch_interval_ms: u64,
+    pub allowlist_watch_enabled: bool,
+    /// Poll interval for allowlisted workspace reconciliation, in milliseconds.
+    pub allowlist_watch_interval_ms: u64,
 }
 
 impl Default for WorkspaceConfig {
@@ -28,8 +28,8 @@ impl Default for WorkspaceConfig {
         Self {
             memory_layers: Vec::new(),
             read_scopes: Vec::new(),
-            mount_watch_enabled: true,
-            mount_watch_interval_ms: 500,
+            allowlist_watch_enabled: true,
+            allowlist_watch_interval_ms: 500,
         }
     }
 }
@@ -146,23 +146,23 @@ impl WorkspaceConfig {
             }
         }
 
-        let mount_watch_enabled = optional_env("WORKSPACE_MOUNT_WATCH_ENABLED")?
+        let allowlist_watch_enabled = optional_env("WORKSPACE_ALLOWLIST_WATCH_ENABLED")?
             .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
             .unwrap_or(true);
 
-        let mount_watch_interval_ms = optional_env("WORKSPACE_MOUNT_WATCH_INTERVAL_MS")?
+        let allowlist_watch_interval_ms = optional_env("WORKSPACE_ALLOWLIST_WATCH_INTERVAL_MS")?
             .map(|value| {
                 value.parse::<u64>().map_err(|e| ConfigError::InvalidValue {
-                    key: "WORKSPACE_MOUNT_WATCH_INTERVAL_MS".to_string(),
+                    key: "WORKSPACE_ALLOWLIST_WATCH_INTERVAL_MS".to_string(),
                     message: format!("must be a positive integer in milliseconds: {e}"),
                 })
             })
             .transpose()?
             .unwrap_or(500);
 
-        if mount_watch_interval_ms < 100 {
+        if allowlist_watch_interval_ms < 100 {
             return Err(ConfigError::InvalidValue {
-                key: "WORKSPACE_MOUNT_WATCH_INTERVAL_MS".to_string(),
+                key: "WORKSPACE_ALLOWLIST_WATCH_INTERVAL_MS".to_string(),
                 message: "must be at least 100ms".to_string(),
             });
         }
@@ -170,8 +170,8 @@ impl WorkspaceConfig {
         Ok(Self {
             memory_layers,
             read_scopes,
-            mount_watch_enabled,
-            mount_watch_interval_ms,
+            allowlist_watch_enabled,
+            allowlist_watch_interval_ms,
         })
     }
 }

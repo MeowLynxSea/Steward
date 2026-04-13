@@ -12,12 +12,12 @@ use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
 use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
-    ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
-    CreateWorkspaceMountRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
-    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
-    ResolveWorkspaceConflictRequest, SendSessionMessageRequest, WorkspaceActionRequest,
-    WorkspaceBaselineSetRequest, WorkspaceCheckpointListQuery, WorkspaceDiffQuery,
-    WorkspaceHistoryQuery, WorkspaceRestoreRequest, WorkspaceSearchRequest,
+    ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceAllowlistRequest,
+    CreateWorkspaceCheckpointRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
+    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
+    SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceBaselineSetRequest,
+    WorkspaceCheckpointListQuery, WorkspaceDiffQuery, WorkspaceHistoryQuery,
+    WorkspaceRestoreRequest, WorkspaceSearchRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -1890,28 +1890,31 @@ pub async fn rollback_memory_changeset(
 }
 
 // =============================================================================
-// Workspace Mounts (8 commands)
+// Workspace Allowlists (8 commands)
 // =============================================================================
 
 #[tauri::command]
-pub async fn list_workspace_mounts(
+pub async fn list_workspace_allowlists(
     state: State<'_, AppState>,
-) -> Result<steward_core::ipc::WorkspaceMountListResponse, String> {
+) -> Result<steward_core::ipc::WorkspaceAllowlistListResponse, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let mounts = workspace.list_mounts().await.map_err(|e| e.to_string())?;
+    let allowlists = workspace
+        .list_allowlists()
+        .await
+        .map_err(|e| e.to_string())?;
 
-    Ok(steward_core::ipc::WorkspaceMountListResponse { mounts })
+    Ok(steward_core::ipc::WorkspaceAllowlistListResponse { allowlists })
 }
 
 #[tauri::command]
-pub async fn create_workspace_mount(
+pub async fn create_workspace_allowlist(
     state: State<'_, AppState>,
-    payload: CreateWorkspaceMountRequest,
-) -> Result<steward_core::workspace::WorkspaceMountSummary, String> {
+    payload: CreateWorkspaceAllowlistRequest,
+) -> Result<steward_core::workspace::WorkspaceAllowlistSummary, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -1921,12 +1924,12 @@ pub async fn create_workspace_mount(
         std::path::Path::new(&payload.path)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or("Mount")
+            .unwrap_or("Allowlist")
             .to_string()
     });
 
     let summary = workspace
-        .create_mount(display_name, &payload.path, payload.bypass_write)
+        .create_allowlist(display_name, &payload.path, payload.bypass_write)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -1934,58 +1937,61 @@ pub async fn create_workspace_mount(
 }
 
 #[tauri::command]
-pub async fn get_workspace_mount(
+pub async fn get_workspace_allowlist(
     state: State<'_, AppState>,
     id: Uuid,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
-    let detail = workspace.get_mount(id).await.map_err(|e| e.to_string())?;
+    let detail = workspace
+        .get_allowlist(id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(detail)
 }
 
-async fn get_workspace_mount_file_impl(
+async fn get_workspace_allowlist_file_impl(
     state: &AppState,
     id: Uuid,
     path: &str,
-) -> Result<steward_core::workspace::WorkspaceMountFileView, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistFileView, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .read_mount_file(id, path)
+        .read_allowlist_file(id, path)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn get_workspace_mount_file(
+pub async fn get_workspace_allowlist_file(
     state: State<'_, AppState>,
     id: Uuid,
     path: String,
-) -> Result<steward_core::workspace::WorkspaceMountFileView, String> {
-    get_workspace_mount_file_impl(&state, id, &path).await
+) -> Result<steward_core::workspace::WorkspaceAllowlistFileView, String> {
+    get_workspace_allowlist_file_impl(&state, id, &path).await
 }
 
 #[tauri::command]
-pub async fn get_workspace_mount_diff(
+pub async fn get_workspace_allowlist_diff(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceDiffQuery,
-) -> Result<steward_core::workspace::WorkspaceMountDiff, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDiff, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let diff = workspace
-        .diff_mount_between(
+        .diff_allowlist_between(
             id,
             payload.scope_path,
             payload.from,
@@ -2004,7 +2010,7 @@ pub async fn create_workspace_checkpoint(
     state: State<'_, AppState>,
     id: Uuid,
     payload: CreateWorkspaceCheckpointRequest,
-) -> Result<steward_core::workspace::WorkspaceMountCheckpoint, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistCheckpoint, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -2028,35 +2034,35 @@ pub async fn create_workspace_checkpoint(
 }
 
 #[tauri::command]
-pub async fn list_workspace_mount_checkpoints(
+pub async fn list_workspace_allowlist_checkpoints(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceCheckpointListQuery,
-) -> Result<Vec<steward_core::workspace::WorkspaceMountCheckpoint>, String> {
+) -> Result<Vec<steward_core::workspace::WorkspaceAllowlistCheckpoint>, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .list_mount_checkpoints(id, payload.limit)
+        .list_allowlist_checkpoints(id, payload.limit)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn get_workspace_mount_history(
+pub async fn get_workspace_allowlist_history(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceHistoryQuery,
-) -> Result<steward_core::workspace::WorkspaceMountHistory, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistHistory, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .mount_history(
+        .allowlist_history(
             id,
             payload.scope_path,
             payload.limit.unwrap_or(20),
@@ -2068,18 +2074,18 @@ pub async fn get_workspace_mount_history(
 }
 
 #[tauri::command]
-pub async fn keep_workspace_mount(
+pub async fn keep_workspace_allowlist(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceActionRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .keep_mount(id, payload.scope_path, payload.checkpoint_id)
+        .keep_allowlist(id, payload.scope_path, payload.checkpoint_id)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2087,18 +2093,18 @@ pub async fn keep_workspace_mount(
 }
 
 #[tauri::command]
-pub async fn revert_workspace_mount(
+pub async fn revert_workspace_allowlist(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceActionRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .revert_mount(id, payload.scope_path, payload.checkpoint_id)
+        .revert_allowlist(id, payload.scope_path, payload.checkpoint_id)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2106,18 +2112,18 @@ pub async fn revert_workspace_mount(
 }
 
 #[tauri::command]
-pub async fn resolve_workspace_mount_conflict(
+pub async fn resolve_workspace_allowlist_conflict(
     state: State<'_, AppState>,
     id: Uuid,
     payload: ResolveWorkspaceConflictRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .resolve_mount_conflict(
+        .resolve_allowlist_conflict(
             id,
             payload.path,
             payload.resolution,
@@ -2131,11 +2137,11 @@ pub async fn resolve_workspace_mount_conflict(
 }
 
 #[tauri::command]
-pub async fn restore_workspace_mount(
+pub async fn restore_workspace_allowlist(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceRestoreRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
@@ -2143,7 +2149,7 @@ pub async fn restore_workspace_mount(
     let created_by = payload.created_by.unwrap_or_else(|| "desktop".to_string());
 
     workspace
-        .restore_mount(
+        .restore_allowlist(
             id,
             payload.target,
             payload.scope_path,
@@ -2157,35 +2163,35 @@ pub async fn restore_workspace_mount(
 }
 
 #[tauri::command]
-pub async fn set_workspace_mount_baseline(
+pub async fn set_workspace_allowlist_baseline(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceBaselineSetRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .set_mount_baseline(id, payload.target)
+        .set_allowlist_baseline(id, payload.target)
         .await
         .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn refresh_workspace_mount(
+pub async fn refresh_workspace_allowlist(
     state: State<'_, AppState>,
     id: Uuid,
     payload: WorkspaceActionRequest,
-) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
         .as_ref()
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .refresh_mount(id, payload.scope_path.as_deref())
+        .refresh_allowlist(id, payload.scope_path.as_deref())
         .await
         .map_err(|e| e.to_string())
 }
@@ -2216,7 +2222,7 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        build_thread_messages_from_db_messages, get_workspace_mount_file_impl,
+        build_thread_messages_from_db_messages, get_workspace_allowlist_file_impl,
         reload_llm_runtime, sync_llm_settings_to_store,
     };
     use steward_core::agent::SessionManager;
@@ -2435,29 +2441,32 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn get_workspace_mount_file_impl_reads_text_mount_file() {
+    async fn get_workspace_allowlist_file_impl_reads_text_allowlist_file() {
         use steward_core::db::Database;
         use steward_core::db::libsql::LibSqlBackend;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("workspace.db");
-        let mount_root = dir.path().join("mounted");
-        std::fs::create_dir_all(&mount_root).expect("create mount root");
-        std::fs::write(mount_root.join("notes.txt"), "mounted workspace file")
-            .expect("write mount fixture");
+        let allowlist_root = dir.path().join("allowlisted");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
+        std::fs::write(
+            allowlist_root.join("notes.txt"),
+            "allowlisted workspace file",
+        )
+        .expect("write allowlist fixture");
 
         let db_backend = Arc::new(LibSqlBackend::new_local(&db_path).await.expect("create db"));
         db_backend.run_migrations().await.expect("run migrations");
         let db: Arc<dyn Database> = db_backend;
         let workspace = Arc::new(Workspace::new_with_db("test-user", Arc::clone(&db)));
         let summary = workspace
-            .create_mount(
-                "Fixture Mount",
-                mount_root.to_string_lossy().to_string(),
+            .create_allowlist(
+                "Fixture Allowlist",
+                allowlist_root.to_string_lossy().to_string(),
                 true,
             )
             .await
-            .expect("create mount");
+            .expect("create allowlist");
 
         let session =
             create_session_manager(steward_core::config::LlmConfig::for_testing().session).await;
@@ -2490,13 +2499,16 @@ mod tests {
             message_inject_tx,
         );
 
-        let file = get_workspace_mount_file_impl(&state, summary.mount.id, "notes.txt")
+        let file = get_workspace_allowlist_file_impl(&state, summary.allowlist.id, "notes.txt")
             .await
-            .expect("read mount file");
+            .expect("read allowlist file");
 
         assert_eq!(file.path, "notes.txt");
-        assert_eq!(file.content.as_deref(), Some("mounted workspace file"));
+        assert_eq!(file.content.as_deref(), Some("allowlisted workspace file"));
         assert!(!file.is_binary);
-        assert_eq!(file.status, steward_core::workspace::MountedFileStatus::Clean);
+        assert_eq!(
+            file.status,
+            steward_core::workspace::AllowlistedFileStatus::Clean
+        );
     }
 }

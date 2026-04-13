@@ -940,7 +940,11 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
 
             if let Some(reject_msg) = self
                 .agent
-                .mounted_workspace_redirect_for_tool(&self.message.user_id, &tc.name, &tc.arguments)
+                .allowlist_workspace_redirect_for_tool(
+                    &self.message.user_id,
+                    &tc.name,
+                    &tc.arguments,
+                )
                 .await
             {
                 preflight.push((tc, PreflightOutcome::Rejected(reject_msg)));

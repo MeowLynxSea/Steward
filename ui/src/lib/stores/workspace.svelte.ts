@@ -1,15 +1,15 @@
 import { apiClient } from "../api";
 import type {
-  MountedFileDiff,
+  AllowlistedFileDiff,
   WorkspaceChangeGroup,
   WorkspaceDocumentView,
   WorkspaceEntry,
-  WorkspaceMountDetail,
-  WorkspaceMountFileView,
+  WorkspaceAllowlistDetail,
+  WorkspaceAllowlistFileView,
   WorkspaceSearchResult
 } from "../types";
 
-function mountIdFromUri(uri: string): string | null {
+function allowlistIdFromUri(uri: string): string | null {
   if (!uri.startsWith("workspace://")) {
     return null;
   }
@@ -19,11 +19,11 @@ function mountIdFromUri(uri: string): string | null {
     return null;
   }
 
-  const [mountId] = remainder.split("/", 1);
-  return mountId || null;
+  const [allowlistId] = remainder.split("/", 1);
+  return allowlistId || null;
 }
 
-function mountDisplayNameFromPath(path: string): string {
+function allowlistDisplayNameFromPath(path: string): string {
   const segments = path.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? path;
 }
@@ -51,10 +51,10 @@ class WorkspaceState {
   entries = $state<WorkspaceEntry[]>([]);
   searchResults = $state<WorkspaceSearchResult[]>([]);
   searchQuery = $state("");
-  selectedMount = $state<WorkspaceMountDetail | null>(null);
-  selectedFile = $state<WorkspaceMountFileView | null>(null);
+  selectedAllowlist = $state<WorkspaceAllowlistDetail | null>(null);
+  selectedFile = $state<WorkspaceAllowlistFileView | null>(null);
   selectedDocument = $state<WorkspaceDocumentView | null>(null);
-  mountDiff = $state<MountedFileDiff[]>([]);
+  allowlistDiff = $state<AllowlistedFileDiff[]>([]);
   changeGroups = $state<WorkspaceChangeGroup[]>([]);
   loading = $state(false);
   refreshing = $state(false);
@@ -64,7 +64,7 @@ class WorkspaceState {
   status = $state("");
   busyAction = $state<string | null>(null);
   #previewRequestId = 0;
-  #mountChangesRefreshPromise: Promise<void> | null = null;
+  #allowlistChangesRefreshPromise: Promise<void> | null = null;
 
   async fetch(
     path = this.currentPath,
@@ -73,7 +73,7 @@ class WorkspaceState {
     } = {}
   ) {
     const previousPath = this.currentPath;
-    const nextMountId = mountIdFromUri(path);
+    const nextAllowlistId = allowlistIdFromUri(path);
     const silent = options.silent ?? false;
     const showLoading = !silent || this.entries.length === 0 || previousPath !== path;
     if (showLoading) {
@@ -91,9 +91,9 @@ class WorkspaceState {
         this.selectedFile = null;
         this.selectedDocument = null;
       }
-      if (!nextMountId) {
-        this.selectedMount = null;
-        this.mountDiff = [];
+      if (!nextAllowlistId) {
+        this.selectedAllowlist = null;
+        this.allowlistDiff = [];
       }
     } catch (e) {
       this.error = errorMessage(e, "Failed to load workspace");
@@ -108,22 +108,22 @@ class WorkspaceState {
       return;
     }
 
-    const mountId =
-      this.selectedMount?.summary.mount.id ?? mountIdFromUri(this.currentPath) ?? null;
+    const allowlistId =
+      this.selectedAllowlist?.summary.allowlist.id ?? allowlistIdFromUri(this.currentPath) ?? null;
     const selectedFilePath = this.selectedFile?.path ?? null;
     const selectedDocumentPath = this.selectedDocument?.path ?? null;
 
     this.error = null;
     await this.fetch(this.currentPath, { silent: true });
 
-    if (mountId) {
-      await this.#refreshMountState(mountId);
+    if (allowlistId) {
+      await this.#refreshAllowlistState(allowlistId);
       if (selectedFilePath) {
-        await this.#reloadSelectedFile(mountId, selectedFilePath);
+        await this.#reloadSelectedFile(allowlistId, selectedFilePath);
       }
     }
 
-    if (selectedDocumentPath && !mountIdFromUri(this.currentPath)) {
+    if (selectedDocumentPath && !allowlistIdFromUri(this.currentPath)) {
       await this.#reloadSelectedDocument(selectedDocumentPath);
     }
   }
@@ -163,29 +163,29 @@ class WorkspaceState {
     this.selectedDocument = null;
   }
 
-  async createMount(path: string, displayName?: string) {
+  async createAllowlist(path: string, displayName?: string) {
     const trimmed = path.trim();
     if (!trimmed) {
-      this.error = "Please enter a folder path to mount";
+      this.error = "Please enter a folder path to allowlist";
       return;
     }
 
     this.error = null;
     this.loading = true;
     try {
-      const mount = await apiClient.createWorkspaceMount(
+      const allowlist = await apiClient.createWorkspaceAllowlist(
         trimmed,
-        displayName?.trim() || mountDisplayNameFromPath(trimmed),
+        displayName?.trim() || allowlistDisplayNameFromPath(trimmed),
         true
       );
       this.clearSearch();
-      this.selectedMount = null;
+      this.selectedAllowlist = null;
       this.selectedFile = null;
       this.selectedDocument = null;
       await this.fetch("workspace://");
-      this.status = `已挂载 ${mount.mount.display_name}`;
+      this.status = `已授权 ${allowlist.allowlist.display_name}`;
     } catch (e) {
-      this.error = errorMessage(e, "Failed to create mount");
+      this.error = errorMessage(e, "Failed to create allowlist");
     } finally {
       this.loading = false;
     }
@@ -194,24 +194,24 @@ class WorkspaceState {
   async openEntry(entry: WorkspaceEntry) {
     this.error = null;
     const target = entry.uri ?? entry.path;
-    const mountId = mountIdFromUri(target);
+    const allowlistId = allowlistIdFromUri(target);
 
     if (entry.is_directory) {
       this.clearSearch();
       this.selectedFile = null;
       this.selectedDocument = null;
       await this.fetch(target);
-      if (!mountId) {
-        this.selectedMount = null;
-        this.mountDiff = [];
+      if (!allowlistId) {
+        this.selectedAllowlist = null;
+        this.allowlistDiff = [];
       }
       return;
     }
 
-    if (mountId) {
+    if (allowlistId) {
       this.clearSearch();
       this.selectedDocument = null;
-      await this.loadFile(mountId, entry.path);
+      await this.loadFile(allowlistId, entry.path);
       return;
     }
 
@@ -220,33 +220,33 @@ class WorkspaceState {
 
   async openPath(path: string) {
     this.clearSearch();
-    const mountId = mountIdFromUri(path);
-    if (mountId) {
+    const allowlistId = allowlistIdFromUri(path);
+    if (allowlistId) {
       this.selectedDocument = null;
       this.selectedFile = null;
       await this.fetch(path);
       return;
     }
 
-    this.selectedMount = null;
+    this.selectedAllowlist = null;
     this.selectedFile = null;
     this.selectedDocument = null;
     await this.fetch(path);
   }
 
-  async loadMount(id: string) {
+  async loadAllowlist(id: string) {
     this.error = null;
-    this.selectedFile = this.selectedFile?.mount_id === id ? this.selectedFile : null;
+    this.selectedFile = this.selectedFile?.allowlist_id === id ? this.selectedFile : null;
     this.selectedDocument = null;
-    await this.#refreshMountState(id);
+    await this.#refreshAllowlistState(id);
   }
 
-  async refreshMountChanges() {
-    if (this.#mountChangesRefreshPromise) {
-      await this.#mountChangesRefreshPromise;
+  async refreshAllowlistChanges() {
+    if (this.#allowlistChangesRefreshPromise) {
+      await this.#allowlistChangesRefreshPromise;
       return;
     }
-    await this.#refreshAllMountChangesInBackground();
+    await this.#refreshAllAllowlistChangesInBackground();
   }
 
   async loadFile(id: string, path: string) {
@@ -255,7 +255,7 @@ class WorkspaceState {
     this.error = null;
     this.selectedDocument = null;
     try {
-      const file = await apiClient.getWorkspaceMountFile(id, path);
+      const file = await apiClient.getWorkspaceAllowlistFile(id, path);
       if (requestId !== this.#previewRequestId) {
         return;
       }
@@ -276,7 +276,7 @@ class WorkspaceState {
     const requestId = ++this.#previewRequestId;
     this.fileLoading = true;
     this.error = null;
-    this.selectedMount = null;
+    this.selectedAllowlist = null;
     this.selectedFile = null;
     try {
       const document = await apiClient.getWorkspaceDocument(path);
@@ -296,24 +296,24 @@ class WorkspaceState {
     }
   }
 
-  async keepMount(id: string, scopePath?: string, checkpointId?: string) {
+  async keepAllowlist(id: string, scopePath?: string, checkpointId?: string) {
     await this.#runBusyAction("Saving workspace changes", async () => {
-      this.selectedMount = await apiClient.keepWorkspaceMount(id, scopePath, checkpointId);
-      await this.#afterMountMutation(id);
+      this.selectedAllowlist = await apiClient.keepWorkspaceAllowlist(id, scopePath, checkpointId);
+      await this.#afterAllowlistMutation(id);
     });
   }
 
-  async revertMount(id: string, scopePath?: string, checkpointId?: string) {
+  async revertAllowlist(id: string, scopePath?: string, checkpointId?: string) {
     await this.#runBusyAction("Reverting workspace changes", async () => {
-      this.selectedMount = await apiClient.revertWorkspaceMount(id, scopePath, checkpointId);
-      await this.#afterMountMutation(id);
+      this.selectedAllowlist = await apiClient.revertWorkspaceAllowlist(id, scopePath, checkpointId);
+      await this.#afterAllowlistMutation(id);
     });
   }
 
   async createCheckpoint(id: string, label?: string, summary?: string) {
     await this.#runBusyAction("Creating checkpoint", async () => {
       await apiClient.createWorkspaceCheckpoint(id, label, summary);
-      await this.#refreshMountState(id);
+      await this.#refreshAllowlistState(id);
     });
   }
 
@@ -325,57 +325,57 @@ class WorkspaceState {
     mergedContent?: string
   ) {
     await this.#runBusyAction("Resolving workspace conflict", async () => {
-      this.selectedMount = await apiClient.resolveWorkspaceMountConflict(
+      this.selectedAllowlist = await apiClient.resolveWorkspaceAllowlistConflict(
         id,
         path,
         resolution,
         renamedCopyPath,
         mergedContent
       );
-      await this.#afterMountMutation(id);
+      await this.#afterAllowlistMutation(id);
     });
   }
 
   dispose() {}
 
-  async #afterMountMutation(id: string) {
+  async #afterAllowlistMutation(id: string) {
     await Promise.all([
       this.fetch(this.currentPath),
-      this.#refreshMountState(id),
-      this.#refreshAllMountChangesInBackground()
+      this.#refreshAllowlistState(id),
+      this.#refreshAllAllowlistChangesInBackground()
     ]);
 
-    if (this.selectedFile?.mount_id === id) {
+    if (this.selectedFile?.allowlist_id === id) {
       await this.#reloadSelectedFile(id, this.selectedFile.path);
     }
   }
 
-  async #refreshMountState(id: string) {
+  async #refreshAllowlistState(id: string) {
     const [detail, diff] = await Promise.all([
-      apiClient.getWorkspaceMount(id),
-      apiClient.getWorkspaceMountDiff(id)
+      apiClient.getWorkspaceAllowlist(id),
+      apiClient.getWorkspaceAllowlistDiff(id)
     ]);
-    this.selectedMount = detail;
-    this.mountDiff = diff.entries;
+    this.selectedAllowlist = detail;
+    this.allowlistDiff = diff.entries;
   }
 
-  async #refreshAllMountChanges() {
-    const mounts = await apiClient.listWorkspaceMounts();
-    if (mounts.mounts.length === 0) {
+  async #refreshAllAllowlistChanges() {
+    const allowlists = await apiClient.listWorkspaceAllowlists();
+    if (allowlists.allowlists.length === 0) {
       this.changeGroups = [];
-      this.mountDiff = [];
+      this.allowlistDiff = [];
       return;
     }
 
     const results = await Promise.all(
-      mounts.mounts.map(async ({ mount }) => {
+      allowlists.allowlists.map(async ({ allowlist }) => {
         const [detail, diff] = await Promise.all([
-          apiClient.getWorkspaceMount(mount.id),
-          apiClient.getWorkspaceMountDiff(mount.id)
+          apiClient.getWorkspaceAllowlist(allowlist.id),
+          apiClient.getWorkspaceAllowlistDiff(allowlist.id)
         ]);
         return {
           ok: true as const,
-          mount: detail,
+          allowlist: detail,
           entries: diff.entries
         };
       }).map((promise) =>
@@ -392,51 +392,51 @@ class WorkspaceState {
     }
 
     const groups = results
-      .filter((result): result is { ok: true; mount: WorkspaceMountDetail; entries: MountedFileDiff[] } => result.ok)
+      .filter((result): result is { ok: true; allowlist: WorkspaceAllowlistDetail; entries: AllowlistedFileDiff[] } => result.ok)
       .map((result) => ({
-        mount: result.mount,
+        allowlist: result.allowlist,
         entries: result.entries
       }));
 
     this.changeGroups = groups
-      .filter((group) => group.entries.length > 0 || group.mount.checkpoints.length > 0)
+      .filter((group) => group.entries.length > 0 || group.allowlist.checkpoints.length > 0)
       .sort((left, right) =>
-        left.mount.summary.mount.display_name.localeCompare(right.mount.summary.mount.display_name)
+        left.allowlist.summary.allowlist.display_name.localeCompare(right.allowlist.summary.allowlist.display_name)
       );
 
-    if (this.selectedMount) {
+    if (this.selectedAllowlist) {
       const updated = this.changeGroups.find(
-        (group) => group.mount.summary.mount.id === this.selectedMount?.summary.mount.id
+        (group) => group.allowlist.summary.allowlist.id === this.selectedAllowlist?.summary.allowlist.id
       );
       if (updated) {
-        this.selectedMount = updated.mount;
-        this.mountDiff = updated.entries;
+        this.selectedAllowlist = updated.allowlist;
+        this.allowlistDiff = updated.entries;
       }
     }
   }
 
-  #refreshAllMountChangesInBackground() {
-    if (this.#mountChangesRefreshPromise) {
-      return this.#mountChangesRefreshPromise;
+  #refreshAllAllowlistChangesInBackground() {
+    if (this.#allowlistChangesRefreshPromise) {
+      return this.#allowlistChangesRefreshPromise;
     }
 
-    const refreshPromise = this.#refreshAllMountChanges()
+    const refreshPromise = this.#refreshAllAllowlistChanges()
       .catch((error) => {
         this.error = errorMessage(error, "变更列表刷新失败");
       })
       .finally(() => {
-        if (this.#mountChangesRefreshPromise === refreshPromise) {
-          this.#mountChangesRefreshPromise = null;
+        if (this.#allowlistChangesRefreshPromise === refreshPromise) {
+          this.#allowlistChangesRefreshPromise = null;
         }
       });
 
-    this.#mountChangesRefreshPromise = refreshPromise;
+    this.#allowlistChangesRefreshPromise = refreshPromise;
     return refreshPromise;
   }
 
   async #reloadSelectedFile(id: string, path: string) {
     try {
-      this.selectedFile = await apiClient.getWorkspaceMountFile(id, path);
+      this.selectedFile = await apiClient.getWorkspaceAllowlistFile(id, path);
     } catch {
       this.selectedFile = null;
     }

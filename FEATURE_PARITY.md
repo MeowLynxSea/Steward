@@ -490,7 +490,7 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 | Elevated mode | ✅ | ❌ | |
 | Safe bins allowlist | ✅ | ❌ | Hardened path trust |
 | LD*/DYLD* validation | ✅ | ❌ | |
-| Path traversal prevention | ✅ | ✅ | Including config includes (OC-06) + workspace-only tool mounts |
+| Path traversal prevention | ✅ | ✅ | Including config includes (OC-06) + workspace-only tool allowlists |
 | Credential theft via env injection | ✅ | 🚧 | Shell env scrubbing + command injection detection; no full OC-09 defense |
 | Session file permissions (0o600) | ✅ | ✅ | Session token file set to 0o600 in llm/session.rs |
 | Skill download path restriction | ✅ | ❌ | Validated download roots prevent arbitrary write targets |

@@ -17,7 +17,7 @@ use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
 use crate::workspace::paths as ws_paths;
-use crate::workspace::{ResolvedWorkspaceMountPath, Workspace};
+use crate::workspace::{ResolvedWorkspaceAllowlistPath, Workspace};
 
 fn is_legacy_memory_workspace_path(path: &str) -> bool {
     let filename = std::path::Path::new(path)
@@ -41,15 +41,15 @@ async fn resolve_workspace_path_metadata(
     resolver: Option<&Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
     user_id: &str,
     path: &Path,
-) -> Result<Option<(Arc<Workspace>, ResolvedWorkspaceMountPath)>, ToolError> {
+) -> Result<Option<(Arc<Workspace>, ResolvedWorkspaceAllowlistPath)>, ToolError> {
     let Some(resolver) = resolver else {
         return Ok(None);
     };
     let workspace = resolver.resolve(user_id).await;
     let resolved = workspace
-        .resolve_mount_path(path)
+        .resolve_allowlist_path(path)
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Mounted path resolve failed: {e}")))?;
+        .map_err(|e| ToolError::ExecutionFailed(format!("Allowlisted path resolve failed: {e}")))?;
     Ok(resolved.map(|resolved| (workspace, resolved)))
 }
 
@@ -57,15 +57,15 @@ async fn refresh_workspace_path_metadata(
     resolver: Option<&Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
     user_id: &str,
     path: &Path,
-) -> Result<Option<ResolvedWorkspaceMountPath>, ToolError> {
+) -> Result<Option<ResolvedWorkspaceAllowlistPath>, ToolError> {
     let Some(resolver) = resolver else {
         return Ok(None);
     };
     let workspace = resolver.resolve(user_id).await;
     workspace
-        .refresh_mount_for_disk_path(path)
+        .refresh_allowlist_for_disk_path(path)
         .await
-        .map_err(|e| ToolError::ExecutionFailed(format!("Mounted refresh failed: {e}")))
+        .map_err(|e| ToolError::ExecutionFailed(format!("Allowlisted refresh failed: {e}")))
 }
 
 /// Read file contents tool.
@@ -117,10 +117,10 @@ impl Tool for ReadFileTool {
 
     fn description(&self) -> &str {
         "Read a file from the LOCAL FILESYSTEM. NOT for workspace document paths \
-         (use workspace_read for those). If the path is inside a mounted workspace directory, \
-         this still reads the real mounted file directly. Use `workspace://<mount-id>/...` \
+         (use workspace_read for those). If the path is inside a allowlisted workspace directory, \
+         this still reads the real allowlisted file directly. Use `workspace://<allowlist-id>/...` \
          via workspace_read when you want workspace-native addressing and diff/history context. \
-         Reading unmounted disk paths may require ask-mode approval. \
+         Reading non-allowlisted disk paths may require ask-mode approval. \
          Returns file content as text. For large files, you can specify offset and limit to read a portion."
     }
 
@@ -130,7 +130,7 @@ impl Tool for ReadFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_read."
+                    "description": "Path to the file to read. Allowlisted files may be addressed either by real disk path here or by `workspace://<allowlist-id>/...` via workspace_read."
                 },
                 "offset": {
                     "type": "integer",
@@ -158,12 +158,9 @@ impl Tool for ReadFileTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
-        let mounted = resolve_workspace_path_metadata(
-            self.workspace_resolver.as_ref(),
-            &ctx.user_id,
-            &path,
-        )
-        .await?;
+        let allowlisted =
+            resolve_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
+                .await?;
 
         // Check file size
         let metadata = fs::metadata(&path)
@@ -209,10 +206,10 @@ impl Tool for ReadFileTool {
             "total_lines": total_lines,
             "lines_shown": end_line - start_line,
             "path": path.display().to_string(),
-            "workspace_uri": mounted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
-            "workspace_mount_id": mounted
+            "workspace_uri": allowlisted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
+            "workspace_allowlist_id": allowlisted
                 .as_ref()
-                .map(|(_, resolved)| resolved.mount_id.to_string())
+                .map(|(_, resolved)| resolved.allowlist_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -280,10 +277,10 @@ impl Tool for WriteFileTool {
 
     fn description(&self) -> &str {
         "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace documents \
-         (use workspace_write for that). If the target is inside a mounted workspace directory, \
-         this updates the real mounted file directly. Use `workspace://<mount-id>/...` via workspace_write \
+         (use workspace_write for that). If the target is inside a allowlisted workspace directory, \
+         this updates the real allowlisted file directly. Use `workspace://<allowlist-id>/...` via workspace_write \
          when you want workspace-native addressing, diff/history tooling, and revision-oriented workflows. \
-         Writing unmounted disk paths may require ask-mode approval. \
+         Writing non-allowlisted disk paths may require ask-mode approval. \
          Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use apply_patch for targeted edits."
     }
 
@@ -293,7 +290,7 @@ impl Tool for WriteFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_write."
+                    "description": "Path to the file to write. Allowlisted files may be addressed either by real disk path here or by `workspace://<allowlist-id>/...` via workspace_write."
                 },
                 "content": {
                     "type": "string",
@@ -346,19 +343,16 @@ impl Tool for WriteFileTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
 
-        let mounted = refresh_workspace_path_metadata(
-            self.workspace_resolver.as_ref(),
-            &ctx.user_id,
-            &path,
-        )
-        .await?;
+        let allowlisted =
+            refresh_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
+                .await?;
 
         let result = serde_json::json!({
             "path": path.display().to_string(),
             "bytes_written": content.len(),
             "success": true,
-            "workspace_uri": mounted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
-            "workspace_mount_id": mounted.as_ref().map(|resolved| resolved.mount_id.to_string())
+            "workspace_uri": allowlisted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
+            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| resolved.allowlist_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -429,7 +423,7 @@ impl Tool for MoveFileTool {
     }
 
     fn description(&self) -> &str {
-        "Move or rename a file on the LOCAL FILESYSTEM. If the source or destination is inside a mounted workspace directory, this moves the real mounted file directly. Use workspace_move when you want workspace-native URIs and revision/diff tracking ergonomics. Raw disk moves may require ask-mode approval. Creates parent directories for the destination when needed."
+        "Move or rename a file on the LOCAL FILESYSTEM. If the source or destination is inside a allowlisted workspace directory, this moves the real allowlisted file directly. Use workspace_move when you want workspace-native URIs and revision/diff tracking ergonomics. Raw disk moves may require ask-mode approval. Creates parent directories for the destination when needed."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -438,11 +432,11 @@ impl Tool for MoveFileTool {
             "properties": {
                 "source_path": {
                     "type": "string",
-                    "description": "Existing source file path. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_move."
+                    "description": "Existing source file path. Allowlisted files may be addressed either by real disk path here or by `workspace://<allowlist-id>/...` via workspace_move."
                 },
                 "destination_path": {
                     "type": "string",
-                    "description": "Destination file path. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_move."
+                    "description": "Destination file path. Allowlisted files may be addressed either by real disk path here or by `workspace://<allowlist-id>/...` via workspace_move."
                 },
                 "create_parent": {
                     "type": "boolean",
@@ -491,13 +485,13 @@ impl Tool for MoveFileTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to move file: {}", e)))?;
 
-        let source_mounted = refresh_workspace_path_metadata(
+        let source_allowlisted = refresh_workspace_path_metadata(
             self.workspace_resolver.as_ref(),
             &ctx.user_id,
             &source,
         )
         .await?;
-        let destination_mounted = refresh_workspace_path_metadata(
+        let destination_allowlisted = refresh_workspace_path_metadata(
             self.workspace_resolver.as_ref(),
             &ctx.user_id,
             &destination,
@@ -509,10 +503,10 @@ impl Tool for MoveFileTool {
                 "source_path": source.display().to_string(),
                 "destination_path": destination.display().to_string(),
                 "success": true,
-                "source_workspace_uri": source_mounted
+                "source_workspace_uri": source_allowlisted
                     .as_ref()
                     .map(|resolved| resolved.workspace_uri.clone()),
-                "destination_workspace_uri": destination_mounted
+                "destination_workspace_uri": destination_allowlisted
                     .as_ref()
                     .map(|resolved| resolved.workspace_uri.clone())
             }),
@@ -586,7 +580,7 @@ impl Tool for ListDirTool {
 
     fn description(&self) -> &str {
         "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace document trees \
-         (use workspace_tree for that). If the directory is mounted into the workspace, this lists the real mounted directory directly. Use `workspace://<mount-id>` via workspace_tree when you want mounted-path status, diff state, and workspace-native browsing. Unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
+         (use workspace_tree for that). If the directory is allowlisted into the workspace, this lists the real allowlisted directory directly. Use `workspace://<allowlist-id>` via workspace_tree when you want allowlist-path status, diff state, and workspace-native browsing. Non-allowlisted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -595,7 +589,7 @@ impl Tool for ListDirTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the directory to list (defaults to current directory). Mounted directories may be addressed either by real disk path here or by `workspace://<mount-id>` via workspace_tree."
+                    "description": "Path to the directory to list (defaults to current directory). Allowlisted directories may be addressed either by real disk path here or by `workspace://<allowlist-id>` via workspace_tree."
                 },
                 "recursive": {
                     "type": "boolean",
@@ -630,12 +624,9 @@ impl Tool for ListDirTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
-        let mounted = resolve_workspace_path_metadata(
-            self.workspace_resolver.as_ref(),
-            &ctx.user_id,
-            &path,
-        )
-        .await?;
+        let allowlisted =
+            resolve_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
+                .await?;
 
         let mut entries = Vec::new();
         list_dir_inner(&path, &path, recursive, max_depth, 0, &mut entries).await?;
@@ -661,10 +652,10 @@ impl Tool for ListDirTool {
             "entries": entries,
             "count": entries.len(),
             "truncated": truncated,
-            "workspace_uri": mounted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
-            "workspace_mount_id": mounted
+            "workspace_uri": allowlisted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
+            "workspace_allowlist_id": allowlisted
                 .as_ref()
-                .map(|(_, resolved)| resolved.mount_id.to_string())
+                .map(|(_, resolved)| resolved.allowlist_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -819,7 +810,7 @@ impl Tool for ApplyPatchTool {
         "Apply targeted edits to a file using search/replace. Finds the exact 'old_string' \
          and replaces it with 'new_string'. Use for surgical code changes without rewriting entire files. \
          The old_string must match exactly (including whitespace and indentation). \
-         If the file lives inside a mounted workspace directory, prefer mounted workspace paths first; editing unmounted disk files may require ask-mode approval."
+         If the file lives inside a allowlisted workspace directory, prefer allowlisted workspace paths first; editing non-allowlisted disk files may require ask-mode approval."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -899,19 +890,16 @@ impl Tool for ApplyPatchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
 
-        let mounted = refresh_workspace_path_metadata(
-            self.workspace_resolver.as_ref(),
-            &ctx.user_id,
-            &path,
-        )
-        .await?;
+        let allowlisted =
+            refresh_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
+                .await?;
 
         let result = serde_json::json!({
             "path": path.display().to_string(),
             "replacements": replacements,
             "success": true,
-            "workspace_uri": mounted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
-            "workspace_mount_id": mounted.as_ref().map(|resolved| resolved.mount_id.to_string())
+            "workspace_uri": allowlisted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
+            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| resolved.allowlist_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -942,8 +930,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[cfg(feature = "libsql")]
-    async fn mounted_workspace(
-    ) -> (
+    async fn allowlisted_workspace() -> (
         Arc<Workspace>,
         tempfile::TempDir,
         tempfile::TempDir,
@@ -952,18 +939,18 @@ mod tests {
     ) {
         let (db, db_dir) = crate::testing::test_db().await;
         let workspace = Arc::new(Workspace::new_with_db("file-tool-user", db));
-        let mount_dir = tempfile::tempdir().expect("mount tempdir");
-        let mount = workspace
-            .create_mount("project", mount_dir.path().display().to_string(), true)
+        let allowlist_dir = tempfile::tempdir().expect("allowlist tempdir");
+        let allowlist = workspace
+            .create_allowlist("project", allowlist_dir.path().display().to_string(), true)
             .await
-            .expect("create mount");
-        let mount_root = mount_dir.path().to_path_buf();
+            .expect("create allowlist");
+        let allowlist_root = allowlist_dir.path().to_path_buf();
         (
             workspace,
             db_dir,
-            mount_dir,
-            mount.mount.id,
-            mount_root,
+            allowlist_dir,
+            allowlist.allowlist.id,
+            allowlist_root,
         )
     }
 
@@ -1014,17 +1001,18 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn test_write_file_refreshes_mounted_workspace() {
-        let (workspace, _db_dir, _mount_dir, mount_id, mount_root) = mounted_workspace().await;
+    async fn test_write_file_refreshes_allowlisted_workspace() {
+        let (workspace, _db_dir, _allowlist_dir, allowlist_id, allowlist_root) =
+            allowlisted_workspace().await;
         let tool = WriteFileTool::from_workspace(Arc::clone(&workspace));
         let ctx = JobContext::with_user("file-tool-user", "test", "test");
-        let file_path = mount_root.join("src").join("lib.rs");
+        let file_path = allowlist_root.join("src").join("lib.rs");
 
         let result = tool
             .execute(
                 serde_json::json!({
                     "path": file_path.display().to_string(),
-                    "content": "pub fn mounted() {}\n"
+                    "content": "pub fn allowlisted() {}\n"
                 }),
                 &ctx,
             )
@@ -1036,9 +1024,12 @@ mod tests {
             .get("workspace_uri")
             .and_then(|value| value.as_str())
             .expect("workspace_uri");
-        assert!(workspace_uri.starts_with(&format!("workspace://{mount_id}/")));
+        assert!(workspace_uri.starts_with(&format!("workspace://{allowlist_id}/")));
 
-        let diff = workspace.diff_mount(mount_id, None).await.expect("mount diff");
+        let diff = workspace
+            .diff_allowlist(allowlist_id, None)
+            .await
+            .expect("allowlist diff");
         assert_eq!(diff.entries.len(), 1);
         assert_eq!(diff.entries[0].path, "src/lib.rs");
     }

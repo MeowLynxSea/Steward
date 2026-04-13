@@ -70,7 +70,7 @@ export async function listenForFolderDrops(
 
 export async function pickDirectory(): Promise<string | null> {
   try {
-    const selection = await invoke<string | null>("pick_mount_directory");
+    const selection = await invoke<string | null>("pick_allowlist_directory");
     return selection ?? null;
   } catch {
     return null;

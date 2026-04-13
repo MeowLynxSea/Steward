@@ -518,9 +518,9 @@ impl AppBuilder {
             }
             ws = ws
                 .with_memory_layers(self.config.workspace.memory_layers.clone())
-                .with_mount_watch_config(
-                    self.config.workspace.mount_watch_enabled,
-                    self.config.workspace.mount_watch_interval_ms,
+                .with_allowlist_watch_config(
+                    self.config.workspace.allowlist_watch_enabled,
+                    self.config.workspace.allowlist_watch_interval_ms,
                 );
             let ws = Arc::new(ws);
 

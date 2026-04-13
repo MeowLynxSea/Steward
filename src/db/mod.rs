@@ -42,11 +42,11 @@ use crate::memory::{
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
 use crate::workspace::{
-    ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest,
-    MountActionRequest, WorkspaceMountBaselineRequest, WorkspaceMountCheckpoint,
-    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountDiffRequest,
-    WorkspaceMountFileView, WorkspaceMountHistory, WorkspaceMountHistoryRequest,
-    WorkspaceMountRestoreRequest, WorkspaceMountSummary, WorkspaceTreeEntry,
+    AllowlistActionRequest, ConflictResolutionRequest, CreateAllowlistRequest,
+    CreateCheckpointRequest, WorkspaceAllowlistBaselineRequest, WorkspaceAllowlistCheckpoint,
+    WorkspaceAllowlistDetail, WorkspaceAllowlistDiff, WorkspaceAllowlistDiffRequest,
+    WorkspaceAllowlistFileView, WorkspaceAllowlistHistory, WorkspaceAllowlistHistoryRequest,
+    WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistSummary, WorkspaceTreeEntry,
 };
 use crate::workspace::{MemoryChunk, MemoryDocument, WorkspaceEntry};
 use crate::workspace::{SearchConfig, SearchResult};
@@ -812,92 +812,92 @@ pub trait WorkspaceStore: Send + Sync {
         })
     }
 
-    async fn create_workspace_mount(
+    async fn create_workspace_allowlist(
         &self,
-        _request: &CreateMountRequest,
-    ) -> Result<WorkspaceMountSummary, WorkspaceError> {
+        _request: &CreateAllowlistRequest,
+    ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "create_workspace_mount".to_string(),
+            operation: "create_workspace_allowlist".to_string(),
         })
     }
 
-    async fn list_workspace_mounts(
+    async fn list_workspace_allowlists(
         &self,
         _user_id: &str,
-    ) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+    ) -> Result<Vec<WorkspaceAllowlistSummary>, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "list_workspace_mounts".to_string(),
+            operation: "list_workspace_allowlists".to_string(),
         })
     }
 
-    async fn get_workspace_mount(
+    async fn get_workspace_allowlist(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        _allowlist_id: Uuid,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "get_workspace_mount".to_string(),
+            operation: "get_workspace_allowlist".to_string(),
         })
     }
 
-    async fn read_workspace_mount_file(
+    async fn read_workspace_allowlist_file(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _path: &str,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "read_workspace_mount_file".to_string(),
+            operation: "read_workspace_allowlist_file".to_string(),
         })
     }
 
-    async fn write_workspace_mount_file(
+    async fn write_workspace_allowlist_file(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _path: &str,
         _content: &[u8],
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "write_workspace_mount_file".to_string(),
+            operation: "write_workspace_allowlist_file".to_string(),
         })
     }
 
-    async fn delete_workspace_mount_file(
+    async fn delete_workspace_allowlist_file(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _path: &str,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "delete_workspace_mount_file".to_string(),
+            operation: "delete_workspace_allowlist_file".to_string(),
         })
     }
 
-    async fn diff_workspace_mount(
+    async fn diff_workspace_allowlist(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "diff_workspace_mount".to_string(),
+            operation: "diff_workspace_allowlist".to_string(),
         })
     }
 
-    async fn diff_workspace_mount_between(
+    async fn diff_workspace_allowlist_between(
         &self,
-        _request: &WorkspaceMountDiffRequest,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        _request: &WorkspaceAllowlistDiffRequest,
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "diff_workspace_mount_between".to_string(),
+            operation: "diff_workspace_allowlist_between".to_string(),
         })
     }
 
     async fn create_workspace_checkpoint(
         &self,
         _request: &CreateCheckpointRequest,
-    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistCheckpoint, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
             operation: "create_workspace_checkpoint".to_string(),
         })
@@ -906,111 +906,111 @@ pub trait WorkspaceStore: Send + Sync {
     async fn list_workspace_checkpoints(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _limit: Option<usize>,
-    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+    ) -> Result<Vec<WorkspaceAllowlistCheckpoint>, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
             operation: "list_workspace_checkpoints".to_string(),
         })
     }
 
-    async fn list_workspace_mount_history(
+    async fn list_workspace_allowlist_history(
         &self,
-        _request: &WorkspaceMountHistoryRequest,
-    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        _request: &WorkspaceAllowlistHistoryRequest,
+    ) -> Result<WorkspaceAllowlistHistory, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "list_workspace_mount_history".to_string(),
+            operation: "list_workspace_allowlist_history".to_string(),
         })
     }
 
-    async fn keep_workspace_mount(
+    async fn keep_workspace_allowlist(
         &self,
-        _request: &MountActionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        _request: &AllowlistActionRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "keep_workspace_mount".to_string(),
+            operation: "keep_workspace_allowlist".to_string(),
         })
     }
 
-    async fn revert_workspace_mount(
+    async fn revert_workspace_allowlist(
         &self,
-        _request: &MountActionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        _request: &AllowlistActionRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "revert_workspace_mount".to_string(),
+            operation: "revert_workspace_allowlist".to_string(),
         })
     }
 
-    async fn resolve_workspace_mount_conflict(
+    async fn resolve_workspace_allowlist_conflict(
         &self,
         _request: &ConflictResolutionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "resolve_workspace_mount_conflict".to_string(),
+            operation: "resolve_workspace_allowlist_conflict".to_string(),
         })
     }
 
-    async fn move_workspace_mount_file(
+    async fn move_workspace_allowlist_file(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _source_path: &str,
         _destination_path: &str,
         _overwrite: bool,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "move_workspace_mount_file".to_string(),
+            operation: "move_workspace_allowlist_file".to_string(),
         })
     }
 
-    async fn delete_workspace_mount_tree(
+    async fn delete_workspace_allowlist_tree(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _path: &str,
         _missing_ok: bool,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "delete_workspace_mount_tree".to_string(),
+            operation: "delete_workspace_allowlist_tree".to_string(),
         })
     }
 
-    async fn restore_workspace_mount(
+    async fn restore_workspace_allowlist(
         &self,
-        _request: &WorkspaceMountRestoreRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        _request: &WorkspaceAllowlistRestoreRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "restore_workspace_mount".to_string(),
+            operation: "restore_workspace_allowlist".to_string(),
         })
     }
 
-    async fn set_workspace_mount_baseline(
+    async fn set_workspace_allowlist_baseline(
         &self,
-        _request: &WorkspaceMountBaselineRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        _request: &WorkspaceAllowlistBaselineRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "set_workspace_mount_baseline".to_string(),
+            operation: "set_workspace_allowlist_baseline".to_string(),
         })
     }
 
-    async fn refresh_workspace_mount(
+    async fn refresh_workspace_allowlist(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
         _scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "refresh_workspace_mount".to_string(),
+            operation: "refresh_workspace_allowlist".to_string(),
         })
     }
 
-    async fn sync_workspace_mount_watch(
+    async fn sync_workspace_allowlist_watch(
         &self,
         _user_id: &str,
-        _mount_id: Uuid,
+        _allowlist_id: Uuid,
     ) -> Result<(), WorkspaceError> {
         Err(WorkspaceError::Unsupported {
-            operation: "sync_workspace_mount_watch".to_string(),
+            operation: "sync_workspace_allowlist_watch".to_string(),
         })
     }
 }

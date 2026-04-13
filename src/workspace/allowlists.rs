@@ -10,17 +10,17 @@ use crate::error::WorkspaceError;
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceTreeEntryKind {
     MemoryRoot,
-    MountsRoot,
+    AllowlistsRoot,
     MemoryDirectory,
     MemoryFile,
-    Mount,
-    MountedDirectory,
-    MountedFile,
+    Allowlist,
+    AllowlistedDirectory,
+    AllowlistedFile,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MountedFileStatus {
+pub enum AllowlistedFileStatus {
     Clean,
     Modified,
     Added,
@@ -31,7 +31,7 @@ pub enum MountedFileStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceMountRevisionKind {
+pub enum WorkspaceAllowlistRevisionKind {
     Initial,
     ToolWrite,
     ToolPatch,
@@ -46,7 +46,7 @@ pub enum WorkspaceMountRevisionKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceMountRevisionSource {
+pub enum WorkspaceAllowlistRevisionSource {
     WorkspaceTool,
     Shell,
     External,
@@ -55,7 +55,7 @@ pub enum WorkspaceMountRevisionSource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkspaceMountChangeKind {
+pub enum WorkspaceAllowlistChangeKind {
     Added,
     Modified,
     Deleted,
@@ -69,7 +69,7 @@ pub struct WorkspaceTreeEntry {
     pub uri: String,
     pub is_directory: bool,
     pub kind: WorkspaceTreeEntryKind,
-    pub status: Option<MountedFileStatus>,
+    pub status: Option<AllowlistedFileStatus>,
     pub updated_at: Option<DateTime<Utc>>,
     pub content_preview: Option<String>,
     pub bypass_write: Option<bool>,
@@ -79,7 +79,7 @@ pub struct WorkspaceTreeEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMount {
+pub struct WorkspaceAllowlist {
     pub id: Uuid,
     pub user_id: String,
     pub display_name: String,
@@ -92,17 +92,17 @@ pub struct WorkspaceMount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountSummary {
-    pub mount: WorkspaceMount,
+pub struct WorkspaceAllowlistSummary {
+    pub allowlist: WorkspaceAllowlist,
     pub dirty_count: usize,
     pub conflict_count: usize,
     pub pending_delete_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountCheckpoint {
+pub struct WorkspaceAllowlistCheckpoint {
     pub id: Uuid,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub revision_id: Uuid,
     pub parent_checkpoint_id: Option<Uuid>,
     pub label: Option<String>,
@@ -115,21 +115,21 @@ pub struct WorkspaceMountCheckpoint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountDetail {
-    pub summary: WorkspaceMountSummary,
+pub struct WorkspaceAllowlistDetail {
+    pub summary: WorkspaceAllowlistSummary,
     pub baseline_revision_id: Option<Uuid>,
     pub head_revision_id: Option<Uuid>,
-    pub checkpoints: Vec<WorkspaceMountCheckpoint>,
+    pub checkpoints: Vec<WorkspaceAllowlistCheckpoint>,
     pub open_change_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountRevision {
+pub struct WorkspaceAllowlistRevision {
     pub id: Uuid,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub parent_revision_id: Option<Uuid>,
-    pub kind: WorkspaceMountRevisionKind,
-    pub source: WorkspaceMountRevisionSource,
+    pub kind: WorkspaceAllowlistRevisionKind,
+    pub source: WorkspaceAllowlistRevisionSource,
     pub trigger: Option<String>,
     pub summary: Option<String>,
     pub created_by: String,
@@ -138,20 +138,20 @@ pub struct WorkspaceMountRevision {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountHistory {
-    pub mount_id: Uuid,
+pub struct WorkspaceAllowlistHistory {
+    pub allowlist_id: Uuid,
     pub baseline_revision_id: Option<Uuid>,
     pub head_revision_id: Option<Uuid>,
-    pub revisions: Vec<WorkspaceMountRevision>,
-    pub checkpoints: Vec<WorkspaceMountCheckpoint>,
+    pub revisions: Vec<WorkspaceAllowlistRevision>,
+    pub checkpoints: Vec<WorkspaceAllowlistCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MountedFileDiff {
+pub struct AllowlistedFileDiff {
     pub path: String,
     pub uri: String,
-    pub status: MountedFileStatus,
-    pub change_kind: WorkspaceMountChangeKind,
+    pub status: AllowlistedFileStatus,
+    pub change_kind: WorkspaceAllowlistChangeKind,
     pub is_binary: bool,
     pub base_content: Option<String>,
     pub working_content: Option<String>,
@@ -161,28 +161,28 @@ pub struct MountedFileDiff {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountDiff {
-    pub mount_id: Uuid,
+pub struct WorkspaceAllowlistDiff {
+    pub allowlist_id: Uuid,
     pub from_revision_id: Option<Uuid>,
     pub to_revision_id: Option<Uuid>,
-    pub entries: Vec<MountedFileDiff>,
+    pub entries: Vec<AllowlistedFileDiff>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceMountFileView {
-    pub mount_id: Uuid,
+pub struct WorkspaceAllowlistFileView {
+    pub allowlist_id: Uuid,
     pub path: String,
     pub uri: String,
     pub disk_path: String,
-    pub status: MountedFileStatus,
+    pub status: AllowlistedFileStatus,
     pub is_binary: bool,
     pub content: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResolvedWorkspaceMountPath {
-    pub mount_id: Uuid,
+pub struct ResolvedWorkspaceAllowlistPath {
+    pub allowlist_id: Uuid,
     pub relative_path: Option<String>,
     pub workspace_uri: String,
     pub disk_path: String,
@@ -190,7 +190,7 @@ pub struct ResolvedWorkspaceMountPath {
 }
 
 #[derive(Debug, Clone)]
-pub struct CreateMountRequest {
+pub struct CreateAllowlistRequest {
     pub user_id: String,
     pub display_name: String,
     pub source_root: String,
@@ -200,7 +200,7 @@ pub struct CreateMountRequest {
 #[derive(Debug, Clone)]
 pub struct CreateCheckpointRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub revision_id: Option<Uuid>,
     pub label: Option<String>,
     pub summary: Option<String>,
@@ -209,18 +209,18 @@ pub struct CreateCheckpointRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct MountActionRequest {
+pub struct AllowlistActionRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub scope_path: Option<String>,
     pub checkpoint_id: Option<Uuid>,
     pub set_as_baseline: bool,
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceMountHistoryRequest {
+pub struct WorkspaceAllowlistHistoryRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub scope_path: Option<String>,
     pub limit: usize,
     pub since: Option<DateTime<Utc>>,
@@ -228,9 +228,9 @@ pub struct WorkspaceMountHistoryRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceMountDiffRequest {
+pub struct WorkspaceAllowlistDiffRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub scope_path: Option<String>,
     pub from: Option<String>,
     pub to: Option<String>,
@@ -239,9 +239,9 @@ pub struct WorkspaceMountDiffRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceMountRestoreRequest {
+pub struct WorkspaceAllowlistRestoreRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub scope_path: Option<String>,
     pub target: String,
     pub set_as_baseline: bool,
@@ -251,16 +251,16 @@ pub struct WorkspaceMountRestoreRequest {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkspaceMountBaselineRequest {
+pub struct WorkspaceAllowlistBaselineRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub target: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConflictResolutionRequest {
     pub user_id: String,
-    pub mount_id: Uuid,
+    pub allowlist_id: Uuid,
     pub path: String,
     pub resolution: String,
     pub renamed_copy_path: Option<String>,
@@ -270,8 +270,8 @@ pub struct ConflictResolutionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceUri {
     Root,
-    MountRoot(Uuid),
-    MountPath(Uuid, String),
+    AllowlistRoot(Uuid),
+    AllowlistPath(Uuid, String),
 }
 
 impl WorkspaceUri {
@@ -285,31 +285,32 @@ impl WorkspaceUri {
             return Ok(Some(Self::Root));
         }
 
-        let rest = if rest == "mounts" {
+        let rest = if rest == "allowlists" {
             ""
         } else {
-            rest.strip_prefix("mounts/").unwrap_or(rest)
+            rest.strip_prefix("allowlists/").unwrap_or(rest)
         };
 
         if rest.is_empty() {
             return Ok(Some(Self::Root));
         }
 
-        let (mount_id, path) = match rest.split_once('/') {
+        let (allowlist_id, path) = match rest.split_once('/') {
             Some((id, tail)) => (id, Some(tail)),
             None => (rest, None),
         };
-        let mount_id = Uuid::parse_str(mount_id).map_err(|_| WorkspaceError::InvalidDocType {
-            doc_type: input.to_string(),
-        })?;
+        let allowlist_id =
+            Uuid::parse_str(allowlist_id).map_err(|_| WorkspaceError::InvalidDocType {
+                doc_type: input.to_string(),
+            })?;
         let normalized = match path {
-            Some(path) if !path.is_empty() => normalize_mount_path(path)?,
+            Some(path) if !path.is_empty() => normalize_allowlist_path(path)?,
             _ => String::new(),
         };
 
         Ok(Some(match normalized.is_empty() {
-            true => Self::MountRoot(mount_id),
-            false => Self::MountPath(mount_id, normalized),
+            true => Self::AllowlistRoot(allowlist_id),
+            false => Self::AllowlistPath(allowlist_id, normalized),
         }))
     }
 
@@ -317,18 +318,18 @@ impl WorkspaceUri {
         "workspace://"
     }
 
-    pub fn mount_uri(mount_id: Uuid, path: Option<&str>) -> String {
+    pub fn allowlist_uri(allowlist_id: Uuid, path: Option<&str>) -> String {
         match path {
-            Some(path) if !path.is_empty() => format!("workspace://{mount_id}/{path}"),
-            _ => format!("workspace://{mount_id}"),
+            Some(path) if !path.is_empty() => format!("workspace://{allowlist_id}/{path}"),
+            _ => format!("workspace://{allowlist_id}"),
         }
     }
 }
 
-pub fn normalize_mount_path(path: &str) -> Result<String, WorkspaceError> {
+pub fn normalize_allowlist_path(path: &str) -> Result<String, WorkspaceError> {
     if path.contains('\0') {
         return Err(WorkspaceError::IoError {
-            reason: "mount path contains null byte".to_string(),
+            reason: "allowlist path contains null byte".to_string(),
         });
     }
 
@@ -340,13 +341,13 @@ pub fn normalize_mount_path(path: &str) -> Result<String, WorkspaceError> {
             Component::ParentDir => {
                 if normalized.pop().is_none() {
                     return Err(WorkspaceError::IoError {
-                        reason: format!("mount path escapes root: {path}"),
+                        reason: format!("allowlist path escapes root: {path}"),
                     });
                 }
             }
             Component::RootDir | Component::Prefix(_) => {
                 return Err(WorkspaceError::IoError {
-                    reason: format!("mount path must be relative: {path}"),
+                    reason: format!("allowlist path must be relative: {path}"),
                 });
             }
         }
@@ -360,32 +361,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_root_and_legacy_mount_root() {
+    fn parse_root_and_allowlists_root() {
         assert_eq!(
             WorkspaceUri::parse("workspace://").unwrap(),
             Some(WorkspaceUri::Root)
         );
         assert_eq!(
-            WorkspaceUri::parse("workspace://mounts").unwrap(),
+            WorkspaceUri::parse("workspace://allowlists").unwrap(),
             Some(WorkspaceUri::Root)
         );
     }
 
     #[test]
-    fn parse_direct_and_legacy_mount_paths() {
+    fn parse_direct_and_allowlists_paths() {
         let id = Uuid::new_v4();
         assert_eq!(
             WorkspaceUri::parse(&format!("workspace://{id}/src/lib.rs")).unwrap(),
-            Some(WorkspaceUri::MountPath(id, "src/lib.rs".to_string()))
+            Some(WorkspaceUri::AllowlistPath(id, "src/lib.rs".to_string()))
         );
         assert_eq!(
-            WorkspaceUri::parse(&format!("workspace://mounts/{id}/src/lib.rs")).unwrap(),
-            Some(WorkspaceUri::MountPath(id, "src/lib.rs".to_string()))
+            WorkspaceUri::parse(&format!("workspace://allowlists/{id}/src/lib.rs")).unwrap(),
+            Some(WorkspaceUri::AllowlistPath(id, "src/lib.rs".to_string()))
         );
     }
 
     #[test]
-    fn rejects_mount_path_escape() {
+    fn rejects_allowlist_path_escape() {
         let id = Uuid::new_v4();
         let err = WorkspaceUri::parse(&format!("workspace://{id}/../secret.txt")).unwrap_err();
         assert!(err.to_string().contains("escapes root"));
@@ -394,7 +395,7 @@ mod tests {
     #[test]
     fn normalizes_internal_parent_segments() {
         assert_eq!(
-            normalize_mount_path("src/bin/../lib.rs").unwrap(),
+            normalize_allowlist_path("src/bin/../lib.rs").unwrap(),
             "src/lib.rs"
         );
     }

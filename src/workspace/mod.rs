@@ -1,6 +1,6 @@
 //! Workspace file-context system (OpenClaw-inspired).
 //!
-//! The workspace is responsible for mounted files, workspace indexing, and
+//! The workspace is responsible for allowlisted files, workspace indexing, and
 //! file-context retrieval. Steward's long-term memory no longer lives here;
 //! that runtime truth is modeled in `src/memory/`.
 //!
@@ -8,11 +8,11 @@
 //!
 //! ```text
 //! workspace/
-//! ├── workspace://mount-a/   <- Mounted project tree
+//! ├── workspace://allowlist-a/   <- Allowlisted project tree
 //! │   ├── src/
 //! │   ├── README.md
 //! │   └── Cargo.toml
-//! ├── workspace://mount-b/   <- Another mounted tree
+//! ├── workspace://allowlist-b/   <- Another allowlisted tree
 //! │   └── ...
 //! └── ...
 //! ```
@@ -28,21 +28,31 @@
 //!
 //! # Key Patterns
 //!
-//! 1. **Workspace means mounted files**: Use `workspace://...` URIs for mounted content
+//! 1. **Workspace means allowlisted files**: Use `workspace://...` URIs for allowlisted content
 //! 2. **Memory is separate**: Use `src/memory/` and graph-native tools for long-term recall
 //! 3. **Search is derived**: Workspace indexing supports discovery, not agent identity
 //! 4. **Hybrid search**: Vector similarity + BM25 full-text via RRF
 
+pub mod allowlists;
 mod chunker;
 mod document;
 mod embedding_cache;
 mod embeddings;
 pub mod hygiene;
 pub mod layer;
-pub mod mounts;
 pub mod privacy;
 mod search;
 
+pub use allowlists::{
+    AllowlistActionRequest, AllowlistedFileDiff, AllowlistedFileStatus, ConflictResolutionRequest,
+    CreateAllowlistRequest, CreateCheckpointRequest, ResolvedWorkspaceAllowlistPath,
+    WorkspaceAllowlist, WorkspaceAllowlistBaselineRequest, WorkspaceAllowlistChangeKind,
+    WorkspaceAllowlistCheckpoint, WorkspaceAllowlistDetail, WorkspaceAllowlistDiff,
+    WorkspaceAllowlistDiffRequest, WorkspaceAllowlistFileView, WorkspaceAllowlistHistory,
+    WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistRevision,
+    WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource, WorkspaceAllowlistSummary,
+    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, normalize_allowlist_path,
+};
 pub use chunker::{ChunkConfig, chunk_document};
 pub use document::{
     IDENTITY_PATHS, MemoryChunk, MemoryDocument, WorkspaceEntry, is_identity_path,
@@ -50,16 +60,6 @@ pub use document::{
 };
 pub use embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
 pub use embeddings::{EmbeddingProvider, MockEmbeddings, OllamaEmbeddings, OpenAiEmbeddings};
-pub use mounts::{
-    ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
-    MountedFileDiff, MountedFileStatus, ResolvedWorkspaceMountPath, WorkspaceMount,
-    WorkspaceMountBaselineRequest, WorkspaceMountChangeKind, WorkspaceMountCheckpoint,
-    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountDiffRequest,
-    WorkspaceMountFileView, WorkspaceMountHistory, WorkspaceMountHistoryRequest,
-    WorkspaceMountRestoreRequest, WorkspaceMountRevision, WorkspaceMountRevisionKind,
-    WorkspaceMountRevisionSource, WorkspaceMountSummary, WorkspaceTreeEntry,
-    WorkspaceTreeEntryKind, WorkspaceUri, normalize_mount_path,
-};
 pub use search::{
     FusionStrategy, RankedResult, SearchConfig, SearchResult, fuse_results, reciprocal_rank_fusion,
 };
@@ -84,8 +84,8 @@ use uuid::Uuid;
 use crate::error::WorkspaceError;
 use crate::safety::{Sanitizer, Severity};
 
-const MAX_MOUNT_SEARCH_FILE_BYTES: u64 = 256 * 1024;
-const DEFAULT_MOUNT_WATCH_INTERVAL_MS: u64 = 500;
+const MAX_ALLOWLIST_SEARCH_FILE_BYTES: u64 = 256 * 1024;
+const DEFAULT_ALLOWLIST_WATCH_INTERVAL_MS: u64 = 500;
 
 /// Files injected into the system prompt. Writes to these are scanned for
 /// prompt injection patterns and rejected if high-severity matches are found.
@@ -133,7 +133,7 @@ fn is_system_prompt_file(path: &str) -> bool {
 /// Shared sanitizer instance — avoids rebuilding Aho-Corasick + regexes on every write.
 static SANITIZER: std::sync::LazyLock<Sanitizer> = std::sync::LazyLock::new(Sanitizer::new);
 
-fn collect_mount_search_files(
+fn collect_allowlist_search_files(
     root: &Path,
     dir: &Path,
     files: &mut Vec<(String, PathBuf, u64)>,
@@ -150,12 +150,12 @@ fn collect_mount_search_files(
             reason: format!("failed to read metadata {}: {e}", path.display()),
         })?;
         if metadata.is_dir() {
-            collect_mount_search_files(root, &path, files)?;
-        } else if metadata.is_file() && metadata.len() <= MAX_MOUNT_SEARCH_FILE_BYTES {
+            collect_allowlist_search_files(root, &path, files)?;
+        } else if metadata.is_file() && metadata.len() <= MAX_ALLOWLIST_SEARCH_FILE_BYTES {
             let relative = path
                 .strip_prefix(root)
                 .map_err(|e| WorkspaceError::IoError {
-                    reason: format!("failed to strip mount root: {e}"),
+                    reason: format!("failed to strip allowlist root: {e}"),
                 })?
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -165,14 +165,17 @@ fn collect_mount_search_files(
     Ok(())
 }
 
-fn mount_search_score(path: &str, content: &str, query: &str) -> Option<f32> {
+fn allowlist_search_score(path: &str, content: &str, query: &str) -> Option<f32> {
     let query = query.trim().to_lowercase();
     if query.is_empty() {
         return None;
     }
     let path_lower = path.to_lowercase();
     let content_lower = content.to_lowercase();
-    let tokens: Vec<&str> = query.split_whitespace().filter(|token| !token.is_empty()).collect();
+    let tokens: Vec<&str> = query
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .collect();
     if tokens.is_empty() {
         return None;
     }
@@ -189,7 +192,7 @@ fn mount_search_score(path: &str, content: &str, query: &str) -> Option<f32> {
     matched.then_some(score)
 }
 
-fn mount_search_snippet(content: &str, query: &str) -> String {
+fn allowlist_search_snippet(content: &str, query: &str) -> String {
     let lower = content.to_lowercase();
     let token = query
         .split_whitespace()
@@ -329,98 +332,104 @@ impl WorkspaceStorage {
         }
     }
 
-    async fn create_workspace_mount(
+    async fn create_workspace_allowlist(
         &self,
-        request: &CreateMountRequest,
-    ) -> Result<WorkspaceMountSummary, WorkspaceError> {
+        request: &CreateAllowlistRequest,
+    ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
         match self {
-            Self::Db(db) => db.create_workspace_mount(request).await,
+            Self::Db(db) => db.create_workspace_allowlist(request).await,
         }
     }
 
-    async fn list_workspace_mounts(
+    async fn list_workspace_allowlists(
         &self,
         user_id: &str,
-    ) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+    ) -> Result<Vec<WorkspaceAllowlistSummary>, WorkspaceError> {
         match self {
-            Self::Db(db) => db.list_workspace_mounts(user_id).await,
+            Self::Db(db) => db.list_workspace_allowlists(user_id).await,
         }
     }
 
-    async fn get_workspace_mount(
+    async fn get_workspace_allowlist(
         &self,
         user_id: &str,
-        mount_id: Uuid,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        allowlist_id: Uuid,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.get_workspace_mount(user_id, mount_id).await,
+            Self::Db(db) => db.get_workspace_allowlist(user_id, allowlist_id).await,
         }
     }
 
-    async fn read_workspace_mount_file(
+    async fn read_workspace_allowlist_file(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         match self {
-            Self::Db(db) => db.read_workspace_mount_file(user_id, mount_id, path).await,
+            Self::Db(db) => {
+                db.read_workspace_allowlist_file(user_id, allowlist_id, path)
+                    .await
+            }
         }
     }
 
-    async fn write_workspace_mount_file(
+    async fn write_workspace_allowlist_file(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
         content: &[u8],
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         match self {
             Self::Db(db) => {
-                db.write_workspace_mount_file(user_id, mount_id, path, content)
+                db.write_workspace_allowlist_file(user_id, allowlist_id, path, content)
                     .await
             }
         }
     }
 
-    async fn delete_workspace_mount_file(
+    async fn delete_workspace_allowlist_file(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         match self {
             Self::Db(db) => {
-                db.delete_workspace_mount_file(user_id, mount_id, path)
+                db.delete_workspace_allowlist_file(user_id, allowlist_id, path)
                     .await
             }
         }
     }
 
-    async fn diff_workspace_mount(
+    async fn diff_workspace_allowlist(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
         match self {
-            Self::Db(db) => db.diff_workspace_mount(user_id, mount_id, scope_path).await,
+            Self::Db(db) => {
+                db.diff_workspace_allowlist(user_id, allowlist_id, scope_path)
+                    .await
+            }
         }
     }
 
-    async fn diff_workspace_mount_between(
+    async fn diff_workspace_allowlist_between(
         &self,
-        request: &WorkspaceMountDiffRequest,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        request: &WorkspaceAllowlistDiffRequest,
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
         match self {
-            Self::Db(db) => db.diff_workspace_mount_between(request).await,
+            Self::Db(db) => db.diff_workspace_allowlist_between(request).await,
         }
     }
 
     async fn create_workspace_checkpoint(
         &self,
         request: &CreateCheckpointRequest,
-    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistCheckpoint, WorkspaceError> {
         match self {
             Self::Db(db) => db.create_workspace_checkpoint(request).await,
         }
@@ -429,63 +438,66 @@ impl WorkspaceStorage {
     async fn list_workspace_checkpoints(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         limit: Option<usize>,
-    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+    ) -> Result<Vec<WorkspaceAllowlistCheckpoint>, WorkspaceError> {
         match self {
-            Self::Db(db) => db.list_workspace_checkpoints(user_id, mount_id, limit).await,
+            Self::Db(db) => {
+                db.list_workspace_checkpoints(user_id, allowlist_id, limit)
+                    .await
+            }
         }
     }
 
-    async fn list_workspace_mount_history(
+    async fn list_workspace_allowlist_history(
         &self,
-        request: &WorkspaceMountHistoryRequest,
-    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        request: &WorkspaceAllowlistHistoryRequest,
+    ) -> Result<WorkspaceAllowlistHistory, WorkspaceError> {
         match self {
-            Self::Db(db) => db.list_workspace_mount_history(request).await,
+            Self::Db(db) => db.list_workspace_allowlist_history(request).await,
         }
     }
 
-    async fn keep_workspace_mount(
+    async fn keep_workspace_allowlist(
         &self,
-        request: &MountActionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        request: &AllowlistActionRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.keep_workspace_mount(request).await,
+            Self::Db(db) => db.keep_workspace_allowlist(request).await,
         }
     }
 
-    async fn revert_workspace_mount(
+    async fn revert_workspace_allowlist(
         &self,
-        request: &MountActionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        request: &AllowlistActionRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.revert_workspace_mount(request).await,
+            Self::Db(db) => db.revert_workspace_allowlist(request).await,
         }
     }
 
-    async fn resolve_workspace_mount_conflict(
+    async fn resolve_workspace_allowlist_conflict(
         &self,
         request: &ConflictResolutionRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.resolve_workspace_mount_conflict(request).await,
+            Self::Db(db) => db.resolve_workspace_allowlist_conflict(request).await,
         }
     }
 
-    async fn move_workspace_mount_file(
+    async fn move_workspace_allowlist_file(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         source_path: &str,
         destination_path: &str,
         overwrite: bool,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
         match self {
             Self::Db(db) => {
-                db.move_workspace_mount_file(
+                db.move_workspace_allowlist_file(
                     user_id,
-                    mount_id,
+                    allowlist_id,
                     source_path,
                     destination_path,
                     overwrite,
@@ -495,54 +507,63 @@ impl WorkspaceStorage {
         }
     }
 
-    async fn delete_workspace_mount_tree(
+    async fn delete_workspace_allowlist_tree(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
         missing_ok: bool,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.delete_workspace_mount_tree(user_id, mount_id, path, missing_ok).await,
+            Self::Db(db) => {
+                db.delete_workspace_allowlist_tree(user_id, allowlist_id, path, missing_ok)
+                    .await
+            }
         }
     }
 
-    async fn restore_workspace_mount(
+    async fn restore_workspace_allowlist(
         &self,
-        request: &WorkspaceMountRestoreRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        request: &WorkspaceAllowlistRestoreRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.restore_workspace_mount(request).await,
+            Self::Db(db) => db.restore_workspace_allowlist(request).await,
         }
     }
 
-    async fn set_workspace_mount_baseline(
+    async fn set_workspace_allowlist_baseline(
         &self,
-        request: &WorkspaceMountBaselineRequest,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        request: &WorkspaceAllowlistBaselineRequest,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.set_workspace_mount_baseline(request).await,
+            Self::Db(db) => db.set_workspace_allowlist_baseline(request).await,
         }
     }
 
-    async fn refresh_workspace_mount(
+    async fn refresh_workspace_allowlist(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         match self {
-            Self::Db(db) => db.refresh_workspace_mount(user_id, mount_id, scope_path).await,
+            Self::Db(db) => {
+                db.refresh_workspace_allowlist(user_id, allowlist_id, scope_path)
+                    .await
+            }
         }
     }
 
-    async fn sync_workspace_mount_watch(
+    async fn sync_workspace_allowlist_watch(
         &self,
         user_id: &str,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
     ) -> Result<(), WorkspaceError> {
         match self {
-            Self::Db(db) => db.sync_workspace_mount_watch(user_id, mount_id).await,
+            Self::Db(db) => {
+                db.sync_workspace_allowlist_watch(user_id, allowlist_id)
+                    .await
+            }
         }
     }
 
@@ -691,24 +712,24 @@ pub struct Workspace {
     /// Optional privacy classifier for shared layer writes.
     /// When None, writes go exactly where requested — no silent redirect.
     privacy_classifier: Option<Arc<dyn crate::workspace::privacy::PrivacyClassifier>>,
-    /// Whether mounted workspace trees should be reconciled in the background.
-    mount_watch_enabled: bool,
-    /// Poll interval for background mounted-tree reconciliation.
-    mount_watch_interval: Duration,
+    /// Whether allowlisted workspace trees should be reconciled in the background.
+    allowlist_watch_enabled: bool,
+    /// Poll interval for background allowlisted-tree reconciliation.
+    allowlist_watch_interval: Duration,
     /// Ensures we only spawn one watch loop per workspace instance.
-    mount_watch_started: std::sync::atomic::AtomicBool,
+    allowlist_watch_started: std::sync::atomic::AtomicBool,
     /// Shutdown signal for the background watch loop.
-    mount_watch_shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    allowlist_watch_shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 impl Workspace {
-    fn ensure_mount_watch_started(&self) {
-        if !self.mount_watch_enabled {
+    fn ensure_allowlist_watch_started(&self) {
+        if !self.allowlist_watch_enabled {
             return;
         }
 
         if self
-            .mount_watch_started
+            .allowlist_watch_started
             .swap(true, std::sync::atomic::Ordering::AcqRel)
         {
             return;
@@ -716,13 +737,13 @@ impl Workspace {
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
         *self
-            .mount_watch_shutdown
+            .allowlist_watch_shutdown
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(shutdown_tx);
 
         let storage = self.storage.clone();
         let user_id = self.user_id.clone();
-        let interval = self.mount_watch_interval;
+        let interval = self.allowlist_watch_interval;
 
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
@@ -736,27 +757,27 @@ impl Workspace {
                         }
                     }
                     _ = ticker.tick() => {
-                        let mounts = match storage.list_workspace_mounts(&user_id).await {
-                            Ok(mounts) => mounts,
+                        let allowlists = match storage.list_workspace_allowlists(&user_id).await {
+                            Ok(allowlists) => allowlists,
                             Err(error) => {
                                 tracing::warn!(
                                     user_id = %user_id,
-                                    "workspace mount watch list failed: {}",
+                                    "workspace allowlist watch list failed: {}",
                                     error
                                 );
                                 continue;
                             }
                         };
 
-                        for summary in mounts {
+                        for summary in allowlists {
                             if let Err(error) = storage
-                                .sync_workspace_mount_watch(&user_id, summary.mount.id)
+                                .sync_workspace_allowlist_watch(&user_id, summary.allowlist.id)
                                 .await
                             {
                                 tracing::warn!(
                                     user_id = %user_id,
-                                    mount_id = %summary.mount.id,
-                                    "workspace mount watch refresh failed: {}",
+                                    allowlist_id = %summary.allowlist.id,
+                                    "workspace allowlist watch refresh failed: {}",
                                     error
                                 );
                             }
@@ -784,10 +805,10 @@ impl Workspace {
             search_defaults: SearchConfig::default(),
             memory_layers,
             privacy_classifier: None,
-            mount_watch_enabled: !cfg!(test),
-            mount_watch_interval: Duration::from_millis(DEFAULT_MOUNT_WATCH_INTERVAL_MS),
-            mount_watch_started: std::sync::atomic::AtomicBool::new(false),
-            mount_watch_shutdown: Mutex::new(None),
+            allowlist_watch_enabled: !cfg!(test),
+            allowlist_watch_interval: Duration::from_millis(DEFAULT_ALLOWLIST_WATCH_INTERVAL_MS),
+            allowlist_watch_started: std::sync::atomic::AtomicBool::new(false),
+            allowlist_watch_shutdown: Mutex::new(None),
         }
     }
 
@@ -876,9 +897,9 @@ impl Workspace {
         self
     }
 
-    pub fn with_mount_watch_config(mut self, enabled: bool, interval_ms: u64) -> Self {
-        self.mount_watch_enabled = enabled;
-        self.mount_watch_interval = Duration::from_millis(interval_ms.max(100));
+    pub fn with_allowlist_watch_config(mut self, enabled: bool, interval_ms: u64) -> Self {
+        self.allowlist_watch_enabled = enabled;
+        self.allowlist_watch_interval = Duration::from_millis(interval_ms.max(100));
         self
     }
 
@@ -981,10 +1002,10 @@ impl Workspace {
             search_defaults: self.search_defaults.clone(),
             memory_layers,
             privacy_classifier: self.privacy_classifier.clone(),
-            mount_watch_enabled: self.mount_watch_enabled,
-            mount_watch_interval: self.mount_watch_interval,
-            mount_watch_started: std::sync::atomic::AtomicBool::new(false),
-            mount_watch_shutdown: Mutex::new(None),
+            allowlist_watch_enabled: self.allowlist_watch_enabled,
+            allowlist_watch_interval: self.allowlist_watch_interval,
+            allowlist_watch_started: std::sync::atomic::AtomicBool::new(false),
+            allowlist_watch_shutdown: Mutex::new(None),
         }
     }
 
@@ -1064,15 +1085,15 @@ impl Workspace {
     pub async fn read(&self, path: &str) -> Result<MemoryDocument, WorkspaceError> {
         if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
+                WorkspaceUri::Root | WorkspaceUri::AllowlistRoot(_) => {
                     Err(WorkspaceError::InvalidDocType {
                         doc_type: path.to_string(),
                     })
                 }
-                WorkspaceUri::MountPath(mount_id, mount_path) => {
+                WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => {
                     let file = self
                         .storage
-                        .read_workspace_mount_file(&self.user_id, mount_id, &mount_path)
+                        .read_workspace_allowlist_file(&self.user_id, allowlist_id, &allowlist_path)
                         .await?;
                     Ok(MemoryDocument {
                         id: Uuid::new_v4(),
@@ -1083,7 +1104,7 @@ impl Workspace {
                         created_at: file.updated_at,
                         updated_at: file.updated_at,
                         metadata: serde_json::json!({
-                            "mount_id": mount_id,
+                            "allowlist_id": allowlist_id,
                             "status": file.status,
                             "is_binary": file.is_binary,
                         }),
@@ -1171,18 +1192,18 @@ impl Workspace {
     pub async fn write(&self, path: &str, content: &str) -> Result<MemoryDocument, WorkspaceError> {
         if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
+                WorkspaceUri::Root | WorkspaceUri::AllowlistRoot(_) => {
                     Err(WorkspaceError::InvalidDocType {
                         doc_type: path.to_string(),
                     })
                 }
-                WorkspaceUri::MountPath(mount_id, mount_path) => {
+                WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => {
                     let file = self
                         .storage
-                        .write_workspace_mount_file(
+                        .write_workspace_allowlist_file(
                             &self.user_id,
-                            mount_id,
-                            &mount_path,
+                            allowlist_id,
+                            &allowlist_path,
                             content.as_bytes(),
                         )
                         .await?;
@@ -1195,7 +1216,7 @@ impl Workspace {
                         created_at: file.updated_at,
                         updated_at: file.updated_at,
                         metadata: serde_json::json!({
-                            "mount_id": mount_id,
+                            "allowlist_id": allowlist_id,
                             "status": file.status,
                             "is_binary": file.is_binary,
                         }),
@@ -1410,14 +1431,14 @@ impl Workspace {
     pub async fn delete(&self, path: &str) -> Result<(), WorkspaceError> {
         if let Some(uri) = WorkspaceUri::parse(path)? {
             return match uri {
-                WorkspaceUri::Root | WorkspaceUri::MountRoot(_) => {
+                WorkspaceUri::Root | WorkspaceUri::AllowlistRoot(_) => {
                     Err(WorkspaceError::InvalidDocType {
                         doc_type: path.to_string(),
                     })
                 }
-                WorkspaceUri::MountPath(mount_id, mount_path) => self
+                WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => self
                     .storage
-                    .delete_workspace_mount_file(&self.user_id, mount_id, &mount_path)
+                    .delete_workspace_allowlist_file(&self.user_id, allowlist_id, &allowlist_path)
                     .await
                     .map(|_| ()),
             };
@@ -1549,15 +1570,15 @@ impl Workspace {
             .collect())
     }
 
-    pub async fn create_mount(
+    pub async fn create_allowlist(
         &self,
         display_name: impl Into<String>,
         source_root: impl Into<String>,
         bypass_write: bool,
-    ) -> Result<WorkspaceMountSummary, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .create_workspace_mount(&CreateMountRequest {
+            .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: self.user_id.clone(),
                 display_name: display_name.into(),
                 source_root: source_root.into(),
@@ -1566,29 +1587,32 @@ impl Workspace {
             .await
     }
 
-    pub async fn list_mounts(&self) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
-        self.ensure_mount_watch_started();
-        self.storage.list_workspace_mounts(&self.user_id).await
+    pub async fn list_allowlists(&self) -> Result<Vec<WorkspaceAllowlistSummary>, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
+        self.storage.list_workspace_allowlists(&self.user_id).await
     }
 
-    pub async fn get_mount(&self, mount_id: Uuid) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    pub async fn get_allowlist(
+        &self,
+        allowlist_id: Uuid,
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .get_workspace_mount(&self.user_id, mount_id)
+            .get_workspace_allowlist(&self.user_id, allowlist_id)
             .await
     }
 
-    pub async fn resolve_mount_path(
+    pub async fn resolve_allowlist_path(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<Option<ResolvedWorkspaceMountPath>, WorkspaceError> {
+    ) -> Result<Option<ResolvedWorkspaceAllowlistPath>, WorkspaceError> {
         let disk_path = normalize_host_path(path.as_ref());
-        let mounts = self.list_mounts().await?;
+        let allowlists = self.list_allowlists().await?;
 
-        let resolved = mounts
+        let resolved = allowlists
             .into_iter()
             .filter_map(|summary| {
-                let source_root = normalize_host_path(Path::new(&summary.mount.source_root));
+                let source_root = normalize_host_path(Path::new(&summary.allowlist.source_root));
                 if !(disk_path == source_root || disk_path.starts_with(&source_root)) {
                     return None;
                 }
@@ -1597,20 +1621,20 @@ impl Workspace {
                     Some(relative) if relative.as_os_str().is_empty() => None,
                     Some(relative) => {
                         let text = relative.to_string_lossy().replace('\\', "/");
-                        Some(normalize_mount_path(&text).ok()?)
+                        Some(normalize_allowlist_path(&text).ok()?)
                     }
                     None => None,
                 };
 
-                Some(ResolvedWorkspaceMountPath {
-                    mount_id: summary.mount.id,
+                Some(ResolvedWorkspaceAllowlistPath {
+                    allowlist_id: summary.allowlist.id,
                     relative_path: relative_path.clone(),
-                    workspace_uri: WorkspaceUri::mount_uri(
-                        summary.mount.id,
+                    workspace_uri: WorkspaceUri::allowlist_uri(
+                        summary.allowlist.id,
                         relative_path.as_deref(),
                     ),
                     disk_path: disk_path.display().to_string(),
-                    source_root: summary.mount.source_root,
+                    source_root: summary.allowlist.source_root,
                 })
             })
             .max_by_key(|resolved| resolved.source_root.len());
@@ -1618,54 +1642,54 @@ impl Workspace {
         Ok(resolved)
     }
 
-    pub async fn refresh_mount_for_disk_path(
+    pub async fn refresh_allowlist_for_disk_path(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<Option<ResolvedWorkspaceMountPath>, WorkspaceError> {
-        let Some(resolved) = self.resolve_mount_path(path).await? else {
+    ) -> Result<Option<ResolvedWorkspaceAllowlistPath>, WorkspaceError> {
+        let Some(resolved) = self.resolve_allowlist_path(path).await? else {
             return Ok(None);
         };
-        self.refresh_mount(resolved.mount_id, resolved.relative_path.as_deref())
+        self.refresh_allowlist(resolved.allowlist_id, resolved.relative_path.as_deref())
             .await?;
         Ok(Some(resolved))
     }
 
-    pub async fn read_mount_file(
+    pub async fn read_allowlist_file(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .read_workspace_mount_file(&self.user_id, mount_id, path)
+            .read_workspace_allowlist_file(&self.user_id, allowlist_id, path)
             .await
     }
 
-    pub async fn diff_mount(
+    pub async fn diff_allowlist(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .diff_workspace_mount(&self.user_id, mount_id, scope_path)
+            .diff_workspace_allowlist(&self.user_id, allowlist_id, scope_path)
             .await
     }
 
-    pub async fn diff_mount_between(
+    pub async fn diff_allowlist_between(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<String>,
         from: Option<String>,
         to: Option<String>,
         include_content: bool,
         max_files: Option<usize>,
-    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .diff_workspace_mount_between(&WorkspaceMountDiffRequest {
+            .diff_workspace_allowlist_between(&WorkspaceAllowlistDiffRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 scope_path,
                 from,
                 to,
@@ -1677,18 +1701,18 @@ impl Workspace {
 
     pub async fn create_checkpoint(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         label: Option<String>,
         summary: Option<String>,
         created_by: impl Into<String>,
         is_auto: bool,
         revision_id: Option<Uuid>,
-    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistCheckpoint, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
             .create_workspace_checkpoint(&CreateCheckpointRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 revision_id,
                 label,
                 summary,
@@ -1698,30 +1722,30 @@ impl Workspace {
             .await
     }
 
-    pub async fn list_mount_checkpoints(
+    pub async fn list_allowlist_checkpoints(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         limit: Option<usize>,
-    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<Vec<WorkspaceAllowlistCheckpoint>, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .list_workspace_checkpoints(&self.user_id, mount_id, limit)
+            .list_workspace_checkpoints(&self.user_id, allowlist_id, limit)
             .await
     }
 
-    pub async fn mount_history(
+    pub async fn allowlist_history(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<String>,
         limit: usize,
         since: Option<chrono::DateTime<chrono::Utc>>,
         include_checkpoints: bool,
-    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistHistory, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .list_workspace_mount_history(&WorkspaceMountHistoryRequest {
+            .list_workspace_allowlist_history(&WorkspaceAllowlistHistoryRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 scope_path,
                 limit,
                 since,
@@ -1730,17 +1754,17 @@ impl Workspace {
             .await
     }
 
-    pub async fn keep_mount(
+    pub async fn keep_allowlist(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<String>,
         checkpoint_id: Option<Uuid>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .keep_workspace_mount(&MountActionRequest {
+            .keep_workspace_allowlist(&AllowlistActionRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 scope_path,
                 checkpoint_id,
                 set_as_baseline: true,
@@ -1748,17 +1772,17 @@ impl Workspace {
             .await
     }
 
-    pub async fn revert_mount(
+    pub async fn revert_allowlist(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<String>,
         checkpoint_id: Option<Uuid>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .revert_workspace_mount(&MountActionRequest {
+            .revert_workspace_allowlist(&AllowlistActionRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 scope_path,
                 checkpoint_id,
                 set_as_baseline: false,
@@ -1766,21 +1790,21 @@ impl Workspace {
             .await
     }
 
-    pub async fn restore_mount(
+    pub async fn restore_allowlist(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         target: impl Into<String>,
         scope_path: Option<String>,
         set_as_baseline: bool,
         dry_run: bool,
         create_checkpoint_before_restore: bool,
         created_by: impl Into<String>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .restore_workspace_mount(&WorkspaceMountRestoreRequest {
+            .restore_workspace_allowlist(&WorkspaceAllowlistRestoreRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 scope_path,
                 target: target.into(),
                 set_as_baseline,
@@ -1791,44 +1815,44 @@ impl Workspace {
             .await
     }
 
-    pub async fn set_mount_baseline(
+    pub async fn set_allowlist_baseline(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         target: impl Into<String>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .set_workspace_mount_baseline(&WorkspaceMountBaselineRequest {
+            .set_workspace_allowlist_baseline(&WorkspaceAllowlistBaselineRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 target: target.into(),
             })
             .await
     }
 
-    pub async fn refresh_mount(
+    pub async fn refresh_allowlist(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         scope_path: Option<&str>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .refresh_workspace_mount(&self.user_id, mount_id, scope_path)
+            .refresh_workspace_allowlist(&self.user_id, allowlist_id, scope_path)
             .await
     }
 
-    pub async fn move_mount_file(
+    pub async fn move_allowlist_file(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         source_path: &str,
         destination_path: &str,
         overwrite: bool,
-    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .move_workspace_mount_file(
+            .move_workspace_allowlist_file(
                 &self.user_id,
-                mount_id,
+                allowlist_id,
                 source_path,
                 destination_path,
                 overwrite,
@@ -1836,30 +1860,30 @@ impl Workspace {
             .await
     }
 
-    pub async fn delete_mount_tree(
+    pub async fn delete_allowlist_tree(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: &str,
         missing_ok: bool,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        self.ensure_mount_watch_started();
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
         self.storage
-            .delete_workspace_mount_tree(&self.user_id, mount_id, path, missing_ok)
+            .delete_workspace_allowlist_tree(&self.user_id, allowlist_id, path, missing_ok)
             .await
     }
 
-    pub async fn resolve_mount_conflict(
+    pub async fn resolve_allowlist_conflict(
         &self,
-        mount_id: Uuid,
+        allowlist_id: Uuid,
         path: impl Into<String>,
         resolution: impl Into<String>,
         renamed_copy_path: Option<String>,
         merged_content: Option<String>,
-    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+    ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
         self.storage
-            .resolve_workspace_mount_conflict(&ConflictResolutionRequest {
+            .resolve_workspace_allowlist_conflict(&ConflictResolutionRequest {
                 user_id: self.user_id.clone(),
-                mount_id,
+                allowlist_id,
                 path: path.into(),
                 resolution: resolution.into(),
                 renamed_copy_path,
@@ -1890,7 +1914,7 @@ impl Workspace {
 impl Drop for Workspace {
     fn drop(&mut self) {
         if let Some(shutdown) = self
-            .mount_watch_shutdown
+            .allowlist_watch_shutdown
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
@@ -1903,31 +1927,33 @@ impl Drop for Workspace {
 // ==================== Search ====================
 
 impl Workspace {
-    async fn search_mounted_files(
+    async fn search_allowlisted_files(
         &self,
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchResult>, WorkspaceError> {
         let mut hits = Vec::new();
-        for mount in self.list_mounts().await? {
-            let root = PathBuf::from(&mount.mount.source_root);
+        for allowlist in self.list_allowlists().await? {
+            let root = PathBuf::from(&allowlist.allowlist.source_root);
             let mut files = Vec::new();
-            collect_mount_search_files(&root, &root, &mut files)?;
+            collect_allowlist_search_files(&root, &root, &mut files)?;
             for (relative_path, absolute_path, _size) in files {
-                let bytes = tokio::fs::read(&absolute_path)
-                    .await
-                    .map_err(|e| WorkspaceError::IoError {
-                        reason: format!("failed to read {}: {e}", absolute_path.display()),
-                    })?;
+                let bytes =
+                    tokio::fs::read(&absolute_path)
+                        .await
+                        .map_err(|e| WorkspaceError::IoError {
+                            reason: format!("failed to read {}: {e}", absolute_path.display()),
+                        })?;
                 let Ok(content) = String::from_utf8(bytes) else {
                     continue;
                 };
-                let Some(score) = mount_search_score(&relative_path, &content, query) else {
+                let Some(score) = allowlist_search_score(&relative_path, &content, query) else {
                     continue;
                 };
-                let document_path = WorkspaceUri::mount_uri(mount.mount.id, Some(&relative_path));
+                let document_path =
+                    WorkspaceUri::allowlist_uri(allowlist.allowlist.id, Some(&relative_path));
                 let document_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, document_path.as_bytes());
-                let snippet = mount_search_snippet(&content, query);
+                let snippet = allowlist_search_snippet(&content, query);
                 let chunk_id = Uuid::new_v5(
                     &document_id,
                     format!("{document_path}#{}", snippet.len()).as_bytes(),
@@ -1978,9 +2004,9 @@ impl Workspace {
         query: &str,
         config: SearchConfig,
     ) -> Result<Vec<SearchResult>, WorkspaceError> {
-        let mount_results = self.search_mounted_files(query, config.limit).await?;
-        if !mount_results.is_empty() {
-            return Ok(mount_results);
+        let allowlist_results = self.search_allowlisted_files(query, config.limit).await?;
+        if !allowlist_results.is_empty() {
+            return Ok(allowlist_results);
         }
 
         // Generate embedding for semantic search if provider available
@@ -2446,7 +2472,7 @@ mod seed_tests {
         (ws, temp_dir)
     }
 
-    async fn create_test_workspace_with_mount_watch(
+    async fn create_test_workspace_with_allowlist_watch(
         interval_ms: u64,
     ) -> (Workspace, tempfile::TempDir) {
         use crate::db::libsql::LibSqlBackend;
@@ -2460,7 +2486,8 @@ mod seed_tests {
             .await
             .expect("migrations");
         let db: Arc<dyn crate::db::Database> = Arc::new(backend);
-        let ws = Workspace::new_with_db("test_watch", db).with_mount_watch_config(true, interval_ms);
+        let ws =
+            Workspace::new_with_db("test_watch", db).with_allowlist_watch_config(true, interval_ms);
         (ws, temp_dir)
     }
 
@@ -2506,57 +2533,66 @@ mod seed_tests {
     }
 
     #[tokio::test]
-    async fn workspace_search_prefers_real_mounted_files() {
+    async fn workspace_search_prefers_real_allowlisted_files() {
         let (ws, dir) = create_test_workspace().await;
-        let mount_root = dir.path().join("search-project");
-        std::fs::create_dir_all(&mount_root).expect("create mount root");
+        let allowlist_root = dir.path().join("search-project");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
         std::fs::write(
-            mount_root.join("README.md"),
-            "workspace search should find this mounted needle\n",
+            allowlist_root.join("README.md"),
+            "workspace search should find this allowlisted needle\n",
         )
-        .expect("write mount file");
+        .expect("write allowlist file");
 
-        let mount = ws
-            .create_mount("search-project", mount_root.display().to_string(), false)
+        let allowlist = ws
+            .create_allowlist(
+                "search-project",
+                allowlist_root.display().to_string(),
+                false,
+            )
             .await
-            .expect("create mount");
+            .expect("create allowlist");
 
-        let results = ws.search("mounted needle", 5).await.expect("search");
+        let results = ws.search("allowlisted needle", 5).await.expect("search");
         assert!(
             results.iter().any(|result| {
-                result.document_path == WorkspaceUri::mount_uri(mount.mount.id, Some("README.md"))
-                    && result.content.contains("mounted needle")
+                result.document_path
+                    == WorkspaceUri::allowlist_uri(allowlist.allowlist.id, Some("README.md"))
+                    && result.content.contains("allowlisted needle")
             }),
-            "workspace search should include real mounted file matches"
+            "workspace search should include real allowlisted file matches"
         );
     }
 
     #[tokio::test]
-    async fn mount_watch_creates_fswatch_revision_for_external_edits() {
-        let (ws, dir) = create_test_workspace_with_mount_watch(200).await;
-        let mount_root = dir.path().join("watched-project");
-        std::fs::create_dir_all(&mount_root).expect("create mount root");
+    async fn allowlist_watch_creates_fswatch_revision_for_external_edits() {
+        let (ws, dir) = create_test_workspace_with_allowlist_watch(200).await;
+        let allowlist_root = dir.path().join("watched-project");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
 
-        let mount = ws
-            .create_mount("watched-project", mount_root.display().to_string(), false)
+        let allowlist = ws
+            .create_allowlist(
+                "watched-project",
+                allowlist_root.display().to_string(),
+                false,
+            )
             .await
-            .expect("create mount");
+            .expect("create allowlist");
 
-        std::fs::write(mount_root.join("external.txt"), "external change\n")
+        std::fs::write(allowlist_root.join("external.txt"), "external change\n")
             .expect("write external file");
 
         tokio::time::sleep(std::time::Duration::from_millis(900)).await;
 
         let history = ws
-            .mount_history(mount.mount.id, None, 20, None, false)
+            .allowlist_history(allowlist.allowlist.id, None, 20, None, false)
             .await
-            .expect("mount history");
+            .expect("allowlist history");
 
         assert!(
             history
                 .revisions
                 .iter()
-                .any(|revision| revision.kind == WorkspaceMountRevisionKind::FsWatch),
+                .any(|revision| revision.kind == WorkspaceAllowlistRevisionKind::FsWatch),
             "background watcher should record external edits as fs_watch revisions"
         );
     }

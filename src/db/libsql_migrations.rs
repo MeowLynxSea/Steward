@@ -883,9 +883,9 @@ CREATE INDEX IF NOT EXISTS idx_task_timeline_events_task
     ),
     (
         17,
-        "workspace_mount_branches",
+        "workspace_allowlist_branches",
         r#"
-CREATE TABLE IF NOT EXISTS workspace_mounts (
+CREATE TABLE IF NOT EXISTS workspace_allowlists (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
@@ -896,12 +896,12 @@ CREATE TABLE IF NOT EXISTS workspace_mounts (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mounts_user
-    ON workspace_mounts(user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlists_user
+    ON workspace_allowlists(user_id, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_snapshots (
+CREATE TABLE IF NOT EXISTS workspace_allowlist_snapshots (
     id TEXT PRIMARY KEY,
-    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    allowlist_id TEXT NOT NULL REFERENCES workspace_allowlists(id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL,
     content BLOB NOT NULL,
     is_binary INTEGER NOT NULL DEFAULT 0,
@@ -910,32 +910,32 @@ CREATE TABLE IF NOT EXISTS workspace_mount_snapshots (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_snapshots_mount_path
-    ON workspace_mount_snapshots(mount_id, relative_path, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_snapshots_allowlist_path
+    ON workspace_allowlist_snapshots(allowlist_id, relative_path, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_files (
-    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workspace_allowlist_files (
+    allowlist_id TEXT NOT NULL REFERENCES workspace_allowlists(id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL,
     status TEXT NOT NULL,
     is_binary INTEGER NOT NULL DEFAULT 0,
-    base_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
-    working_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    base_snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
+    working_snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
     remote_hash TEXT,
     base_hash TEXT,
     working_hash TEXT,
     conflict_reason TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-    PRIMARY KEY (mount_id, relative_path)
+    PRIMARY KEY (allowlist_id, relative_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_files_mount_status
-    ON workspace_mount_files(mount_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_files_allowlist_status
+    ON workspace_allowlist_files(allowlist_id, status, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_checkpoints (
+CREATE TABLE IF NOT EXISTS workspace_allowlist_checkpoints (
     id TEXT PRIMARY KEY,
-    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
-    parent_checkpoint_id TEXT REFERENCES workspace_mount_checkpoints(id) ON DELETE SET NULL,
+    allowlist_id TEXT NOT NULL REFERENCES workspace_allowlists(id) ON DELETE CASCADE,
+    parent_checkpoint_id TEXT REFERENCES workspace_allowlist_checkpoints(id) ON DELETE SET NULL,
     label TEXT,
     summary TEXT,
     created_by TEXT NOT NULL,
@@ -944,14 +944,14 @@ CREATE TABLE IF NOT EXISTS workspace_mount_checkpoints (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_checkpoints_mount
-    ON workspace_mount_checkpoints(mount_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_checkpoints_allowlist_created
+    ON workspace_allowlist_checkpoints(allowlist_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_checkpoint_files (
-    checkpoint_id TEXT NOT NULL REFERENCES workspace_mount_checkpoints(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workspace_allowlist_checkpoint_files (
+    checkpoint_id TEXT NOT NULL REFERENCES workspace_allowlist_checkpoints(id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL,
     status TEXT NOT NULL,
-    snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
     PRIMARY KEY (checkpoint_id, relative_path)
 );
 "#,
@@ -1300,12 +1300,12 @@ ALTER TABLE routine_runs ADD COLUMN trigger_payload TEXT;
     ),
     (
         23,
-        "workspace_mount_revisions",
+        "workspace_allowlist_revisions",
         r#"
-CREATE TABLE IF NOT EXISTS workspace_mount_revisions (
+CREATE TABLE IF NOT EXISTS workspace_allowlist_revisions (
     id TEXT PRIMARY KEY,
-    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
-    parent_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
+    allowlist_id TEXT NOT NULL REFERENCES workspace_allowlists(id) ON DELETE CASCADE,
+    parent_revision_id TEXT REFERENCES workspace_allowlist_revisions(id) ON DELETE SET NULL,
     kind TEXT NOT NULL,
     source TEXT NOT NULL,
     trigger TEXT,
@@ -1314,15 +1314,15 @@ CREATE TABLE IF NOT EXISTS workspace_mount_revisions (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_revisions_mount_created
-    ON workspace_mount_revisions(mount_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revisions_allowlist_created
+    ON workspace_allowlist_revisions(allowlist_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_revision_files (
-    revision_id TEXT NOT NULL REFERENCES workspace_mount_revisions(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workspace_allowlist_revision_files (
+    revision_id TEXT NOT NULL REFERENCES workspace_allowlist_revisions(id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL,
     change_kind TEXT NOT NULL,
-    before_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
-    after_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    before_snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
+    after_snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
     before_mode INTEGER,
     after_mode INTEGER,
     is_binary INTEGER NOT NULL DEFAULT 0,
@@ -1331,13 +1331,13 @@ CREATE TABLE IF NOT EXISTS workspace_mount_revision_files (
     PRIMARY KEY (revision_id, relative_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_revision_files_revision
-    ON workspace_mount_revision_files(revision_id, change_kind, relative_path);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revision_files_revision
+    ON workspace_allowlist_revision_files(revision_id, change_kind, relative_path);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_manifests (
-    revision_id TEXT NOT NULL REFERENCES workspace_mount_revisions(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS workspace_allowlist_manifests (
+    revision_id TEXT NOT NULL REFERENCES workspace_allowlist_revisions(id) ON DELETE CASCADE,
     relative_path TEXT NOT NULL,
-    snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    snapshot_id TEXT REFERENCES workspace_allowlist_snapshots(id) ON DELETE SET NULL,
     file_mode INTEGER,
     size_bytes INTEGER NOT NULL DEFAULT 0,
     modified_at INTEGER,
@@ -1345,25 +1345,328 @@ CREATE TABLE IF NOT EXISTS workspace_mount_manifests (
     PRIMARY KEY (revision_id, relative_path)
 );
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_manifests_revision
-    ON workspace_mount_manifests(revision_id, relative_path);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_manifests_revision
+    ON workspace_allowlist_manifests(revision_id, relative_path);
 
-CREATE TABLE IF NOT EXISTS workspace_mount_state (
-    mount_id TEXT PRIMARY KEY REFERENCES workspace_mounts(id) ON DELETE CASCADE,
-    baseline_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
-    head_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
+CREATE TABLE IF NOT EXISTS workspace_allowlist_state (
+    allowlist_id TEXT PRIMARY KEY REFERENCES workspace_allowlists(id) ON DELETE CASCADE,
+    baseline_revision_id TEXT REFERENCES workspace_allowlist_revisions(id) ON DELETE SET NULL,
+    head_revision_id TEXT REFERENCES workspace_allowlist_revisions(id) ON DELETE SET NULL,
     last_reconciled_at TEXT,
     watch_dirty INTEGER NOT NULL DEFAULT 0,
     watch_cursor TEXT
 );
 
-ALTER TABLE workspace_mount_checkpoints ADD COLUMN revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL;
+ALTER TABLE workspace_allowlist_checkpoints ADD COLUMN revision_id TEXT REFERENCES workspace_allowlist_revisions(id) ON DELETE SET NULL;
 
-CREATE INDEX IF NOT EXISTS idx_workspace_mount_checkpoints_revision
-    ON workspace_mount_checkpoints(mount_id, revision_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_checkpoints_revision
+    ON workspace_allowlist_checkpoints(allowlist_id, revision_id, created_at DESC);
 "#,
     ),
+    (24, "workspace_allowlist_rename_cleanup", ""),
 ];
+
+async fn sqlite_object_exists(
+    conn: &libsql::Transaction,
+    object_type: &str,
+    name: &str,
+) -> Result<bool, crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2 LIMIT 1",
+            libsql::params![object_type, name],
+        )
+        .await
+        .map_err(|e| {
+            DatabaseError::Migration(format!(
+                "Failed to inspect sqlite_master for {object_type} {name}: {e}"
+            ))
+        })?;
+
+    Ok(rows.next().await.ok().flatten().is_some())
+}
+
+async fn sqlite_column_exists(
+    conn: &libsql::Transaction,
+    table: &str,
+    column: &str,
+) -> Result<bool, crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    let pragma = format!("PRAGMA table_info({table})");
+    let mut rows = conn.query(&pragma, libsql::params![]).await.map_err(|e| {
+        DatabaseError::Migration(format!("Failed to inspect columns for {table}: {e}"))
+    })?;
+
+    while let Some(row) = rows.next().await.ok().flatten() {
+        let name = row
+            .get_value(1)
+            .ok()
+            .and_then(|value| value.as_text().cloned());
+        if name.as_deref() == Some(column) {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+async fn rename_table_if_needed(
+    conn: &libsql::Transaction,
+    old: &str,
+    new: &str,
+) -> Result<(), crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    if !sqlite_object_exists(conn, "table", old).await?
+        || sqlite_object_exists(conn, "table", new).await?
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!("ALTER TABLE {old} RENAME TO {new};"))
+        .await
+        .map_err(|e| {
+            DatabaseError::Migration(format!("Failed to rename table {old} -> {new}: {e}"))
+        })?;
+
+    Ok(())
+}
+
+async fn rename_column_if_needed(
+    conn: &libsql::Transaction,
+    table: &str,
+    old: &str,
+    new: &str,
+) -> Result<(), crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    if !sqlite_object_exists(conn, "table", table).await?
+        || !sqlite_column_exists(conn, table, old).await?
+        || sqlite_column_exists(conn, table, new).await?
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} RENAME COLUMN {old} TO {new};"
+    ))
+    .await
+    .map_err(|e| {
+        DatabaseError::Migration(format!(
+            "Failed to rename column {table}.{old} -> {new}: {e}"
+        ))
+    })?;
+
+    Ok(())
+}
+
+async fn execute_batch_if_table_exists(
+    conn: &libsql::Transaction,
+    table: &str,
+    sql: &str,
+) -> Result<(), crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    if !sqlite_object_exists(conn, "table", table).await? {
+        return Ok(());
+    }
+
+    conn.execute_batch(sql).await.map_err(|e| {
+        DatabaseError::Migration(format!("Failed to update schema for {table}: {e}"))
+    })?;
+
+    Ok(())
+}
+
+async fn run_workspace_allowlist_rename_cleanup(
+    conn: &libsql::Transaction,
+) -> Result<(), crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    rename_table_if_needed(conn, "workspace_mounts", "workspace_allowlists").await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_snapshots",
+        "workspace_allowlist_snapshots",
+    )
+    .await?;
+    rename_table_if_needed(conn, "workspace_mount_files", "workspace_allowlist_files").await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_checkpoints",
+        "workspace_allowlist_checkpoints",
+    )
+    .await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_checkpoint_files",
+        "workspace_allowlist_checkpoint_files",
+    )
+    .await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_revisions",
+        "workspace_allowlist_revisions",
+    )
+    .await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_revision_files",
+        "workspace_allowlist_revision_files",
+    )
+    .await?;
+    rename_table_if_needed(
+        conn,
+        "workspace_mount_manifests",
+        "workspace_allowlist_manifests",
+    )
+    .await?;
+    rename_table_if_needed(conn, "workspace_mount_state", "workspace_allowlist_state").await?;
+
+    rename_column_if_needed(
+        conn,
+        "workspace_allowlist_snapshots",
+        "mount_id",
+        "allowlist_id",
+    )
+    .await?;
+    rename_column_if_needed(
+        conn,
+        "workspace_allowlist_files",
+        "mount_id",
+        "allowlist_id",
+    )
+    .await?;
+    rename_column_if_needed(
+        conn,
+        "workspace_allowlist_checkpoints",
+        "mount_id",
+        "allowlist_id",
+    )
+    .await?;
+    rename_column_if_needed(
+        conn,
+        "workspace_allowlist_revisions",
+        "mount_id",
+        "allowlist_id",
+    )
+    .await?;
+    rename_column_if_needed(
+        conn,
+        "workspace_allowlist_state",
+        "mount_id",
+        "allowlist_id",
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlists",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mounts_user;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlists_user
+    ON workspace_allowlists(user_id, updated_at DESC);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_snapshots",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_snapshots_mount_path;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_snapshots_allowlist_path
+    ON workspace_allowlist_snapshots(allowlist_id, relative_path, created_at DESC);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_files",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_files_mount_status;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_files_allowlist_status
+    ON workspace_allowlist_files(allowlist_id, status, updated_at DESC);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_checkpoints",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_checkpoints_mount;
+DROP INDEX IF EXISTS idx_workspace_allowlist_checkpoints_mount;
+DROP INDEX IF EXISTS idx_workspace_mount_checkpoints_revision;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_checkpoints_allowlist_created
+    ON workspace_allowlist_checkpoints(allowlist_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_checkpoints_revision
+    ON workspace_allowlist_checkpoints(allowlist_id, revision_id, created_at DESC);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_revisions",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_revisions_mount_created;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revisions_allowlist_created
+    ON workspace_allowlist_revisions(allowlist_id, created_at DESC);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_revision_files",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_revision_files_revision;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revision_files_revision
+    ON workspace_allowlist_revision_files(revision_id, change_kind, relative_path);
+"#,
+    )
+    .await?;
+
+    execute_batch_if_table_exists(
+        conn,
+        "workspace_allowlist_manifests",
+        r#"
+DROP INDEX IF EXISTS idx_workspace_mount_manifests_revision;
+CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_manifests_revision
+    ON workspace_allowlist_manifests(revision_id, relative_path);
+"#,
+    )
+    .await?;
+
+    conn.execute(
+        "UPDATE _migrations SET name = 'workspace_allowlist_branches' WHERE version = 17",
+        libsql::params![],
+    )
+    .await
+    .map_err(|e| {
+        DatabaseError::Migration(format!(
+            "Failed to update migration name for workspace allowlists (V17): {e}"
+        ))
+    })?;
+
+    conn.execute(
+        "UPDATE _migrations SET name = 'workspace_allowlist_revisions' WHERE version = 23",
+        libsql::params![],
+    )
+    .await
+    .map_err(|e| {
+        DatabaseError::Migration(format!(
+            "Failed to update migration name for workspace allowlists (V23): {e}"
+        ))
+    })?;
+
+    Ok(())
+}
 
 /// Run incremental migrations that haven't been applied yet.
 ///
@@ -1398,9 +1701,15 @@ pub async fn run_incremental(conn: &libsql::Connection) -> Result<(), crate::err
             ))
         })?;
 
-        tx.execute_batch(sql).await.map_err(|e| {
-            DatabaseError::Migration(format!("libSQL migration V{version} ({name}) failed: {e}"))
-        })?;
+        if version == 24 {
+            run_workspace_allowlist_rename_cleanup(&tx).await?;
+        } else {
+            tx.execute_batch(sql).await.map_err(|e| {
+                DatabaseError::Migration(format!(
+                    "libSQL migration V{version} ({name}) failed: {e}"
+                ))
+            })?;
+        }
 
         // Record as applied (inside the same transaction)
         tx.execute(

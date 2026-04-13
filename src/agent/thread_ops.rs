@@ -1653,7 +1653,7 @@ impl Agent {
                 .await;
 
             let tool_result = if let Some(reject_msg) = self
-                .mounted_workspace_redirect_for_tool(
+                .allowlist_workspace_redirect_for_tool(
                     &message.user_id,
                     &pending.tool_name,
                     &pending.parameters,
@@ -1797,7 +1797,11 @@ impl Agent {
 
             for (idx, tc) in deferred_tool_calls.iter().enumerate() {
                 if let Some(reject_msg) = self
-                    .mounted_workspace_redirect_for_tool(&message.user_id, &tc.name, &tc.arguments)
+                    .allowlist_workspace_redirect_for_tool(
+                        &message.user_id,
+                        &tc.name,
+                        &tc.arguments,
+                    )
                     .await
                 {
                     context_messages.push(ChatMessage::tool_result(

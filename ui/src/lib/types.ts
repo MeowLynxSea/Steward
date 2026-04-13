@@ -301,7 +301,7 @@ export interface MemoryChangeSet {
   updated_at: string;
 }
 
-export interface WorkspaceMount {
+export interface WorkspaceAllowlist {
   id: string;
   user_id: string;
   display_name: string;
@@ -312,16 +312,16 @@ export interface WorkspaceMount {
   updated_at: string;
 }
 
-export interface WorkspaceMountSummary {
-  mount: WorkspaceMount;
+export interface WorkspaceAllowlistSummary {
+  allowlist: WorkspaceAllowlist;
   dirty_count: number;
   conflict_count: number;
   pending_delete_count: number;
 }
 
-export interface WorkspaceMountCheckpoint {
+export interface WorkspaceAllowlistCheckpoint {
   id: string;
-  mount_id: string;
+  allowlist_id: string;
   revision_id: string;
   parent_checkpoint_id: string | null;
   label: string | null;
@@ -333,7 +333,7 @@ export interface WorkspaceMountCheckpoint {
   changed_files: string[];
 }
 
-export type MountedFileStatus =
+export type AllowlistedFileStatus =
   | "clean"
   | "modified"
   | "added"
@@ -341,7 +341,7 @@ export type MountedFileStatus =
   | "conflicted"
   | "binary_modified";
 
-export type WorkspaceMountRevisionKind =
+export type WorkspaceAllowlistRevisionKind =
   | "initial"
   | "tool_write"
   | "tool_patch"
@@ -353,19 +353,19 @@ export type WorkspaceMountRevisionKind =
   | "restore"
   | "accept";
 
-export type WorkspaceMountRevisionSource =
+export type WorkspaceAllowlistRevisionSource =
   | "workspace_tool"
   | "shell"
   | "external"
   | "system";
 
-export type WorkspaceMountChangeKind = "added" | "modified" | "deleted" | "moved";
+export type WorkspaceAllowlistChangeKind = "added" | "modified" | "deleted" | "moved";
 
-export interface MountedFileDiff {
+export interface AllowlistedFileDiff {
   path: string;
   uri: string;
-  status: MountedFileStatus;
-  change_kind: WorkspaceMountChangeKind;
+  status: AllowlistedFileStatus;
+  change_kind: WorkspaceAllowlistChangeKind;
   is_binary: boolean;
   base_content: string | null;
   working_content: string | null;
@@ -374,27 +374,27 @@ export interface MountedFileDiff {
   conflict_reason: string | null;
 }
 
-export interface WorkspaceMountDiff {
-  mount_id: string;
+export interface WorkspaceAllowlistDiff {
+  allowlist_id: string;
   from_revision_id: string | null;
   to_revision_id: string | null;
-  entries: MountedFileDiff[];
+  entries: AllowlistedFileDiff[];
 }
 
-export interface WorkspaceMountDetail {
-  summary: WorkspaceMountSummary;
+export interface WorkspaceAllowlistDetail {
+  summary: WorkspaceAllowlistSummary;
   baseline_revision_id: string | null;
   head_revision_id: string | null;
-  checkpoints: WorkspaceMountCheckpoint[];
+  checkpoints: WorkspaceAllowlistCheckpoint[];
   open_change_count: number;
 }
 
-export interface WorkspaceMountRevision {
+export interface WorkspaceAllowlistRevision {
   id: string;
-  mount_id: string;
+  allowlist_id: string;
   parent_revision_id: string | null;
-  kind: WorkspaceMountRevisionKind;
-  source: WorkspaceMountRevisionSource;
+  kind: WorkspaceAllowlistRevisionKind;
+  source: WorkspaceAllowlistRevisionSource;
   trigger: string | null;
   summary: string | null;
   created_by: string;
@@ -402,25 +402,25 @@ export interface WorkspaceMountRevision {
   changed_files: string[];
 }
 
-export interface WorkspaceMountHistory {
-  mount_id: string;
+export interface WorkspaceAllowlistHistory {
+  allowlist_id: string;
   baseline_revision_id: string | null;
   head_revision_id: string | null;
-  revisions: WorkspaceMountRevision[];
-  checkpoints: WorkspaceMountCheckpoint[];
+  revisions: WorkspaceAllowlistRevision[];
+  checkpoints: WorkspaceAllowlistCheckpoint[];
 }
 
 export interface WorkspaceChangeGroup {
-  mount: WorkspaceMountDetail;
-  entries: MountedFileDiff[];
+  allowlist: WorkspaceAllowlistDetail;
+  entries: AllowlistedFileDiff[];
 }
 
-export interface WorkspaceMountFileView {
-  mount_id: string;
+export interface WorkspaceAllowlistFileView {
+  allowlist_id: string;
   path: string;
   uri: string;
   disk_path: string;
-  status: MountedFileStatus;
+  status: AllowlistedFileStatus;
   is_binary: boolean;
   content: string | null;
   updated_at: string;

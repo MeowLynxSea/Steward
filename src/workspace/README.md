@@ -1,10 +1,10 @@
 # Workspace & File Context System
 
-Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace provides mounted-file context and indexing for agents.
+Inspired by [OpenClaw](https://github.com/openclaw/openclaw), the workspace provides allowlisted-file context and indexing for agents.
 
 ## Current Scope
 
-`src/workspace/` is now responsible for mounted files, workspace indexing, and file-context retrieval.
+`src/workspace/` is now responsible for allowlisted files, workspace indexing, and file-context retrieval.
 
 Steward's long-term agent memory no longer lives here as runtime truth. The native graph-based memory system now lives under `src/memory/`, backed by libSQL tables such as `memory_nodes`, `memory_versions`, and `memory_routes`.
 
@@ -12,23 +12,23 @@ Legacy file-based memory is no longer part of the active workspace architecture.
 
 ## Key Principles
 
-1. **Workspace means mounted files** - `workspace://...` points at real mounted project content
-2. **Real filesystem is the source of truth** - mounted reads, writes, moves, deletes, and shell commands operate on the host files directly
+1. **Workspace means allowlisted files** - `workspace://...` points at real allowlisted project content
+2. **Real filesystem is the source of truth** - allowlisted reads, writes, moves, deletes, and shell commands operate on the host files directly
 3. **Revisions track filesystem states** - diff/history/checkpoint/restore compare real tree states instead of an overlay copy
-4. **Background mount watch keeps history current** - a workspace watcher polls mounted roots and records external edits as `fs_watch` revisions
+4. **Background allowlist watch keeps history current** - a workspace watcher polls allowlisted roots and records external edits as `fs_watch` revisions
 5. **Agent memory is separate** - long-term memory lives in `src/memory/`, not here
-6. **Hybrid search is discovery** - workspace search helps find mounted file context
+6. **Hybrid search is discovery** - workspace search helps find allowlisted file context
 7. **No workspace memory truth** - long-term memory does not live in workspace markdown files
 
 ## Workspace Shape
 
 ```
 workspace/
-├── workspace://mount-a/   <- Mounted project tree
+├── workspace://allowlist-a/   <- Allowlisted project tree
 │   ├── src/
 │   ├── README.md
 │   └── Cargo.toml
-├── workspace://mount-b/   <- Another mounted tree
+├── workspace://allowlist-b/   <- Another allowlisted tree
 │   └── ...
 └── ...
 ```
@@ -47,9 +47,9 @@ let workspace = Workspace::new("user_123", pool)
 // let workspace = Workspace::new("user_123", pool)
 //     .with_embeddings_uncached(Arc::new(MockEmbeddings::new(1536)));
 
-// Read/write mounted files via workspace:// URIs
-let doc = workspace.read("workspace://mount-a/README.md").await?;
-workspace.write("workspace://mount-a/src/lib.rs", "pub fn run() {}").await?;
+// Read/write allowlisted files via workspace:// URIs
+let doc = workspace.read("workspace://allowlist-a/README.md").await?;
+workspace.write("workspace://allowlist-a/src/lib.rs", "pub fn run() {}").await?;
 
 // List directory contents
 let entries = workspace.list("projects/").await?;
@@ -61,22 +61,22 @@ let results = workspace.search("dark mode preference", 5).await?;
 
 ## Workspace Tools
 
-Current LLM-facing workspace tools are mount-oriented:
+Current LLM-facing workspace tools are allowlist-oriented:
 
-- **`workspace_search`** - Search indexed mounted workspace content
-- **`workspace_read`** - Read a mounted file via `workspace://...`
-- **`workspace_write`** - Write a mounted file via `workspace://...`
-- **`workspace_apply_patch`** - Patch a mounted file in place
-- **`workspace_move`** - Rename or move a mounted file within a mount
-- **`workspace_delete`** - Delete a mounted file
-- **`workspace_delete_tree`** - Delete a mounted directory tree
-- **`workspace_tree`** - Browse mounted workspace trees
+- **`workspace_search`** - Search indexed allowlisted workspace content
+- **`workspace_read`** - Read a allowlisted file via `workspace://...`
+- **`workspace_write`** - Write a allowlisted file via `workspace://...`
+- **`workspace_apply_patch`** - Patch a allowlisted file in place
+- **`workspace_move`** - Rename or move a allowlisted file within a allowlist
+- **`workspace_delete`** - Delete a allowlisted file
+- **`workspace_delete_tree`** - Delete a allowlisted directory tree
+- **`workspace_tree`** - Browse allowlisted workspace trees
 - **`workspace_diff`** - Compare `baseline`, `head`, revisions, or checkpoints
 - **`workspace_history`** - List automatic revisions and named checkpoints
 - **`workspace_checkpoint_create` / `workspace_checkpoint_list`** - Create and inspect named restore points
 - **`workspace_restore`** - Force real files back to a target revision/checkpoint/baseline
 - **`workspace_baseline_set`** - Change the default diff reference without modifying disk
-- **`workspace_refresh`** - Force a reconcile scan of the real mounted tree
+- **`workspace_refresh`** - Force a reconcile scan of the real allowlisted tree
 
 ## Hybrid Search (RRF)
 
