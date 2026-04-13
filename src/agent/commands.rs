@@ -382,13 +382,18 @@ impl Agent {
         session: Arc<Mutex<Session>>,
         thread_id: Uuid,
     ) -> Result<SubmissionResult, Error> {
+        let user_tz = crate::timezone::resolve_timezone_with_local_default(
+            None,
+            None,
+            &self.config.default_timezone,
+        );
         let messages = {
             let sess = session.lock().await;
             let thread = sess
                 .threads
                 .get(&thread_id)
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
-            thread.messages()
+            thread.messages_for_context(user_tz)
         };
 
         if messages.is_empty() {
@@ -434,13 +439,18 @@ impl Agent {
         session: Arc<Mutex<Session>>,
         thread_id: Uuid,
     ) -> Result<SubmissionResult, Error> {
+        let user_tz = crate::timezone::resolve_timezone_with_local_default(
+            None,
+            None,
+            &self.config.default_timezone,
+        );
         let messages = {
             let sess = session.lock().await;
             let thread = sess
                 .threads
                 .get(&thread_id)
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
-            thread.messages()
+            thread.messages_for_context(user_tz)
         };
 
         if messages.is_empty() {

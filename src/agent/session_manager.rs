@@ -840,7 +840,9 @@ mod tests {
                 .get_mut(&thread_id)
                 .expect("thread should exist");
             thread.start_turn("message before restart");
-            assert!(thread.queue_message("queued while processing".to_string()));
+            assert!(
+                thread.queue_message("queued while processing".to_string(), chrono::Utc::now())
+            );
             thread_id
         };
         manager.persist_session_snapshot("user-1", &session).await;

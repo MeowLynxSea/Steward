@@ -20,6 +20,19 @@ pub fn resolve_timezone(
     Tz::UTC
 }
 
+/// Resolve the effective timezone, defaulting to the local system timezone
+/// when no explicit timezone is available and the config is still the stock UTC.
+pub fn resolve_timezone_with_local_default(
+    client_tz: Option<&str>,
+    user_setting: Option<&str>,
+    config_default: &str,
+) -> Tz {
+    if client_tz.is_none() && user_setting.is_none() && config_default == "UTC" {
+        return detect_system_timezone();
+    }
+    resolve_timezone(client_tz, user_setting, config_default)
+}
+
 /// Parse a timezone string (IANA name) into a `Tz`.
 pub fn parse_timezone(s: &str) -> Option<Tz> {
     s.parse::<Tz>().ok()
@@ -77,6 +90,18 @@ mod tests {
     fn test_resolve_invalid_client_skipped() {
         let tz = resolve_timezone(Some("Fake/Zone"), Some("Europe/London"), "UTC");
         assert_eq!(tz, chrono_tz::Europe::London);
+    }
+
+    #[test]
+    fn test_resolve_with_local_default_prefers_system_when_only_stock_utc_exists() {
+        let tz = resolve_timezone_with_local_default(None, None, "UTC");
+        let _ = now_in_tz(tz);
+    }
+
+    #[test]
+    fn test_resolve_with_local_default_keeps_config_when_non_utc() {
+        let tz = resolve_timezone_with_local_default(None, None, "Asia/Tokyo");
+        assert_eq!(tz, chrono_tz::Asia::Tokyo);
     }
 
     #[test]

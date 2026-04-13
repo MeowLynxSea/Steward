@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use chrono::{DateTime, TimeDelta, Utc};
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -225,6 +226,21 @@ fn default_true() -> bool {
     true
 }
 
+/// A queued user message that arrived while a turn was still processing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingUserMessage {
+    pub content: String,
+    #[serde(default = "Utc::now")]
+    pub received_at: DateTime<Utc>,
+}
+
+/// A user-authored message segment that contributes to a single logical turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimedUserMessageSegment {
+    pub content: String,
+    pub sent_at: DateTime<Utc>,
+}
+
 /// A conversation thread within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thread {
@@ -250,7 +266,7 @@ pub struct Thread {
     pub pending_auth: Option<PendingAuth>,
     /// Messages queued while the thread was processing a turn.
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
-    pub pending_messages: VecDeque<String>,
+    pub pending_messages: VecDeque<PendingUserMessage>,
 }
 
 /// Maximum number of messages that can be queued while a thread is processing.
@@ -311,30 +327,33 @@ impl Thread {
 
     /// Queue a message for processing after the current turn completes.
     /// Returns `false` if the queue is at capacity ([`MAX_PENDING_MESSAGES`]).
-    pub fn queue_message(&mut self, content: String) -> bool {
+    pub fn queue_message(&mut self, content: String, received_at: DateTime<Utc>) -> bool {
         if self.pending_messages.len() >= MAX_PENDING_MESSAGES {
             return false;
         }
-        self.pending_messages.push_back(content);
+        self.pending_messages.push_back(PendingUserMessage {
+            content,
+            received_at,
+        });
         self.updated_at = Utc::now();
         true
     }
 
     /// Take the next pending message from the queue.
-    pub fn take_pending_message(&mut self) -> Option<String> {
+    pub fn take_pending_message(&mut self) -> Option<PendingUserMessage> {
         self.pending_messages.pop_front()
     }
 
     /// Drain all pending messages from the queue.
     /// Multiple messages are joined with newlines so the LLM receives
     /// full context from rapid consecutive inputs (#259).
-    pub fn drain_pending_messages(&mut self) -> Option<String> {
+    pub fn drain_pending_messages(&mut self) -> Option<Vec<PendingUserMessage>> {
         if self.pending_messages.is_empty() {
             return None;
         }
-        let parts: Vec<String> = self.pending_messages.drain(..).collect();
+        let parts: Vec<PendingUserMessage> = self.pending_messages.drain(..).collect();
         self.updated_at = Utc::now();
-        Some(parts.join("\n"))
+        Some(parts)
     }
 
     /// Re-queue previously drained content at the front of the queue.
@@ -345,8 +364,10 @@ impl Thread {
     /// was already counted against the cap before draining. The overshoot
     /// is bounded to 1 entry (the re-queued merged string) plus any new
     /// messages that arrived during the failed attempt.
-    pub fn requeue_drained(&mut self, content: String) {
-        self.pending_messages.push_front(content);
+    pub fn requeue_drained(&mut self, messages: Vec<PendingUserMessage>) {
+        for message in messages.into_iter().rev() {
+            self.pending_messages.push_front(message);
+        }
         self.updated_at = Utc::now();
     }
 
@@ -354,6 +375,21 @@ impl Thread {
     pub fn start_turn(&mut self, user_input: impl Into<String>) -> &mut Turn {
         let turn_number = self.turns.len();
         let turn = Turn::new(turn_number, user_input);
+        self.turns.push(turn);
+        self.state = ThreadState::Processing;
+        self.updated_at = Utc::now();
+        // turn_number was len() before push, so it's a valid index after push
+        &mut self.turns[turn_number]
+    }
+
+    /// Start a new turn with user input and an explicit send timestamp.
+    pub fn start_turn_at(
+        &mut self,
+        user_input: impl Into<String>,
+        started_at: DateTime<Utc>,
+    ) -> &mut Turn {
+        let turn_number = self.turns.len();
+        let turn = Turn::new_at(turn_number, user_input, started_at);
         self.turns.push(turn);
         self.state = ThreadState::Processing;
         self.updated_at = Utc::now();
@@ -439,6 +475,15 @@ impl Thread {
     /// This ensures the LLM sees prior tool executions and won't re-attempt
     /// completed actions in subsequent turns.
     pub fn messages(&self) -> Vec<ChatMessage> {
+        self.build_messages(None)
+    }
+
+    /// Get all messages formatted for LLM context, with user-message send times.
+    pub fn messages_for_context(&self, user_tz: Tz) -> Vec<ChatMessage> {
+        self.build_messages(Some(user_tz))
+    }
+
+    fn build_messages(&self, user_tz: Option<Tz>) -> Vec<ChatMessage> {
         let mut messages = Vec::new();
         // We use the enumeration index (`turn_idx`) rather than `turn.turn_number`
         // intentionally: after `truncate_turns()`, the remaining turns are
@@ -446,11 +491,20 @@ impl Thread {
         // are equivalent. Using the index avoids coupling to the field and keeps
         // tool-call ID generation deterministic for the current message window.
         for (turn_idx, turn) in self.turns.iter().enumerate() {
+            let user_content = if let Some(tz) = user_tz {
+                if turn.user_message_segments.is_empty() {
+                    format_user_message_for_context(&turn.user_input, turn.started_at, tz)
+                } else {
+                    format_user_message_segments_for_context(&turn.user_message_segments, tz)
+                }
+            } else {
+                turn.user_input.clone()
+            };
             if turn.image_content_parts.is_empty() {
-                messages.push(ChatMessage::user(&turn.user_input));
+                messages.push(ChatMessage::user(user_content));
             } else {
                 messages.push(ChatMessage::user_with_parts(
-                    &turn.user_input,
+                    user_content,
                     turn.image_content_parts.clone(),
                 ));
             }
@@ -604,6 +658,182 @@ impl Thread {
 
         self.updated_at = Utc::now();
     }
+
+    /// Restore thread state directly from persisted conversation rows.
+    ///
+    /// Unlike `restore_from_messages`, this preserves the original user-message
+    /// timestamps from storage so LLM context can reflect when each message was sent.
+    pub fn restore_from_conversation_messages(
+        &mut self,
+        messages: &[crate::history::ConversationMessage],
+    ) {
+        self.turns.clear();
+        self.state = ThreadState::Idle;
+
+        let mut idx = 0usize;
+        let mut turn_number = 0usize;
+        let mut pending_thinking_segments: Vec<String> = Vec::new();
+
+        while idx < messages.len() {
+            let msg = &messages[idx];
+            if msg.role != "user" {
+                idx += 1;
+                continue;
+            }
+
+            let mut turn = Turn::new_at(turn_number, &msg.content, msg.created_at);
+            idx += 1;
+
+            while idx < messages.len() {
+                let next = &messages[idx];
+                match next.role.as_str() {
+                    "thinking" => {
+                        if !next.content.trim().is_empty() {
+                            pending_thinking_segments.push(next.content.clone());
+                        }
+                        idx += 1;
+                    }
+                    "tool_call" => {
+                        let call = match serde_json::from_str::<serde_json::Value>(&next.content) {
+                            Ok(value) => value,
+                            Err(_) => {
+                                idx += 1;
+                                continue;
+                            }
+                        };
+
+                        let tool_call = ToolCall {
+                            id: call["call_id"].as_str().unwrap_or("call_0").to_string(),
+                            name: call["name"].as_str().unwrap_or("unknown").to_string(),
+                            arguments: call
+                                .get("parameters")
+                                .cloned()
+                                .unwrap_or(serde_json::json!({})),
+                            reasoning: call
+                                .get("rationale")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                        };
+
+                        if turn.narrative.is_none() && !pending_thinking_segments.is_empty() {
+                            turn.narrative = Some(pending_thinking_segments.join(""));
+                        }
+                        pending_thinking_segments.clear();
+
+                        turn.record_tool_call_with_reasoning(
+                            tool_call.name.clone(),
+                            tool_call.arguments.clone(),
+                            tool_call.reasoning.clone(),
+                            Some(tool_call.id.clone()),
+                        );
+
+                        if let Some(last_call) = turn.tool_calls.last_mut() {
+                            let content = if let Some(err) =
+                                call.get("error").and_then(|v| v.as_str())
+                            {
+                                Some(err.to_string())
+                            } else if let Some(res) = call.get("result").and_then(|v| v.as_str()) {
+                                Some(res.to_string())
+                            } else if let Some(preview) =
+                                call.get("result_preview").and_then(|v| v.as_str())
+                            {
+                                Some(preview.to_string())
+                            } else if call.get("completed_at").and_then(|v| v.as_str()).is_some() {
+                                Some("OK".to_string())
+                            } else {
+                                None
+                            };
+                            last_call.result = content.map(serde_json::Value::String);
+                        }
+                        idx += 1;
+                    }
+                    "tool_calls" => {
+                        let (calls, wrapper_narrative): (Vec<serde_json::Value>, Option<String>) =
+                            match serde_json::from_str::<serde_json::Value>(&next.content) {
+                                Ok(serde_json::Value::Array(arr)) => (arr, None),
+                                Ok(serde_json::Value::Object(obj)) => (
+                                    obj.get("calls")
+                                        .and_then(|v| v.as_array())
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                    obj.get("narrative")
+                                        .and_then(|v| v.as_str())
+                                        .map(str::to_owned)
+                                        .filter(|value| !value.trim().is_empty()),
+                                ),
+                                _ => (Vec::new(), None),
+                            };
+
+                        if turn.narrative.is_none() {
+                            turn.narrative = if pending_thinking_segments.is_empty() {
+                                wrapper_narrative
+                            } else {
+                                Some(pending_thinking_segments.join(""))
+                            };
+                        }
+                        pending_thinking_segments.clear();
+
+                        for call in calls {
+                            let tool_call_id =
+                                call["call_id"].as_str().unwrap_or("call_0").to_string();
+                            let name = call["name"].as_str().unwrap_or("unknown").to_string();
+                            let arguments = call
+                                .get("parameters")
+                                .cloned()
+                                .unwrap_or(serde_json::json!({}));
+                            let reasoning = call
+                                .get("rationale")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+
+                            turn.record_tool_call_with_reasoning(
+                                name.clone(),
+                                arguments,
+                                reasoning,
+                                Some(tool_call_id),
+                            );
+
+                            if let Some(last_call) = turn.tool_calls.last_mut() {
+                                let content =
+                                    if let Some(err) = call.get("error").and_then(|v| v.as_str()) {
+                                        Some(err.to_string())
+                                    } else if let Some(res) =
+                                        call.get("result").and_then(|v| v.as_str())
+                                    {
+                                        Some(res.to_string())
+                                    } else if let Some(preview) =
+                                        call.get("result_preview").and_then(|v| v.as_str())
+                                    {
+                                        Some(preview.to_string())
+                                    } else {
+                                        None
+                                    };
+                                last_call.result = content.map(serde_json::Value::String);
+                            }
+                        }
+                        idx += 1;
+                    }
+                    "assistant" => {
+                        turn.response = Some(next.content.clone());
+                        turn.state = TurnState::Completed;
+                        turn.completed_at = Some(next.created_at);
+                        pending_thinking_segments.clear();
+                        idx += 1;
+                        break;
+                    }
+                    "user" => break,
+                    _ => {
+                        idx += 1;
+                    }
+                }
+            }
+
+            self.turns.push(turn);
+            turn_number += 1;
+        }
+
+        self.updated_at = Utc::now();
+    }
 }
 
 /// State of a turn.
@@ -654,6 +884,9 @@ pub struct Turn {
     /// Cumulative usage snapshot captured at turn start to compute per-turn deltas.
     #[serde(skip)]
     pub cost_baseline: Option<crate::agent::cost_guard::ModelTokens>,
+    /// Individual user-authored segments that were merged into this logical turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_message_segments: Vec<TimedUserMessageSegment>,
     /// Transient image content parts for multimodal LLM input.
     /// Not serialized — images are only needed for the current LLM call.
     /// The text description in `user_input` persists for compaction/context.
@@ -664,13 +897,22 @@ pub struct Turn {
 impl Turn {
     /// Create a new turn.
     pub fn new(turn_number: usize, user_input: impl Into<String>) -> Self {
+        Self::new_at(turn_number, user_input, Utc::now())
+    }
+
+    /// Create a new turn with an explicit start time.
+    pub fn new_at(
+        turn_number: usize,
+        user_input: impl Into<String>,
+        started_at: DateTime<Utc>,
+    ) -> Self {
         Self {
             turn_number,
             user_input: user_input.into(),
             response: None,
             tool_calls: Vec::new(),
             state: TurnState::Processing,
-            started_at: Utc::now(),
+            started_at,
             completed_at: None,
             error: None,
             narrative: None,
@@ -678,6 +920,7 @@ impl Turn {
             user_message_id: None,
             assistant_message_id: None,
             cost_baseline: None,
+            user_message_segments: Vec::new(),
             image_content_parts: Vec::new(),
         }
     }
@@ -857,6 +1100,28 @@ impl Turn {
     }
 }
 
+fn format_user_message_for_context(content: &str, sent_at: DateTime<Utc>, user_tz: Tz) -> String {
+    let local = sent_at.with_timezone(&user_tz);
+    format!(
+        "<user-message-time sent_at_local=\"{}\" timezone=\"{}\" sent_at_utc=\"{}\" />\n{}",
+        local.to_rfc3339(),
+        user_tz.name(),
+        sent_at.to_rfc3339(),
+        content
+    )
+}
+
+fn format_user_message_segments_for_context(
+    segments: &[TimedUserMessageSegment],
+    user_tz: Tz,
+) -> String {
+    segments
+        .iter()
+        .map(|segment| format_user_message_for_context(&segment.content, segment.sent_at, user_tz))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Record of a tool call made during a turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnToolCall {
@@ -888,6 +1153,13 @@ pub struct TurnToolCall {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn queued_message(content: &str) -> PendingUserMessage {
+        PendingUserMessage {
+            content: content.to_string(),
+            received_at: Utc::now(),
+        }
+    }
 
     #[test]
     fn test_session_creation() {
@@ -922,6 +1194,71 @@ mod tests {
 
         let messages = thread.messages();
         assert_eq!(messages.len(), 4);
+    }
+
+    #[test]
+    fn test_messages_for_context_includes_user_send_time() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:09Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        thread.start_turn_at("现在几点了？", sent_at);
+        thread.complete_turn("现在是下午。");
+
+        let messages = thread.messages_for_context(chrono_tz::Asia::Shanghai);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, crate::llm::Role::User);
+        assert!(
+            messages[0]
+                .content
+                .contains("sent_at_local=\"2026-04-13T15:08:09+08:00\"")
+        );
+        assert!(messages[0].content.contains("timezone=\"Asia/Shanghai\""));
+        assert!(
+            messages[0]
+                .content
+                .contains("sent_at_utc=\"2026-04-13T07:08:09+00:00\"")
+        );
+        assert!(messages[0].content.ends_with("现在几点了？"));
+    }
+
+    #[test]
+    fn test_messages_for_context_marks_each_queued_user_segment() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let first = chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:09Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let second = chrono::DateTime::parse_from_rfc3339("2026-04-13T07:09:10Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let turn = thread.start_turn_at("第一条\n第二条", first);
+        turn.user_message_segments = vec![
+            TimedUserMessageSegment {
+                content: "第一条".to_string(),
+                sent_at: first,
+            },
+            TimedUserMessageSegment {
+                content: "第二条".to_string(),
+                sent_at: second,
+            },
+        ];
+        thread.complete_turn("收到。");
+
+        let messages = thread.messages_for_context(chrono_tz::Asia::Shanghai);
+        assert!(
+            messages[0]
+                .content
+                .contains("sent_at_local=\"2026-04-13T15:08:09+08:00\"")
+        );
+        assert!(
+            messages[0]
+                .content
+                .contains("sent_at_local=\"2026-04-13T15:09:10+08:00\"")
+        );
+        assert!(messages[0].content.contains("第一条"));
+        assert!(messages[0].content.contains("第二条"));
     }
 
     #[test]
@@ -967,6 +1304,47 @@ mod tests {
         assert_eq!(thread.turns[1].user_input, "How are you?");
         assert_eq!(thread.turns[1].response, Some("I'm good!".to_string()));
         assert_eq!(thread.state, ThreadState::Idle);
+    }
+
+    #[test]
+    fn test_restore_from_conversation_messages_preserves_started_at() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let user_created_at = chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:09Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let assistant_created_at = chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:30Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let db_messages = vec![
+            crate::history::ConversationMessage {
+                id: Uuid::new_v4(),
+                role: "user".to_string(),
+                content: "帮我看一下今天的安排".to_string(),
+                metadata: serde_json::json!({}),
+                created_at: user_created_at,
+            },
+            crate::history::ConversationMessage {
+                id: Uuid::new_v4(),
+                role: "assistant".to_string(),
+                content: "今天有两个会议。".to_string(),
+                metadata: serde_json::json!({}),
+                created_at: assistant_created_at,
+            },
+        ];
+
+        thread.restore_from_conversation_messages(&db_messages);
+
+        assert_eq!(thread.turns.len(), 1);
+        assert_eq!(thread.turns[0].started_at, user_created_at);
+
+        let messages = thread.messages_for_context(chrono_tz::Asia::Shanghai);
+        assert!(
+            messages[0]
+                .content
+                .contains("sent_at_local=\"2026-04-13T15:08:09+08:00\"")
+        );
+        assert!(messages[0].content.ends_with("帮我看一下今天的安排"));
     }
 
     #[test]
@@ -1693,29 +2071,41 @@ mod tests {
         assert!(thread.take_pending_message().is_none());
 
         // Queue messages and verify FIFO ordering
-        assert!(thread.queue_message("first".to_string()));
-        assert!(thread.queue_message("second".to_string()));
-        assert!(thread.queue_message("third".to_string()));
+        assert!(thread.queue_message("first".to_string(), Utc::now()));
+        assert!(thread.queue_message("second".to_string(), Utc::now()));
+        assert!(thread.queue_message("third".to_string(), Utc::now()));
         assert_eq!(thread.pending_messages.len(), 3);
 
-        assert_eq!(thread.take_pending_message(), Some("first".to_string()));
-        assert_eq!(thread.take_pending_message(), Some("second".to_string()));
-        assert_eq!(thread.take_pending_message(), Some("third".to_string()));
+        assert_eq!(
+            thread.take_pending_message().map(|msg| msg.content),
+            Some("first".to_string())
+        );
+        assert_eq!(
+            thread.take_pending_message().map(|msg| msg.content),
+            Some("second".to_string())
+        );
+        assert_eq!(
+            thread.take_pending_message().map(|msg| msg.content),
+            Some("third".to_string())
+        );
         assert!(thread.take_pending_message().is_none());
 
         // Fill to capacity — all 10 should succeed
         for i in 0..MAX_PENDING_MESSAGES {
-            assert!(thread.queue_message(format!("msg-{}", i)));
+            assert!(thread.queue_message(format!("msg-{}", i), Utc::now()));
         }
         assert_eq!(thread.pending_messages.len(), MAX_PENDING_MESSAGES);
 
         // 11th message rejected by queue_message itself
-        assert!(!thread.queue_message("overflow".to_string()));
+        assert!(!thread.queue_message("overflow".to_string(), Utc::now()));
         assert_eq!(thread.pending_messages.len(), MAX_PENDING_MESSAGES);
 
         // Drain and verify order
         for i in 0..MAX_PENDING_MESSAGES {
-            assert_eq!(thread.take_pending_message(), Some(format!("msg-{}", i)));
+            assert_eq!(
+                thread.take_pending_message().map(|msg| msg.content),
+                Some(format!("msg-{}", i))
+            );
         }
         assert!(thread.take_pending_message().is_none());
     }
@@ -1729,14 +2119,14 @@ mod tests {
         assert!(!json.contains("pending_messages"));
 
         // Non-empty queue should serialize and deserialize
-        thread.queue_message("queued msg".to_string());
+        thread.queue_message("queued msg".to_string(), Utc::now());
         let json = serde_json::to_string(&thread).unwrap();
         assert!(json.contains("pending_messages"));
         assert!(json.contains("queued msg"));
 
         let restored: Thread = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.pending_messages.len(), 1);
-        assert_eq!(restored.pending_messages[0], "queued msg");
+        assert_eq!(restored.pending_messages[0].content, "queued msg");
     }
 
     #[test]
@@ -1759,9 +2149,9 @@ mod tests {
         thread.start_turn("initial input");
 
         // Queue several messages while "processing"
-        thread.queue_message("queued-1".to_string());
-        thread.queue_message("queued-2".to_string());
-        thread.queue_message("queued-3".to_string());
+        thread.queue_message("queued-1".to_string(), Utc::now());
+        thread.queue_message("queued-2".to_string(), Utc::now());
+        thread.queue_message("queued-3".to_string(), Utc::now());
         assert_eq!(thread.pending_messages.len(), 3);
 
         // Interrupt should clear the queue
@@ -1779,8 +2169,8 @@ mod tests {
         thread.start_turn("turn 1");
         assert_eq!(thread.state, ThreadState::Processing);
 
-        thread.queue_message("queued-a".to_string());
-        thread.queue_message("queued-b".to_string());
+        thread.queue_message("queued-a".to_string(), Utc::now());
+        thread.queue_message("queued-b".to_string(), Utc::now());
 
         // Complete the turn (simulates process_user_input finishing)
         thread.complete_turn("response 1");
@@ -1788,8 +2178,13 @@ mod tests {
 
         // Drain: merge all queued messages and process as a single turn
         let merged = thread.drain_pending_messages().unwrap();
-        assert_eq!(merged, "queued-a\nqueued-b");
-        thread.start_turn(&merged);
+        let merged_content = merged
+            .iter()
+            .map(|msg| msg.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(merged_content, "queued-a\nqueued-b");
+        thread.start_turn(&merged_content);
         thread.complete_turn("response for merged");
 
         // Queue is fully drained, thread is idle
@@ -1806,20 +2201,28 @@ mod tests {
         assert!(thread.drain_pending_messages().is_none());
 
         // Single message returned as-is (no trailing newline)
-        thread.queue_message("only one".to_string());
+        thread.queue_message("only one".to_string(), Utc::now());
         assert_eq!(
-            thread.drain_pending_messages(),
-            Some("only one".to_string()),
+            thread
+                .drain_pending_messages()
+                .map(|msgs| msgs.into_iter().map(|msg| msg.content).collect::<Vec<_>>()),
+            Some(vec!["only one".to_string()]),
         );
         assert!(thread.pending_messages.is_empty());
 
         // Multiple messages joined with newlines
-        thread.queue_message("hey".to_string());
-        thread.queue_message("can you check the server".to_string());
-        thread.queue_message("it started 10 min ago".to_string());
+        thread.queue_message("hey".to_string(), Utc::now());
+        thread.queue_message("can you check the server".to_string(), Utc::now());
+        thread.queue_message("it started 10 min ago".to_string(), Utc::now());
         assert_eq!(
-            thread.drain_pending_messages(),
-            Some("hey\ncan you check the server\nit started 10 min ago".to_string()),
+            thread
+                .drain_pending_messages()
+                .map(|msgs| msgs.into_iter().map(|msg| msg.content).collect::<Vec<_>>()),
+            Some(vec![
+                "hey".to_string(),
+                "can you check the server".to_string(),
+                "it started 10 min ago".to_string(),
+            ]),
         );
         assert!(thread.pending_messages.is_empty());
 
@@ -1832,17 +2235,25 @@ mod tests {
         let mut thread = Thread::new(Uuid::new_v4());
 
         // Re-queue into empty queue
-        thread.requeue_drained("failed batch".to_string());
+        thread.requeue_drained(vec![queued_message("failed batch")]);
         assert_eq!(thread.pending_messages.len(), 1);
-        assert_eq!(thread.pending_messages[0], "failed batch");
+        assert_eq!(thread.pending_messages[0].content, "failed batch");
 
         // New messages go behind the re-queued content
-        thread.queue_message("new msg".to_string());
+        thread.queue_message("new msg".to_string(), Utc::now());
         assert_eq!(thread.pending_messages.len(), 2);
 
         // Drain should return re-queued content first (front of queue)
-        let merged = thread.drain_pending_messages().unwrap();
-        assert_eq!(merged, "failed batch\nnew msg");
+        let merged = thread
+            .drain_pending_messages()
+            .unwrap()
+            .into_iter()
+            .map(|msg| msg.content)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            merged,
+            vec!["failed batch".to_string(), "new msg".to_string()]
+        );
     }
 
     #[test]

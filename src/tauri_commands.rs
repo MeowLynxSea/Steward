@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
 
@@ -30,10 +31,11 @@ enum DesktopDispatchPlan {
 fn plan_desktop_message_dispatch(
     thread: &mut steward_core::agent::session::Thread,
     content: &str,
+    received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<DesktopDispatchPlan, String> {
     match thread.state {
         steward_core::agent::session::ThreadState::Processing => {
-            if thread.queue_message(content.to_string()) {
+            if thread.queue_message(content.to_string(), received_at) {
                 Ok(DesktopDispatchPlan::QueueOnly)
             } else {
                 Err("Message queue full".to_string())
@@ -1333,7 +1335,7 @@ pub async fn send_session_message(
 
     tracing::info!(thread_id = %thread_id, "About to match thread state");
     let title_context = build_session_title_context(thread, payload.content.trim());
-    let dispatch_plan = plan_desktop_message_dispatch(thread, &payload.content)?;
+    let dispatch_plan = plan_desktop_message_dispatch(thread, &payload.content, Utc::now())?;
     drop(sess);
 
     match dispatch_plan {
@@ -1411,7 +1413,7 @@ mod db_message_tests {
         let mut thread = Thread::new(Uuid::new_v4());
         assert_eq!(thread.state, ThreadState::Idle);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello").unwrap();
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello", Utc::now()).unwrap();
 
         assert!(matches!(plan, DesktopDispatchPlan::InjectOnly));
         assert!(thread.pending_messages.is_empty());
@@ -1424,12 +1426,12 @@ mod db_message_tests {
         thread.start_turn("working");
         assert_eq!(thread.state, ThreadState::Processing);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello").unwrap();
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello", Utc::now()).unwrap();
 
         assert!(matches!(plan, DesktopDispatchPlan::QueueOnly));
         assert_eq!(thread.pending_messages.len(), 1);
         assert_eq!(
-            thread.pending_messages.front().map(String::as_str),
+            thread.pending_messages.front().map(|msg| msg.content.as_str()),
             Some("hello")
         );
     }

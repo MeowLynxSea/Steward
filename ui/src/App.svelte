@@ -200,37 +200,62 @@
     return segments.at(-1) ?? path;
   }
 
-  onMount(async () => {
+  onMount(() => {
     themeStore.init();
-    await bootstrap();
+    let disposed = false;
+    let taskInterval: number | null = null;
+    let workspaceInterval: number | null = null;
+    let unlistenDrops: (() => void) | null = null;
 
-    const taskInterval = window.setInterval(() => {
-      void tasksStore.refresh();
-    }, 5000);
-
-    const workspaceInterval = window.setInterval(() => {
-      if (
-        showAllowlistModal ||
-        workspaceStore.loading ||
-        workspaceStore.refreshing ||
-        workspaceStore.busyAction
-      ) {
+    void (async () => {
+      await bootstrap();
+      if (disposed) {
         return;
       }
-      void workspaceStore.refresh();
-    }, 4000);
 
-    const unlistenDrops = await listenForFolderDrops(async (path) => {
-      await workspaceStore.createAllowlist(path, defaultAllowlistName(path));
-    });
+      taskInterval = window.setInterval(() => {
+        void tasksStore.refresh();
+      }, 5000);
+
+      workspaceInterval = window.setInterval(() => {
+        if (
+          showAllowlistModal ||
+          workspaceStore.loading ||
+          workspaceStore.refreshing ||
+          workspaceStore.busyAction
+        ) {
+          return;
+        }
+        void workspaceStore.refresh();
+      }, 4000);
+
+      unlistenDrops = await listenForFolderDrops(async (path) => {
+        await workspaceStore.createAllowlist(path, defaultAllowlistName(path));
+      });
+
+      if (disposed) {
+        if (taskInterval !== null) {
+          window.clearInterval(taskInterval);
+        }
+        if (workspaceInterval !== null) {
+          window.clearInterval(workspaceInterval);
+        }
+        unlistenDrops();
+      }
+    })();
 
     return () => {
-      window.clearInterval(taskInterval);
-      window.clearInterval(workspaceInterval);
+      disposed = true;
+      if (taskInterval !== null) {
+        window.clearInterval(taskInterval);
+      }
+      if (workspaceInterval !== null) {
+        window.clearInterval(workspaceInterval);
+      }
       tasksStore.dispose();
       sessionsStore.disconnect();
       workspaceStore.dispose();
-      void unlistenDrops();
+      unlistenDrops?.();
     };
   });
 </script>

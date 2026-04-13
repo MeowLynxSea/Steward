@@ -41,11 +41,11 @@ export async function getOpenAiCodexLoginStatus(loginId: string): Promise<CodexL
 
 export async function listenForFolderDrops(
   onDrop: (path: string) => Promise<void> | void
-): Promise<() => Promise<void>> {
+): Promise<() => void> {
   try {
     const current = getCurrentWebviewWindow?.();
     if (!current?.onDragDropEvent) {
-      return async () => {};
+      return () => {};
     }
 
     const unlisten = await current.onDragDropEvent((event: unknown) => {
@@ -60,11 +60,11 @@ export async function listenForFolderDrops(
       }
     });
 
-    return async () => {
+    return () => {
       unlisten();
     };
   } catch {
-    return async () => {};
+    return () => {};
   }
 }
 

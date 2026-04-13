@@ -20,7 +20,7 @@ use crate::agent::submission::SubmissionResult;
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
-use crate::llm::{ChatMessage, ToolCall};
+use crate::llm::ChatMessage;
 use crate::tools::{prepare_tool_params, redact_params};
 use chrono::Utc;
 use steward_common::truncate_preview;
@@ -181,7 +181,7 @@ impl Agent {
         }
 
         // Load history from DB (may be empty for a newly created thread).
-        let mut chat_messages: Vec<ChatMessage> = Vec::new();
+        let mut db_messages: Vec<crate::history::ConversationMessage> = Vec::new();
         let msg_count;
 
         if let Some(store) = self.store() {
@@ -241,12 +241,12 @@ impl Agent {
                 return None;
             }
 
-            let db_messages = store
+            let fetched_messages = store
                 .list_conversation_messages(thread_uuid)
                 .await
                 .unwrap_or_default();
-            msg_count = db_messages.len();
-            chat_messages = rebuild_chat_messages_from_db(&db_messages);
+            msg_count = fetched_messages.len();
+            db_messages = fetched_messages;
         } else {
             msg_count = 0;
         }
@@ -258,8 +258,8 @@ impl Agent {
         };
 
         let mut thread = crate::agent::session::Thread::with_id(thread_uuid, session_id);
-        if !chat_messages.is_empty() {
-            thread.restore_from_messages(chat_messages);
+        if !db_messages.is_empty() {
+            thread.restore_from_conversation_messages(&db_messages);
         }
 
         // Insert into session and register with session manager
@@ -295,6 +295,19 @@ impl Agent {
         session: Arc<Mutex<Session>>,
         thread_id: Uuid,
         content: &str,
+    ) -> Result<SubmissionResult, Error> {
+        self.process_user_input_with_segments(message, tenant, session, thread_id, content, None)
+            .await
+    }
+
+    pub(super) async fn process_user_input_with_segments(
+        &self,
+        message: &IncomingMessage,
+        tenant: crate::tenant::TenantCtx,
+        session: Arc<Mutex<Session>>,
+        thread_id: Uuid,
+        content: &str,
+        queued_segments: Option<Vec<crate::agent::session::PendingUserMessage>>,
     ) -> Result<SubmissionResult, Error> {
         tracing::info!(
             message_id = %message.id,
@@ -379,7 +392,7 @@ impl Agent {
                             return Ok(SubmissionResult::error(warning));
                         }
 
-                        if !thread.queue_message(content.to_string()) {
+                        if !thread.queue_message(content.to_string(), message.received_at) {
                             return Ok(SubmissionResult::error(format!(
                                 "Message queue full ({MAX_PENDING_MESSAGES}). Wait for the current turn to complete.",
                             )));
@@ -549,16 +562,31 @@ impl Agent {
         let cost_baseline = self.cost_guard().total_usage().await;
 
         // Start the turn and get messages
+        let user_tz = crate::timezone::resolve_timezone_with_local_default(
+            message.timezone.as_deref(),
+            None, // user setting lookup can be added later
+            &self.config.default_timezone,
+        );
+
         let turn_messages = {
             let mut sess = session.lock().await;
             let thread = sess
                 .threads
                 .get_mut(&thread_id)
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
-            let turn = thread.start_turn(effective_content);
+            let turn = thread.start_turn_at(effective_content, message.received_at);
+            if let Some(ref queued_segments) = queued_segments {
+                turn.user_message_segments = queued_segments
+                    .iter()
+                    .map(|segment| crate::agent::session::TimedUserMessageSegment {
+                        content: segment.content.clone(),
+                        sent_at: segment.received_at,
+                    })
+                    .collect();
+            }
             turn.image_content_parts = image_parts;
             turn.cost_baseline = Some(cost_baseline);
-            thread.messages()
+            thread.messages_for_context(user_tz)
         };
 
         // Persist user message to DB immediately so it survives crashes
@@ -2699,6 +2727,7 @@ impl Agent {
 /// and `tool_result` messages so that the LLM sees the complete tool execution
 /// history on thread hydration. Falls back gracefully for legacy rows that
 /// lack the enriched fields (`call_id`, `parameters`, `result`).
+#[cfg(test)]
 fn rebuild_chat_messages_from_db(
     db_messages: &[crate::history::ConversationMessage],
 ) -> Vec<ChatMessage> {
@@ -3335,17 +3364,20 @@ mod tests {
 
         // Fill the queue to the cap
         for i in 0..MAX_PENDING_MESSAGES {
-            assert!(thread.queue_message(format!("msg-{}", i)));
+            assert!(thread.queue_message(format!("msg-{}", i), chrono::Utc::now()));
         }
         assert_eq!(thread.pending_messages.len(), MAX_PENDING_MESSAGES);
 
         // The next message should be rejected by queue_message
-        assert!(!thread.queue_message("overflow".to_string()));
+        assert!(!thread.queue_message("overflow".to_string(), chrono::Utc::now()));
         assert_eq!(thread.pending_messages.len(), MAX_PENDING_MESSAGES);
 
         // Verify all drain in FIFO order
         for i in 0..MAX_PENDING_MESSAGES {
-            assert_eq!(thread.take_pending_message(), Some(format!("msg-{}", i)));
+            assert_eq!(
+                thread.take_pending_message().map(|msg| msg.content),
+                Some(format!("msg-{}", i))
+            );
         }
         assert!(thread.take_pending_message().is_none());
     }
@@ -3358,8 +3390,8 @@ mod tests {
         let mut thread = Thread::new(Uuid::new_v4());
         thread.start_turn("processing");
 
-        thread.queue_message("pending-1".to_string());
-        thread.queue_message("pending-2".to_string());
+        thread.queue_message("pending-1".to_string(), chrono::Utc::now());
+        thread.queue_message("pending-2".to_string(), chrono::Utc::now());
         assert_eq!(thread.pending_messages.len(), 2);
 
         // Simulate what process_clear does: clear turns and pending_messages

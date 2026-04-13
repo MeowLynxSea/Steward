@@ -105,7 +105,7 @@ impl Agent {
             .is_some_and(|t| t == "group" || t == "channel" || t == "supergroup");
 
         // Resolve the user's timezone for tool execution metadata and timestamps.
-        let user_tz = crate::timezone::resolve_timezone(
+        let user_tz = crate::timezone::resolve_timezone_with_local_default(
             message.timezone.as_deref(),
             None, // user setting lookup can be added later
             &self.config.default_timezone,
@@ -173,10 +173,14 @@ impl Agent {
             None
         };
 
-        let system_prompt_parts = [workspace_prompt, memory_prompt, conversation_history_prompt]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+        let system_prompt_parts = [
+            workspace_prompt,
+            memory_prompt,
+            conversation_history_prompt,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
         let system_prompt =
             (!system_prompt_parts.is_empty()).then(|| system_prompt_parts.join("\n\n"));
 

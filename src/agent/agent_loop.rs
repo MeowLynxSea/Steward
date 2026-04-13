@@ -2052,9 +2052,14 @@ impl Agent {
                             .get_mut(&thread_id)
                             .and_then(|t| t.drain_pending_messages())
                     };
-                    let Some(next_content) = merged else {
+                    let Some(next_messages) = merged else {
                         break;
                     };
+                    let next_content = next_messages
+                        .iter()
+                        .map(|msg| msg.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n");
 
                     tracing::debug!(
                         thread_id = %thread_id,
@@ -2101,12 +2106,13 @@ impl Agent {
                     queued_msg.id = Uuid::new_v4();
                     queued_msg.attachments.clear();
                     result = self
-                        .process_user_input(
+                        .process_user_input_with_segments(
                             &queued_msg,
                             tenant.clone(),
                             session.clone(),
                             thread_id,
                             &next_content,
+                            Some(next_messages.clone()),
                         )
                         .await;
 
@@ -2115,7 +2121,7 @@ impl Agent {
                     if !matches!(&result, Ok(SubmissionResult::Response { .. })) {
                         let mut sess = session.lock().await;
                         if let Some(thread) = sess.threads.get_mut(&thread_id) {
-                            thread.requeue_drained(next_content);
+                            thread.requeue_drained(next_messages);
                             tracing::debug!(
                                 thread_id = %thread_id,
                                 "Re-queued drained content after non-Response result"
