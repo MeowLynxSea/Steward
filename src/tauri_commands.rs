@@ -14,8 +14,10 @@ use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceCheckpointRequest,
     CreateWorkspaceMountRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
-    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
-    SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceSearchRequest,
+    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest,
+    ResolveWorkspaceConflictRequest, SendSessionMessageRequest, WorkspaceActionRequest,
+    WorkspaceBaselineSetRequest, WorkspaceCheckpointListQuery, WorkspaceDiffQuery,
+    WorkspaceHistoryQuery, WorkspaceRestoreRequest, WorkspaceSearchRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -1975,7 +1977,7 @@ pub async fn get_workspace_mount_file(
 pub async fn get_workspace_mount_diff(
     state: State<'_, AppState>,
     id: Uuid,
-    scope_path: Option<String>,
+    payload: WorkspaceDiffQuery,
 ) -> Result<steward_core::workspace::WorkspaceMountDiff, String> {
     let workspace = state
         .workspace
@@ -1983,7 +1985,14 @@ pub async fn get_workspace_mount_diff(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let diff = workspace
-        .diff_mount(id, scope_path.as_deref())
+        .diff_mount_between(
+            id,
+            payload.scope_path,
+            payload.from,
+            payload.to,
+            payload.include_content,
+            payload.max_files,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2010,11 +2019,52 @@ pub async fn create_workspace_checkpoint(
             payload.summary,
             created_by,
             payload.is_auto,
+            payload.revision_id,
         )
         .await
         .map_err(|e| e.to_string())?;
 
     Ok(checkpoint)
+}
+
+#[tauri::command]
+pub async fn list_workspace_mount_checkpoints(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: WorkspaceCheckpointListQuery,
+) -> Result<Vec<steward_core::workspace::WorkspaceMountCheckpoint>, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .list_mount_checkpoints(id, payload.limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_workspace_mount_history(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: WorkspaceHistoryQuery,
+) -> Result<steward_core::workspace::WorkspaceMountHistory, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .mount_history(
+            id,
+            payload.scope_path,
+            payload.limit.unwrap_or(20),
+            payload.since,
+            payload.include_checkpoints,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2078,6 +2128,66 @@ pub async fn resolve_workspace_mount_conflict(
         .map_err(|e| e.to_string())?;
 
     Ok(detail)
+}
+
+#[tauri::command]
+pub async fn restore_workspace_mount(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: WorkspaceRestoreRequest,
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+    let created_by = payload.created_by.unwrap_or_else(|| "desktop".to_string());
+
+    workspace
+        .restore_mount(
+            id,
+            payload.target,
+            payload.scope_path,
+            payload.set_as_baseline,
+            payload.dry_run,
+            payload.create_checkpoint_before_restore,
+            created_by,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_workspace_mount_baseline(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: WorkspaceBaselineSetRequest,
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .set_mount_baseline(id, payload.target)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn refresh_workspace_mount(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: WorkspaceActionRequest,
+) -> Result<steward_core::workspace::WorkspaceMountDetail, String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .refresh_mount(id, payload.scope_path.as_deref())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // =============================================================================

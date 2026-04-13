@@ -52,9 +52,13 @@ pub use embedding_cache::{CachedEmbeddingProvider, EmbeddingCacheConfig};
 pub use embeddings::{EmbeddingProvider, MockEmbeddings, OllamaEmbeddings, OpenAiEmbeddings};
 pub use mounts::{
     ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
-    MountedFileDiff, MountedFileStatus, WorkspaceMount, WorkspaceMountCheckpoint,
-    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView, WorkspaceMountSummary,
-    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, normalize_mount_path,
+    MountedFileDiff, MountedFileStatus, ResolvedWorkspaceMountPath, WorkspaceMount,
+    WorkspaceMountBaselineRequest, WorkspaceMountChangeKind, WorkspaceMountCheckpoint,
+    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountDiffRequest,
+    WorkspaceMountFileView, WorkspaceMountHistory, WorkspaceMountHistoryRequest,
+    WorkspaceMountRestoreRequest, WorkspaceMountRevision, WorkspaceMountRevisionKind,
+    WorkspaceMountRevisionSource, WorkspaceMountSummary, WorkspaceTreeEntry,
+    WorkspaceTreeEntryKind, WorkspaceUri, normalize_mount_path,
 };
 pub use search::{
     FusionStrategy, RankedResult, SearchConfig, SearchResult, fuse_results, reciprocal_rank_fusion,
@@ -71,12 +75,17 @@ pub struct WriteResult {
     pub actual_layer: String,
 }
 
-use std::sync::{Arc, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 
 use uuid::Uuid;
 
 use crate::error::WorkspaceError;
 use crate::safety::{Sanitizer, Severity};
+
+const MAX_MOUNT_SEARCH_FILE_BYTES: u64 = 256 * 1024;
+const DEFAULT_MOUNT_WATCH_INTERVAL_MS: u64 = 500;
 
 /// Files injected into the system prompt. Writes to these are scanned for
 /// prompt injection patterns and rejected if high-severity matches are found.
@@ -88,6 +97,32 @@ const SYSTEM_PROMPT_FILES: &[&str] = &[
     paths::BOOTSTRAP,
 ];
 
+fn normalize_host_path(path: &Path) -> PathBuf {
+    if path.exists() {
+        return std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    }
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 /// Returns true if `path` (already normalized) is a system-prompt-injected file.
 fn is_system_prompt_file(path: &str) -> bool {
     SYSTEM_PROMPT_FILES
@@ -97,6 +132,78 @@ fn is_system_prompt_file(path: &str) -> bool {
 
 /// Shared sanitizer instance — avoids rebuilding Aho-Corasick + regexes on every write.
 static SANITIZER: std::sync::LazyLock<Sanitizer> = std::sync::LazyLock::new(Sanitizer::new);
+
+fn collect_mount_search_files(
+    root: &Path,
+    dir: &Path,
+    files: &mut Vec<(String, PathBuf, u64)>,
+) -> Result<(), WorkspaceError> {
+    let read_dir = std::fs::read_dir(dir).map_err(|e| WorkspaceError::IoError {
+        reason: format!("failed to read directory {}: {e}", dir.display()),
+    })?;
+    for entry in read_dir {
+        let entry = entry.map_err(|e| WorkspaceError::IoError {
+            reason: format!("failed to read directory entry: {e}"),
+        })?;
+        let path = entry.path();
+        let metadata = entry.metadata().map_err(|e| WorkspaceError::IoError {
+            reason: format!("failed to read metadata {}: {e}", path.display()),
+        })?;
+        if metadata.is_dir() {
+            collect_mount_search_files(root, &path, files)?;
+        } else if metadata.is_file() && metadata.len() <= MAX_MOUNT_SEARCH_FILE_BYTES {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to strip mount root: {e}"),
+                })?
+                .to_string_lossy()
+                .replace('\\', "/");
+            files.push((relative, path, metadata.len()));
+        }
+    }
+    Ok(())
+}
+
+fn mount_search_score(path: &str, content: &str, query: &str) -> Option<f32> {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return None;
+    }
+    let path_lower = path.to_lowercase();
+    let content_lower = content.to_lowercase();
+    let tokens: Vec<&str> = query.split_whitespace().filter(|token| !token.is_empty()).collect();
+    if tokens.is_empty() {
+        return None;
+    }
+    let mut score = 0.0_f32;
+    let mut matched = false;
+    for token in tokens {
+        let path_hits = path_lower.matches(token).count() as f32;
+        let content_hits = content_lower.matches(token).count() as f32;
+        if path_hits > 0.0 || content_hits > 0.0 {
+            matched = true;
+        }
+        score += path_hits * 3.0 + content_hits;
+    }
+    matched.then_some(score)
+}
+
+fn mount_search_snippet(content: &str, query: &str) -> String {
+    let lower = content.to_lowercase();
+    let token = query
+        .split_whitespace()
+        .find(|token| !token.is_empty())
+        .unwrap_or(query)
+        .to_lowercase();
+    if let Some(idx) = lower.find(&token) {
+        let start = idx.saturating_sub(80);
+        let end = (idx + token.len() + 120).min(content.len());
+        content[start..end].to_string()
+    } else {
+        content.chars().take(200).collect()
+    }
+}
 
 /// Scan content for prompt injection. Returns `Err` if high-severity patterns
 /// are detected, otherwise logs warnings and returns `Ok(())`.
@@ -301,12 +408,41 @@ impl WorkspaceStorage {
         }
     }
 
+    async fn diff_workspace_mount_between(
+        &self,
+        request: &WorkspaceMountDiffRequest,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.diff_workspace_mount_between(request).await,
+        }
+    }
+
     async fn create_workspace_checkpoint(
         &self,
         request: &CreateCheckpointRequest,
     ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
         match self {
             Self::Db(db) => db.create_workspace_checkpoint(request).await,
+        }
+    }
+
+    async fn list_workspace_checkpoints(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.list_workspace_checkpoints(user_id, mount_id, limit).await,
+        }
+    }
+
+    async fn list_workspace_mount_history(
+        &self,
+        request: &WorkspaceMountHistoryRequest,
+    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.list_workspace_mount_history(request).await,
         }
     }
 
@@ -334,6 +470,79 @@ impl WorkspaceStorage {
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
         match self {
             Self::Db(db) => db.resolve_workspace_mount_conflict(request).await,
+        }
+    }
+
+    async fn move_workspace_mount_file(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        source_path: &str,
+        destination_path: &str,
+        overwrite: bool,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        match self {
+            Self::Db(db) => {
+                db.move_workspace_mount_file(
+                    user_id,
+                    mount_id,
+                    source_path,
+                    destination_path,
+                    overwrite,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn delete_workspace_mount_tree(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        path: &str,
+        missing_ok: bool,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.delete_workspace_mount_tree(user_id, mount_id, path, missing_ok).await,
+        }
+    }
+
+    async fn restore_workspace_mount(
+        &self,
+        request: &WorkspaceMountRestoreRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.restore_workspace_mount(request).await,
+        }
+    }
+
+    async fn set_workspace_mount_baseline(
+        &self,
+        request: &WorkspaceMountBaselineRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.set_workspace_mount_baseline(request).await,
+        }
+    }
+
+    async fn refresh_workspace_mount(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        match self {
+            Self::Db(db) => db.refresh_workspace_mount(user_id, mount_id, scope_path).await,
+        }
+    }
+
+    async fn sync_workspace_mount_watch(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        match self {
+            Self::Db(db) => db.sync_workspace_mount_watch(user_id, mount_id).await,
         }
     }
 
@@ -482,9 +691,82 @@ pub struct Workspace {
     /// Optional privacy classifier for shared layer writes.
     /// When None, writes go exactly where requested — no silent redirect.
     privacy_classifier: Option<Arc<dyn crate::workspace::privacy::PrivacyClassifier>>,
+    /// Whether mounted workspace trees should be reconciled in the background.
+    mount_watch_enabled: bool,
+    /// Poll interval for background mounted-tree reconciliation.
+    mount_watch_interval: Duration,
+    /// Ensures we only spawn one watch loop per workspace instance.
+    mount_watch_started: std::sync::atomic::AtomicBool,
+    /// Shutdown signal for the background watch loop.
+    mount_watch_shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 impl Workspace {
+    fn ensure_mount_watch_started(&self) {
+        if !self.mount_watch_enabled {
+            return;
+        }
+
+        if self
+            .mount_watch_started
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+
+        let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+        *self
+            .mount_watch_shutdown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(shutdown_tx);
+
+        let storage = self.storage.clone();
+        let user_id = self.user_id.clone();
+        let interval = self.mount_watch_interval;
+
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                tokio::select! {
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = ticker.tick() => {
+                        let mounts = match storage.list_workspace_mounts(&user_id).await {
+                            Ok(mounts) => mounts,
+                            Err(error) => {
+                                tracing::warn!(
+                                    user_id = %user_id,
+                                    "workspace mount watch list failed: {}",
+                                    error
+                                );
+                                continue;
+                            }
+                        };
+
+                        for summary in mounts {
+                            if let Err(error) = storage
+                                .sync_workspace_mount_watch(&user_id, summary.mount.id)
+                                .await
+                            {
+                                tracing::warn!(
+                                    user_id = %user_id,
+                                    mount_id = %summary.mount.id,
+                                    "workspace mount watch refresh failed: {}",
+                                    error
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     /// Create a new workspace backed by any Database implementation.
     ///
     /// Use this for libSQL or any other backend that implements the Database trait.
@@ -502,6 +784,10 @@ impl Workspace {
             search_defaults: SearchConfig::default(),
             memory_layers,
             privacy_classifier: None,
+            mount_watch_enabled: !cfg!(test),
+            mount_watch_interval: Duration::from_millis(DEFAULT_MOUNT_WATCH_INTERVAL_MS),
+            mount_watch_started: std::sync::atomic::AtomicBool::new(false),
+            mount_watch_shutdown: Mutex::new(None),
         }
     }
 
@@ -587,6 +873,12 @@ impl Workspace {
             .with_rrf_k(config.rrf_k)
             .with_fts_weight(config.fts_weight)
             .with_vector_weight(config.vector_weight);
+        self
+    }
+
+    pub fn with_mount_watch_config(mut self, enabled: bool, interval_ms: u64) -> Self {
+        self.mount_watch_enabled = enabled;
+        self.mount_watch_interval = Duration::from_millis(interval_ms.max(100));
         self
     }
 
@@ -689,6 +981,10 @@ impl Workspace {
             search_defaults: self.search_defaults.clone(),
             memory_layers,
             privacy_classifier: self.privacy_classifier.clone(),
+            mount_watch_enabled: self.mount_watch_enabled,
+            mount_watch_interval: self.mount_watch_interval,
+            mount_watch_started: std::sync::atomic::AtomicBool::new(false),
+            mount_watch_shutdown: Mutex::new(None),
         }
     }
 
@@ -1259,6 +1555,7 @@ impl Workspace {
         source_root: impl Into<String>,
         bypass_write: bool,
     ) -> Result<WorkspaceMountSummary, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .create_workspace_mount(&CreateMountRequest {
                 user_id: self.user_id.clone(),
@@ -1270,13 +1567,67 @@ impl Workspace {
     }
 
     pub async fn list_mounts(&self) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage.list_workspace_mounts(&self.user_id).await
     }
 
     pub async fn get_mount(&self, mount_id: Uuid) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .get_workspace_mount(&self.user_id, mount_id)
             .await
+    }
+
+    pub async fn resolve_mount_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Option<ResolvedWorkspaceMountPath>, WorkspaceError> {
+        let disk_path = normalize_host_path(path.as_ref());
+        let mounts = self.list_mounts().await?;
+
+        let resolved = mounts
+            .into_iter()
+            .filter_map(|summary| {
+                let source_root = normalize_host_path(Path::new(&summary.mount.source_root));
+                if !(disk_path == source_root || disk_path.starts_with(&source_root)) {
+                    return None;
+                }
+
+                let relative_path = match disk_path.strip_prefix(&source_root).ok() {
+                    Some(relative) if relative.as_os_str().is_empty() => None,
+                    Some(relative) => {
+                        let text = relative.to_string_lossy().replace('\\', "/");
+                        Some(normalize_mount_path(&text).ok()?)
+                    }
+                    None => None,
+                };
+
+                Some(ResolvedWorkspaceMountPath {
+                    mount_id: summary.mount.id,
+                    relative_path: relative_path.clone(),
+                    workspace_uri: WorkspaceUri::mount_uri(
+                        summary.mount.id,
+                        relative_path.as_deref(),
+                    ),
+                    disk_path: disk_path.display().to_string(),
+                    source_root: summary.mount.source_root,
+                })
+            })
+            .max_by_key(|resolved| resolved.source_root.len());
+
+        Ok(resolved)
+    }
+
+    pub async fn refresh_mount_for_disk_path(
+        &self,
+        path: impl AsRef<Path>,
+    ) -> Result<Option<ResolvedWorkspaceMountPath>, WorkspaceError> {
+        let Some(resolved) = self.resolve_mount_path(path).await? else {
+            return Ok(None);
+        };
+        self.refresh_mount(resolved.mount_id, resolved.relative_path.as_deref())
+            .await?;
+        Ok(Some(resolved))
     }
 
     pub async fn read_mount_file(
@@ -1284,6 +1635,7 @@ impl Workspace {
         mount_id: Uuid,
         path: &str,
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .read_workspace_mount_file(&self.user_id, mount_id, path)
             .await
@@ -1294,8 +1646,32 @@ impl Workspace {
         mount_id: Uuid,
         scope_path: Option<&str>,
     ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .diff_workspace_mount(&self.user_id, mount_id, scope_path)
+            .await
+    }
+
+    pub async fn diff_mount_between(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<String>,
+        from: Option<String>,
+        to: Option<String>,
+        include_content: bool,
+        max_files: Option<usize>,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .diff_workspace_mount_between(&WorkspaceMountDiffRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                scope_path,
+                from,
+                to,
+                include_content,
+                max_files,
+            })
             .await
     }
 
@@ -1306,15 +1682,50 @@ impl Workspace {
         summary: Option<String>,
         created_by: impl Into<String>,
         is_auto: bool,
+        revision_id: Option<Uuid>,
     ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .create_workspace_checkpoint(&CreateCheckpointRequest {
                 user_id: self.user_id.clone(),
                 mount_id,
+                revision_id,
                 label,
                 summary,
                 created_by: created_by.into(),
                 is_auto,
+            })
+            .await
+    }
+
+    pub async fn list_mount_checkpoints(
+        &self,
+        mount_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .list_workspace_checkpoints(&self.user_id, mount_id, limit)
+            .await
+    }
+
+    pub async fn mount_history(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<String>,
+        limit: usize,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        include_checkpoints: bool,
+    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .list_workspace_mount_history(&WorkspaceMountHistoryRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                scope_path,
+                limit,
+                since,
+                include_checkpoints,
             })
             .await
     }
@@ -1325,12 +1736,14 @@ impl Workspace {
         scope_path: Option<String>,
         checkpoint_id: Option<Uuid>,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .keep_workspace_mount(&MountActionRequest {
                 user_id: self.user_id.clone(),
                 mount_id,
                 scope_path,
                 checkpoint_id,
+                set_as_baseline: true,
             })
             .await
     }
@@ -1341,13 +1754,97 @@ impl Workspace {
         scope_path: Option<String>,
         checkpoint_id: Option<Uuid>,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
         self.storage
             .revert_workspace_mount(&MountActionRequest {
                 user_id: self.user_id.clone(),
                 mount_id,
                 scope_path,
                 checkpoint_id,
+                set_as_baseline: false,
             })
+            .await
+    }
+
+    pub async fn restore_mount(
+        &self,
+        mount_id: Uuid,
+        target: impl Into<String>,
+        scope_path: Option<String>,
+        set_as_baseline: bool,
+        dry_run: bool,
+        create_checkpoint_before_restore: bool,
+        created_by: impl Into<String>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .restore_workspace_mount(&WorkspaceMountRestoreRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                scope_path,
+                target: target.into(),
+                set_as_baseline,
+                dry_run,
+                create_checkpoint_before_restore,
+                created_by: created_by.into(),
+            })
+            .await
+    }
+
+    pub async fn set_mount_baseline(
+        &self,
+        mount_id: Uuid,
+        target: impl Into<String>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .set_workspace_mount_baseline(&WorkspaceMountBaselineRequest {
+                user_id: self.user_id.clone(),
+                mount_id,
+                target: target.into(),
+            })
+            .await
+    }
+
+    pub async fn refresh_mount(
+        &self,
+        mount_id: Uuid,
+        scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .refresh_workspace_mount(&self.user_id, mount_id, scope_path)
+            .await
+    }
+
+    pub async fn move_mount_file(
+        &self,
+        mount_id: Uuid,
+        source_path: &str,
+        destination_path: &str,
+        overwrite: bool,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .move_workspace_mount_file(
+                &self.user_id,
+                mount_id,
+                source_path,
+                destination_path,
+                overwrite,
+            )
+            .await
+    }
+
+    pub async fn delete_mount_tree(
+        &self,
+        mount_id: Uuid,
+        path: &str,
+        missing_ok: bool,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.ensure_mount_watch_started();
+        self.storage
+            .delete_workspace_mount_tree(&self.user_id, mount_id, path, missing_ok)
             .await
     }
 
@@ -1390,9 +1887,76 @@ impl Workspace {
     }
 }
 
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self
+            .mount_watch_shutdown
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            let _ = shutdown.send(true);
+        }
+    }
+}
+
 // ==================== Search ====================
 
 impl Workspace {
+    async fn search_mounted_files(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>, WorkspaceError> {
+        let mut hits = Vec::new();
+        for mount in self.list_mounts().await? {
+            let root = PathBuf::from(&mount.mount.source_root);
+            let mut files = Vec::new();
+            collect_mount_search_files(&root, &root, &mut files)?;
+            for (relative_path, absolute_path, _size) in files {
+                let bytes = tokio::fs::read(&absolute_path)
+                    .await
+                    .map_err(|e| WorkspaceError::IoError {
+                        reason: format!("failed to read {}: {e}", absolute_path.display()),
+                    })?;
+                let Ok(content) = String::from_utf8(bytes) else {
+                    continue;
+                };
+                let Some(score) = mount_search_score(&relative_path, &content, query) else {
+                    continue;
+                };
+                let document_path = WorkspaceUri::mount_uri(mount.mount.id, Some(&relative_path));
+                let document_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, document_path.as_bytes());
+                let snippet = mount_search_snippet(&content, query);
+                let chunk_id = Uuid::new_v5(
+                    &document_id,
+                    format!("{document_path}#{}", snippet.len()).as_bytes(),
+                );
+                hits.push(SearchResult {
+                    document_id,
+                    document_path,
+                    chunk_id,
+                    content: snippet,
+                    score,
+                    fts_rank: None,
+                    vector_rank: None,
+                });
+            }
+        }
+
+        hits.sort_by(|left, right| {
+            right
+                .score
+                .total_cmp(&left.score)
+                .then_with(|| left.document_path.cmp(&right.document_path))
+        });
+        hits.truncate(limit);
+        for (idx, hit) in hits.iter_mut().enumerate() {
+            hit.fts_rank = Some(idx as u32 + 1);
+        }
+        Ok(hits)
+    }
+
     /// Hybrid search across all memory documents.
     ///
     /// Combines full-text search (BM25) with semantic search (vector similarity)
@@ -1414,6 +1978,11 @@ impl Workspace {
         query: &str,
         config: SearchConfig,
     ) -> Result<Vec<SearchResult>, WorkspaceError> {
+        let mount_results = self.search_mounted_files(query, config.limit).await?;
+        if !mount_results.is_empty() {
+            return Ok(mount_results);
+        }
+
         // Generate embedding for semantic search if provider available
         let embedding = if let Some(provider) = self.current_embeddings() {
             Some(
@@ -1877,6 +2446,24 @@ mod seed_tests {
         (ws, temp_dir)
     }
 
+    async fn create_test_workspace_with_mount_watch(
+        interval_ms: u64,
+    ) -> (Workspace, tempfile::TempDir) {
+        use crate::db::libsql::LibSqlBackend;
+
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let db_path = temp_dir.path().join("workspace_test.db");
+        let backend = LibSqlBackend::new_local(&db_path)
+            .await
+            .expect("LibSqlBackend");
+        <LibSqlBackend as crate::db::Database>::run_migrations(&backend)
+            .await
+            .expect("migrations");
+        let db: Arc<dyn crate::db::Database> = Arc::new(backend);
+        let ws = Workspace::new_with_db("test_watch", db).with_mount_watch_config(true, interval_ms);
+        (ws, temp_dir)
+    }
+
     #[tokio::test]
     async fn seed_if_empty_seeds_bootstrap_on_fresh_workspace() {
         let (ws, _dir) = create_test_workspace().await;
@@ -1915,6 +2502,62 @@ mod seed_tests {
         assert!(
             ws.read(paths::BOOTSTRAP).await.is_err(),
             "BOOTSTRAP.md should NOT have been seeded when identity exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_search_prefers_real_mounted_files() {
+        let (ws, dir) = create_test_workspace().await;
+        let mount_root = dir.path().join("search-project");
+        std::fs::create_dir_all(&mount_root).expect("create mount root");
+        std::fs::write(
+            mount_root.join("README.md"),
+            "workspace search should find this mounted needle\n",
+        )
+        .expect("write mount file");
+
+        let mount = ws
+            .create_mount("search-project", mount_root.display().to_string(), false)
+            .await
+            .expect("create mount");
+
+        let results = ws.search("mounted needle", 5).await.expect("search");
+        assert!(
+            results.iter().any(|result| {
+                result.document_path == WorkspaceUri::mount_uri(mount.mount.id, Some("README.md"))
+                    && result.content.contains("mounted needle")
+            }),
+            "workspace search should include real mounted file matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn mount_watch_creates_fswatch_revision_for_external_edits() {
+        let (ws, dir) = create_test_workspace_with_mount_watch(200).await;
+        let mount_root = dir.path().join("watched-project");
+        std::fs::create_dir_all(&mount_root).expect("create mount root");
+
+        let mount = ws
+            .create_mount("watched-project", mount_root.display().to_string(), false)
+            .await
+            .expect("create mount");
+
+        std::fs::write(mount_root.join("external.txt"), "external change\n")
+            .expect("write external file");
+
+        tokio::time::sleep(std::time::Duration::from_millis(900)).await;
+
+        let history = ws
+            .mount_history(mount.mount.id, None, 20, None, false)
+            .await
+            .expect("mount history");
+
+        assert!(
+            history
+                .revisions
+                .iter()
+                .any(|revision| revision.kind == WorkspaceMountRevisionKind::FsWatch),
+            "background watcher should record external edits as fs_watch revisions"
         );
     }
 

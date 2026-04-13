@@ -17,8 +17,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::context::JobContext;
-use crate::tools::tool::{Tool, ToolError, ToolOutput, require_str};
-use crate::workspace::{Workspace, paths};
+use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
+use crate::workspace::{Workspace, WorkspaceUri, paths};
 
 // ── WorkspaceResolver ──────────────────────────────────────────────
 
@@ -90,6 +90,10 @@ impl WorkspacePool {
         }
 
         ws.with_memory_layers(self.workspace_config.memory_layers.clone())
+            .with_mount_watch_config(
+                self.workspace_config.mount_watch_enabled,
+                self.workspace_config.mount_watch_interval_ms,
+            )
     }
 }
 
@@ -142,6 +146,22 @@ fn is_legacy_memory_target(target: &str) -> bool {
 
 fn is_workspace_mount_uri(path: &str) -> bool {
     path.starts_with("workspace://")
+}
+
+fn parse_workspace_mount_target(path: &str) -> Result<(uuid::Uuid, Option<String>), ToolError> {
+    match WorkspaceUri::parse(path)
+        .map_err(|e| ToolError::ExecutionFailed(format!("Path parse failed: {e}")))?
+    {
+        Some(WorkspaceUri::MountRoot(mount_id)) => Ok((mount_id, None)),
+        Some(WorkspaceUri::MountPath(mount_id, mount_path)) => Ok((mount_id, Some(mount_path))),
+        Some(WorkspaceUri::Root) => Err(ToolError::InvalidParameters(
+            "workspace:// root is not a valid mount target for this tool".to_string(),
+        )),
+        None => Err(ToolError::InvalidParameters(format!(
+            "'{}' is not a mounted workspace URI",
+            path
+        ))),
+    }
 }
 
 /// Map workspace write errors to tool errors, using `NotAuthorized` for
@@ -332,6 +352,10 @@ impl Tool for WorkspaceSearchTool {
     fn requires_sanitization(&self) -> bool {
         false // Internal workspace content, trusted content
     }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
 }
 
 /// Tool for writing mounted workspace files.
@@ -384,15 +408,6 @@ impl Tool for WorkspaceWriteTool {
                     "type": "boolean",
                     "description": "If true, append to existing content. If false, replace entirely.",
                     "default": true
-                },
-                "layer": {
-                    "type": "string",
-                    "description": "Memory layer to write to (e.g. 'private', 'household', 'finance'). When omitted, writes to the workspace's default scope."
-                },
-                "force": {
-                    "type": "boolean",
-                    "description": "Skip privacy classification and write directly to the specified layer without redirect. Use when you're certain the content belongs in the target layer.",
-                    "default": false
                 }
             },
             "required": ["content", "target"]
@@ -447,63 +462,47 @@ impl Tool for WorkspaceWriteTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(true);
 
-        let layer = params.get("layer").and_then(|v| v.as_str());
-        let force = params
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
         let resolved_path = target.to_string();
-
-        // When a layer is specified, route through layer-aware methods for ALL targets.
-        // Otherwise, use default workspace methods (which include injection scanning).
-        let layer_result = if let Some(layer_name) = layer {
-            let result = if append {
-                workspace
-                    .append_to_layer(layer_name, &resolved_path, content, force)
-                    .await
-                    .map_err(map_write_err)?
-            } else {
-                workspace
-                    .write_to_layer(layer_name, &resolved_path, content, force)
-                    .await
-                    .map_err(map_write_err)?
+        // Mounted workspace files now map directly to the real filesystem.
+        // Append uses an explicit read-modify-write so workspace:// paths behave
+        // the same way as raw filesystem append semantics.
+        if append {
+            let existing = match workspace.read(&resolved_path).await {
+                Ok(doc) => Some(doc.content),
+                Err(crate::error::WorkspaceError::DocumentNotFound { .. }) => None,
+                Err(err) => return Err(ToolError::ExecutionFailed(format!("Read failed: {err}"))),
             };
-            Some((result.actual_layer, result.redirected))
+            let merged = match existing {
+                Some(existing) if !existing.is_empty() => format!("{existing}\n{content}"),
+                _ => content.to_string(),
+            };
+            workspace
+                .write(&resolved_path, &merged)
+                .await
+                .map_err(map_write_err)?;
         } else {
-            // No layer specified — use default workspace methods.
-            // Prompt injection scanning for system-prompt files is handled by
-            // Workspace::write() / Workspace::append().
-            if append {
-                workspace
-                    .append(&resolved_path, content)
-                    .await
-                    .map_err(map_write_err)?;
-            } else {
-                workspace
-                    .write(&resolved_path, content)
-                    .await
-                    .map_err(map_write_err)?;
-            }
-            None
-        };
+            workspace
+                .write(&resolved_path, content)
+                .await
+                .map_err(map_write_err)?;
+        }
 
-        let mut output = serde_json::json!({
+        let output = serde_json::json!({
             "status": "written",
             "path": resolved_path,
             "append": append,
             "content_length": content.len(),
         });
-        if let Some((actual_layer, redirected)) = layer_result {
-            output["layer"] = serde_json::Value::String(actual_layer);
-            output["redirected"] = serde_json::Value::Bool(redirected);
-        }
 
         Ok(ToolOutput::success(output, start.elapsed()))
     }
 
     fn requires_sanitization(&self) -> bool {
         false // Internal tool
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
     }
 
     fn rate_limit_config(&self) -> Option<crate::tools::tool::ToolRateLimitConfig> {
@@ -601,6 +600,10 @@ impl Tool for WorkspaceReadTool {
 
     fn requires_sanitization(&self) -> bool {
         false // Internal workspace content
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
     }
 }
 
@@ -743,6 +746,834 @@ impl Tool for WorkspaceTreeTool {
 
     fn requires_sanitization(&self) -> bool {
         false // Internal tool
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceApplyPatchTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceApplyPatchTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceApplyPatchTool {
+    fn name(&self) -> &str {
+        "workspace_apply_patch"
+    }
+
+    fn description(&self) -> &str {
+        "Apply a targeted string replacement to a mounted workspace file on the real filesystem."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "old_string": { "type": "string" },
+                "new_string": { "type": "string" },
+                "replace_all": { "type": "boolean", "default": false }
+            },
+            "required": ["path", "old_string", "new_string"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let path = require_str(&params, "path")?;
+        let old_string = require_str(&params, "old_string")?;
+        let new_string = require_str(&params, "new_string")?;
+        let replace_all = params
+            .get("replace_all")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let current = workspace
+            .read(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Read failed: {e}")))?;
+        if !current.content.contains(old_string) {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Target text not found in {}",
+                path
+            )));
+        }
+        let updated = if replace_all {
+            current.content.replace(old_string, new_string)
+        } else {
+            current.content.replacen(old_string, new_string, 1)
+        };
+        workspace
+            .write(path, &updated)
+            .await
+            .map_err(map_write_err)?;
+        Ok(ToolOutput::success(
+            serde_json::json!({
+                "path": path,
+                "replaced": true,
+                "replace_all": replace_all
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceMoveTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceMoveTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceMoveTool {
+    fn name(&self) -> &str {
+        "workspace_move"
+    }
+
+    fn description(&self) -> &str {
+        "Move or rename a file inside a mounted workspace on the real filesystem."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "source_path": { "type": "string" },
+                "destination_path": { "type": "string" },
+                "overwrite": { "type": "boolean", "default": false }
+            },
+            "required": ["source_path", "destination_path"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let source_path = require_str(&params, "source_path")?;
+        let destination_path = require_str(&params, "destination_path")?;
+        let overwrite = params
+            .get("overwrite")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let (source_mount, source_rel) = parse_workspace_mount_target(source_path)?;
+        let (destination_mount, destination_rel) = parse_workspace_mount_target(destination_path)?;
+        if source_mount != destination_mount {
+            return Err(ToolError::InvalidParameters(
+                "workspace_move only supports moves within the same mount".to_string(),
+            ));
+        }
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let view = workspace
+            .move_mount_file(
+                source_mount,
+                source_rel.as_deref().unwrap_or(""),
+                destination_rel.as_deref().unwrap_or(""),
+                overwrite,
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Move failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(view)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceDeleteTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceDeleteTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceDeleteTool {
+    fn name(&self) -> &str {
+        "workspace_delete"
+    }
+
+    fn description(&self) -> &str {
+        "Delete a file from a mounted workspace on the real filesystem."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let path = require_str(&params, "path")?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        workspace
+            .delete(path)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Delete failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::json!({ "path": path, "deleted": true }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceDeleteTreeTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceDeleteTreeTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceDeleteTreeTool {
+    fn name(&self) -> &str {
+        "workspace_delete_tree"
+    }
+
+    fn description(&self) -> &str {
+        "Delete a directory tree from a mounted workspace on the real filesystem."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string" },
+                "missing_ok": { "type": "boolean", "default": false }
+            },
+            "required": ["path"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let path = require_str(&params, "path")?;
+        let missing_ok = params
+            .get("missing_ok")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let (mount_id, mount_path) = parse_workspace_mount_target(path)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let detail = workspace
+            .delete_mount_tree(mount_id, mount_path.as_deref().unwrap_or(""), missing_ok)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Delete tree failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(detail)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceDiffTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceDiffTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceDiffTool {
+    fn name(&self) -> &str {
+        "workspace_diff"
+    }
+
+    fn description(&self) -> &str {
+        "Compare the current real workspace tree with baseline or another revision/checkpoint."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "from": { "type": "string" },
+                "to": { "type": "string" },
+                "include_content": { "type": "boolean", "default": true },
+                "max_files": { "type": "integer" }
+            },
+            "required": ["scope"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let include_content = params
+            .get("include_content")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let max_files = params.get("max_files").and_then(|value| value.as_u64()).map(|v| v as usize);
+        let from = params.get("from").and_then(|value| value.as_str()).map(ToString::to_string);
+        let to = params.get("to").and_then(|value| value.as_str()).map(ToString::to_string);
+        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let diff = workspace
+            .diff_mount_between(mount_id, scope_path, from, to, include_content, max_files)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Diff failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(diff)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceHistoryTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceHistoryTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceHistoryTool {
+    fn name(&self) -> &str {
+        "workspace_history"
+    }
+
+    fn description(&self) -> &str {
+        "List revisions and checkpoints for a mounted workspace."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "limit": { "type": "integer", "default": 20 },
+                "include_checkpoints": { "type": "boolean", "default": true }
+            },
+            "required": ["scope"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let limit = params
+            .get("limit")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(20) as usize;
+        let include_checkpoints = params
+            .get("include_checkpoints")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let history = workspace
+            .mount_history(mount_id, scope_path, limit, None, include_checkpoints)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("History failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(history)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceCheckpointCreateTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceCheckpointCreateTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceCheckpointCreateTool {
+    fn name(&self) -> &str {
+        "workspace_checkpoint_create"
+    }
+
+    fn description(&self) -> &str {
+        "Create a named checkpoint for the current or specified workspace revision."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "label": { "type": "string" },
+                "summary": { "type": "string" },
+                "revision": { "type": "string" }
+            },
+            "required": ["scope"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let label = params.get("label").and_then(|value| value.as_str()).map(ToString::to_string);
+        let summary = params
+            .get("summary")
+            .and_then(|value| value.as_str())
+            .map(ToString::to_string);
+        let revision = params
+            .get("revision")
+            .and_then(|value| value.as_str())
+            .and_then(|value| uuid::Uuid::parse_str(value).ok());
+        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let checkpoint = workspace
+            .create_checkpoint(mount_id, label, summary, "agent", false, revision)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Checkpoint failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(checkpoint)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceCheckpointListTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceCheckpointListTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceCheckpointListTool {
+    fn name(&self) -> &str {
+        "workspace_checkpoint_list"
+    }
+
+    fn description(&self) -> &str {
+        "List checkpoints for a mounted workspace."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "limit": { "type": "integer" }
+            },
+            "required": ["scope"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let limit = params.get("limit").and_then(|value| value.as_u64()).map(|v| v as usize);
+        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let checkpoints = workspace
+            .list_mount_checkpoints(mount_id, limit)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Checkpoint list failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(checkpoints)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceRestoreTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceRestoreTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceRestoreTool {
+    fn name(&self) -> &str {
+        "workspace_restore"
+    }
+
+    fn description(&self) -> &str {
+        "Restore a mounted workspace or subtree to a baseline, revision, or checkpoint."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "target": { "type": "string" },
+                "set_as_baseline": { "type": "boolean", "default": false },
+                "dry_run": { "type": "boolean", "default": false },
+                "create_checkpoint_before_restore": { "type": "boolean", "default": true }
+            },
+            "required": ["scope", "target"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let target = require_str(&params, "target")?;
+        let set_as_baseline = params
+            .get("set_as_baseline")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let dry_run = params
+            .get("dry_run")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let create_checkpoint_before_restore = params
+            .get("create_checkpoint_before_restore")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(true);
+        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let detail = workspace
+            .restore_mount(
+                mount_id,
+                target,
+                scope_path,
+                set_as_baseline,
+                dry_run,
+                create_checkpoint_before_restore,
+                "agent",
+            )
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Restore failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(detail)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceBaselineSetTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceBaselineSetTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceBaselineSetTool {
+    fn name(&self) -> &str {
+        "workspace_baseline_set"
+    }
+
+    fn description(&self) -> &str {
+        "Set the baseline revision for a mounted workspace without changing disk contents."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" },
+                "target": { "type": "string" }
+            },
+            "required": ["scope", "target"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let target = require_str(&params, "target")?;
+        let (mount_id, _) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let detail = workspace
+            .set_mount_baseline(mount_id, target)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Set baseline failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(detail)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
+    }
+}
+
+pub struct WorkspaceRefreshTool {
+    resolver: Arc<dyn WorkspaceResolver>,
+}
+
+impl WorkspaceRefreshTool {
+    pub fn new(resolver: Arc<dyn WorkspaceResolver>) -> Self {
+        Self { resolver }
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self {
+            resolver: Arc::new(FixedWorkspaceResolver::new(workspace)),
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for WorkspaceRefreshTool {
+    fn name(&self) -> &str {
+        "workspace_refresh"
+    }
+
+    fn description(&self) -> &str {
+        "Force a refresh of a mounted workspace from the real filesystem."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "scope": { "type": "string" }
+            },
+            "required": ["scope"]
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = std::time::Instant::now();
+        let scope = require_str(&params, "scope")?;
+        let (mount_id, scope_path) = parse_workspace_mount_target(scope)?;
+        let workspace = self.resolver.resolve(&ctx.user_id).await;
+        let detail = workspace
+            .refresh_mount(mount_id, scope_path.as_deref())
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Refresh failed: {e}")))?;
+        Ok(ToolOutput::success(
+            serde_json::to_value(detail)
+                .map_err(|e| ToolError::ExecutionFailed(format!("Serialize failed: {e}")))?,
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+
+    fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
+        ApprovalRequirement::UnlessAutoApproved
     }
 }
 

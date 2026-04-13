@@ -1,7 +1,7 @@
 //! Workspace-related WorkspaceStore implementation for LibSqlBackend.
 
-use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use libsql::params;
@@ -16,9 +16,13 @@ use crate::error::{DatabaseError, WorkspaceError};
 use crate::workspace::{
     ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MemoryChunk,
     MemoryDocument, MountActionRequest, MountedFileDiff, MountedFileStatus, RankedResult,
-    SearchConfig, SearchResult, WorkspaceEntry, WorkspaceMount, WorkspaceMountCheckpoint,
-    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView, WorkspaceMountSummary,
-    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, fuse_results, normalize_mount_path,
+    SearchConfig, SearchResult, WorkspaceEntry, WorkspaceMount, WorkspaceMountBaselineRequest,
+    WorkspaceMountChangeKind, WorkspaceMountCheckpoint, WorkspaceMountDetail,
+    WorkspaceMountDiff, WorkspaceMountDiffRequest, WorkspaceMountFileView,
+    WorkspaceMountHistory, WorkspaceMountHistoryRequest, WorkspaceMountRestoreRequest,
+    WorkspaceMountRevision, WorkspaceMountRevisionKind, WorkspaceMountRevisionSource,
+    WorkspaceMountSummary, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
+    fuse_results, normalize_mount_path,
 };
 
 use chrono::Utc;
@@ -70,15 +74,44 @@ struct MountFileRecord {
     is_binary: bool,
     base_snapshot_id: Option<Uuid>,
     working_snapshot_id: Option<Uuid>,
-    conflict_reason: Option<String>,
     updated_at: chrono::DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TextChange {
-    base_start: usize,
-    base_end: usize,
-    new_lines: Vec<String>,
+#[derive(Debug, Clone)]
+struct ManifestEntry {
+    snapshot_id: Uuid,
+    is_binary: bool,
+    size_bytes: i64,
+    modified_at: Option<i64>,
+    file_mode: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct MountStateRecord {
+    baseline_revision_id: Option<Uuid>,
+    head_revision_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+struct RevisionRef {
+    id: Uuid,
+    parent_revision_id: Option<Uuid>,
+    kind: WorkspaceMountRevisionKind,
+    source: WorkspaceMountRevisionSource,
+    trigger: Option<String>,
+    summary: Option<String>,
+    created_by: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct ManifestChange {
+    path: String,
+    before: Option<ManifestEntry>,
+    after: Option<ManifestEntry>,
+    status: MountedFileStatus,
+    change_kind: WorkspaceMountChangeKind,
+    is_binary: bool,
 }
 
 fn compute_content_hash(bytes: &[u8]) -> String {
@@ -93,166 +126,11 @@ fn bytes_to_text(bytes: &[u8]) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(ToString::to_string)
 }
 
-fn split_text_lines(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    text.split_inclusive('\n')
-        .map(ToString::to_string)
-        .collect()
-}
-
-fn lcs_matches(base: &[String], other: &[String]) -> Vec<(usize, usize)> {
-    let mut dp = vec![vec![0usize; other.len() + 1]; base.len() + 1];
-    for i in (0..base.len()).rev() {
-        for j in (0..other.len()).rev() {
-            dp[i][j] = if base[i] == other[j] {
-                dp[i + 1][j + 1] + 1
-            } else {
-                dp[i + 1][j].max(dp[i][j + 1])
-            };
-        }
-    }
-
-    let mut i = 0;
-    let mut j = 0;
-    let mut matches = Vec::new();
-    while i < base.len() && j < other.len() {
-        if base[i] == other[j] {
-            matches.push((i, j));
-            i += 1;
-            j += 1;
-        } else if dp[i + 1][j] >= dp[i][j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
-    matches
-}
-
-fn diff_text_changes(base: &str, other: &str) -> Vec<TextChange> {
-    let base_lines = split_text_lines(base);
-    let other_lines = split_text_lines(other);
-    let matches = lcs_matches(&base_lines, &other_lines);
-    let mut changes = Vec::new();
-    let mut prev_base = 0usize;
-    let mut prev_other = 0usize;
-
-    for (base_idx, other_idx) in matches {
-        if base_idx > prev_base || other_idx > prev_other {
-            changes.push(TextChange {
-                base_start: prev_base,
-                base_end: base_idx,
-                new_lines: other_lines[prev_other..other_idx].to_vec(),
-            });
-        }
-        prev_base = base_idx + 1;
-        prev_other = other_idx + 1;
-    }
-
-    if prev_base < base_lines.len() || prev_other < other_lines.len() {
-        changes.push(TextChange {
-            base_start: prev_base,
-            base_end: base_lines.len(),
-            new_lines: other_lines[prev_other..].to_vec(),
-        });
-    }
-
-    changes
-}
-
-fn apply_text_changes(base: &[String], changes: &[TextChange]) -> String {
-    let mut cursor = 0usize;
-    let mut merged = String::new();
-    for change in changes {
-        if change.base_start > cursor {
-            merged.push_str(&base[cursor..change.base_start].concat());
-        }
-        merged.push_str(&change.new_lines.concat());
-        cursor = change.base_end;
-    }
-    if cursor < base.len() {
-        merged.push_str(&base[cursor..].concat());
-    }
-    merged
-}
-
-fn three_way_merge_text(base: &str, remote: &str, working: &str) -> Result<String, String> {
-    if remote == working {
-        return Ok(working.to_string());
-    }
-    if remote == base {
-        return Ok(working.to_string());
-    }
-    if working == base {
-        return Ok(remote.to_string());
-    }
-
-    let remote_changes = diff_text_changes(base, remote);
-    let working_changes = diff_text_changes(base, working);
-    let mut merged_changes = Vec::new();
-    let mut remote_idx = 0usize;
-    let mut working_idx = 0usize;
-
-    while remote_idx < remote_changes.len() || working_idx < working_changes.len() {
-        match (
-            remote_changes.get(remote_idx),
-            working_changes.get(working_idx),
-        ) {
-            (Some(remote_change), Some(working_change)) => {
-                let same_insert_point = remote_change.base_start == remote_change.base_end
-                    && working_change.base_start == working_change.base_end
-                    && remote_change.base_start == working_change.base_start;
-                let overlaps = same_insert_point
-                    || (remote_change.base_start < working_change.base_end
-                        && working_change.base_start < remote_change.base_end);
-
-                if overlaps {
-                    if remote_change == working_change {
-                        merged_changes.push(remote_change.clone());
-                        remote_idx += 1;
-                        working_idx += 1;
-                        continue;
-                    }
-                    return Err(format!(
-                        "Text conflict around base lines {}..{}",
-                        remote_change.base_start + 1,
-                        remote_change.base_end.max(working_change.base_end)
-                    ));
-                }
-
-                let remote_first = remote_change.base_start < working_change.base_start
-                    || (remote_change.base_start == working_change.base_start
-                        && remote_change.base_end <= working_change.base_end);
-                if remote_first {
-                    merged_changes.push(remote_change.clone());
-                    remote_idx += 1;
-                } else {
-                    merged_changes.push(working_change.clone());
-                    working_idx += 1;
-                }
-            }
-            (Some(remote_change), None) => {
-                merged_changes.push(remote_change.clone());
-                remote_idx += 1;
-            }
-            (None, Some(working_change)) => {
-                merged_changes.push(working_change.clone());
-                working_idx += 1;
-            }
-            (None, None) => break,
-        }
-    }
-
-    Ok(apply_text_changes(&split_text_lines(base), &merged_changes))
-}
-
 fn status_from_str(value: &str) -> MountedFileStatus {
     match value {
         "modified" => MountedFileStatus::Modified,
         "added" => MountedFileStatus::Added,
-        "pending_delete" => MountedFileStatus::PendingDelete,
+        "deleted" | "pending_delete" => MountedFileStatus::Deleted,
         "conflicted" => MountedFileStatus::Conflicted,
         "binary_modified" => MountedFileStatus::BinaryModified,
         _ => MountedFileStatus::Clean,
@@ -264,10 +142,231 @@ fn status_to_str(status: MountedFileStatus) -> &'static str {
         MountedFileStatus::Clean => "clean",
         MountedFileStatus::Modified => "modified",
         MountedFileStatus::Added => "added",
-        MountedFileStatus::PendingDelete => "pending_delete",
+        MountedFileStatus::Deleted => "deleted",
         MountedFileStatus::Conflicted => "conflicted",
         MountedFileStatus::BinaryModified => "binary_modified",
     }
+}
+
+fn revision_kind_from_str(value: &str) -> WorkspaceMountRevisionKind {
+    match value {
+        "tool_write" => WorkspaceMountRevisionKind::ToolWrite,
+        "tool_patch" => WorkspaceMountRevisionKind::ToolPatch,
+        "tool_move" => WorkspaceMountRevisionKind::ToolMove,
+        "tool_delete" => WorkspaceMountRevisionKind::ToolDelete,
+        "shell" => WorkspaceMountRevisionKind::Shell,
+        "fs_watch" => WorkspaceMountRevisionKind::FsWatch,
+        "manual_refresh" => WorkspaceMountRevisionKind::ManualRefresh,
+        "restore" => WorkspaceMountRevisionKind::Restore,
+        "accept" => WorkspaceMountRevisionKind::Accept,
+        _ => WorkspaceMountRevisionKind::Initial,
+    }
+}
+
+fn revision_kind_to_str(value: WorkspaceMountRevisionKind) -> &'static str {
+    match value {
+        WorkspaceMountRevisionKind::Initial => "initial",
+        WorkspaceMountRevisionKind::ToolWrite => "tool_write",
+        WorkspaceMountRevisionKind::ToolPatch => "tool_patch",
+        WorkspaceMountRevisionKind::ToolMove => "tool_move",
+        WorkspaceMountRevisionKind::ToolDelete => "tool_delete",
+        WorkspaceMountRevisionKind::Shell => "shell",
+        WorkspaceMountRevisionKind::FsWatch => "fs_watch",
+        WorkspaceMountRevisionKind::ManualRefresh => "manual_refresh",
+        WorkspaceMountRevisionKind::Restore => "restore",
+        WorkspaceMountRevisionKind::Accept => "accept",
+    }
+}
+
+fn revision_source_from_str(value: &str) -> WorkspaceMountRevisionSource {
+    match value {
+        "shell" => WorkspaceMountRevisionSource::Shell,
+        "external" => WorkspaceMountRevisionSource::External,
+        "system" => WorkspaceMountRevisionSource::System,
+        _ => WorkspaceMountRevisionSource::WorkspaceTool,
+    }
+}
+
+fn revision_source_to_str(value: WorkspaceMountRevisionSource) -> &'static str {
+    match value {
+        WorkspaceMountRevisionSource::WorkspaceTool => "workspace_tool",
+        WorkspaceMountRevisionSource::Shell => "shell",
+        WorkspaceMountRevisionSource::External => "external",
+        WorkspaceMountRevisionSource::System => "system",
+    }
+}
+
+fn change_kind_to_str(value: WorkspaceMountChangeKind) -> &'static str {
+    match value {
+        WorkspaceMountChangeKind::Added => "added",
+        WorkspaceMountChangeKind::Modified => "modified",
+        WorkspaceMountChangeKind::Deleted => "deleted",
+        WorkspaceMountChangeKind::Moved => "moved",
+    }
+}
+
+fn scope_matches(path: &str, scope: Option<&str>) -> bool {
+    match scope {
+        None => true,
+        Some(scope) if scope.is_empty() => true,
+        Some(scope) => path == scope || path.starts_with(&format!("{scope}/")),
+    }
+}
+
+fn manifest_entry_equals(left: Option<&ManifestEntry>, right: Option<&ManifestEntry>) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            left.snapshot_id == right.snapshot_id
+                && left.file_mode == right.file_mode
+                && left.is_binary == right.is_binary
+                && left.size_bytes == right.size_bytes
+        }
+        _ => false,
+    }
+}
+
+fn mounted_status_for_entries(
+    before: Option<&ManifestEntry>,
+    after: Option<&ManifestEntry>,
+) -> Option<(MountedFileStatus, WorkspaceMountChangeKind, bool)> {
+    match (before, after) {
+        (None, Some(after)) => Some((
+            MountedFileStatus::Added,
+            WorkspaceMountChangeKind::Added,
+            after.is_binary,
+        )),
+        (Some(before), None) => Some((
+            MountedFileStatus::Deleted,
+            WorkspaceMountChangeKind::Deleted,
+            before.is_binary,
+        )),
+        (Some(before), Some(after)) if !manifest_entry_equals(Some(before), Some(after)) => {
+            Some((
+                if before.is_binary || after.is_binary {
+                    MountedFileStatus::BinaryModified
+                } else {
+                    MountedFileStatus::Modified
+                },
+                WorkspaceMountChangeKind::Modified,
+                before.is_binary || after.is_binary,
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn summarize_change_counts(changes: usize) -> Option<String> {
+    if changes == 0 {
+        None
+    } else if changes == 1 {
+        Some("1 file changed".to_string())
+    } else {
+        Some(format!("{changes} files changed"))
+    }
+}
+
+fn render_text_diff(path: &str, before: Option<&str>, after: Option<&str>) -> Option<String> {
+    match (before, after) {
+        (Some(before), Some(after)) if before != after => Some(format!(
+            "--- from/{path}\n+++ to/{path}\n- {}\n+ {}",
+            before.replace('\n', "\n- "),
+            after.replace('\n', "\n+ ")
+        )),
+        (None, Some(after)) => Some(format!("+++ to/{path}\n+ {}", after.replace('\n', "\n+ "))),
+        (Some(before), None) => Some(format!(
+            "--- from/{path}\n- {}",
+            before.replace('\n', "\n- ")
+        )),
+        _ => None,
+    }
+}
+
+fn metadata_file_mode(metadata: &std::fs::Metadata) -> Option<i64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        Some(i64::from(metadata.permissions().mode()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
+fn metadata_mtime(metadata: &std::fs::Metadata) -> Option<i64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|value| value.as_secs() as i64)
+}
+
+fn collect_manifest_changes(
+    before: &BTreeMap<String, ManifestEntry>,
+    after: &BTreeMap<String, ManifestEntry>,
+    scope: Option<&str>,
+) -> Vec<ManifestChange> {
+    let mut paths = BTreeSet::new();
+    for path in before.keys() {
+        if scope_matches(path, scope) {
+            paths.insert(path.clone());
+        }
+    }
+    for path in after.keys() {
+        if scope_matches(path, scope) {
+            paths.insert(path.clone());
+        }
+    }
+
+    let mut changes = Vec::new();
+    for path in paths {
+        let before_entry = before.get(&path).cloned();
+        let after_entry = after.get(&path).cloned();
+        if let Some((status, change_kind, is_binary)) =
+            mounted_status_for_entries(before_entry.as_ref(), after_entry.as_ref())
+        {
+            changes.push(ManifestChange {
+                path,
+                before: before_entry,
+                after: after_entry,
+                status,
+                change_kind,
+                is_binary,
+            });
+        }
+    }
+
+    let mut deletes: HashMap<String, usize> = HashMap::new();
+    let mut adds: HashMap<String, usize> = HashMap::new();
+    for (idx, change) in changes.iter().enumerate() {
+        match change.change_kind {
+            WorkspaceMountChangeKind::Deleted => {
+                if let Some(before) = &change.before {
+                    deletes.insert(before.snapshot_id.to_string(), idx);
+                }
+            }
+            WorkspaceMountChangeKind::Added => {
+                if let Some(after) = &change.after {
+                    adds.insert(after.snapshot_id.to_string(), idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    for (hash_key, delete_idx) in deletes {
+        if let Some(add_idx) = adds.get(&hash_key) {
+            if let Some(delete_change) = changes.get_mut(delete_idx) {
+                delete_change.change_kind = WorkspaceMountChangeKind::Moved;
+            }
+            if let Some(add_change) = changes.get_mut(*add_idx) {
+                add_change.change_kind = WorkspaceMountChangeKind::Moved;
+            }
+        }
+    }
+
+    changes
 }
 
 impl LibSqlBackend {
@@ -292,42 +391,891 @@ impl LibSqlBackend {
         }
     }
 
-    async fn replace_mount_record_with_snapshot(
+    async fn load_mount_state_record(
         &self,
         mount_id: Uuid,
-        path: &str,
-        snapshot: &SnapshotRecord,
-    ) -> Result<MountFileRecord, WorkspaceError> {
-        self.upsert_mount_file_record(
-            mount_id,
-            path,
-            MountedFileStatus::Clean,
-            snapshot.is_binary,
-            Some(snapshot.id),
-            Some(snapshot.id),
-            Some(snapshot.hash.clone()),
-            Some(snapshot.hash.clone()),
-            Some(snapshot.hash.clone()),
-            None,
-        )
-        .await
+    ) -> Result<Option<MountStateRecord>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = conn
+            .query(
+                "SELECT baseline_revision_id, head_revision_id
+                 FROM workspace_mount_state
+                 WHERE mount_id = ?1",
+                params![mount_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("mount state query failed: {e}"),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("mount state query failed: {e}"),
+            })?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(MountStateRecord {
+            baseline_revision_id: get_opt_text(&row, 0).and_then(|v| Uuid::parse_str(&v).ok()),
+            head_revision_id: get_opt_text(&row, 1).and_then(|v| Uuid::parse_str(&v).ok()),
+        }))
     }
 
-    async fn sync_record_to_disk_snapshot(
+    async fn save_mount_state_record(
         &self,
         mount_id: Uuid,
-        path: &str,
-        disk_path: &Path,
-    ) -> Result<MountFileRecord, WorkspaceError> {
-        let bytes = Self::read_disk_bytes(disk_path).await?.ok_or_else(|| {
-            WorkspaceError::MountPathNotFound {
-                mount_id: mount_id.to_string(),
-                path: path.to_string(),
-            }
-        })?;
-        let snapshot = self.insert_snapshot(mount_id, path, &bytes).await?;
-        self.replace_mount_record_with_snapshot(mount_id, path, &snapshot)
+        baseline_revision_id: Option<Uuid>,
+        head_revision_id: Option<Uuid>,
+    ) -> Result<(), WorkspaceError> {
+        let conn = self
+            .connect()
             .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let now = fmt_ts(&Utc::now());
+        conn.execute(
+            r#"
+            INSERT INTO workspace_mount_state (
+                mount_id, baseline_revision_id, head_revision_id, last_reconciled_at
+            )
+            VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(mount_id) DO UPDATE SET
+                baseline_revision_id = excluded.baseline_revision_id,
+                head_revision_id = excluded.head_revision_id,
+                last_reconciled_at = excluded.last_reconciled_at
+            "#,
+            params![
+                mount_id.to_string(),
+                baseline_revision_id.map(|v| v.to_string()),
+                head_revision_id.map(|v| v.to_string()),
+                now
+            ],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("mount state upsert failed: {e}"),
+        })?;
+        Ok(())
+    }
+
+    async fn touch_mount_updated_at(&self, mount_id: Uuid) -> Result<(), WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        conn.execute(
+            "UPDATE workspace_mounts SET updated_at = ?2 WHERE id = ?1",
+            params![mount_id.to_string(), fmt_ts(&Utc::now())],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("mount timestamp update failed: {e}"),
+        })?;
+        Ok(())
+    }
+
+    async fn load_revision_record(
+        &self,
+        mount_id: Uuid,
+        revision_id: Uuid,
+    ) -> Result<Option<RevisionRef>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = conn
+            .query(
+                "SELECT id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
+                 FROM workspace_mount_revisions
+                 WHERE mount_id = ?1 AND id = ?2",
+                params![mount_id.to_string(), revision_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision query failed: {e}"),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision query failed: {e}"),
+            })?
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(RevisionRef {
+            id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("invalid revision id: {e}"),
+            })?,
+            parent_revision_id: get_opt_text(&row, 1).and_then(|v| Uuid::parse_str(&v).ok()),
+            kind: revision_kind_from_str(&get_text(&row, 2)),
+            source: revision_source_from_str(&get_text(&row, 3)),
+            trigger: get_opt_text(&row, 4),
+            summary: get_opt_text(&row, 5),
+            created_by: get_text(&row, 6),
+            created_at: get_ts(&row, 7),
+        }))
+    }
+
+    async fn list_revision_refs(
+        &self,
+        mount_id: Uuid,
+        limit: Option<usize>,
+        since: Option<chrono::DateTime<Utc>>,
+    ) -> Result<Vec<RevisionRef>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = if let Some(since) = since {
+            let mut sql = String::from(
+                "SELECT id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
+                 FROM workspace_mount_revisions
+                 WHERE mount_id = ?1 AND created_at >= ?2
+                 ORDER BY created_at DESC",
+            );
+            if let Some(limit) = limit {
+                sql.push_str(&format!(" LIMIT {}", limit as i64));
+            }
+            conn.query(&sql, params![mount_id.to_string(), fmt_ts(&since)])
+                .await
+        } else {
+            let mut sql = String::from(
+                "SELECT id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
+                 FROM workspace_mount_revisions
+                 WHERE mount_id = ?1
+                 ORDER BY created_at DESC",
+            );
+            if let Some(limit) = limit {
+                sql.push_str(&format!(" LIMIT {}", limit as i64));
+            }
+            conn.query(&sql, params![mount_id.to_string()]).await
+        }
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("revision history query failed: {e}"),
+        })?;
+        let mut revisions = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision history query failed: {e}"),
+            })?
+        {
+            revisions.push(RevisionRef {
+                id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("invalid revision id: {e}"),
+                })?,
+                parent_revision_id: get_opt_text(&row, 1).and_then(|v| Uuid::parse_str(&v).ok()),
+                kind: revision_kind_from_str(&get_text(&row, 2)),
+                source: revision_source_from_str(&get_text(&row, 3)),
+                trigger: get_opt_text(&row, 4),
+                summary: get_opt_text(&row, 5),
+                created_by: get_text(&row, 6),
+                created_at: get_ts(&row, 7),
+            });
+        }
+        Ok(revisions)
+    }
+
+    async fn load_manifest_entries(
+        &self,
+        revision_id: Uuid,
+    ) -> Result<BTreeMap<String, ManifestEntry>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = conn
+            .query(
+                "SELECT relative_path, snapshot_id, file_mode, size_bytes, modified_at, is_binary
+                 FROM workspace_mount_manifests
+                 WHERE revision_id = ?1
+                 ORDER BY relative_path",
+                params![revision_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("manifest query failed: {e}"),
+            })?;
+        let mut entries = BTreeMap::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("manifest query failed: {e}"),
+            })?
+        {
+            let snapshot_id_text = get_opt_text(&row, 1).ok_or_else(|| WorkspaceError::SearchFailed {
+                reason: "manifest row missing snapshot".to_string(),
+            })?;
+            let snapshot_id = Uuid::parse_str(&snapshot_id_text).map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("invalid manifest snapshot id: {e}"),
+            })?;
+            entries.insert(
+                get_text(&row, 0),
+                ManifestEntry {
+                    snapshot_id,
+                    file_mode: row.get::<Option<i64>>(2).ok().flatten(),
+                    size_bytes: get_i64(&row, 3),
+                    modified_at: row.get::<Option<i64>>(4).ok().flatten(),
+                    is_binary: get_i64(&row, 5) != 0,
+                },
+            );
+        }
+        Ok(entries)
+    }
+
+    async fn write_manifest_entries(
+        &self,
+        revision_id: Uuid,
+        manifest: &BTreeMap<String, ManifestEntry>,
+    ) -> Result<(), WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        for (path, entry) in manifest {
+            conn.execute(
+                "INSERT INTO workspace_mount_manifests (
+                    revision_id, relative_path, snapshot_id, file_mode, size_bytes, modified_at, is_binary
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    revision_id.to_string(),
+                    path.clone(),
+                    entry.snapshot_id.to_string(),
+                    entry.file_mode,
+                    entry.size_bytes,
+                    entry.modified_at,
+                    if entry.is_binary { 1 } else { 0 }
+                ],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("manifest insert failed: {e}"),
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn insert_revision_record(
+        &self,
+        mount_id: Uuid,
+        parent_revision_id: Option<Uuid>,
+        kind: WorkspaceMountRevisionKind,
+        source: WorkspaceMountRevisionSource,
+        trigger: Option<String>,
+        summary: Option<String>,
+        created_by: impl Into<String>,
+    ) -> Result<Uuid, WorkspaceError> {
+        let revision_id = Uuid::new_v4();
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        conn.execute(
+            "INSERT INTO workspace_mount_revisions (
+                id, mount_id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                revision_id.to_string(),
+                mount_id.to_string(),
+                parent_revision_id.map(|v| v.to_string()),
+                revision_kind_to_str(kind),
+                revision_source_to_str(source),
+                trigger,
+                summary,
+                created_by.into(),
+                fmt_ts(&Utc::now())
+            ],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("revision insert failed: {e}"),
+        })?;
+        Ok(revision_id)
+    }
+
+    async fn insert_revision_changes(
+        &self,
+        revision_id: Uuid,
+        changes: &[ManifestChange],
+    ) -> Result<(), WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        for change in changes {
+            let rename_from = if change.change_kind == WorkspaceMountChangeKind::Moved {
+                change.before.as_ref().map(|_| change.path.clone())
+            } else {
+                None
+            };
+            let rename_to = if change.change_kind == WorkspaceMountChangeKind::Moved {
+                change.after.as_ref().map(|_| change.path.clone())
+            } else {
+                None
+            };
+            conn.execute(
+                "INSERT INTO workspace_mount_revision_files (
+                    revision_id, relative_path, change_kind, before_snapshot_id, after_snapshot_id,
+                    before_mode, after_mode, is_binary, rename_from, rename_to
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![
+                    revision_id.to_string(),
+                    change.path.clone(),
+                    change_kind_to_str(change.change_kind),
+                    change.before.as_ref().map(|v| v.snapshot_id.to_string()),
+                    change.after.as_ref().map(|v| v.snapshot_id.to_string()),
+                    change.before.as_ref().and_then(|v| v.file_mode),
+                    change.after.as_ref().and_then(|v| v.file_mode),
+                    if change.is_binary { 1 } else { 0 },
+                    rename_from,
+                    rename_to
+                ],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision change insert failed: {e}"),
+            })?;
+        }
+        Ok(())
+    }
+
+    async fn list_revision_changed_files(
+        &self,
+        revision_id: Uuid,
+        scope: Option<&str>,
+    ) -> Result<Vec<String>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = conn
+            .query(
+                "SELECT relative_path FROM workspace_mount_revision_files
+                 WHERE revision_id = ?1
+                 ORDER BY relative_path",
+                params![revision_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision files query failed: {e}"),
+            })?;
+        let mut result = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("revision files query failed: {e}"),
+            })?
+        {
+            let path = get_text(&row, 0);
+            if scope_matches(&path, scope) {
+                result.push(path);
+            }
+        }
+        Ok(result)
+    }
+
+    async fn clear_mount_live_cache(&self, mount_id: Uuid) -> Result<(), WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        conn.execute(
+            "DELETE FROM workspace_mount_files WHERE mount_id = ?1",
+            params![mount_id.to_string()],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("mount cache clear failed: {e}"),
+        })?;
+        Ok(())
+    }
+
+    async fn sync_mount_live_cache(
+        &self,
+        mount_id: Uuid,
+        baseline_revision_id: Option<Uuid>,
+        head_revision_id: Option<Uuid>,
+    ) -> Result<(), WorkspaceError> {
+        let baseline = match baseline_revision_id {
+            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
+            None => BTreeMap::new(),
+        };
+        let head = match head_revision_id {
+            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
+            None => BTreeMap::new(),
+        };
+        self.clear_mount_live_cache(mount_id).await?;
+        for change in collect_manifest_changes(&baseline, &head, None) {
+            let base_snapshot_id = change.before.as_ref().map(|v| v.snapshot_id);
+            let working_snapshot_id = change.after.as_ref().map(|v| v.snapshot_id);
+            self.upsert_mount_file_record(
+                mount_id,
+                &change.path,
+                change.status,
+                change.is_binary,
+                base_snapshot_id,
+                working_snapshot_id,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn create_revision_from_manifest(
+        &self,
+        mount_id: Uuid,
+        parent_revision_id: Option<Uuid>,
+        previous_manifest: &BTreeMap<String, ManifestEntry>,
+        next_manifest: &BTreeMap<String, ManifestEntry>,
+        kind: WorkspaceMountRevisionKind,
+        source: WorkspaceMountRevisionSource,
+        trigger: Option<String>,
+        summary: Option<String>,
+        created_by: impl Into<String>,
+    ) -> Result<Uuid, WorkspaceError> {
+        let changes = collect_manifest_changes(previous_manifest, next_manifest, None);
+        let revision_id = self
+            .insert_revision_record(
+                mount_id,
+                parent_revision_id,
+                kind,
+                source,
+                trigger,
+                summary.or_else(|| summarize_change_counts(changes.len())),
+                created_by,
+            )
+            .await?;
+        self.write_manifest_entries(revision_id, next_manifest).await?;
+        self.insert_revision_changes(revision_id, &changes).await?;
+        Ok(revision_id)
+    }
+
+    async fn get_checkpoint_record(
+        &self,
+        mount_id: Uuid,
+        checkpoint_id: Uuid,
+    ) -> Result<Option<WorkspaceMountCheckpoint>, WorkspaceError> {
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let mut rows = conn
+            .query(
+                "SELECT id, mount_id, revision_id, parent_checkpoint_id, label, summary, created_by, is_auto, base_generation, created_at
+                 FROM workspace_mount_checkpoints
+                 WHERE mount_id = ?1 AND id = ?2",
+                params![mount_id.to_string(), checkpoint_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("checkpoint query failed: {e}"),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("checkpoint query failed: {e}"),
+            })?
+        else {
+            return Ok(None);
+        };
+        let revision_id = get_opt_text(&row, 2)
+            .and_then(|v| Uuid::parse_str(&v).ok())
+            .ok_or_else(|| WorkspaceError::SearchFailed {
+                reason: "checkpoint missing revision_id".to_string(),
+            })?;
+        Ok(Some(WorkspaceMountCheckpoint {
+            id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("invalid checkpoint id: {e}"),
+            })?,
+            mount_id: Uuid::parse_str(&get_text(&row, 1)).map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("invalid checkpoint mount id: {e}"),
+            })?,
+            revision_id,
+            parent_checkpoint_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
+            label: get_opt_text(&row, 4),
+            summary: get_opt_text(&row, 5),
+            created_by: get_text(&row, 6),
+            is_auto: get_i64(&row, 7) != 0,
+            base_generation: get_i64(&row, 8),
+            created_at: get_ts(&row, 9),
+            changed_files: self.list_revision_changed_files(revision_id, None).await?,
+        }))
+    }
+
+    async fn create_checkpoint_record(
+        &self,
+        mount_id: Uuid,
+        revision_id: Uuid,
+        label: Option<String>,
+        summary: Option<String>,
+        created_by: String,
+        is_auto: bool,
+    ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
+        let parent = self
+            .collect_checkpoint_chain(mount_id)
+            .await?
+            .first()
+            .map(|checkpoint| checkpoint.id);
+        let checkpoint_id = Uuid::new_v4();
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        conn.execute(
+            "INSERT INTO workspace_mount_checkpoints (
+                id, mount_id, revision_id, parent_checkpoint_id, label, summary, created_by, is_auto, base_generation, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                checkpoint_id.to_string(),
+                mount_id.to_string(),
+                revision_id.to_string(),
+                parent.map(|v| v.to_string()),
+                label,
+                summary,
+                created_by,
+                if is_auto { 1 } else { 0 },
+                0_i64,
+                fmt_ts(&Utc::now())
+            ],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("checkpoint insert failed: {e}"),
+        })?;
+        self.get_checkpoint_record(mount_id, checkpoint_id)
+            .await?
+            .ok_or_else(|| WorkspaceError::SearchFailed {
+                reason: "checkpoint missing after create".to_string(),
+            })
+    }
+
+    async fn scan_mount_manifest(
+        &self,
+        mount_id: Uuid,
+        source_root: &Path,
+    ) -> Result<BTreeMap<String, ManifestEntry>, WorkspaceError> {
+        fn collect_paths(
+            root: &Path,
+            dir: &Path,
+            entries: &mut Vec<(String, PathBuf, std::fs::Metadata)>,
+        ) -> Result<(), WorkspaceError> {
+            let read_dir = std::fs::read_dir(dir).map_err(|e| WorkspaceError::IoError {
+                reason: format!("failed to read directory {}: {e}", dir.display()),
+            })?;
+            for entry in read_dir {
+                let entry = entry.map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to read directory entry: {e}"),
+                })?;
+                let path = entry.path();
+                let metadata = entry.metadata().map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to read metadata {}: {e}", path.display()),
+                })?;
+                if metadata.is_dir() {
+                    collect_paths(root, &path, entries)?;
+                } else if metadata.is_file() {
+                    let rel = path
+                        .strip_prefix(root)
+                        .map_err(|e| WorkspaceError::IoError {
+                            reason: format!("failed to strip mount prefix: {e}"),
+                        })?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    entries.push((rel, path, metadata));
+                }
+            }
+            Ok(())
+        }
+
+        let mut files = Vec::new();
+        collect_paths(source_root, source_root, &mut files)?;
+        files.sort_by(|left, right| left.0.cmp(&right.0));
+
+        let mut manifest = BTreeMap::new();
+        for (relative_path, absolute_path, metadata) in files {
+            let bytes = tokio::fs::read(&absolute_path)
+                .await
+                .map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to read {}: {e}", absolute_path.display()),
+                })?;
+            let snapshot = self.insert_snapshot(mount_id, &relative_path, &bytes).await?;
+            manifest.insert(
+                relative_path,
+                ManifestEntry {
+                    snapshot_id: snapshot.id,
+                    is_binary: snapshot.is_binary,
+                    size_bytes: metadata.len() as i64,
+                    modified_at: metadata_mtime(&metadata),
+                    file_mode: metadata_file_mode(&metadata),
+                },
+            );
+        }
+        Ok(manifest)
+    }
+
+    async fn materialize_legacy_overlay_if_needed(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+    ) -> Result<bool, WorkspaceError> {
+        let records = self.list_mount_file_records(mount_id, None).await?;
+        if records.is_empty() {
+            return Ok(false);
+        }
+        if records
+            .iter()
+            .any(|record| record.status == MountedFileStatus::Conflicted)
+        {
+            return Err(WorkspaceError::MountConflict {
+                path: mount_id.to_string(),
+                reason: "legacy overlay conflict blocks migration to real filesystem mode"
+                    .to_string(),
+            });
+        }
+        let has_dirty = records
+            .iter()
+            .any(|record| record.status != MountedFileStatus::Clean);
+        if !has_dirty {
+            return Ok(false);
+        }
+
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        for record in records {
+            let disk_path = Path::new(&mount.source_root).join(&record.path);
+            match record.status {
+                MountedFileStatus::Deleted => {
+                    if tokio::fs::try_exists(&disk_path).await.map_err(|e| WorkspaceError::IoError {
+                        reason: format!("failed to check {}: {e}", disk_path.display()),
+                    })? {
+                        tokio::fs::remove_file(&disk_path)
+                            .await
+                            .map_err(|e| WorkspaceError::IoError {
+                                reason: format!("failed to delete {}: {e}", disk_path.display()),
+                            })?;
+                    }
+                }
+                MountedFileStatus::Clean => {}
+                _ => {
+                    let snapshot_id =
+                        record
+                            .working_snapshot_id
+                            .or(record.base_snapshot_id)
+                            .ok_or_else(|| WorkspaceError::MountConflict {
+                                path: record.path.clone(),
+                                reason: "legacy overlay record is missing content snapshot"
+                                    .to_string(),
+                            })?;
+                    let snapshot = self.read_snapshot_required(snapshot_id).await?;
+                    if let Some(parent) = disk_path.parent() {
+                        tokio::fs::create_dir_all(parent)
+                            .await
+                            .map_err(|e| WorkspaceError::IoError {
+                                reason: format!("failed to create {}: {e}", parent.display()),
+                            })?;
+                    }
+                    tokio::fs::write(&disk_path, snapshot.content)
+                        .await
+                        .map_err(|e| WorkspaceError::IoError {
+                            reason: format!("failed to write {}: {e}", disk_path.display()),
+                        })?;
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    async fn ensure_mount_initialized(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+    ) -> Result<MountStateRecord, WorkspaceError> {
+        if let Some(state) = self.load_mount_state_record(mount_id).await? {
+            return Ok(state);
+        }
+
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let initial_disk_manifest = self
+            .scan_mount_manifest(mount_id, Path::new(&mount.source_root))
+            .await?;
+        let initial_revision_id = self
+            .create_revision_from_manifest(
+                mount_id,
+                None,
+                &BTreeMap::new(),
+                &initial_disk_manifest,
+                WorkspaceMountRevisionKind::Initial,
+                WorkspaceMountRevisionSource::System,
+                Some("initial_scan".to_string()),
+                Some("initial disk scan".to_string()),
+                "system",
+            )
+            .await?;
+        self.create_checkpoint_record(
+            mount_id,
+            initial_revision_id,
+            Some("pre-real-fs-migration".to_string()),
+            Some("state before real filesystem migration".to_string()),
+            "system".to_string(),
+            true,
+        )
+        .await?;
+
+        let overlay_materialized = self.materialize_legacy_overlay_if_needed(user_id, mount_id).await?;
+        let (baseline_revision_id, head_revision_id) = if overlay_materialized {
+            let migrated_manifest = self
+                .scan_mount_manifest(mount_id, Path::new(&mount.source_root))
+                .await?;
+            let migration_revision_id = self
+                .create_revision_from_manifest(
+                    mount_id,
+                    Some(initial_revision_id),
+                    &initial_disk_manifest,
+                    &migrated_manifest,
+                    WorkspaceMountRevisionKind::ManualRefresh,
+                    WorkspaceMountRevisionSource::System,
+                    Some("migration_import".to_string()),
+                    Some("imported legacy overlay into real filesystem".to_string()),
+                    "system",
+                )
+                .await?;
+            (Some(migration_revision_id), Some(migration_revision_id))
+        } else {
+            (Some(initial_revision_id), Some(initial_revision_id))
+        };
+
+        self.save_mount_state_record(
+            mount_id,
+            baseline_revision_id,
+            head_revision_id,
+        )
+        .await?;
+        self.sync_mount_live_cache(mount_id, baseline_revision_id, head_revision_id)
+            .await?;
+        self.touch_mount_updated_at(mount_id).await?;
+
+        Ok(MountStateRecord {
+            baseline_revision_id,
+            head_revision_id,
+        })
+    }
+
+    async fn reconcile_mount(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        kind: WorkspaceMountRevisionKind,
+        source: WorkspaceMountRevisionSource,
+        trigger: Option<String>,
+        summary: Option<String>,
+        created_by: impl Into<String>,
+    ) -> Result<MountStateRecord, WorkspaceError> {
+        let mut state = self.ensure_mount_initialized(user_id, mount_id).await?;
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let head_manifest = match state.head_revision_id {
+            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
+            None => BTreeMap::new(),
+        };
+        let disk_manifest = self
+            .scan_mount_manifest(mount_id, Path::new(&mount.source_root))
+            .await?;
+        let changes = collect_manifest_changes(&head_manifest, &disk_manifest, None);
+        if !changes.is_empty() {
+            let new_revision_id = self
+                .create_revision_from_manifest(
+                    mount_id,
+                    state.head_revision_id,
+                    &head_manifest,
+                    &disk_manifest,
+                    kind,
+                    source,
+                    trigger,
+                    summary.or_else(|| summarize_change_counts(changes.len())),
+                    created_by,
+                )
+                .await?;
+            state.head_revision_id = Some(new_revision_id);
+        }
+        self.save_mount_state_record(
+            mount_id,
+            state.baseline_revision_id,
+            state.head_revision_id,
+        )
+        .await?;
+        self.sync_mount_live_cache(mount_id, state.baseline_revision_id, state.head_revision_id)
+            .await?;
+        self.touch_mount_updated_at(mount_id).await?;
+        Ok(state)
+    }
+
+    async fn resolve_revision_target(
+        &self,
+        mount_id: Uuid,
+        state: &MountStateRecord,
+        target: &str,
+    ) -> Result<Uuid, WorkspaceError> {
+        match target {
+            "baseline" => state
+                .baseline_revision_id
+                .ok_or_else(|| WorkspaceError::MountConflict {
+                    path: mount_id.to_string(),
+                    reason: "baseline revision is not set".to_string(),
+                }),
+            "head" => state.head_revision_id.ok_or_else(|| WorkspaceError::MountConflict {
+                path: mount_id.to_string(),
+                reason: "head revision is not set".to_string(),
+            }),
+            other => {
+                let parsed = Uuid::parse_str(other).map_err(|_| WorkspaceError::MountConflict {
+                    path: mount_id.to_string(),
+                    reason: format!("unknown revision target '{other}'"),
+                })?;
+                if let Some(checkpoint) = self.get_checkpoint_record(mount_id, parsed).await? {
+                    return Ok(checkpoint.revision_id);
+                }
+                if self.load_revision_record(mount_id, parsed).await?.is_some() {
+                    return Ok(parsed);
+                }
+                Err(WorkspaceError::MountConflict {
+                    path: mount_id.to_string(),
+                    reason: format!("unknown revision/checkpoint '{other}'"),
+                })
+            }
+        }
     }
 
     async fn fetch_mount(
@@ -395,7 +1343,7 @@ impl LibSqlBackend {
                        m.created_at, m.updated_at,
                        COALESCE(SUM(CASE WHEN f.status != 'clean' THEN 1 ELSE 0 END), 0),
                        COALESCE(SUM(CASE WHEN f.status = 'conflicted' THEN 1 ELSE 0 END), 0),
-                       COALESCE(SUM(CASE WHEN f.status = 'pending_delete' THEN 1 ELSE 0 END), 0)
+                       COALESCE(SUM(CASE WHEN f.status = 'deleted' THEN 1 ELSE 0 END), 0)
                 FROM workspace_mounts m
                 LEFT JOIN workspace_mount_files f ON f.mount_id = m.id
                 WHERE m.user_id = ?1
@@ -490,18 +1438,53 @@ impl LibSqlBackend {
         path: &str,
         content: &[u8],
     ) -> Result<SnapshotRecord, WorkspaceError> {
-        let snapshot = SnapshotRecord {
-            id: Uuid::new_v4(),
-            content: content.to_vec(),
-            is_binary: classify_binary(content),
-            hash: compute_content_hash(content),
-        };
         let conn = self
             .connect()
             .await
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
+        let hash = compute_content_hash(content);
+        let is_binary = classify_binary(content);
+        let mut existing_rows = conn
+            .query(
+                "SELECT id, content, is_binary, content_hash
+                 FROM workspace_mount_snapshots
+                 WHERE mount_id = ?1 AND relative_path = ?2 AND content_hash = ?3
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                params![mount_id.to_string(), path, hash.clone()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("snapshot dedupe query failed: {e}"),
+            })?;
+        if let Some(row) = existing_rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("snapshot dedupe query failed: {e}"),
+            })?
+        {
+            return Ok(SnapshotRecord {
+                id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("invalid snapshot id: {e}"),
+                })?,
+                content: row
+                    .get::<Vec<u8>>(1)
+                    .map_err(|e| WorkspaceError::SearchFailed {
+                        reason: format!("invalid snapshot content: {e}"),
+                    })?,
+                is_binary: get_i64(&row, 2) != 0,
+                hash: get_text(&row, 3),
+            });
+        }
+        let snapshot = SnapshotRecord {
+            id: Uuid::new_v4(),
+            content: content.to_vec(),
+            is_binary,
+            hash,
+        };
         conn.execute(
             "INSERT INTO workspace_mount_snapshots (id, mount_id, relative_path, content, is_binary, content_hash, size_bytes)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -535,7 +1518,7 @@ impl LibSqlBackend {
             })?;
         let mut rows = conn
             .query(
-                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, conflict_reason, updated_at
+                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, updated_at
                  FROM workspace_mount_files
                  WHERE mount_id = ?1 AND relative_path = ?2",
                 params![mount_id.to_string(), path],
@@ -559,8 +1542,7 @@ impl LibSqlBackend {
             is_binary: get_i64(&row, 2) != 0,
             base_snapshot_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
             working_snapshot_id: get_opt_text(&row, 4).and_then(|v| Uuid::parse_str(&v).ok()),
-            conflict_reason: get_opt_text(&row, 5),
-            updated_at: get_ts(&row, 6),
+            updated_at: get_ts(&row, 5),
         }))
     }
 
@@ -572,10 +1554,6 @@ impl LibSqlBackend {
         is_binary: bool,
         base_snapshot_id: Option<Uuid>,
         working_snapshot_id: Option<Uuid>,
-        base_hash: Option<String>,
-        working_hash: Option<String>,
-        remote_hash: Option<String>,
-        conflict_reason: Option<String>,
     ) -> Result<MountFileRecord, WorkspaceError> {
         let conn = self
             .connect()
@@ -596,10 +1574,6 @@ impl LibSqlBackend {
                 is_binary = excluded.is_binary,
                 base_snapshot_id = excluded.base_snapshot_id,
                 working_snapshot_id = excluded.working_snapshot_id,
-                remote_hash = excluded.remote_hash,
-                base_hash = excluded.base_hash,
-                working_hash = excluded.working_hash,
-                conflict_reason = excluded.conflict_reason,
                 updated_at = excluded.updated_at
             "#,
             params![
@@ -609,10 +1583,10 @@ impl LibSqlBackend {
                 if is_binary { 1 } else { 0 },
                 base_snapshot_id.map(|v| v.to_string()),
                 working_snapshot_id.map(|v| v.to_string()),
-                remote_hash,
-                base_hash,
-                working_hash,
-                conflict_reason,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
+                Option::<String>::None,
                 now
             ],
         )
@@ -626,41 +1600,6 @@ impl LibSqlBackend {
                 mount_id: mount_id.to_string(),
                 path: path.to_string(),
             })
-    }
-
-    async fn ensure_mount_file_loaded(
-        &self,
-        user_id: &str,
-        mount_id: Uuid,
-        path: &str,
-    ) -> Result<MountFileRecord, WorkspaceError> {
-        let path = normalize_mount_path(path)?;
-        if let Some(existing) = self.load_mount_file_record(mount_id, &path).await? {
-            return Ok(existing);
-        }
-        let mount = self.fetch_mount(user_id, mount_id).await?;
-        let disk_path = Path::new(&mount.source_root).join(&path);
-        let bytes =
-            tokio::fs::read(&disk_path)
-                .await
-                .map_err(|e| WorkspaceError::MountPathNotFound {
-                    mount_id: mount_id.to_string(),
-                    path: format!("{path} ({e})"),
-                })?;
-        let snapshot = self.insert_snapshot(mount_id, &path, &bytes).await?;
-        self.upsert_mount_file_record(
-            mount_id,
-            &path,
-            MountedFileStatus::Clean,
-            snapshot.is_binary,
-            Some(snapshot.id),
-            Some(snapshot.id),
-            Some(snapshot.hash.clone()),
-            Some(snapshot.hash.clone()),
-            Some(snapshot.hash.clone()),
-            None,
-        )
-        .await
     }
 
     async fn list_mount_file_records(
@@ -686,7 +1625,7 @@ impl LibSqlBackend {
         };
         let mut rows = conn
             .query(
-                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, conflict_reason, updated_at
+                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, updated_at
                  FROM workspace_mount_files
                  WHERE mount_id = ?1 AND relative_path LIKE ?2
                  ORDER BY relative_path",
@@ -710,8 +1649,7 @@ impl LibSqlBackend {
                 is_binary: get_i64(&row, 2) != 0,
                 base_snapshot_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
                 working_snapshot_id: get_opt_text(&row, 4).and_then(|v| Uuid::parse_str(&v).ok()),
-                conflict_reason: get_opt_text(&row, 5),
-                updated_at: get_ts(&row, 6),
+                updated_at: get_ts(&row, 5),
             });
         }
         Ok(result)
@@ -729,7 +1667,7 @@ impl LibSqlBackend {
             })?;
         let mut rows = conn
             .query(
-                "SELECT id, mount_id, parent_checkpoint_id, label, summary, created_by, is_auto, base_generation, created_at
+                "SELECT id, mount_id, revision_id, parent_checkpoint_id, label, summary, created_by, is_auto, base_generation, created_at
                  FROM workspace_mount_checkpoints
                  WHERE mount_id = ?1
                  ORDER BY created_at DESC",
@@ -751,7 +1689,12 @@ impl LibSqlBackend {
                 Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
                     reason: format!("invalid checkpoint id: {e}"),
                 })?;
-            let changed_files = self.list_checkpoint_files(checkpoint_id).await?;
+            let revision_id = get_opt_text(&row, 2)
+                .and_then(|v| Uuid::parse_str(&v).ok())
+                .ok_or_else(|| WorkspaceError::SearchFailed {
+                    reason: format!("checkpoint {checkpoint_id} missing revision_id"),
+                })?;
+            let changed_files = self.list_revision_changed_files(revision_id, None).await?;
             result.push(WorkspaceMountCheckpoint {
                 id: checkpoint_id,
                 mount_id: Uuid::parse_str(&get_text(&row, 1)).map_err(|e| {
@@ -759,49 +1702,18 @@ impl LibSqlBackend {
                         reason: format!("invalid checkpoint mount id: {e}"),
                     }
                 })?,
-                parent_checkpoint_id: get_opt_text(&row, 2).and_then(|v| Uuid::parse_str(&v).ok()),
-                label: get_opt_text(&row, 3),
-                summary: get_opt_text(&row, 4),
-                created_by: get_text(&row, 5),
-                is_auto: get_i64(&row, 6) != 0,
-                base_generation: get_i64(&row, 7),
-                created_at: get_ts(&row, 8),
+                revision_id,
+                parent_checkpoint_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
+                label: get_opt_text(&row, 4),
+                summary: get_opt_text(&row, 5),
+                created_by: get_text(&row, 6),
+                is_auto: get_i64(&row, 7) != 0,
+                base_generation: get_i64(&row, 8),
+                created_at: get_ts(&row, 9),
                 changed_files,
             });
         }
         Ok(result)
-    }
-
-    async fn list_checkpoint_files(
-        &self,
-        checkpoint_id: Uuid,
-    ) -> Result<Vec<String>, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let mut rows = conn
-            .query(
-                "SELECT relative_path FROM workspace_mount_checkpoint_files WHERE checkpoint_id = ?1 ORDER BY relative_path",
-                params![checkpoint_id.to_string()],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("checkpoint files query failed: {e}"),
-            })?;
-        let mut files = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("checkpoint files query failed: {e}"),
-            })?
-        {
-            files.push(get_text(&row, 0));
-        }
-        Ok(files)
     }
 
     async fn build_mount_detail_internal(
@@ -809,6 +1721,7 @@ impl LibSqlBackend {
         user_id: &str,
         mount_id: Uuid,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        let state = self.ensure_mount_initialized(user_id, mount_id).await?;
         let summary = self
             .list_mount_summaries_internal(user_id)
             .await?
@@ -821,6 +1734,8 @@ impl LibSqlBackend {
         Ok(WorkspaceMountDetail {
             open_change_count: summary.dirty_count,
             summary,
+            baseline_revision_id: state.baseline_revision_id,
+            head_revision_id: state.head_revision_id,
             checkpoints,
         })
     }
@@ -1676,6 +2591,16 @@ impl WorkspaceStore for LibSqlBackend {
                 Ok(entries)
             }
             WorkspaceUri::MountRoot(mount_id) => {
+                self.reconcile_mount(
+                    user_id,
+                    mount_id,
+                    WorkspaceMountRevisionKind::ManualRefresh,
+                    WorkspaceMountRevisionSource::External,
+                    Some("workspace_tree".to_string()),
+                    None,
+                    "system",
+                )
+                .await?;
                 let mount = self.fetch_mount(user_id, mount_id).await?;
                 let prefix = String::new();
                 let dir_path = Path::new(&mount.source_root).join(&prefix);
@@ -1759,7 +2684,7 @@ impl WorkspaceStore for LibSqlBackend {
                         entry.conflict_count +=
                             usize::from(record.status == MountedFileStatus::Conflicted);
                         entry.pending_delete_count +=
-                            usize::from(record.status == MountedFileStatus::PendingDelete);
+                            usize::from(record.status == MountedFileStatus::Deleted);
                     } else {
                         entry.status = Some(record.status);
                         entry.updated_at = Some(record.updated_at);
@@ -1769,6 +2694,16 @@ impl WorkspaceStore for LibSqlBackend {
                 Ok(entries_map.into_values().collect())
             }
             WorkspaceUri::MountPath(mount_id, prefix) => {
+                self.reconcile_mount(
+                    user_id,
+                    mount_id,
+                    WorkspaceMountRevisionKind::ManualRefresh,
+                    WorkspaceMountRevisionSource::External,
+                    Some("workspace_tree".to_string()),
+                    None,
+                    "system",
+                )
+                .await?;
                 let mount = self.fetch_mount(user_id, mount_id).await?;
                 let dir_path = Path::new(&mount.source_root).join(&prefix);
                 let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
@@ -1865,7 +2800,7 @@ impl WorkspaceStore for LibSqlBackend {
                         entry.conflict_count +=
                             usize::from(record.status == MountedFileStatus::Conflicted);
                         entry.pending_delete_count +=
-                            usize::from(record.status == MountedFileStatus::PendingDelete);
+                            usize::from(record.status == MountedFileStatus::Deleted);
                     } else {
                         entry.status = Some(record.status);
                         entry.updated_at = Some(record.updated_at);
@@ -1914,6 +2849,7 @@ impl WorkspaceStore for LibSqlBackend {
         .map_err(|e| WorkspaceError::SearchFailed {
             reason: format!("mount insert failed: {e}"),
         })?;
+        self.ensure_mount_initialized(&request.user_id, mount_id).await?;
         self.list_mount_summaries_internal(&request.user_id)
             .await?
             .into_iter()
@@ -1927,6 +2863,10 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         user_id: &str,
     ) -> Result<Vec<WorkspaceMountSummary>, WorkspaceError> {
+        let summaries = self.list_mount_summaries_internal(user_id).await?;
+        for summary in &summaries {
+            self.ensure_mount_initialized(user_id, summary.mount.id).await?;
+        }
         self.list_mount_summaries_internal(user_id).await
     }
 
@@ -1935,6 +2875,16 @@ impl WorkspaceStore for LibSqlBackend {
         user_id: &str,
         mount_id: Uuid,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ManualRefresh,
+            WorkspaceMountRevisionSource::External,
+            Some("get_mount".to_string()),
+            None,
+            "system",
+        )
+        .await?;
         self.build_mount_detail_internal(user_id, mount_id).await
     }
 
@@ -1944,30 +2894,40 @@ impl WorkspaceStore for LibSqlBackend {
         mount_id: Uuid,
         path: &str,
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        let record = self
-            .ensure_mount_file_loaded(user_id, mount_id, path)
-            .await?;
-        let snapshot_id =
-            record
-                .working_snapshot_id
-                .ok_or_else(|| WorkspaceError::MountPathNotFound {
-                    mount_id: mount_id.to_string(),
-                    path: path.to_string(),
-                })?;
-        let snapshot = self.read_snapshot(snapshot_id).await?.ok_or_else(|| {
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ManualRefresh,
+            WorkspaceMountRevisionSource::External,
+            Some("workspace_read".to_string()),
+            None,
+            "workspace_read",
+        )
+        .await?;
+        let normalized = normalize_mount_path(path)?;
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let disk_path = Path::new(&mount.source_root).join(&normalized);
+        let bytes = Self::read_disk_bytes(&disk_path).await?.ok_or_else(|| {
             WorkspaceError::MountPathNotFound {
                 mount_id: mount_id.to_string(),
-                path: path.to_string(),
+                path: normalized.clone(),
             }
         })?;
+        let record = self.load_mount_file_record(mount_id, &normalized).await?;
+        let status = record
+            .as_ref()
+            .map(|value| value.status)
+            .unwrap_or(MountedFileStatus::Clean);
+        let is_binary = classify_binary(&bytes);
         Ok(WorkspaceMountFileView {
             mount_id,
-            path: record.path.clone(),
-            uri: WorkspaceUri::mount_uri(mount_id, Some(&record.path)),
-            status: record.status,
-            is_binary: snapshot.is_binary,
-            content: bytes_to_text(&snapshot.content),
-            updated_at: record.updated_at,
+            path: normalized.clone(),
+            uri: WorkspaceUri::mount_uri(mount_id, Some(&normalized)),
+            disk_path: disk_path.display().to_string(),
+            status,
+            is_binary,
+            content: bytes_to_text(&bytes),
+            updated_at: Utc::now(),
         })
     }
 
@@ -1979,54 +2939,31 @@ impl WorkspaceStore for LibSqlBackend {
         content: &[u8],
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
         let normalized = normalize_mount_path(path)?;
-        let existing = self.load_mount_file_record(mount_id, &normalized).await?;
-        let base = match existing.clone() {
-            Some(record) => record,
-            None => match self
-                .ensure_mount_file_loaded(user_id, mount_id, &normalized)
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let disk_path = Path::new(&mount.source_root).join(&normalized);
+        if let Some(parent) = disk_path.parent() {
+            tokio::fs::create_dir_all(parent)
                 .await
-            {
-                Ok(record) => record,
-                Err(WorkspaceError::MountPathNotFound { .. }) => MountFileRecord {
-                    path: normalized.clone(),
-                    status: MountedFileStatus::Added,
-                    is_binary: classify_binary(content),
-                    base_snapshot_id: None,
-                    working_snapshot_id: None,
-                    conflict_reason: None,
-                    updated_at: Utc::now(),
-                },
-                Err(error) => return Err(error),
-            },
-        };
-        let working_snapshot = self.insert_snapshot(mount_id, &normalized, content).await?;
-        let status = if working_snapshot.is_binary {
-            MountedFileStatus::BinaryModified
-        } else if base.base_snapshot_id.is_none() {
-            MountedFileStatus::Added
-        } else {
-            MountedFileStatus::Modified
-        };
-        let base_hash = match base.base_snapshot_id {
-            Some(snapshot_id) => Some(self.read_snapshot_required(snapshot_id).await?.hash),
-            None => None,
-        };
-        let updated = self
-            .upsert_mount_file_record(
-                mount_id,
-                &normalized,
-                status,
-                working_snapshot.is_binary,
-                base.base_snapshot_id,
-                Some(working_snapshot.id),
-                base_hash.clone(),
-                Some(working_snapshot.hash.clone()),
-                Some(working_snapshot.hash.clone()),
-                None,
-            )
-            .await?;
-        self.read_workspace_mount_file(user_id, mount_id, &updated.path)
+                .map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to create {}: {e}", parent.display()),
+                })?;
+        }
+        tokio::fs::write(&disk_path, content)
             .await
+            .map_err(|e| WorkspaceError::IoError {
+                reason: format!("failed to write {}: {e}", disk_path.display()),
+            })?;
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ToolWrite,
+            WorkspaceMountRevisionSource::WorkspaceTool,
+            Some(normalized.clone()),
+            Some(format!("updated {}", normalized)),
+            "workspace_write",
+        )
+        .await?;
+        self.read_workspace_mount_file(user_id, mount_id, &normalized).await
     }
 
     async fn delete_workspace_mount_file(
@@ -2036,60 +2973,50 @@ impl WorkspaceStore for LibSqlBackend {
         path: &str,
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
         let normalized = normalize_mount_path(path)?;
-        let existing = match self.load_mount_file_record(mount_id, &normalized).await? {
-            Some(record) => record,
-            None => {
-                self.ensure_mount_file_loaded(user_id, mount_id, &normalized)
-                    .await?
-            }
-        };
-        if existing.base_snapshot_id.is_none() {
-            let conn = self
-                .connect()
-                .await
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: e.to_string(),
-                })?;
-            conn.execute(
-                "DELETE FROM workspace_mount_files WHERE mount_id = ?1 AND relative_path = ?2",
-                params![mount_id.to_string(), normalized.clone()],
-            )
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let disk_path = Path::new(&mount.source_root).join(&normalized);
+        let metadata = tokio::fs::metadata(&disk_path)
             .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("failed to drop added mount file state: {e}"),
-            })?;
-            return Ok(WorkspaceMountFileView {
-                mount_id,
+            .map_err(|_| WorkspaceError::MountPathNotFound {
+                mount_id: mount_id.to_string(),
                 path: normalized.clone(),
-                uri: WorkspaceUri::mount_uri(mount_id, Some(&normalized)),
-                status: MountedFileStatus::Clean,
-                is_binary: existing.is_binary,
-                content: None,
-                updated_at: Utc::now(),
+            })?;
+        if metadata.is_dir() {
+            return Err(WorkspaceError::IoError {
+                reason: format!(
+                    "workspace_delete only removes files; use workspace_delete_tree for {}",
+                    normalized
+                ),
             });
         }
-        let updated = self
-            .upsert_mount_file_record(
-                mount_id,
-                &normalized,
-                MountedFileStatus::PendingDelete,
-                existing.is_binary,
-                existing.base_snapshot_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-            )
-            .await?;
+        tokio::fs::remove_file(&disk_path)
+            .await
+            .map_err(|e| WorkspaceError::IoError {
+                reason: format!("failed to delete {}: {e}", disk_path.display()),
+            })?;
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ToolDelete,
+            WorkspaceMountRevisionSource::WorkspaceTool,
+            Some(normalized.clone()),
+            Some(format!("deleted {}", normalized)),
+            "workspace_delete",
+        )
+        .await?;
+        let record = self.load_mount_file_record(mount_id, &normalized).await?;
         Ok(WorkspaceMountFileView {
             mount_id,
-            path: updated.path.clone(),
-            uri: WorkspaceUri::mount_uri(mount_id, Some(&updated.path)),
-            status: updated.status,
-            is_binary: updated.is_binary,
+            path: normalized.clone(),
+            uri: WorkspaceUri::mount_uri(mount_id, Some(&normalized)),
+            disk_path: disk_path.display().to_string(),
+            status: record
+                .as_ref()
+                .map(|value| value.status)
+                .unwrap_or(MountedFileStatus::Clean),
+            is_binary: record.as_ref().map(|value| value.is_binary).unwrap_or(false),
             content: None,
-            updated_at: updated.updated_at,
+            updated_at: Utc::now(),
         })
     }
 
@@ -2099,331 +3026,282 @@ impl WorkspaceStore for LibSqlBackend {
         mount_id: Uuid,
         scope_path: Option<&str>,
     ) -> Result<WorkspaceMountDiff, WorkspaceError> {
-        let mount = self.fetch_mount(user_id, mount_id).await?;
-        let prefix = match scope_path {
-            Some(path) => Some(normalize_mount_path(path)?),
-            None => None,
-        };
-        let mut entries = Vec::new();
-        for record in self
-            .list_mount_file_records(mount_id, prefix.as_deref())
-            .await?
-            .into_iter()
-            .filter(|record| record.status != MountedFileStatus::Clean)
-        {
-            let base_snapshot = match record.base_snapshot_id {
-                Some(snapshot_id) => self.read_snapshot(snapshot_id).await?,
-                None => None,
-            };
-            let working_snapshot = match record.working_snapshot_id {
-                Some(snapshot_id) => self.read_snapshot(snapshot_id).await?,
-                None => None,
-            };
-            let remote_path = Path::new(&mount.source_root).join(&record.path);
-            let remote_content = Self::read_disk_bytes(&remote_path).await?;
-            let diff_text = match (
-                base_snapshot
-                    .as_ref()
-                    .and_then(|v| bytes_to_text(&v.content)),
-                working_snapshot
-                    .as_ref()
-                    .and_then(|v| bytes_to_text(&v.content)),
-            ) {
-                (Some(base), Some(working)) => Some(format!(
-                    "--- base/{0}\n+++ working/{0}\n- {1}\n+ {2}",
-                    record.path,
-                    base.replace('\n', "\n- "),
-                    working.replace('\n', "\n+ ")
-                )),
-                (None, Some(working)) => Some(format!(
-                    "+++ working/{}\n+ {}",
-                    record.path,
-                    working.replace('\n', "\n+ ")
-                )),
-                _ => None,
-            };
-            entries.push(MountedFileDiff {
-                path: record.path.clone(),
-                uri: WorkspaceUri::mount_uri(mount_id, Some(&record.path)),
-                status: record.status,
-                is_binary: record.is_binary,
-                base_content: base_snapshot
-                    .as_ref()
-                    .and_then(|v| bytes_to_text(&v.content)),
-                working_content: working_snapshot
-                    .as_ref()
-                    .and_then(|v| bytes_to_text(&v.content)),
-                remote_content: remote_content.as_ref().and_then(|v| bytes_to_text(v)),
-                diff_text,
-                conflict_reason: record.conflict_reason.clone(),
-            });
-        }
-        Ok(WorkspaceMountDiff { mount_id, entries })
+        self.diff_workspace_mount_between(&WorkspaceMountDiffRequest {
+            user_id: user_id.to_string(),
+            mount_id,
+            scope_path: scope_path.map(ToString::to_string),
+            from: Some("baseline".to_string()),
+            to: Some("head".to_string()),
+            include_content: true,
+            max_files: None,
+        })
+        .await
     }
 
     async fn create_workspace_checkpoint(
         &self,
         request: &CreateCheckpointRequest,
     ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
-        let parent = self
-            .collect_checkpoint_chain(request.mount_id)
-            .await?
-            .first()
-            .map(|value| value.id);
-        let files = self
-            .list_mount_file_records(request.mount_id, None)
-            .await?
-            .into_iter()
-            .filter(|record| record.status != MountedFileStatus::Clean)
-            .collect::<Vec<_>>();
-        let checkpoint_id = Uuid::new_v4();
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let now = fmt_ts(&Utc::now());
-        conn.execute(
-            "INSERT INTO workspace_mount_checkpoints (id, mount_id, parent_checkpoint_id, label, summary, created_by, is_auto, base_generation, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                checkpoint_id.to_string(),
-                request.mount_id.to_string(),
-                parent.map(|v| v.to_string()),
-                request.label.clone(),
-                request.summary.clone(),
-                request.created_by.clone(),
-                if request.is_auto { 1 } else { 0 },
-                0_i64,
-                now
-            ],
+        let state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("checkpoint_create".to_string()),
+                None,
+                &request.created_by,
+            )
+            .await?;
+        let revision_id = match request.revision_id {
+            Some(revision_id) => revision_id,
+            None => state.head_revision_id.ok_or_else(|| WorkspaceError::MountConflict {
+                path: request.mount_id.to_string(),
+                reason: "cannot checkpoint mount without a head revision".to_string(),
+            })?,
+        };
+        self.create_checkpoint_record(
+            request.mount_id,
+            revision_id,
+            request.label.clone(),
+            request.summary.clone(),
+            request.created_by.clone(),
+            request.is_auto,
         )
         .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("checkpoint insert failed: {e}"),
-        })?;
-        for file in &files {
-            conn.execute(
-                "INSERT INTO workspace_mount_checkpoint_files (checkpoint_id, relative_path, status, snapshot_id)
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    checkpoint_id.to_string(),
-                    file.path.clone(),
-                    status_to_str(file.status),
-                    file.working_snapshot_id.map(|v| v.to_string())
-                ],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("checkpoint file insert failed: {e}"),
-            })?;
+    }
+
+    async fn list_workspace_checkpoints(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        limit: Option<usize>,
+    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+        self.ensure_mount_initialized(user_id, mount_id).await?;
+        let mut checkpoints = self.collect_checkpoint_chain(mount_id).await?;
+        if let Some(limit) = limit {
+            checkpoints.truncate(limit);
         }
-        self.collect_checkpoint_chain(request.mount_id)
+        Ok(checkpoints)
+    }
+
+    async fn list_workspace_mount_history(
+        &self,
+        request: &WorkspaceMountHistoryRequest,
+    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        let scope = request
+            .scope_path
+            .as_deref()
+            .map(normalize_mount_path)
+            .transpose()?;
+        let state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("history".to_string()),
+                None,
+                "system",
+            )
+            .await?;
+        let mut revisions = Vec::new();
+        for revision in self
+            .list_revision_refs(request.mount_id, Some(request.limit), request.since)
             .await?
-            .into_iter()
-            .find(|checkpoint| checkpoint.id == checkpoint_id)
-            .ok_or_else(|| WorkspaceError::SearchFailed {
-                reason: "checkpoint missing after create".to_string(),
-            })
+        {
+            let changed_files = self
+                .list_revision_changed_files(revision.id, scope.as_deref())
+                .await?;
+            if scope.is_some() && changed_files.is_empty() {
+                continue;
+            }
+            revisions.push(WorkspaceMountRevision {
+                id: revision.id,
+                mount_id: request.mount_id,
+                parent_revision_id: revision.parent_revision_id,
+                kind: revision.kind,
+                source: revision.source,
+                trigger: revision.trigger,
+                summary: revision.summary,
+                created_by: revision.created_by,
+                created_at: revision.created_at,
+                changed_files,
+            });
+        }
+
+        let checkpoints = if request.include_checkpoints {
+            self.collect_checkpoint_chain(request.mount_id)
+                .await?
+                .into_iter()
+                .filter(|checkpoint| {
+                    scope.is_none()
+                        || checkpoint
+                            .changed_files
+                            .iter()
+                            .any(|path| scope_matches(path, scope.as_deref()))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(WorkspaceMountHistory {
+            mount_id: request.mount_id,
+            baseline_revision_id: state.baseline_revision_id,
+            head_revision_id: state.head_revision_id,
+            revisions,
+            checkpoints,
+        })
+    }
+
+    async fn diff_workspace_mount_between(
+        &self,
+        request: &WorkspaceMountDiffRequest,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        let scope = request
+            .scope_path
+            .as_deref()
+            .map(normalize_mount_path)
+            .transpose()?;
+        let state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("workspace_diff".to_string()),
+                None,
+                "system",
+            )
+            .await?;
+        let from_revision_id = self
+            .resolve_revision_target(
+                request.mount_id,
+                &state,
+                request.from.as_deref().unwrap_or("baseline"),
+            )
+            .await?;
+        let to_revision_id = self
+            .resolve_revision_target(
+                request.mount_id,
+                &state,
+                request.to.as_deref().unwrap_or("head"),
+            )
+            .await?;
+        let from_manifest = self.load_manifest_entries(from_revision_id).await?;
+        let to_manifest = self.load_manifest_entries(to_revision_id).await?;
+        let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
+        let mut changes = collect_manifest_changes(&from_manifest, &to_manifest, scope.as_deref());
+        if let Some(max_files) = request.max_files {
+            changes.truncate(max_files);
+        }
+
+        let mut entries = Vec::new();
+        for change in changes {
+            let base_snapshot = match change.before.as_ref() {
+                Some(entry) => Some(self.read_snapshot_required(entry.snapshot_id).await?),
+                None => None,
+            };
+            let working_snapshot = match change.after.as_ref() {
+                Some(entry) => Some(self.read_snapshot_required(entry.snapshot_id).await?),
+                None => None,
+            };
+            let base_content = if request.include_content {
+                base_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| bytes_to_text(&snapshot.content))
+            } else {
+                None
+            };
+            let working_content = if request.include_content {
+                working_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| bytes_to_text(&snapshot.content))
+            } else {
+                None
+            };
+            let remote_content = if to_revision_id == state.head_revision_id.unwrap_or(to_revision_id) {
+                let disk_path = Path::new(&mount.source_root).join(&change.path);
+                Self::read_disk_bytes(&disk_path)
+                    .await?
+                    .and_then(|bytes| bytes_to_text(&bytes))
+            } else {
+                None
+            };
+            let diff_text = if request.include_content && !change.is_binary {
+                render_text_diff(&change.path, base_content.as_deref(), working_content.as_deref())
+            } else {
+                None
+            };
+            entries.push(MountedFileDiff {
+                path: change.path.clone(),
+                uri: WorkspaceUri::mount_uri(request.mount_id, Some(&change.path)),
+                status: change.status,
+                change_kind: change.change_kind,
+                is_binary: change.is_binary,
+                base_content,
+                working_content,
+                remote_content,
+                diff_text,
+                conflict_reason: None,
+            });
+        }
+
+        Ok(WorkspaceMountDiff {
+            mount_id: request.mount_id,
+            from_revision_id: Some(from_revision_id),
+            to_revision_id: Some(to_revision_id),
+            entries,
+        })
     }
 
     async fn keep_workspace_mount(
         &self,
         request: &MountActionRequest,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
-        let target_prefix = match request.scope_path.as_deref() {
-            Some(path) => Some(normalize_mount_path(path)?),
-            None => None,
-        };
-        let records = self
-            .list_mount_file_records(request.mount_id, target_prefix.as_deref())
+        let state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("keep_mount".to_string()),
+                None,
+                "system",
+            )
             .await?;
-        for record in records
-            .into_iter()
-            .filter(|record| record.status != MountedFileStatus::Clean)
-        {
-            let disk_path = Path::new(&mount.source_root).join(&record.path);
-            match record.status {
-                MountedFileStatus::PendingDelete => {
-                    let base_snapshot = match record.base_snapshot_id {
-                        Some(id) => self.read_snapshot(id).await?,
-                        None => None,
-                    };
-                    if let Some(base_snapshot) = base_snapshot {
-                        if let Some(remote_bytes) = Self::read_disk_bytes(&disk_path).await? {
-                            let remote_hash = compute_content_hash(&remote_bytes);
-                            if remote_hash != base_snapshot.hash {
-                                self.upsert_mount_file_record(
-                                    request.mount_id,
-                                    &record.path,
-                                    MountedFileStatus::Conflicted,
-                                    record.is_binary,
-                                    record.base_snapshot_id,
-                                    record.working_snapshot_id,
-                                    Some(base_snapshot.hash),
-                                    None,
-                                    Some(remote_hash),
-                                    Some("Disk changed since base snapshot".to_string()),
-                                )
-                                .await?;
-                                continue;
-                            }
-                        }
-                    }
-                    if disk_path.exists() {
-                        tokio::fs::remove_file(&disk_path).await.map_err(|e| {
-                            WorkspaceError::IoError {
-                                reason: format!("failed to delete {}: {e}", disk_path.display()),
-                            }
-                        })?;
-                    }
-                    let conn = self
-                        .connect()
-                        .await
-                        .map_err(|e| WorkspaceError::SearchFailed {
-                            reason: e.to_string(),
-                        })?;
-                    conn.execute(
-                        "DELETE FROM workspace_mount_files WHERE mount_id = ?1 AND relative_path = ?2",
-                        params![request.mount_id.to_string(), record.path.clone()],
-                    )
-                    .await
-                    .map_err(|e| WorkspaceError::SearchFailed {
-                        reason: format!("failed to delete mount file state: {e}"),
-                    })?;
-                }
-                _ => {
-                    let working_snapshot = match record.working_snapshot_id {
-                        Some(snapshot_id) => self.read_snapshot_required(snapshot_id).await?,
-                        None => {
-                            return Err(WorkspaceError::MountPathNotFound {
-                                mount_id: request.mount_id.to_string(),
-                                path: record.path.clone(),
-                            });
-                        }
-                    };
-                    let base_snapshot = match record.base_snapshot_id {
-                        Some(snapshot_id) => Some(self.read_snapshot_required(snapshot_id).await?),
-                        None => None,
-                    };
-                    let remote_bytes = Self::read_disk_bytes(&disk_path).await?;
-
-                    let final_bytes = if let Some(base_snapshot) = &base_snapshot {
-                        if let Some(remote_bytes) = remote_bytes.as_ref() {
-                            let remote_hash = compute_content_hash(remote_bytes);
-                            if remote_hash == base_snapshot.hash
-                                || remote_hash == working_snapshot.hash
-                            {
-                                working_snapshot.content.clone()
-                            } else if working_snapshot.is_binary || base_snapshot.is_binary {
-                                self.upsert_mount_file_record(
-                                    request.mount_id,
-                                    &record.path,
-                                    MountedFileStatus::Conflicted,
-                                    true,
-                                    record.base_snapshot_id,
-                                    record.working_snapshot_id,
-                                    Some(base_snapshot.hash.clone()),
-                                    Some(working_snapshot.hash.clone()),
-                                    Some(remote_hash),
-                                    Some(
-                                        "Binary file changed on disk since base snapshot"
-                                            .to_string(),
-                                    ),
-                                )
-                                .await?;
-                                continue;
-                            } else {
-                                let base_text =
-                                    bytes_to_text(&base_snapshot.content).ok_or_else(|| {
-                                        WorkspaceError::MountConflict {
-                                            path: record.path.clone(),
-                                            reason: "base snapshot is not valid utf-8".to_string(),
-                                        }
-                                    })?;
-                                let remote_text = bytes_to_text(remote_bytes).ok_or_else(|| {
-                                    WorkspaceError::MountConflict {
-                                        path: record.path.clone(),
-                                        reason: "disk file is not valid utf-8".to_string(),
-                                    }
-                                })?;
-                                let working_text = bytes_to_text(&working_snapshot.content)
-                                    .ok_or_else(|| WorkspaceError::MountConflict {
-                                        path: record.path.clone(),
-                                        reason: "working file is not valid utf-8".to_string(),
-                                    })?;
-                                match three_way_merge_text(&base_text, &remote_text, &working_text)
-                                {
-                                    Ok(merged) => merged.into_bytes(),
-                                    Err(reason) => {
-                                        self.upsert_mount_file_record(
-                                            request.mount_id,
-                                            &record.path,
-                                            MountedFileStatus::Conflicted,
-                                            false,
-                                            record.base_snapshot_id,
-                                            record.working_snapshot_id,
-                                            Some(base_snapshot.hash.clone()),
-                                            Some(working_snapshot.hash.clone()),
-                                            Some(remote_hash),
-                                            Some(reason),
-                                        )
-                                        .await?;
-                                        continue;
-                                    }
-                                }
-                            }
-                        } else {
-                            working_snapshot.content.clone()
-                        }
-                    } else if let Some(remote_bytes) = remote_bytes.as_ref() {
-                        let remote_hash = compute_content_hash(remote_bytes);
-                        if remote_hash != working_snapshot.hash {
-                            self.upsert_mount_file_record(
-                                request.mount_id,
-                                &record.path,
-                                MountedFileStatus::Conflicted,
-                                working_snapshot.is_binary,
-                                None,
-                                record.working_snapshot_id,
-                                None,
-                                Some(working_snapshot.hash.clone()),
-                                Some(remote_hash),
-                                Some("File was created in both workspace and disk with different content".to_string()),
-                            )
-                            .await?;
-                            continue;
-                        }
-                        working_snapshot.content.clone()
-                    } else {
-                        working_snapshot.content.clone()
-                    };
-                    if let Some(parent) = disk_path.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                            WorkspaceError::IoError {
-                                reason: format!("failed to create {}: {e}", parent.display()),
-                            }
-                        })?;
-                    }
-                    tokio::fs::write(&disk_path, &final_bytes)
-                        .await
-                        .map_err(|e| WorkspaceError::IoError {
-                            reason: format!("failed to write {}: {e}", disk_path.display()),
-                        })?;
-                    let final_snapshot = self
-                        .insert_snapshot(request.mount_id, &record.path, &final_bytes)
-                        .await?;
-                    self.replace_mount_record_with_snapshot(
-                        request.mount_id,
-                        &record.path,
-                        &final_snapshot,
-                    )
-                    .await?;
-                }
-            }
-        }
+        let head_revision_id = state.head_revision_id.ok_or_else(|| WorkspaceError::MountConflict {
+            path: request.mount_id.to_string(),
+            reason: "cannot keep mount without a head revision".to_string(),
+        })?;
+        let head_manifest = self.load_manifest_entries(head_revision_id).await?;
+        let accept_revision_id = self
+            .create_revision_from_manifest(
+                request.mount_id,
+                Some(head_revision_id),
+                &head_manifest,
+                &head_manifest,
+                WorkspaceMountRevisionKind::Accept,
+                WorkspaceMountRevisionSource::System,
+                Some("keep_mount".to_string()),
+                Some("accepted current workspace tree as baseline".to_string()),
+                "system",
+            )
+            .await?;
+        self.save_mount_state_record(
+            request.mount_id,
+            Some(accept_revision_id),
+            Some(accept_revision_id),
+        )
+        .await?;
+        self.sync_mount_live_cache(
+            request.mount_id,
+            Some(accept_revision_id),
+            Some(accept_revision_id),
+        )
+        .await?;
+        self.touch_mount_updated_at(request.mount_id).await?;
         self.build_mount_detail_internal(&request.user_id, request.mount_id)
             .await
     }
@@ -2432,172 +3310,53 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &MountActionRequest,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
-        let target_prefix = match request.scope_path.as_deref() {
-            Some(path) => Some(normalize_mount_path(path)?),
-            None => None,
-        };
-        let records = self
-            .list_mount_file_records(request.mount_id, target_prefix.as_deref())
-            .await?;
-        let checkpoint_map = if let Some(checkpoint_id) = request.checkpoint_id {
-            let conn = self
-                .connect()
-                .await
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: e.to_string(),
-                })?;
-            let mut rows = conn
-                .query(
-                    "SELECT relative_path, status, snapshot_id FROM workspace_mount_checkpoint_files WHERE checkpoint_id = ?1",
-                    params![checkpoint_id.to_string()],
-                )
-                .await
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: format!("checkpoint restore query failed: {e}"),
-                })?;
-            let mut map = HashMap::new();
-            while let Some(row) = rows
-                .next()
-                .await
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: format!("checkpoint restore query failed: {e}"),
-                })?
-            {
-                map.insert(
-                    get_text(&row, 0),
-                    (
-                        status_from_str(&get_text(&row, 1)),
-                        get_opt_text(&row, 2).and_then(|value| Uuid::parse_str(&value).ok()),
-                    ),
-                );
-            }
-            Some(map)
-        } else {
-            None
-        };
-
-        for record in records {
-            if let Some(checkpoint) = &checkpoint_map {
-                if let Some((status, snapshot_id)) = checkpoint.get(&record.path) {
-                    self.upsert_mount_file_record(
-                        request.mount_id,
-                        &record.path,
-                        *status,
-                        record.is_binary,
-                        snapshot_id.or(record.base_snapshot_id),
-                        *snapshot_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                } else {
-                    self.upsert_mount_file_record(
-                        request.mount_id,
-                        &record.path,
-                        MountedFileStatus::Clean,
-                        record.is_binary,
-                        record.base_snapshot_id,
-                        record.base_snapshot_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?;
-                }
-            } else {
-                self.upsert_mount_file_record(
-                    request.mount_id,
-                    &record.path,
-                    MountedFileStatus::Clean,
-                    record.is_binary,
-                    record.base_snapshot_id,
-                    record.base_snapshot_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .await?;
-            }
-        }
-        self.build_mount_detail_internal(&request.user_id, request.mount_id)
-            .await
+        let target = request
+            .checkpoint_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "baseline".to_string());
+        self.restore_workspace_mount(&WorkspaceMountRestoreRequest {
+            user_id: request.user_id.clone(),
+            mount_id: request.mount_id,
+            scope_path: request.scope_path.clone(),
+            target,
+            set_as_baseline: request.set_as_baseline,
+            dry_run: false,
+            create_checkpoint_before_restore: true,
+            created_by: "system".to_string(),
+        })
+        .await
     }
 
     async fn resolve_workspace_mount_conflict(
         &self,
         request: &ConflictResolutionRequest,
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        let normalized = normalize_mount_path(&request.path)?;
         let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
-        let record = self
-            .load_mount_file_record(request.mount_id, &normalize_mount_path(&request.path)?)
-            .await?
-            .ok_or_else(|| WorkspaceError::MountPathNotFound {
-                mount_id: request.mount_id.to_string(),
-                path: request.path.clone(),
-            })?;
+        let disk_path = Path::new(&mount.source_root).join(&normalized);
         match request.resolution.as_str() {
             "keep_disk" => {
-                let disk_path = Path::new(&mount.source_root).join(&record.path);
-                self.sync_record_to_disk_snapshot(request.mount_id, &record.path, &disk_path)
+                self.refresh_workspace_mount(&request.user_id, request.mount_id, None)
                     .await?;
             }
             "keep_workspace" => {
-                let snapshot = match record.working_snapshot_id {
-                    Some(snapshot_id) => self.read_snapshot_required(snapshot_id).await?,
-                    None => {
-                        return Err(WorkspaceError::MountConflict {
-                            path: record.path.clone(),
-                            reason: "missing working snapshot".to_string(),
-                        });
-                    }
-                };
-                let disk_path = Path::new(&mount.source_root).join(&record.path);
-                if let Some(parent) = disk_path.parent() {
-                    tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                        WorkspaceError::IoError {
-                            reason: format!("failed to create {}: {e}", parent.display()),
-                        }
-                    })?;
-                }
-                tokio::fs::write(&disk_path, &snapshot.content)
-                    .await
-                    .map_err(|e| WorkspaceError::IoError {
-                        reason: format!(
-                            "failed to write conflict resolution {}: {e}",
-                            disk_path.display()
-                        ),
-                    })?;
-                let final_snapshot = self
-                    .insert_snapshot(request.mount_id, &record.path, &snapshot.content)
+                self.refresh_workspace_mount(&request.user_id, request.mount_id, None)
                     .await?;
-                self.replace_mount_record_with_snapshot(
-                    request.mount_id,
-                    &record.path,
-                    &final_snapshot,
-                )
-                .await?;
             }
             "write_copy" => {
                 let copy_path = request.renamed_copy_path.clone().ok_or_else(|| {
                     WorkspaceError::MountConflict {
-                        path: record.path.clone(),
+                        path: normalized.clone(),
                         reason: "renamed_copy_path is required".to_string(),
                     }
                 })?;
                 let copy_path = normalize_mount_path(&copy_path)?;
-                let snapshot = match record.working_snapshot_id {
-                    Some(snapshot_id) => self.read_snapshot_required(snapshot_id).await?,
-                    None => {
-                        return Err(WorkspaceError::MountConflict {
-                            path: record.path.clone(),
-                            reason: "missing working snapshot".to_string(),
-                        });
+                let bytes = Self::read_disk_bytes(&disk_path).await?.ok_or_else(|| {
+                    WorkspaceError::MountPathNotFound {
+                        mount_id: request.mount_id.to_string(),
+                        path: normalized.clone(),
                     }
-                };
+                })?;
                 let disk_path = Path::new(&mount.source_root).join(&copy_path);
                 if let Some(parent) = disk_path.parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -2606,27 +3365,29 @@ impl WorkspaceStore for LibSqlBackend {
                         }
                     })?;
                 }
-                tokio::fs::write(&disk_path, snapshot.content)
+                tokio::fs::write(&disk_path, bytes)
                     .await
                     .map_err(|e| WorkspaceError::IoError {
                         reason: format!("failed to write copy {}: {e}", disk_path.display()),
                     })?;
-                let original_disk_path = Path::new(&mount.source_root).join(&record.path);
-                self.sync_record_to_disk_snapshot(
+                self.reconcile_mount(
+                    &request.user_id,
                     request.mount_id,
-                    &record.path,
-                    &original_disk_path,
+                    WorkspaceMountRevisionKind::ToolWrite,
+                    WorkspaceMountRevisionSource::WorkspaceTool,
+                    Some(copy_path),
+                    Some("wrote copy during conflict resolution".to_string()),
+                    "workspace_conflict",
                 )
                 .await?;
             }
             "manual_merge" => {
                 let merged_content = request.merged_content.clone().ok_or_else(|| {
                     WorkspaceError::MountConflict {
-                        path: record.path.clone(),
+                        path: normalized.clone(),
                         reason: "merged_content is required".to_string(),
                     }
                 })?;
-                let disk_path = Path::new(&mount.source_root).join(&record.path);
                 if let Some(parent) = disk_path.parent() {
                     tokio::fs::create_dir_all(parent).await.map_err(|e| {
                         WorkspaceError::IoError {
@@ -2639,21 +3400,356 @@ impl WorkspaceStore for LibSqlBackend {
                     .map_err(|e| WorkspaceError::IoError {
                         reason: format!("failed to write merged file {}: {e}", disk_path.display()),
                     })?;
-                let snapshot = self
-                    .insert_snapshot(request.mount_id, &record.path, merged_content.as_bytes())
-                    .await?;
-                self.replace_mount_record_with_snapshot(request.mount_id, &record.path, &snapshot)
-                    .await?;
+                self.reconcile_mount(
+                    &request.user_id,
+                    request.mount_id,
+                    WorkspaceMountRevisionKind::ToolPatch,
+                    WorkspaceMountRevisionSource::WorkspaceTool,
+                    Some(normalized),
+                    Some("manual merge resolution".to_string()),
+                    "workspace_conflict",
+                )
+                .await?;
             }
             other => {
                 return Err(WorkspaceError::MountConflict {
-                    path: record.path.clone(),
+                    path: request.path.clone(),
                     reason: format!("unknown resolution '{other}'"),
                 });
             }
         }
         self.build_mount_detail_internal(&request.user_id, request.mount_id)
             .await
+    }
+
+    async fn move_workspace_mount_file(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        source_path: &str,
+        destination_path: &str,
+        overwrite: bool,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        let source_path = normalize_mount_path(source_path)?;
+        let destination_path = normalize_mount_path(destination_path)?;
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let source_disk_path = Path::new(&mount.source_root).join(&source_path);
+        let destination_disk_path = Path::new(&mount.source_root).join(&destination_path);
+
+        let source_metadata = tokio::fs::metadata(&source_disk_path)
+            .await
+            .map_err(|_| WorkspaceError::MountPathNotFound {
+                mount_id: mount_id.to_string(),
+                path: source_path.clone(),
+            })?;
+        if source_metadata.is_dir() {
+            return Err(WorkspaceError::IoError {
+                reason: format!("workspace_move only supports files: {}", source_path),
+            });
+        }
+        if !overwrite
+            && tokio::fs::try_exists(&destination_disk_path)
+                .await
+                .map_err(|e| WorkspaceError::IoError {
+                    reason: format!(
+                        "failed to check destination {}: {e}",
+                        destination_disk_path.display()
+                    ),
+                })?
+        {
+            return Err(WorkspaceError::IoError {
+                reason: format!("destination already exists: {}", destination_path),
+            });
+        }
+        if let Some(parent) = destination_disk_path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| WorkspaceError::IoError {
+                    reason: format!("failed to create {}: {e}", parent.display()),
+                })?;
+        }
+        tokio::fs::rename(&source_disk_path, &destination_disk_path)
+            .await
+            .map_err(|e| WorkspaceError::IoError {
+                reason: format!(
+                    "failed to move {} -> {}: {e}",
+                    source_disk_path.display(),
+                    destination_disk_path.display()
+                ),
+            })?;
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ToolMove,
+            WorkspaceMountRevisionSource::WorkspaceTool,
+            Some(format!("{source_path} -> {destination_path}")),
+            Some(format!("moved {} to {}", source_path, destination_path)),
+            "workspace_move",
+        )
+        .await?;
+        self.read_workspace_mount_file(user_id, mount_id, &destination_path)
+            .await
+    }
+
+    async fn delete_workspace_mount_tree(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        path: &str,
+        missing_ok: bool,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        let normalized = normalize_mount_path(path)?;
+        let mount = self.fetch_mount(user_id, mount_id).await?;
+        let disk_path = Path::new(&mount.source_root).join(&normalized);
+        match tokio::fs::metadata(&disk_path).await {
+            Ok(metadata) => {
+                if !metadata.is_dir() {
+                    return Err(WorkspaceError::IoError {
+                        reason: format!("workspace_delete_tree requires a directory: {}", normalized),
+                    });
+                }
+            }
+            Err(_) if missing_ok => {
+                return self.build_mount_detail_internal(user_id, mount_id).await;
+            }
+            Err(_) => {
+                return Err(WorkspaceError::MountPathNotFound {
+                    mount_id: mount_id.to_string(),
+                    path: normalized,
+                });
+            }
+        }
+        tokio::fs::remove_dir_all(&disk_path)
+            .await
+            .map_err(|e| WorkspaceError::IoError {
+                reason: format!("failed to delete directory {}: {e}", disk_path.display()),
+            })?;
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ToolDelete,
+            WorkspaceMountRevisionSource::WorkspaceTool,
+            Some(path.to_string()),
+            Some(format!("deleted directory tree {}", path)),
+            "workspace_delete_tree",
+        )
+        .await?;
+        self.build_mount_detail_internal(user_id, mount_id).await
+    }
+
+    async fn restore_workspace_mount(
+        &self,
+        request: &WorkspaceMountRestoreRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        let scope = request
+            .scope_path
+            .as_deref()
+            .map(normalize_mount_path)
+            .transpose()?;
+        let mut state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("restore_prepare".to_string()),
+                None,
+                &request.created_by,
+            )
+            .await?;
+        let head_revision_id = state.head_revision_id.ok_or_else(|| WorkspaceError::MountConflict {
+            path: request.mount_id.to_string(),
+            reason: "cannot restore mount without a head revision".to_string(),
+        })?;
+        let target_revision_id = self
+            .resolve_revision_target(request.mount_id, &state, &request.target)
+            .await?;
+        if request.dry_run {
+            return self.build_mount_detail_internal(&request.user_id, request.mount_id).await;
+        }
+        if request.create_checkpoint_before_restore {
+            let label = format!(
+                "auto-pre-restore-{}",
+                Utc::now().format("%Y%m%d%H%M%S")
+            );
+            self.create_checkpoint_record(
+                request.mount_id,
+                head_revision_id,
+                Some(label),
+                Some(format!("automatic checkpoint before restoring {}", request.target)),
+                request.created_by.clone(),
+                true,
+            )
+            .await?;
+        }
+
+        let mount = self.fetch_mount(&request.user_id, request.mount_id).await?;
+        let current_manifest = self.load_manifest_entries(head_revision_id).await?;
+        let target_manifest = self.load_manifest_entries(target_revision_id).await?;
+        let desired_manifest = if let Some(scope) = scope.as_deref() {
+            let mut desired = current_manifest.clone();
+            desired.retain(|path, _| !scope_matches(path, Some(scope)));
+            for (path, entry) in &target_manifest {
+                if scope_matches(path, Some(scope)) {
+                    desired.insert(path.clone(), entry.clone());
+                }
+            }
+            desired
+        } else {
+            target_manifest.clone()
+        };
+        let changes = collect_manifest_changes(&current_manifest, &desired_manifest, None);
+        let mut recovery_bundle = Vec::new();
+        for change in &changes {
+            let disk_path = Path::new(&mount.source_root).join(&change.path);
+            recovery_bundle.push((disk_path.clone(), Self::read_disk_bytes(&disk_path).await?));
+        }
+
+        let apply_result = async {
+            for change in &changes {
+                let disk_path = Path::new(&mount.source_root).join(&change.path);
+                match &change.after {
+                    Some(entry) => {
+                        let snapshot = self.read_snapshot_required(entry.snapshot_id).await?;
+                        if let Some(parent) = disk_path.parent() {
+                            tokio::fs::create_dir_all(parent)
+                                .await
+                                .map_err(|e| WorkspaceError::IoError {
+                                    reason: format!("failed to create {}: {e}", parent.display()),
+                                })?;
+                        }
+                        tokio::fs::write(&disk_path, snapshot.content)
+                            .await
+                            .map_err(|e| WorkspaceError::IoError {
+                                reason: format!("failed to restore {}: {e}", disk_path.display()),
+                            })?;
+                    }
+                    None => {
+                        if tokio::fs::try_exists(&disk_path)
+                            .await
+                            .map_err(|e| WorkspaceError::IoError {
+                                reason: format!("failed to check {}: {e}", disk_path.display()),
+                            })?
+                        {
+                            tokio::fs::remove_file(&disk_path)
+                                .await
+                                .map_err(|e| WorkspaceError::IoError {
+                                    reason: format!("failed to delete {}: {e}", disk_path.display()),
+                                })?;
+                        }
+                    }
+                }
+            }
+            Ok::<(), WorkspaceError>(())
+        }
+        .await;
+
+        if let Err(error) = apply_result {
+            for (path, bytes) in recovery_bundle.into_iter().rev() {
+                match bytes {
+                    Some(bytes) => {
+                        if let Some(parent) = path.parent() {
+                            let _ = tokio::fs::create_dir_all(parent).await;
+                        }
+                        let _ = tokio::fs::write(&path, bytes).await;
+                    }
+                    None => {
+                        let _ = tokio::fs::remove_file(&path).await;
+                    }
+                }
+            }
+            return Err(error);
+        }
+
+        state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::Restore,
+                WorkspaceMountRevisionSource::System,
+                Some(request.target.clone()),
+                Some(format!("restored workspace to {}", request.target)),
+                &request.created_by,
+            )
+            .await?;
+        if request.set_as_baseline {
+            self.save_mount_state_record(
+                request.mount_id,
+                state.head_revision_id,
+                state.head_revision_id,
+            )
+            .await?;
+            self.sync_mount_live_cache(request.mount_id, state.head_revision_id, state.head_revision_id)
+                .await?;
+        }
+        self.build_mount_detail_internal(&request.user_id, request.mount_id).await
+    }
+
+    async fn set_workspace_mount_baseline(
+        &self,
+        request: &WorkspaceMountBaselineRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        let state = self
+            .reconcile_mount(
+                &request.user_id,
+                request.mount_id,
+                WorkspaceMountRevisionKind::ManualRefresh,
+                WorkspaceMountRevisionSource::External,
+                Some("baseline_set".to_string()),
+                None,
+                "system",
+            )
+            .await?;
+        let target_revision_id = self
+            .resolve_revision_target(request.mount_id, &state, &request.target)
+            .await?;
+        self.save_mount_state_record(
+            request.mount_id,
+            Some(target_revision_id),
+            state.head_revision_id,
+        )
+        .await?;
+        self.sync_mount_live_cache(request.mount_id, Some(target_revision_id), state.head_revision_id)
+            .await?;
+        self.touch_mount_updated_at(request.mount_id).await?;
+        self.build_mount_detail_internal(&request.user_id, request.mount_id).await
+    }
+
+    async fn refresh_workspace_mount(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+        _scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::ManualRefresh,
+            WorkspaceMountRevisionSource::External,
+            Some("workspace_refresh".to_string()),
+            Some("manual workspace refresh".to_string()),
+            "system",
+        )
+        .await?;
+        self.build_mount_detail_internal(user_id, mount_id).await
+    }
+
+    async fn sync_workspace_mount_watch(
+        &self,
+        user_id: &str,
+        mount_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        self.reconcile_mount(
+            user_id,
+            mount_id,
+            WorkspaceMountRevisionKind::FsWatch,
+            WorkspaceMountRevisionSource::External,
+            Some("workspace_watch".to_string()),
+            Some("background mounted tree watch".to_string()),
+            "system",
+        )
+        .await?;
+        Ok(())
     }
 }
 
@@ -2831,7 +3927,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_workspace_mount_round_trip_diff_keep_revert() {
+    async fn test_workspace_mount_real_disk_diff_keep_revert() {
         let (backend, dir) = setup_backend().await;
         let mount_root = dir.path().join("mounted-project");
         std::fs::create_dir_all(&mount_root).expect("create mount root");
@@ -2851,6 +3947,15 @@ mod tests {
             .await
             .expect("create mount");
 
+        let initial_detail = backend
+            .get_workspace_mount("default", mount.mount.id)
+            .await
+            .expect("get mount");
+        assert_eq!(
+            initial_detail.baseline_revision_id,
+            initial_detail.head_revision_id
+        );
+
         let file = backend
             .read_workspace_mount_file("default", mount.mount.id, "main.rs")
             .await
@@ -2866,12 +3971,20 @@ mod tests {
             )
             .await
             .expect("write mounted file");
+        let disk_after_write =
+            std::fs::read_to_string(mount_root.join("main.rs")).expect("read disk after write");
+        assert!(disk_after_write.contains("v2"));
 
         let diff = backend
             .diff_workspace_mount("default", mount.mount.id, None)
             .await
             .expect("diff mount");
         assert_eq!(diff.entries.len(), 1);
+        assert_eq!(diff.entries[0].status, MountedFileStatus::Modified);
+        assert_eq!(
+            diff.entries[0].change_kind,
+            WorkspaceMountChangeKind::Modified
+        );
         assert!(
             diff.entries[0]
                 .working_content
@@ -2885,6 +3998,7 @@ mod tests {
                 mount_id: mount.mount.id,
                 scope_path: Some("main.rs".to_string()),
                 checkpoint_id: None,
+                set_as_baseline: false,
             })
             .await
             .expect("revert file");
@@ -2899,6 +4013,9 @@ mod tests {
                 .as_deref()
                 .is_some_and(|v| v.contains("v1"))
         );
+        let disk_after_revert =
+            std::fs::read_to_string(mount_root.join("main.rs")).expect("read disk after revert");
+        assert!(disk_after_revert.contains("v1"));
 
         backend
             .write_workspace_mount_file(
@@ -2915,11 +4032,27 @@ mod tests {
                 mount_id: mount.mount.id,
                 scope_path: Some("main.rs".to_string()),
                 checkpoint_id: None,
+                set_as_baseline: true,
             })
             .await
             .expect("keep file");
 
-        let disk_content = std::fs::read_to_string(mount_root.join("main.rs")).expect("read disk");
+        let post_keep_detail = backend
+            .get_workspace_mount("default", mount.mount.id)
+            .await
+            .expect("get post-keep mount");
+        assert_eq!(
+            post_keep_detail.baseline_revision_id,
+            post_keep_detail.head_revision_id
+        );
+        let clean_diff = backend
+            .diff_workspace_mount("default", mount.mount.id, None)
+            .await
+            .expect("diff after keep");
+        assert!(clean_diff.entries.is_empty());
+
+        let disk_content =
+            std::fs::read_to_string(mount_root.join("main.rs")).expect("read disk after keep");
         assert!(disk_content.contains("kept"));
     }
 
@@ -3024,7 +4157,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_workspace_mount_delete_is_pending_until_keep() {
+    async fn test_workspace_mount_delete_is_immediate_and_restore_recovers() {
         let (backend, dir) = setup_backend().await;
         let mount_root = dir.path().join("delete-project");
         std::fs::create_dir_all(&mount_root).expect("create mount root");
@@ -3043,24 +4176,30 @@ mod tests {
         backend
             .delete_workspace_mount_file("default", mount.mount.id, "delete.txt")
             .await
-            .expect("mark pending delete");
-        assert!(
-            mount_root.join("delete.txt").exists(),
-            "disk file should remain until keep"
-        );
+            .expect("delete file");
+        assert!(!mount_root.join("delete.txt").exists(), "disk file should be deleted immediately");
+
+        let diff = backend
+            .diff_workspace_mount("default", mount.mount.id, None)
+            .await
+            .expect("diff after delete");
+        assert_eq!(diff.entries.len(), 1);
+        assert_eq!(diff.entries[0].status, MountedFileStatus::Deleted);
+        assert_eq!(diff.entries[0].change_kind, WorkspaceMountChangeKind::Deleted);
 
         backend
-            .keep_workspace_mount(&MountActionRequest {
+            .revert_workspace_mount(&MountActionRequest {
                 user_id: "default".to_string(),
                 mount_id: mount.mount.id,
                 scope_path: Some("delete.txt".to_string()),
                 checkpoint_id: None,
+                set_as_baseline: false,
             })
             .await
-            .expect("apply delete");
+            .expect("restore baseline");
         assert!(
-            !mount_root.join("delete.txt").exists(),
-            "disk file should be deleted after keep"
+            mount_root.join("delete.txt").exists(),
+            "restore should bring back the deleted file"
         );
     }
 
@@ -3133,35 +4272,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_three_way_merge_text_merges_non_overlapping_changes() {
-        let base = "a\nb\nc\n";
-        let remote = "a\nb-remote\nc\n";
-        let working = "a\nb\nc-working\n";
-        let merged = three_way_merge_text(base, remote, working).expect("merge should succeed");
-        assert_eq!(merged, "a\nb-remote\nc-working\n");
-    }
-
-    #[test]
-    fn test_three_way_merge_text_conflicts_on_same_region() {
-        let base = "a\nb\nc\n";
-        let remote = "a\nremote\nc\n";
-        let working = "a\nworking\nc\n";
-        let err = three_way_merge_text(base, remote, working).expect_err("merge should conflict");
-        assert!(err.contains("Text conflict"));
-    }
-
     #[tokio::test]
-    async fn test_workspace_mount_keep_auto_merges_remote_text_change() {
+    async fn test_workspace_mount_checkpoint_history_and_restore() {
         let (backend, dir) = setup_backend().await;
-        let mount_root = dir.path().join("merge-project");
+        let mount_root = dir.path().join("checkpoint-project");
         std::fs::create_dir_all(&mount_root).expect("create mount root");
-        std::fs::write(mount_root.join("main.txt"), "a\nb\nc\n").expect("seed file");
+        std::fs::write(mount_root.join("main.txt"), "v1\n").expect("seed file");
 
         let mount = backend
             .create_workspace_mount(&CreateMountRequest {
                 user_id: "default".to_string(),
-                display_name: "merge-project".to_string(),
+                display_name: "checkpoint-project".to_string(),
                 source_root: mount_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3169,32 +4290,67 @@ mod tests {
             .expect("create mount");
 
         backend
-            .read_workspace_mount_file("default", mount.mount.id, "main.txt")
+            .write_workspace_mount_file("default", mount.mount.id, "main.txt", b"v2\n")
             .await
-            .expect("prime base");
-        backend
-            .write_workspace_mount_file("default", mount.mount.id, "main.txt", b"a\nb\nc-local\n")
-            .await
-            .expect("write local");
-
-        std::fs::write(mount_root.join("main.txt"), "a\nb-remote\nc\n").expect("remote edit");
-
-        backend
-            .keep_workspace_mount(&MountActionRequest {
+            .expect("write v2");
+        let checkpoint = backend
+            .create_workspace_checkpoint(&CreateCheckpointRequest {
                 user_id: "default".to_string(),
                 mount_id: mount.mount.id,
-                scope_path: Some("main.txt".to_string()),
-                checkpoint_id: None,
+                revision_id: None,
+                label: Some("v2".to_string()),
+                summary: Some("before v3".to_string()),
+                created_by: "test".to_string(),
+                is_auto: false,
             })
             .await
-            .expect("keep merged");
+            .expect("create checkpoint");
 
-        let disk = std::fs::read_to_string(mount_root.join("main.txt")).expect("read merged disk");
-        assert_eq!(disk, "a\nb-remote\nc-local\n");
+        backend
+            .write_workspace_mount_file("default", mount.mount.id, "main.txt", b"v3\n")
+            .await
+            .expect("write v3");
+
+        let history = backend
+            .list_workspace_mount_history(&WorkspaceMountHistoryRequest {
+                user_id: "default".to_string(),
+                mount_id: mount.mount.id,
+                scope_path: None,
+                limit: 20,
+                since: None,
+                include_checkpoints: true,
+            })
+            .await
+            .expect("history");
+        assert!(!history.revisions.is_empty());
+        assert!(
+            history
+                .checkpoints
+                .iter()
+                .any(|value| value.id == checkpoint.id && value.label.as_deref() == Some("v2"))
+        );
+
+        backend
+            .restore_workspace_mount(&WorkspaceMountRestoreRequest {
+                user_id: "default".to_string(),
+                mount_id: mount.mount.id,
+                scope_path: None,
+                target: checkpoint.id.to_string(),
+                set_as_baseline: false,
+                dry_run: false,
+                create_checkpoint_before_restore: true,
+                created_by: "test".to_string(),
+            })
+            .await
+            .expect("restore checkpoint");
+
+        let disk =
+            std::fs::read_to_string(mount_root.join("main.txt")).expect("read restored disk");
+        assert_eq!(disk, "v2\n");
     }
 
     #[tokio::test]
-    async fn test_workspace_mount_write_new_file_then_keep() {
+    async fn test_workspace_mount_write_new_file_then_keep_clears_diff() {
         let (backend, dir) = setup_backend().await;
         let mount_root = dir.path().join("new-file-project");
         std::fs::create_dir_all(&mount_root).expect("create mount root");
@@ -3218,17 +4374,32 @@ mod tests {
             )
             .await
             .expect("write new mounted file");
+        assert!(mount_root.join("nested/new.txt").exists());
+        let diff = backend
+            .diff_workspace_mount("default", mount.mount.id, None)
+            .await
+            .expect("diff after write");
+        assert_eq!(diff.entries.len(), 1);
+        assert_eq!(diff.entries[0].status, MountedFileStatus::Added);
+        assert_eq!(diff.entries[0].change_kind, WorkspaceMountChangeKind::Added);
+
         backend
             .keep_workspace_mount(&MountActionRequest {
                 user_id: "default".to_string(),
                 mount_id: mount.mount.id,
                 scope_path: Some("nested/new.txt".to_string()),
                 checkpoint_id: None,
+                set_as_baseline: true,
             })
             .await
             .expect("keep new file");
 
         let disk = std::fs::read_to_string(mount_root.join("nested/new.txt")).expect("read disk");
         assert_eq!(disk, "hello world\n");
+        let clean_diff = backend
+            .diff_workspace_mount("default", mount.mount.id, None)
+            .await
+            .expect("diff after keep");
+        assert!(clean_diff.entries.is_empty());
     }
 }

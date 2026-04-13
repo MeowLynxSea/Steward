@@ -358,16 +358,9 @@ mod tests {
     }
 
     #[cfg(feature = "libsql")]
-    async fn make_unmigrated_workspace() -> crate::workspace::Workspace {
-        use crate::db::Database;
-        use crate::db::libsql::LibSqlBackend;
-
-        // Intentionally skip migrations so workspace append operations fail.
-        let backend = LibSqlBackend::new_memory()
-            .await
-            .expect("should create in-memory libsql backend");
-        let db: Arc<dyn Database> = Arc::new(backend);
-        crate::workspace::Workspace::new_with_db("compaction-test", db)
+    async fn make_memory_manager() -> (crate::memory::MemoryManager, tempfile::TempDir) {
+        let (db, dir) = crate::testing::test_db().await;
+        (crate::memory::MemoryManager::new(db), dir)
     }
 
     // ------------------------------------------------------------------
@@ -582,40 +575,28 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn test_compact_with_summary_preserves_turns_when_workspace_write_fails() {
+    async fn test_compact_with_summary_writes_to_memory_and_truncates() {
         let llm = Arc::new(StubLlm::new("summary"));
         let compactor = make_compactor(llm.clone());
         let mut thread = make_thread(8);
-        let original_inputs: Vec<String> =
-            thread.turns.iter().map(|t| t.user_input.clone()).collect();
-        let workspace = make_unmigrated_workspace().await;
+        let (memory, _dir) = make_memory_manager().await;
 
         let result = compactor
             .compact(
                 &mut thread,
                 CompactionStrategy::Summarize { keep_recent: 3 },
-                Some(&workspace),
                 None,
+                Some(&memory),
                 "test-owner",
             )
             .await
-            .expect("compact should succeed even when workspace write fails");
+            .expect("compact should succeed when memory archival is available");
 
-        // On archival failure, no turns should be removed.
-        assert_eq!(thread.turns.len(), 8);
-        assert_eq!(
-            thread
-                .turns
-                .iter()
-                .map(|t| t.user_input.as_str())
-                .collect::<Vec<_>>(),
-            original_inputs
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result.turns_removed, 0);
-        assert!(!result.summary_written);
+        assert_eq!(thread.turns.len(), 3);
+        assert_eq!(thread.turns[0].user_input, "msg-5");
+        assert_eq!(thread.turns[2].user_input, "msg-7");
+        assert_eq!(result.turns_removed, 5);
+        assert!(result.summary_written);
         assert_eq!(llm.calls(), 1);
     }
 
@@ -681,40 +662,28 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn test_compact_to_workspace_preserves_turns_when_workspace_write_fails() {
+    async fn test_compact_to_workspace_writes_to_memory_and_truncates() {
         let llm = Arc::new(StubLlm::new("unused"));
         let compactor = make_compactor(llm.clone());
         let mut thread = make_thread(20);
-        let original_inputs: Vec<String> =
-            thread.turns.iter().map(|t| t.user_input.clone()).collect();
-        let workspace = make_unmigrated_workspace().await;
+        let (memory, _dir) = make_memory_manager().await;
 
         let result = compactor
             .compact(
                 &mut thread,
                 CompactionStrategy::MoveToWorkspace,
-                Some(&workspace),
                 None,
+                Some(&memory),
                 "test-owner",
             )
             .await
-            .expect("compact should succeed even when workspace write fails");
+            .expect("compact should succeed when memory archival is available");
 
-        // On archival failure, no turns should be removed.
-        assert_eq!(thread.turns.len(), 20);
-        assert_eq!(
-            thread
-                .turns
-                .iter()
-                .map(|t| t.user_input.as_str())
-                .collect::<Vec<_>>(),
-            original_inputs
-                .iter()
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-        );
-        assert_eq!(result.turns_removed, 0);
-        assert!(!result.summary_written);
+        assert_eq!(thread.turns.len(), 10);
+        assert_eq!(thread.turns[0].user_input, "msg-10");
+        assert_eq!(thread.turns[9].user_input, "msg-19");
+        assert_eq!(result.turns_removed, 10);
+        assert!(result.summary_written);
         assert_eq!(llm.calls(), 0);
     }
 

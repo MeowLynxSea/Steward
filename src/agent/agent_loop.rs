@@ -499,54 +499,9 @@ impl Agent {
         roots
     }
 
-    fn filesystem_access_path_arguments(
-        &self,
-        tool_name: &str,
-        params: &serde_json::Value,
-    ) -> Result<Vec<(&'static str, String)>, Error> {
-        let required = |name: &'static str| {
-            params
-                .get(name)
-                .and_then(|value| value.as_str())
-                .map(|value| value.to_string())
-                .ok_or_else(|| {
-                    Error::Tool(crate::error::ToolError::InvalidParameters {
-                        name: tool_name.to_string(),
-                        reason: format!("missing '{name}' parameter"),
-                    })
-                })
-        };
-
-        match tool_name {
-            "read_file" | "write_file" | "apply_patch" => Ok(vec![("path", required("path")?)]),
-            "list_dir" => Ok(vec![(
-                "path",
-                params
-                    .get("path")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or(".")
-                    .to_string(),
-            )]),
-            "move_file" => Ok(vec![
-                ("source_path", required("source_path")?),
-                ("destination_path", required("destination_path")?),
-            ]),
-            _ => Ok(Vec::new()),
-        }
-    }
-
     async fn filesystem_paths_are_mounted(&self, user_id: &str, paths: &[PathBuf]) -> bool {
-        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
-            return false;
-        };
-        let Ok(mounts) = workspace.list_mounts().await else {
-            return false;
-        };
-        paths.iter().all(|path| {
-            mounts
-                .iter()
-                .any(|mount| path.starts_with(Path::new(&mount.mount.source_root)))
-        })
+        let _ = (user_id, paths);
+        false
     }
 
     async fn filesystem_access_is_preapproved(
@@ -580,96 +535,8 @@ impl Agent {
         tool_name: &str,
         params: &serde_json::Value,
     ) -> Option<String> {
-        if !self.is_path_scoped_filesystem_tool(tool_name) {
-            return None;
-        }
-
-        let path_args = self
-            .filesystem_access_path_arguments(tool_name, params)
-            .ok()?;
-        if path_args.is_empty() {
-            return None;
-        }
-
-        let paths = self
-            .resolve_filesystem_access_paths(tool_name, params)
-            .ok()?;
-        if paths.is_empty() {
-            return None;
-        }
-
-        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
-            return None;
-        };
-        let mounts = workspace.list_mounts().await.ok()?;
-
-        let mut redirects = Vec::new();
-        for ((param_name, raw_path), normalized_path) in
-            path_args.into_iter().zip(paths.into_iter())
-        {
-            if raw_path.starts_with("workspace://") {
-                continue;
-            }
-
-            let mut selected: Option<(usize, String)> = None;
-            for mount in &mounts {
-                let root = Path::new(&mount.mount.source_root);
-                if !normalized_path.starts_with(root) {
-                    continue;
-                }
-
-                let rel = normalized_path
-                    .strip_prefix(root)
-                    .ok()
-                    .map(|value| {
-                        value
-                            .iter()
-                            .map(|segment| segment.to_string_lossy().into_owned())
-                            .collect::<Vec<_>>()
-                            .join("/")
-                    })
-                    .unwrap_or_default();
-                let uri = crate::workspace::WorkspaceUri::mount_uri(
-                    mount.mount.id,
-                    if rel.is_empty() {
-                        None
-                    } else {
-                        Some(rel.as_str())
-                    },
-                );
-                let depth = root.components().count();
-
-                match &selected {
-                    Some((best_depth, _)) if *best_depth >= depth => {}
-                    _ => selected = Some((depth, uri)),
-                }
-            }
-
-            if let Some((_, uri)) = selected {
-                redirects.push((param_name, uri));
-            }
-        }
-
-        if redirects.is_empty() {
-            return None;
-        }
-
-        let mut message = format!(
-            "Tool '{tool_name}' is targeting a raw filesystem path inside a mounted workspace directory. \
-             Mounted workspace content must be accessed via workspace URIs, not direct disk paths."
-        );
-        let guidance = match tool_name {
-            "read_file" => "Use workspace_read with:",
-            "list_dir" => "Use workspace_tree with:",
-            _ => "Use workspace tools such as workspace_read or workspace_write with:",
-        };
-        message.push('\n');
-        message.push_str(guidance);
-        for (param_name, uri) in redirects {
-            message.push_str(&format!("\n- {param_name}: {uri}"));
-        }
-        message.push_str("\nDo not access mounted workspace files through raw local paths.");
-        Some(message)
+        let _ = (user_id, tool_name, params);
+        None
     }
 
     pub(super) async fn approval_decision_for_tool(
@@ -725,32 +592,7 @@ impl Agent {
             }
         }
 
-        let Some(workspace) = self.tenant_ctx(user_id).await.workspace().cloned() else {
-            return Ok(());
-        };
-        let mut existing_mounts = workspace.list_mounts().await?;
-        for root in roots {
-            if existing_mounts
-                .iter()
-                .any(|mount| root.starts_with(Path::new(&mount.mount.source_root)))
-            {
-                continue;
-            }
-            if !root.exists() || !root.is_dir() {
-                tracing::warn!(path = %root.display(), "Skipping mount promotion for non-directory path");
-                continue;
-            }
-            let display_name = root
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.is_empty())
-                .unwrap_or("mount")
-                .to_string();
-            let summary = workspace
-                .create_mount(display_name, root.display().to_string(), true)
-                .await?;
-            existing_mounts.push(summary);
-        }
+        let _ = (user_id, roots);
         Ok(())
     }
 
@@ -2628,7 +2470,6 @@ mod tests {
     #[cfg(feature = "libsql")]
     use crate::tools::ToolRegistry;
     #[cfg(feature = "libsql")]
-    use crate::workspace::WorkspaceUri;
     #[cfg(feature = "libsql")]
     use std::sync::Arc;
     #[cfg(feature = "libsql")]
@@ -2967,7 +2808,7 @@ mod tests {
 
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    async fn mounted_workspace_redirect_rejects_raw_disk_paths() {
+    async fn mounted_workspace_redirect_allows_raw_disk_paths() {
         let (db, _db_dir) = test_db().await;
         let agent = make_test_agent_with_db(db);
         let user_id = "mount-redirect-user";
@@ -2980,7 +2821,7 @@ mod tests {
 
         let tenant = agent.tenant_ctx(user_id).await;
         let workspace = tenant.workspace().cloned().expect("workspace");
-        let mount = workspace
+        workspace
             .create_mount("project", mount_dir.path().display().to_string(), true)
             .await
             .expect("create mount");
@@ -2991,21 +2832,11 @@ mod tests {
                 "read_file",
                 &serde_json::json!({ "path": raw_file.display().to_string() }),
             )
-            .await
-            .expect("redirect message");
+            .await;
 
-        let expected_uri = WorkspaceUri::mount_uri(mount.mount.id, Some("src/lib.rs"));
         assert!(
-            redirect.contains(&expected_uri),
-            "redirect should include workspace uri, got: {redirect}"
-        );
-        assert!(
-            redirect.contains("workspace_read"),
-            "redirect should point the agent to workspace_read, got: {redirect}"
-        );
-        assert!(
-            !redirect.contains(&raw_file.display().to_string()),
-            "redirect should not echo the raw disk path back to the agent, got: {redirect}"
+            redirect.is_none(),
+            "mounted raw filesystem paths should no longer be redirected"
         );
     }
 }

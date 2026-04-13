@@ -20,6 +20,7 @@ import type {
   WorkspaceMountDetail,
   WorkspaceMountDiff,
   WorkspaceMountFileView,
+  WorkspaceMountHistory,
   WorkspaceMountSummary,
   WorkspaceSearchResult
 } from "./types";
@@ -182,36 +183,136 @@ export const apiClient = {
     return invoke<WorkspaceMountFileView>("get_workspace_mount_file", { id, path });
   },
 
-  getWorkspaceMountDiff(id: string, scopePath?: string) {
+  getWorkspaceMountDiff(
+    id: string,
+    options?: {
+      scopePath?: string;
+      from?: string;
+      to?: string;
+      includeContent?: boolean;
+      maxFiles?: number;
+    }
+  ) {
     return invoke<WorkspaceMountDiff>("get_workspace_mount_diff", {
       id,
-      scope_path: scopePath ?? null
+      payload: {
+        scope_path: options?.scopePath ?? null,
+        from: options?.from ?? null,
+        to: options?.to ?? null,
+        include_content: options?.includeContent ?? true,
+        max_files: options?.maxFiles ?? null
+      }
     });
   },
 
-  createWorkspaceCheckpoint(id: string, label?: string, summary?: string) {
+  createWorkspaceCheckpoint(
+    id: string,
+    label?: string,
+    summary?: string,
+    revisionId?: string
+  ) {
     return invoke<WorkspaceMountCheckpoint>("create_workspace_checkpoint", {
       id,
-      label: label ?? null,
-      summary: summary ?? null,
-      created_by: "user",
-      is_auto: false
+      payload: {
+        revision_id: revisionId ?? null,
+        label: label ?? null,
+        summary: summary ?? null,
+        created_by: "user",
+        is_auto: false
+      }
+    });
+  },
+
+  listWorkspaceMountCheckpoints(id: string, limit?: number) {
+    return invoke<WorkspaceMountCheckpoint[]>("list_workspace_mount_checkpoints", {
+      id,
+      payload: {
+        limit: limit ?? null
+      }
+    });
+  },
+
+  getWorkspaceMountHistory(
+    id: string,
+    options?: {
+      scopePath?: string;
+      limit?: number;
+      since?: string;
+      includeCheckpoints?: boolean;
+    }
+  ) {
+    return invoke<WorkspaceMountHistory>("get_workspace_mount_history", {
+      id,
+      payload: {
+        scope_path: options?.scopePath ?? null,
+        limit: options?.limit ?? 20,
+        since: options?.since ?? null,
+        include_checkpoints: options?.includeCheckpoints ?? true
+      }
     });
   },
 
   keepWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
     return invoke<WorkspaceMountDetail>("keep_workspace_mount", {
       id,
-      scope_path: scopePath ?? null,
-      checkpoint_id: checkpointId ?? null
+      payload: {
+        scope_path: scopePath ?? null,
+        checkpoint_id: checkpointId ?? null,
+        set_as_baseline: true
+      }
     });
   },
 
   revertWorkspaceMount(id: string, scopePath?: string, checkpointId?: string) {
     return invoke<WorkspaceMountDetail>("revert_workspace_mount", {
       id,
-      scope_path: scopePath ?? null,
-      checkpoint_id: checkpointId ?? null
+      payload: {
+        scope_path: scopePath ?? null,
+        checkpoint_id: checkpointId ?? null,
+        set_as_baseline: false
+      }
+    });
+  },
+
+  restoreWorkspaceMount(
+    id: string,
+    target: string,
+    options?: {
+      scopePath?: string;
+      setAsBaseline?: boolean;
+      dryRun?: boolean;
+      createCheckpointBeforeRestore?: boolean;
+    }
+  ) {
+    return invoke<WorkspaceMountDetail>("restore_workspace_mount", {
+      id,
+      payload: {
+        target,
+        scope_path: options?.scopePath ?? null,
+        set_as_baseline: options?.setAsBaseline ?? false,
+        dry_run: options?.dryRun ?? false,
+        create_checkpoint_before_restore:
+          options?.createCheckpointBeforeRestore ?? true,
+        created_by: "user"
+      }
+    });
+  },
+
+  setWorkspaceMountBaseline(id: string, target: string) {
+    return invoke<WorkspaceMountDetail>("set_workspace_mount_baseline", {
+      id,
+      payload: { target }
+    });
+  },
+
+  refreshWorkspaceMount(id: string, scopePath?: string) {
+    return invoke<WorkspaceMountDetail>("refresh_workspace_mount", {
+      id,
+      payload: {
+        scope_path: scopePath ?? null,
+        checkpoint_id: null,
+        set_as_baseline: false
+      }
     });
   },
 
@@ -224,10 +325,12 @@ export const apiClient = {
   ) {
     return invoke<WorkspaceMountDetail>("resolve_workspace_mount_conflict", {
       id,
-      path,
-      resolution,
-      renamed_copy_path: renamedCopyPath ?? null,
-      merged_content: mergedContent ?? null
+      payload: {
+        path,
+        resolution,
+        renamed_copy_path: renamedCopyPath ?? null,
+        merged_content: mergedContent ?? null
+      }
     });
   }
 };

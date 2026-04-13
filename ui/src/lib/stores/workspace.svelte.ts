@@ -64,6 +64,7 @@ class WorkspaceState {
   status = $state("");
   busyAction = $state<string | null>(null);
   #previewRequestId = 0;
+  #mountChangesRefreshPromise: Promise<void> | null = null;
 
   async fetch(
     path = this.currentPath,
@@ -86,11 +87,7 @@ class WorkspaceState {
       this.currentPath = response.path;
       this.entries = response.entries;
       this.status = response.entries.length > 0 ? "工作区已就绪" : "这里还没有内容";
-      try {
-        await this.#refreshAllMountChanges();
-      } catch (changesError) {
-        this.error = errorMessage(changesError, "变更列表刷新失败");
-      }
+      void this.#refreshAllMountChangesInBackground();
       if (previousPath !== response.path) {
         this.selectedFile = null;
         this.selectedDocument = null;
@@ -341,7 +338,7 @@ class WorkspaceState {
     await Promise.all([
       this.fetch(this.currentPath),
       this.#refreshMountState(id),
-      this.#refreshAllMountChanges()
+      this.#refreshAllMountChangesInBackground()
     ]);
 
     if (this.selectedFile?.mount_id === id) {
@@ -412,6 +409,25 @@ class WorkspaceState {
         this.mountDiff = updated.entries;
       }
     }
+  }
+
+  #refreshAllMountChangesInBackground() {
+    if (this.#mountChangesRefreshPromise) {
+      return this.#mountChangesRefreshPromise;
+    }
+
+    const refreshPromise = this.#refreshAllMountChanges()
+      .catch((error) => {
+        this.error = errorMessage(error, "变更列表刷新失败");
+      })
+      .finally(() => {
+        if (this.#mountChangesRefreshPromise === refreshPromise) {
+          this.#mountChangesRefreshPromise = null;
+        }
+      });
+
+    this.#mountChangesRefreshPromise = refreshPromise;
+    return refreshPromise;
   }
 
   async #reloadSelectedFile(id: string, path: string) {

@@ -42,9 +42,11 @@ use crate::memory::{
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
 use crate::workspace::{
-    ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest, MountActionRequest,
-    WorkspaceMountCheckpoint, WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountFileView,
-    WorkspaceMountSummary, WorkspaceTreeEntry,
+    ConflictResolutionRequest, CreateCheckpointRequest, CreateMountRequest,
+    MountActionRequest, WorkspaceMountBaselineRequest, WorkspaceMountCheckpoint,
+    WorkspaceMountDetail, WorkspaceMountDiff, WorkspaceMountDiffRequest,
+    WorkspaceMountFileView, WorkspaceMountHistory, WorkspaceMountHistoryRequest,
+    WorkspaceMountRestoreRequest, WorkspaceMountSummary, WorkspaceTreeEntry,
 };
 use crate::workspace::{MemoryChunk, MemoryDocument, WorkspaceEntry};
 use crate::workspace::{SearchConfig, SearchResult};
@@ -883,12 +885,41 @@ pub trait WorkspaceStore: Send + Sync {
         })
     }
 
+    async fn diff_workspace_mount_between(
+        &self,
+        _request: &WorkspaceMountDiffRequest,
+    ) -> Result<WorkspaceMountDiff, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "diff_workspace_mount_between".to_string(),
+        })
+    }
+
     async fn create_workspace_checkpoint(
         &self,
         _request: &CreateCheckpointRequest,
     ) -> Result<WorkspaceMountCheckpoint, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
             operation: "create_workspace_checkpoint".to_string(),
+        })
+    }
+
+    async fn list_workspace_checkpoints(
+        &self,
+        _user_id: &str,
+        _mount_id: Uuid,
+        _limit: Option<usize>,
+    ) -> Result<Vec<WorkspaceMountCheckpoint>, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "list_workspace_checkpoints".to_string(),
+        })
+    }
+
+    async fn list_workspace_mount_history(
+        &self,
+        _request: &WorkspaceMountHistoryRequest,
+    ) -> Result<WorkspaceMountHistory, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "list_workspace_mount_history".to_string(),
         })
     }
 
@@ -916,6 +947,70 @@ pub trait WorkspaceStore: Send + Sync {
     ) -> Result<WorkspaceMountDetail, WorkspaceError> {
         Err(WorkspaceError::Unsupported {
             operation: "resolve_workspace_mount_conflict".to_string(),
+        })
+    }
+
+    async fn move_workspace_mount_file(
+        &self,
+        _user_id: &str,
+        _mount_id: Uuid,
+        _source_path: &str,
+        _destination_path: &str,
+        _overwrite: bool,
+    ) -> Result<WorkspaceMountFileView, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "move_workspace_mount_file".to_string(),
+        })
+    }
+
+    async fn delete_workspace_mount_tree(
+        &self,
+        _user_id: &str,
+        _mount_id: Uuid,
+        _path: &str,
+        _missing_ok: bool,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "delete_workspace_mount_tree".to_string(),
+        })
+    }
+
+    async fn restore_workspace_mount(
+        &self,
+        _request: &WorkspaceMountRestoreRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "restore_workspace_mount".to_string(),
+        })
+    }
+
+    async fn set_workspace_mount_baseline(
+        &self,
+        _request: &WorkspaceMountBaselineRequest,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "set_workspace_mount_baseline".to_string(),
+        })
+    }
+
+    async fn refresh_workspace_mount(
+        &self,
+        _user_id: &str,
+        _mount_id: Uuid,
+        _scope_path: Option<&str>,
+    ) -> Result<WorkspaceMountDetail, WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "refresh_workspace_mount".to_string(),
+        })
+    }
+
+    async fn sync_workspace_mount_watch(
+        &self,
+        _user_id: &str,
+        _mount_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "sync_workspace_mount_watch".to_string(),
         })
     }
 }

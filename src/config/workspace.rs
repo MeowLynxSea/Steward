@@ -6,7 +6,7 @@ use crate::workspace::layer::MemoryLayer;
 ///
 /// Parsed from environment variables. Lives outside desktop transport wiring
 /// so that browser-mode and desktop-mode surfaces can use the same settings.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct WorkspaceConfig {
     /// Memory layer definitions (JSON in `MEMORY_LAYERS` env var, or defaults).
     pub memory_layers: Vec<MemoryLayer>,
@@ -16,6 +16,22 @@ pub struct WorkspaceConfig {
     /// additional user scopes while writes remain isolated to the primary
     /// `user_id`. Parsed from `WORKSPACE_READ_SCOPES` (comma-separated).
     pub read_scopes: Vec<String>,
+    /// Whether mounted workspace trees should be polled in the background so
+    /// external filesystem edits are reconciled into revisions automatically.
+    pub mount_watch_enabled: bool,
+    /// Poll interval for mounted workspace reconciliation, in milliseconds.
+    pub mount_watch_interval_ms: u64,
+}
+
+impl Default for WorkspaceConfig {
+    fn default() -> Self {
+        Self {
+            memory_layers: Vec::new(),
+            read_scopes: Vec::new(),
+            mount_watch_enabled: true,
+            mount_watch_interval_ms: 500,
+        }
+    }
 }
 
 impl WorkspaceConfig {
@@ -130,9 +146,32 @@ impl WorkspaceConfig {
             }
         }
 
+        let mount_watch_enabled = optional_env("WORKSPACE_MOUNT_WATCH_ENABLED")?
+            .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+            .unwrap_or(true);
+
+        let mount_watch_interval_ms = optional_env("WORKSPACE_MOUNT_WATCH_INTERVAL_MS")?
+            .map(|value| {
+                value.parse::<u64>().map_err(|e| ConfigError::InvalidValue {
+                    key: "WORKSPACE_MOUNT_WATCH_INTERVAL_MS".to_string(),
+                    message: format!("must be a positive integer in milliseconds: {e}"),
+                })
+            })
+            .transpose()?
+            .unwrap_or(500);
+
+        if mount_watch_interval_ms < 100 {
+            return Err(ConfigError::InvalidValue {
+                key: "WORKSPACE_MOUNT_WATCH_INTERVAL_MS".to_string(),
+                message: "must be at least 100ms".to_string(),
+            });
+        }
+
         Ok(Self {
             memory_layers,
             read_scopes,
+            mount_watch_enabled,
+            mount_watch_interval_ms,
         })
     }
 }

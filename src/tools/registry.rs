@@ -24,8 +24,11 @@ use crate::tools::builtin::{
     ReadMemoryTool, SearchConversationHistoryTool, SearchMemoryTool, ShellTool, SkillInstallTool,
     SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
     ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
-    UpdateMemoryTool, WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool,
-    WorkspaceWriteTool, WriteFileTool,
+    UpdateMemoryTool, WorkspaceApplyPatchTool, WorkspaceBaselineSetTool,
+    WorkspaceCheckpointCreateTool, WorkspaceCheckpointListTool, WorkspaceDeleteTool,
+    WorkspaceDeleteTreeTool, WorkspaceDiffTool, WorkspaceHistoryTool, WorkspaceMoveTool,
+    WorkspaceReadTool, WorkspaceRefreshTool, WorkspaceRestoreTool, WorkspaceSearchTool,
+    WorkspaceTreeTool, WorkspaceWriteTool, WriteFileTool,
 };
 use crate::tools::rate_limiter::RateLimiter;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolDomain};
@@ -321,7 +324,14 @@ impl ToolRegistry {
     /// capabilities needed for the software builder. Call this after
     /// `register_builtin_tools()` to enable code generation features.
     pub fn register_dev_tools(&self) {
-        self.register_sync(Arc::new(ShellTool::new()));
+        let has_shell = self
+            .tools
+            .try_read()
+            .ok()
+            .is_some_and(|tools| tools.contains_key("shell"));
+        if !has_shell {
+            self.register_sync(Arc::new(ShellTool::new()));
+        }
         self.register_sync(Arc::new(ReadFileTool::new()));
         self.register_sync(Arc::new(WriteFileTool::new()));
         self.register_sync(Arc::new(MoveFileTool::new()));
@@ -339,13 +349,52 @@ impl ToolRegistry {
         &self,
         resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
     ) {
+        self.register_sync(Arc::new(ReadFileTool::new().with_workspace_resolver(
+            Arc::clone(&resolver),
+        )));
+        self.register_sync(Arc::new(WriteFileTool::new().with_workspace_resolver(
+            Arc::clone(&resolver),
+        )));
+        self.register_sync(Arc::new(MoveFileTool::new().with_workspace_resolver(
+            Arc::clone(&resolver),
+        )));
+        self.register_sync(Arc::new(ListDirTool::new().with_workspace_resolver(
+            Arc::clone(&resolver),
+        )));
+        self.register_sync(Arc::new(ApplyPatchTool::new().with_workspace_resolver(
+            Arc::clone(&resolver),
+        )));
         self.register_sync(Arc::new(WorkspaceSearchTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceWriteTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceApplyPatchTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceMoveTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceDeleteTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceDeleteTreeTool::new(Arc::clone(
+            &resolver,
+        ))));
+        self.register_sync(Arc::new(WorkspaceDiffTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceHistoryTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceCheckpointCreateTool::new(Arc::clone(
+            &resolver,
+        ))));
+        self.register_sync(Arc::new(WorkspaceCheckpointListTool::new(Arc::clone(
+            &resolver,
+        ))));
+        self.register_sync(Arc::new(WorkspaceRestoreTool::new(Arc::clone(&resolver))));
+        self.register_sync(Arc::new(WorkspaceBaselineSetTool::new(Arc::clone(
+            &resolver,
+        ))));
+        self.register_sync(Arc::new(WorkspaceRefreshTool::new(Arc::clone(
+            &resolver,
+        ))));
+        self.register_sync(Arc::new(ShellTool::new().with_workspace_resolver(Arc::clone(
+            &resolver,
+        ))));
         self.register_sync(Arc::new(WorkspaceReadTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(BootstrapCompleteTool::new(Arc::clone(&resolver))));
         self.register_sync(Arc::new(WorkspaceTreeTool::new(resolver)));
 
-        tracing::debug!("Registered 5 workspace document tools");
+        tracing::debug!("Registered workspace document tools");
     }
 
     /// Register workspace document tools with a fixed workspace.
@@ -353,12 +402,61 @@ impl ToolRegistry {
     /// Workspace tools require a workspace for persistence. Call this after
     /// `register_builtin_tools()` if you have a workspace available.
     pub fn register_workspace_tools(&self, workspace: Arc<Workspace>) {
+        self.register_sync(Arc::new(ReadFileTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WriteFileTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(MoveFileTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(ListDirTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(ApplyPatchTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
         self.register_sync(Arc::new(WorkspaceSearchTool::from_workspace(Arc::clone(
             &workspace,
         ))));
         self.register_sync(Arc::new(WorkspaceWriteTool::from_workspace(Arc::clone(
             &workspace,
         ))));
+        self.register_sync(Arc::new(WorkspaceApplyPatchTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceMoveTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceDeleteTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceDeleteTreeTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceDiffTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceHistoryTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceCheckpointCreateTool::from_workspace(
+            Arc::clone(&workspace),
+        )));
+        self.register_sync(Arc::new(WorkspaceCheckpointListTool::from_workspace(
+            Arc::clone(&workspace),
+        )));
+        self.register_sync(Arc::new(WorkspaceRestoreTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(WorkspaceBaselineSetTool::from_workspace(
+            Arc::clone(&workspace),
+        )));
+        self.register_sync(Arc::new(WorkspaceRefreshTool::from_workspace(Arc::clone(
+            &workspace,
+        ))));
+        self.register_sync(Arc::new(ShellTool::from_workspace(Arc::clone(&workspace))));
         self.register_sync(Arc::new(WorkspaceReadTool::from_workspace(Arc::clone(
             &workspace,
         ))));

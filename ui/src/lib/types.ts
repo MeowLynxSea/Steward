@@ -167,7 +167,6 @@ export interface WorkspaceDocumentView {
 export interface WorkspaceSearchResult {
   document_id: string;
   document_path: string;
-  source_path: string | null;
   chunk_id: string;
   content: string;
   score: number;
@@ -323,6 +322,7 @@ export interface WorkspaceMountSummary {
 export interface WorkspaceMountCheckpoint {
   id: string;
   mount_id: string;
+  revision_id: string;
   parent_checkpoint_id: string | null;
   label: string | null;
   summary: string | null;
@@ -337,14 +337,35 @@ export type MountedFileStatus =
   | "clean"
   | "modified"
   | "added"
-  | "pending_delete"
+  | "deleted"
   | "conflicted"
   | "binary_modified";
+
+export type WorkspaceMountRevisionKind =
+  | "initial"
+  | "tool_write"
+  | "tool_patch"
+  | "tool_move"
+  | "tool_delete"
+  | "shell"
+  | "fs_watch"
+  | "manual_refresh"
+  | "restore"
+  | "accept";
+
+export type WorkspaceMountRevisionSource =
+  | "workspace_tool"
+  | "shell"
+  | "external"
+  | "system";
+
+export type WorkspaceMountChangeKind = "added" | "modified" | "deleted" | "moved";
 
 export interface MountedFileDiff {
   path: string;
   uri: string;
   status: MountedFileStatus;
+  change_kind: WorkspaceMountChangeKind;
   is_binary: boolean;
   base_content: string | null;
   working_content: string | null;
@@ -355,13 +376,38 @@ export interface MountedFileDiff {
 
 export interface WorkspaceMountDiff {
   mount_id: string;
+  from_revision_id: string | null;
+  to_revision_id: string | null;
   entries: MountedFileDiff[];
 }
 
 export interface WorkspaceMountDetail {
   summary: WorkspaceMountSummary;
+  baseline_revision_id: string | null;
+  head_revision_id: string | null;
   checkpoints: WorkspaceMountCheckpoint[];
   open_change_count: number;
+}
+
+export interface WorkspaceMountRevision {
+  id: string;
+  mount_id: string;
+  parent_revision_id: string | null;
+  kind: WorkspaceMountRevisionKind;
+  source: WorkspaceMountRevisionSource;
+  trigger: string | null;
+  summary: string | null;
+  created_by: string;
+  created_at: string;
+  changed_files: string[];
+}
+
+export interface WorkspaceMountHistory {
+  mount_id: string;
+  baseline_revision_id: string | null;
+  head_revision_id: string | null;
+  revisions: WorkspaceMountRevision[];
+  checkpoints: WorkspaceMountCheckpoint[];
 }
 
 export interface WorkspaceChangeGroup {
@@ -373,6 +419,7 @@ export interface WorkspaceMountFileView {
   mount_id: string;
   path: string;
   uri: string;
+  disk_path: string;
   status: MountedFileStatus;
   is_binary: boolean;
   content: string | null;

@@ -279,10 +279,16 @@ fn default_true() -> bool {
 #[derive(Debug, Deserialize)]
 pub struct WorkspaceDiffQuery {
     pub scope_path: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_true")]
+    pub include_content: bool,
+    pub max_files: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CreateWorkspaceCheckpointRequest {
+    pub revision_id: Option<Uuid>,
     pub label: Option<String>,
     pub summary: Option<String>,
     #[serde(default)]
@@ -295,6 +301,40 @@ pub struct CreateWorkspaceCheckpointRequest {
 pub struct WorkspaceActionRequest {
     pub scope_path: Option<String>,
     pub checkpoint_id: Option<Uuid>,
+    #[serde(default)]
+    pub set_as_baseline: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceCheckpointListQuery {
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceHistoryQuery {
+    pub scope_path: Option<String>,
+    pub limit: Option<usize>,
+    pub since: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default = "default_true")]
+    pub include_checkpoints: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceRestoreRequest {
+    pub target: String,
+    pub scope_path: Option<String>,
+    #[serde(default)]
+    pub set_as_baseline: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default = "default_true")]
+    pub create_checkpoint_before_restore: bool,
+    pub created_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkspaceBaselineSetRequest {
+    pub target: String,
 }
 
 #[derive(Debug, Deserialize)]

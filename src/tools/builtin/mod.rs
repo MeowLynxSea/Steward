@@ -35,8 +35,11 @@ pub use job::{
 };
 pub use json::JsonTool;
 pub use memory::{
-    BootstrapCompleteTool, WorkspaceReadTool, WorkspaceSearchTool, WorkspaceTreeTool,
-    WorkspaceWriteTool,
+    BootstrapCompleteTool, WorkspaceApplyPatchTool, WorkspaceBaselineSetTool,
+    WorkspaceCheckpointCreateTool, WorkspaceCheckpointListTool, WorkspaceDeleteTool,
+    WorkspaceDeleteTreeTool, WorkspaceDiffTool, WorkspaceHistoryTool, WorkspaceMoveTool,
+    WorkspaceReadTool, WorkspaceRefreshTool, WorkspaceRestoreTool, WorkspaceSearchTool,
+    WorkspaceTreeTool, WorkspaceWriteTool,
 };
 pub use routine::{
     EventEmitTool, RoutineCreateTool, RoutineDeleteTool, RoutineFireTool, RoutineHistoryTool,

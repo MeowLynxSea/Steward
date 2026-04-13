@@ -31,6 +31,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -534,6 +535,8 @@ pub struct ShellTool {
     timeout: Duration,
     /// Whether to allow potentially dangerous commands (requires explicit approval).
     allow_dangerous: bool,
+    /// Optional workspace resolver for translating `workspace://` workdirs.
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
 }
 
 impl std::fmt::Debug for ShellTool {
@@ -542,6 +545,7 @@ impl std::fmt::Debug for ShellTool {
             .field("working_dir", &self.working_dir)
             .field("timeout", &self.timeout)
             .field("allow_dangerous", &self.allow_dangerous)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
             .finish()
     }
 }
@@ -553,7 +557,22 @@ impl ShellTool {
             working_dir: None,
             timeout: DEFAULT_TIMEOUT,
             allow_dangerous: false,
+            workspace_resolver: None,
         }
+    }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<crate::workspace::Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
     }
 
     /// Set the working directory.
@@ -703,13 +722,62 @@ impl ShellTool {
     }
 
     /// Execute a command locally.
+    async fn resolve_workdir(
+        &self,
+        user_id: &str,
+        workdir: Option<&str>,
+    ) -> Result<PathBuf, ToolError> {
+        let Some(workdir) = workdir else {
+            return Ok(self
+                .working_dir
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))));
+        };
+        if !workdir.starts_with("workspace://") {
+            return Ok(PathBuf::from(workdir));
+        }
+        let resolver = self.workspace_resolver.as_ref().ok_or_else(|| {
+            ToolError::ExecutionFailed(
+                "workspace:// workdir is unavailable because no workspace resolver is configured"
+                    .to_string(),
+            )
+        })?;
+        let workspace = resolver.resolve(user_id).await;
+        let parsed = crate::workspace::WorkspaceUri::parse(workdir)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Invalid workspace workdir: {e}")))?
+            .ok_or_else(|| {
+                ToolError::ExecutionFailed("Invalid workspace:// workdir".to_string())
+            })?;
+        match parsed {
+            crate::workspace::WorkspaceUri::Root => Err(ToolError::InvalidParameters(
+                "shell workdir must target a specific mounted workspace, not workspace:// root"
+                    .to_string(),
+            )),
+            crate::workspace::WorkspaceUri::MountRoot(mount_id) => {
+                let detail = workspace
+                    .get_mount(mount_id)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}")))?;
+                Ok(PathBuf::from(detail.summary.mount.source_root))
+            }
+            crate::workspace::WorkspaceUri::MountPath(mount_id, mount_path) => {
+                let detail = workspace
+                    .get_mount(mount_id)
+                    .await
+                    .map_err(|e| ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}")))?;
+                Ok(PathBuf::from(detail.summary.mount.source_root).join(mount_path))
+            }
+        }
+    }
+
     async fn execute_command(
         &self,
         cmd: &str,
+        user_id: &str,
         workdir: Option<&str>,
         timeout: Option<u64>,
         extra_env: &HashMap<String, String>,
-    ) -> Result<(String, i64), ToolError> {
+    ) -> Result<(String, i64, Option<crate::workspace::ResolvedWorkspaceMountPath>), ToolError> {
         // Check for blocked commands
         if let Some(reason) = self.is_blocked(cmd) {
             return Err(ToolError::NotAuthorized(format!(
@@ -729,10 +797,7 @@ impl ShellTool {
         }
 
         // Determine working directory
-        let cwd = workdir
-            .map(PathBuf::from)
-            .or_else(|| self.working_dir.clone())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+        let cwd = self.resolve_workdir(user_id, workdir).await?;
 
         // Determine timeout
         let timeout_duration = timeout.map(Duration::from_secs).unwrap_or(self.timeout);
@@ -740,7 +805,16 @@ impl ShellTool {
         let (output, code) = self
             .execute_direct(cmd, &cwd, timeout_duration, extra_env)
             .await?;
-        Ok((output, code as i64))
+        let workspace_path = if let Some(resolver) = self.workspace_resolver.as_ref() {
+            let workspace = resolver.resolve(user_id).await;
+            workspace
+                .refresh_mount_for_disk_path(&cwd)
+                .await
+                .map_err(|e| ToolError::ExecutionFailed(format!("Mounted refresh failed: {e}")))?
+        } else {
+            None
+        };
+        Ok((output, code as i64, workspace_path))
     }
 }
 
@@ -793,8 +867,8 @@ impl Tool for ShellTool {
         let timeout = params.get("timeout").and_then(|v| v.as_u64());
 
         let start = std::time::Instant::now();
-        let (output, exit_code) = self
-            .execute_command(command, workdir, timeout, &ctx.extra_env)
+        let (output, exit_code, workspace_path) = self
+            .execute_command(command, &ctx.user_id, workdir, timeout, &ctx.extra_env)
             .await?;
         let duration = start.elapsed();
 
@@ -802,7 +876,11 @@ impl Tool for ShellTool {
             "output": output,
             "exit_code": exit_code,
             "success": exit_code == 0,
-            "execution_mode": "local"
+            "execution_mode": "local",
+            "workspace_uri": workspace_path.as_ref().map(|resolved| resolved.workspace_uri.clone()),
+            "workspace_mount_id": workspace_path
+                .as_ref()
+                .map(|resolved| resolved.mount_id.to_string())
         });
 
         Ok(ToolOutput::success(result, duration))
@@ -869,7 +947,30 @@ fn truncate_for_error(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
     use super::*;
+    use std::sync::Arc;
+
+    static WORKSPACE_SHELL_TEST_GUARD: LazyLock<std::sync::Mutex<()>> =
+        LazyLock::new(|| std::sync::Mutex::new(()));
+
+    #[cfg(feature = "libsql")]
+    async fn mounted_workspace(
+    ) -> (
+        Arc<crate::workspace::Workspace>,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        uuid::Uuid,
+    ) {
+        let (db, db_dir) = crate::testing::test_db().await;
+        let workspace = Arc::new(crate::workspace::Workspace::new_with_db("shell-user", db));
+        let mount_dir = tempfile::tempdir().expect("mount tempdir");
+        let mount = workspace
+            .create_mount("project", mount_dir.path().display().to_string(), true)
+            .await
+            .expect("create mount");
+        (workspace, db_dir, mount_dir, mount.mount.id)
+    }
 
     #[tokio::test]
     async fn test_echo_command() {
@@ -884,6 +985,43 @@ mod tests {
         let output = result.result.get("output").unwrap().as_str().unwrap();
         assert!(output.contains("hello"));
         assert_eq!(result.result.get("exit_code").unwrap().as_i64().unwrap(), 0);
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_workspace_workdir_refreshes_mount() {
+        let _guard = WORKSPACE_SHELL_TEST_GUARD.lock().expect("workspace shell test lock");
+        let (workspace, _db_dir, mount_dir, mount_id) = mounted_workspace().await;
+        let tool = ShellTool::from_workspace(Arc::clone(&workspace));
+        let ctx = JobContext::with_user("shell-user", "test", "test");
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "command": "printf 'from-shell\\n' > shell.txt",
+                    "workdir": format!("workspace://{mount_id}")
+                }),
+                &ctx,
+            )
+            .await
+            .expect("shell execute");
+        let expected_workspace_uri = format!("workspace://{mount_id}");
+
+        assert_eq!(
+            result
+                .result
+                .get("workspace_uri")
+                .and_then(|value| value.as_str()),
+            Some(expected_workspace_uri.as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(mount_dir.path().join("shell.txt")).expect("disk read"),
+            "from-shell\n"
+        );
+
+        let diff = workspace.diff_mount(mount_id, None).await.expect("mount diff");
+        assert_eq!(diff.entries.len(), 1);
+        assert_eq!(diff.entries[0].path, "shell.txt");
     }
 
     #[test]

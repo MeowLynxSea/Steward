@@ -89,6 +89,20 @@ function mergeStreamingChunk(existing: string, incoming: string): string {
   return `${existing}${incoming}`;
 }
 
+function isSessionTitleUpdatePayload(payload: unknown): payload is SessionTitleUpdatePayload {
+  if (!payload || typeof payload !== "object") {
+    return false;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  return (
+    typeof candidate.session_id === "string" &&
+    typeof candidate.title === "string" &&
+    (candidate.emoji === null || typeof candidate.emoji === "string") &&
+    typeof candidate.pending === "boolean"
+  );
+}
+
 class SessionsState {
   list = $state<SessionSummary[]>([]);
   activeId = $state<string>("");
@@ -351,7 +365,9 @@ class SessionsState {
 
   #handleEvent(event: StreamEnvelope) {
     if (event.event === "session.title_updated") {
-      this.#applySessionTitleUpdate(event.payload as SessionTitleUpdatePayload);
+      if (isSessionTitleUpdatePayload(event.payload)) {
+        this.#applySessionTitleUpdate(event.payload);
+      }
       return;
     }
 

@@ -1298,6 +1298,71 @@ END;
 ALTER TABLE routine_runs ADD COLUMN trigger_payload TEXT;
 "#,
     ),
+    (
+        23,
+        "workspace_mount_revisions",
+        r#"
+CREATE TABLE IF NOT EXISTS workspace_mount_revisions (
+    id TEXT PRIMARY KEY,
+    mount_id TEXT NOT NULL REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    parent_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
+    kind TEXT NOT NULL,
+    source TEXT NOT NULL,
+    trigger TEXT,
+    summary TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_revisions_mount_created
+    ON workspace_mount_revisions(mount_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_revision_files (
+    revision_id TEXT NOT NULL REFERENCES workspace_mount_revisions(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    change_kind TEXT NOT NULL,
+    before_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    after_snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    before_mode INTEGER,
+    after_mode INTEGER,
+    is_binary INTEGER NOT NULL DEFAULT 0,
+    rename_from TEXT,
+    rename_to TEXT,
+    PRIMARY KEY (revision_id, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_revision_files_revision
+    ON workspace_mount_revision_files(revision_id, change_kind, relative_path);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_manifests (
+    revision_id TEXT NOT NULL REFERENCES workspace_mount_revisions(id) ON DELETE CASCADE,
+    relative_path TEXT NOT NULL,
+    snapshot_id TEXT REFERENCES workspace_mount_snapshots(id) ON DELETE SET NULL,
+    file_mode INTEGER,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    modified_at INTEGER,
+    is_binary INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (revision_id, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_manifests_revision
+    ON workspace_mount_manifests(revision_id, relative_path);
+
+CREATE TABLE IF NOT EXISTS workspace_mount_state (
+    mount_id TEXT PRIMARY KEY REFERENCES workspace_mounts(id) ON DELETE CASCADE,
+    baseline_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
+    head_revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL,
+    last_reconciled_at TEXT,
+    watch_dirty INTEGER NOT NULL DEFAULT 0,
+    watch_cursor TEXT
+);
+
+ALTER TABLE workspace_mount_checkpoints ADD COLUMN revision_id TEXT REFERENCES workspace_mount_revisions(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_mount_checkpoints_revision
+    ON workspace_mount_checkpoints(mount_id, revision_id, created_at DESC);
+"#,
+    ),
 ];
 
 /// Run incremental migrations that haven't been applied yet.

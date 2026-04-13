@@ -24,9 +24,42 @@ pub enum MountedFileStatus {
     Clean,
     Modified,
     Added,
-    PendingDelete,
+    Deleted,
     Conflicted,
     BinaryModified,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMountRevisionKind {
+    Initial,
+    ToolWrite,
+    ToolPatch,
+    ToolMove,
+    ToolDelete,
+    Shell,
+    FsWatch,
+    ManualRefresh,
+    Restore,
+    Accept,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMountRevisionSource {
+    WorkspaceTool,
+    Shell,
+    External,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMountChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Moved,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +103,7 @@ pub struct WorkspaceMountSummary {
 pub struct WorkspaceMountCheckpoint {
     pub id: Uuid,
     pub mount_id: Uuid,
+    pub revision_id: Uuid,
     pub parent_checkpoint_id: Option<Uuid>,
     pub label: Option<String>,
     pub summary: Option<String>,
@@ -83,8 +117,33 @@ pub struct WorkspaceMountCheckpoint {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMountDetail {
     pub summary: WorkspaceMountSummary,
+    pub baseline_revision_id: Option<Uuid>,
+    pub head_revision_id: Option<Uuid>,
     pub checkpoints: Vec<WorkspaceMountCheckpoint>,
     pub open_change_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMountRevision {
+    pub id: Uuid,
+    pub mount_id: Uuid,
+    pub parent_revision_id: Option<Uuid>,
+    pub kind: WorkspaceMountRevisionKind,
+    pub source: WorkspaceMountRevisionSource,
+    pub trigger: Option<String>,
+    pub summary: Option<String>,
+    pub created_by: String,
+    pub created_at: DateTime<Utc>,
+    pub changed_files: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceMountHistory {
+    pub mount_id: Uuid,
+    pub baseline_revision_id: Option<Uuid>,
+    pub head_revision_id: Option<Uuid>,
+    pub revisions: Vec<WorkspaceMountRevision>,
+    pub checkpoints: Vec<WorkspaceMountCheckpoint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +151,7 @@ pub struct MountedFileDiff {
     pub path: String,
     pub uri: String,
     pub status: MountedFileStatus,
+    pub change_kind: WorkspaceMountChangeKind,
     pub is_binary: bool,
     pub base_content: Option<String>,
     pub working_content: Option<String>,
@@ -103,6 +163,8 @@ pub struct MountedFileDiff {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceMountDiff {
     pub mount_id: Uuid,
+    pub from_revision_id: Option<Uuid>,
+    pub to_revision_id: Option<Uuid>,
     pub entries: Vec<MountedFileDiff>,
 }
 
@@ -111,10 +173,20 @@ pub struct WorkspaceMountFileView {
     pub mount_id: Uuid,
     pub path: String,
     pub uri: String,
+    pub disk_path: String,
     pub status: MountedFileStatus,
     pub is_binary: bool,
     pub content: Option<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolvedWorkspaceMountPath {
+    pub mount_id: Uuid,
+    pub relative_path: Option<String>,
+    pub workspace_uri: String,
+    pub disk_path: String,
+    pub source_root: String,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +201,7 @@ pub struct CreateMountRequest {
 pub struct CreateCheckpointRequest {
     pub user_id: String,
     pub mount_id: Uuid,
+    pub revision_id: Option<Uuid>,
     pub label: Option<String>,
     pub summary: Option<String>,
     pub created_by: String,
@@ -141,6 +214,47 @@ pub struct MountActionRequest {
     pub mount_id: Uuid,
     pub scope_path: Option<String>,
     pub checkpoint_id: Option<Uuid>,
+    pub set_as_baseline: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceMountHistoryRequest {
+    pub user_id: String,
+    pub mount_id: Uuid,
+    pub scope_path: Option<String>,
+    pub limit: usize,
+    pub since: Option<DateTime<Utc>>,
+    pub include_checkpoints: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceMountDiffRequest {
+    pub user_id: String,
+    pub mount_id: Uuid,
+    pub scope_path: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub include_content: bool,
+    pub max_files: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceMountRestoreRequest {
+    pub user_id: String,
+    pub mount_id: Uuid,
+    pub scope_path: Option<String>,
+    pub target: String,
+    pub set_as_baseline: bool,
+    pub dry_run: bool,
+    pub create_checkpoint_before_restore: bool,
+    pub created_by: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkspaceMountBaselineRequest {
+    pub user_id: String,
+    pub mount_id: Uuid,
+    pub target: String,
 }
 
 #[derive(Debug, Clone)]

@@ -6,6 +6,7 @@
 //! - Support for common development tasks
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::fs;
@@ -16,6 +17,7 @@ use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
 use crate::workspace::paths as ws_paths;
+use crate::workspace::{ResolvedWorkspaceMountPath, Workspace};
 
 fn is_legacy_memory_workspace_path(path: &str) -> bool {
     let filename = std::path::Path::new(path)
@@ -35,10 +37,51 @@ const MAX_WRITE_SIZE: usize = 5 * 1024 * 1024;
 /// Maximum directory listing entries.
 const MAX_DIR_ENTRIES: usize = 500;
 
+async fn resolve_workspace_path_metadata(
+    resolver: Option<&Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    user_id: &str,
+    path: &Path,
+) -> Result<Option<(Arc<Workspace>, ResolvedWorkspaceMountPath)>, ToolError> {
+    let Some(resolver) = resolver else {
+        return Ok(None);
+    };
+    let workspace = resolver.resolve(user_id).await;
+    let resolved = workspace
+        .resolve_mount_path(path)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Mounted path resolve failed: {e}")))?;
+    Ok(resolved.map(|resolved| (workspace, resolved)))
+}
+
+async fn refresh_workspace_path_metadata(
+    resolver: Option<&Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    user_id: &str,
+    path: &Path,
+) -> Result<Option<ResolvedWorkspaceMountPath>, ToolError> {
+    let Some(resolver) = resolver else {
+        return Ok(None);
+    };
+    let workspace = resolver.resolve(user_id).await;
+    workspace
+        .refresh_mount_for_disk_path(path)
+        .await
+        .map_err(|e| ToolError::ExecutionFailed(format!("Mounted refresh failed: {e}")))
+}
+
 /// Read file contents tool.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ReadFileTool {
     base_dir: Option<PathBuf>,
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+}
+
+impl std::fmt::Debug for ReadFileTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadFileTool")
+            .field("base_dir", &self.base_dir)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .finish()
+    }
 }
 
 impl ReadFileTool {
@@ -49,6 +92,20 @@ impl ReadFileTool {
     pub fn with_base_dir(mut self, dir: PathBuf) -> Self {
         self.base_dir = Some(dir);
         self
+    }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
     }
 }
 
@@ -61,7 +118,8 @@ impl Tool for ReadFileTool {
     fn description(&self) -> &str {
         "Read a file from the LOCAL FILESYSTEM. NOT for workspace document paths \
          (use workspace_read for those). If the path is inside a mounted workspace directory, \
-         prefer `workspace://<mount-id>/...` via workspace_read instead. \
+         this still reads the real mounted file directly. Use `workspace://<mount-id>/...` \
+         via workspace_read when you want workspace-native addressing and diff/history context. \
          Reading unmounted disk paths may require ask-mode approval. \
          Returns file content as text. For large files, you can specify offset and limit to read a portion."
     }
@@ -72,7 +130,7 @@ impl Tool for ReadFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read. Prefer `workspace://<mount-id>/...` in mounted areas; use local disk paths only when you intentionally need raw filesystem access."
+                    "description": "Path to the file to read. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_read."
                 },
                 "offset": {
                     "type": "integer",
@@ -90,7 +148,7 @@ impl Tool for ReadFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
@@ -100,6 +158,12 @@ impl Tool for ReadFileTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        let mounted = resolve_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &path,
+        )
+        .await?;
 
         // Check file size
         let metadata = fs::metadata(&path)
@@ -144,7 +208,11 @@ impl Tool for ReadFileTool {
             "content": selected_lines.join("\n"),
             "total_lines": total_lines,
             "lines_shown": end_line - start_line,
-            "path": path.display().to_string()
+            "path": path.display().to_string(),
+            "workspace_uri": mounted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
+            "workspace_mount_id": mounted
+                .as_ref()
+                .map(|(_, resolved)| resolved.mount_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -164,9 +232,19 @@ impl Tool for ReadFileTool {
 }
 
 /// Write file contents tool.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct WriteFileTool {
     base_dir: Option<PathBuf>,
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+}
+
+impl std::fmt::Debug for WriteFileTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WriteFileTool")
+            .field("base_dir", &self.base_dir)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .finish()
+    }
 }
 
 impl WriteFileTool {
@@ -177,6 +255,20 @@ impl WriteFileTool {
     pub fn with_base_dir(mut self, dir: PathBuf) -> Self {
         self.base_dir = Some(dir);
         self
+    }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
     }
 }
 
@@ -189,8 +281,9 @@ impl Tool for WriteFileTool {
     fn description(&self) -> &str {
         "Write content to a file on the LOCAL FILESYSTEM. NOT for workspace documents \
          (use workspace_write for that). If the target is inside a mounted workspace directory, \
-         prefer `workspace://<mount-id>/...` via workspace_write so changes stay in the workspace branch first. \
-         Writing unmounted disk paths may require ask-mode approval and 'always allow' can promote the directory into a mount. \
+         this updates the real mounted file directly. Use `workspace://<mount-id>/...` via workspace_write \
+         when you want workspace-native addressing, diff/history tooling, and revision-oriented workflows. \
+         Writing unmounted disk paths may require ask-mode approval. \
          Creates the file if it doesn't exist, overwrites if it does. Parent directories are created automatically. Use apply_patch for targeted edits."
     }
 
@@ -200,7 +293,7 @@ impl Tool for WriteFileTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write. Prefer `workspace://<mount-id>/...` for mounted directories; use local disk paths only for explicit raw filesystem operations."
+                    "description": "Path to the file to write. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_write."
                 },
                 "content": {
                     "type": "string",
@@ -214,7 +307,7 @@ impl Tool for WriteFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
@@ -253,10 +346,19 @@ impl Tool for WriteFileTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
 
+        let mounted = refresh_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &path,
+        )
+        .await?;
+
         let result = serde_json::json!({
             "path": path.display().to_string(),
             "bytes_written": content.len(),
-            "success": true
+            "success": true,
+            "workspace_uri": mounted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
+            "workspace_mount_id": mounted.as_ref().map(|resolved| resolved.mount_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -280,9 +382,19 @@ impl Tool for WriteFileTool {
 }
 
 /// Move a file to a new path.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct MoveFileTool {
     base_dir: Option<PathBuf>,
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+}
+
+impl std::fmt::Debug for MoveFileTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MoveFileTool")
+            .field("base_dir", &self.base_dir)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .finish()
+    }
 }
 
 impl MoveFileTool {
@@ -294,6 +406,20 @@ impl MoveFileTool {
         self.base_dir = Some(dir);
         self
     }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
+    }
 }
 
 #[async_trait]
@@ -303,7 +429,7 @@ impl Tool for MoveFileTool {
     }
 
     fn description(&self) -> &str {
-        "Move or rename a file on the LOCAL FILESYSTEM. If the source or destination is inside a mounted workspace directory, prefer mounted workspace paths first. Raw disk moves may require ask-mode approval. Creates parent directories for the destination when needed."
+        "Move or rename a file on the LOCAL FILESYSTEM. If the source or destination is inside a mounted workspace directory, this moves the real mounted file directly. Use workspace_move when you want workspace-native URIs and revision/diff tracking ergonomics. Raw disk moves may require ask-mode approval. Creates parent directories for the destination when needed."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -312,11 +438,11 @@ impl Tool for MoveFileTool {
             "properties": {
                 "source_path": {
                     "type": "string",
-                    "description": "Existing source file path. Prefer mounted workspace paths for mounted directories."
+                    "description": "Existing source file path. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_move."
                 },
                 "destination_path": {
                     "type": "string",
-                    "description": "Destination file path. Prefer mounted workspace paths for mounted directories."
+                    "description": "Destination file path. Mounted files may be addressed either by real disk path here or by `workspace://<mount-id>/...` via workspace_move."
                 },
                 "create_parent": {
                     "type": "boolean",
@@ -330,7 +456,7 @@ impl Tool for MoveFileTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let source_path = require_str(&params, "source_path")?;
         let destination_path = require_str(&params, "destination_path")?;
@@ -365,11 +491,30 @@ impl Tool for MoveFileTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to move file: {}", e)))?;
 
+        let source_mounted = refresh_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &source,
+        )
+        .await?;
+        let destination_mounted = refresh_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &destination,
+        )
+        .await?;
+
         Ok(ToolOutput::success(
             serde_json::json!({
                 "source_path": source.display().to_string(),
                 "destination_path": destination.display().to_string(),
-                "success": true
+                "success": true,
+                "source_workspace_uri": source_mounted
+                    .as_ref()
+                    .map(|resolved| resolved.workspace_uri.clone()),
+                "destination_workspace_uri": destination_mounted
+                    .as_ref()
+                    .map(|resolved| resolved.workspace_uri.clone())
             }),
             start.elapsed(),
         ))
@@ -393,9 +538,19 @@ impl Tool for MoveFileTool {
 }
 
 /// List directory contents tool.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ListDirTool {
     base_dir: Option<PathBuf>,
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+}
+
+impl std::fmt::Debug for ListDirTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListDirTool")
+            .field("base_dir", &self.base_dir)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .finish()
+    }
 }
 
 impl ListDirTool {
@@ -407,6 +562,20 @@ impl ListDirTool {
         self.base_dir = Some(dir);
         self
     }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
+    }
 }
 
 #[async_trait]
@@ -417,7 +586,7 @@ impl Tool for ListDirTool {
 
     fn description(&self) -> &str {
         "List contents of a directory on the LOCAL FILESYSTEM. NOT for workspace document trees \
-         (use workspace_tree for that). If the directory is mounted into the workspace, prefer `workspace://<mount-id>` via workspace_tree instead. Listing mounted directories is read-only and should not require ask-mode approval; unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
+         (use workspace_tree for that). If the directory is mounted into the workspace, this lists the real mounted directory directly. Use `workspace://<mount-id>` via workspace_tree when you want mounted-path status, diff state, and workspace-native browsing. Unmounted raw disk listings may still require ask-mode approval. Shows files and subdirectories with their sizes."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -426,7 +595,7 @@ impl Tool for ListDirTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the directory to list (defaults to current directory). Prefer mounted workspace paths for mounted directories."
+                    "description": "Path to the directory to list (defaults to current directory). Mounted directories may be addressed either by real disk path here or by `workspace://<mount-id>` via workspace_tree."
                 },
                 "recursive": {
                     "type": "boolean",
@@ -444,7 +613,7 @@ impl Tool for ListDirTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = params.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
@@ -461,6 +630,12 @@ impl Tool for ListDirTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        let mounted = resolve_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &path,
+        )
+        .await?;
 
         let mut entries = Vec::new();
         list_dir_inner(&path, &path, recursive, max_depth, 0, &mut entries).await?;
@@ -485,7 +660,11 @@ impl Tool for ListDirTool {
             "path": path.display().to_string(),
             "entries": entries,
             "count": entries.len(),
-            "truncated": truncated
+            "truncated": truncated,
+            "workspace_uri": mounted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
+            "workspace_mount_id": mounted
+                .as_ref()
+                .map(|(_, resolved)| resolved.mount_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -590,9 +769,19 @@ fn format_size(bytes: u64) -> String {
 }
 
 /// Apply patch tool for targeted file edits.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ApplyPatchTool {
     base_dir: Option<PathBuf>,
+    workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+}
+
+impl std::fmt::Debug for ApplyPatchTool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ApplyPatchTool")
+            .field("base_dir", &self.base_dir)
+            .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .finish()
+    }
 }
 
 impl ApplyPatchTool {
@@ -603,6 +792,20 @@ impl ApplyPatchTool {
     pub fn with_base_dir(mut self, dir: PathBuf) -> Self {
         self.base_dir = Some(dir);
         self
+    }
+
+    pub fn with_workspace_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>,
+    ) -> Self {
+        self.workspace_resolver = Some(resolver);
+        self
+    }
+
+    pub fn from_workspace(workspace: Arc<Workspace>) -> Self {
+        Self::new().with_workspace_resolver(Arc::new(
+            crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
+        ))
     }
 }
 
@@ -647,7 +850,7 @@ impl Tool for ApplyPatchTool {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let path_str = require_str(&params, "path")?;
 
@@ -696,10 +899,19 @@ impl Tool for ApplyPatchTool {
             .await
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to write file: {}", e)))?;
 
+        let mounted = refresh_workspace_path_metadata(
+            self.workspace_resolver.as_ref(),
+            &ctx.user_id,
+            &path,
+        )
+        .await?;
+
         let result = serde_json::json!({
             "path": path.display().to_string(),
             "replacements": replacements,
-            "success": true
+            "success": true,
+            "workspace_uri": mounted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
+            "workspace_mount_id": mounted.as_ref().map(|resolved| resolved.mount_id.to_string())
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -726,7 +938,34 @@ impl Tool for ApplyPatchTool {
 mod tests {
     use super::*;
     use crate::tools::builtin::path_utils::normalize_lexical;
+    use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[cfg(feature = "libsql")]
+    async fn mounted_workspace(
+    ) -> (
+        Arc<Workspace>,
+        tempfile::TempDir,
+        tempfile::TempDir,
+        uuid::Uuid,
+        PathBuf,
+    ) {
+        let (db, db_dir) = crate::testing::test_db().await;
+        let workspace = Arc::new(Workspace::new_with_db("file-tool-user", db));
+        let mount_dir = tempfile::tempdir().expect("mount tempdir");
+        let mount = workspace
+            .create_mount("project", mount_dir.path().display().to_string(), true)
+            .await
+            .expect("create mount");
+        let mount_root = mount_dir.path().to_path_buf();
+        (
+            workspace,
+            db_dir,
+            mount_dir,
+            mount.mount.id,
+            mount_root,
+        )
+    }
 
     #[tokio::test]
     async fn test_read_file() {
@@ -771,6 +1010,37 @@ mod tests {
 
         assert!(result.result.get("success").unwrap().as_bool().unwrap());
         assert_eq!(std::fs::read_to_string(&file_path).unwrap(), "hello world");
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_write_file_refreshes_mounted_workspace() {
+        let (workspace, _db_dir, _mount_dir, mount_id, mount_root) = mounted_workspace().await;
+        let tool = WriteFileTool::from_workspace(Arc::clone(&workspace));
+        let ctx = JobContext::with_user("file-tool-user", "test", "test");
+        let file_path = mount_root.join("src").join("lib.rs");
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "path": file_path.display().to_string(),
+                    "content": "pub fn mounted() {}\n"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("write file");
+
+        let workspace_uri = result
+            .result
+            .get("workspace_uri")
+            .and_then(|value| value.as_str())
+            .expect("workspace_uri");
+        assert!(workspace_uri.starts_with(&format!("workspace://{mount_id}/")));
+
+        let diff = workspace.diff_mount(mount_id, None).await.expect("mount diff");
+        assert_eq!(diff.entries.len(), 1);
+        assert_eq!(diff.entries[0].path, "src/lib.rs");
     }
 
     #[tokio::test]
@@ -848,8 +1118,8 @@ mod tests {
 
             let msg = err.to_string();
             assert!(
-                msg.contains("memory_"),
-                "Rejection for {} should mention native memory tools, got: {}",
+                msg.contains("graph memory tools") || msg.contains("Steward memory"),
+                "Rejection for {} should mention graph memory guidance, got: {}",
                 filename,
                 msg
             );

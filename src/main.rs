@@ -519,8 +519,13 @@ fn main() {
             tauri_commands::get_workspace_mount_file,
             tauri_commands::get_workspace_mount_diff,
             tauri_commands::create_workspace_checkpoint,
+            tauri_commands::list_workspace_mount_checkpoints,
+            tauri_commands::get_workspace_mount_history,
             tauri_commands::keep_workspace_mount,
             tauri_commands::revert_workspace_mount,
+            tauri_commands::restore_workspace_mount,
+            tauri_commands::set_workspace_mount_baseline,
+            tauri_commands::refresh_workspace_mount,
             tauri_commands::resolve_workspace_mount_conflict,
             tauri_commands::get_workbench_capabilities
         ])
