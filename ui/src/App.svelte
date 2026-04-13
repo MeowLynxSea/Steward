@@ -329,6 +329,7 @@
         onRequestMount={openMountModal}
         onNavigate={(path) => void workspaceStore.openPath(path)}
         onOpenEntry={(entry) => void workspaceStore.openEntry(entry)}
+        onOpenChangesTab={() => void workspaceStore.refreshMountChanges()}
         onKeepMount={(mountId, scopePath, checkpointId) => void workspaceStore.keepMount(mountId, scopePath, checkpointId)}
         onRevertMount={(mountId, scopePath, checkpointId) => void workspaceStore.revertMount(mountId, scopePath, checkpointId)}
         onCreateCheckpoint={(mountId, label, summary) => void workspaceStore.createCheckpoint(mountId, label, summary)}

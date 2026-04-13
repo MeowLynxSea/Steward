@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-
 use async_trait::async_trait;
 use libsql::params;
 use uuid::Uuid;
@@ -2591,16 +2590,7 @@ impl WorkspaceStore for LibSqlBackend {
                 Ok(entries)
             }
             WorkspaceUri::MountRoot(mount_id) => {
-                self.reconcile_mount(
-                    user_id,
-                    mount_id,
-                    WorkspaceMountRevisionKind::ManualRefresh,
-                    WorkspaceMountRevisionSource::External,
-                    Some("workspace_tree".to_string()),
-                    None,
-                    "system",
-                )
-                .await?;
+                let has_mount_state = self.load_mount_state_record(mount_id).await?.is_some();
                 let mount = self.fetch_mount(user_id, mount_id).await?;
                 let prefix = String::new();
                 let dir_path = Path::new(&mount.source_root).join(&prefix);
@@ -2645,65 +2635,58 @@ impl WorkspaceStore for LibSqlBackend {
                     }
                 }
 
-                for record in self
-                    .list_mount_file_records(mount_id, Some(&prefix))
-                    .await?
-                {
-                    let relative = record.path.clone();
-                    let child_name = relative.split('/').next().unwrap_or("").to_string();
-                    if child_name.is_empty() {
-                        continue;
-                    }
-                    let child_path = child_name.clone();
-                    let is_directory = relative.contains('/');
-                    let entry =
-                        entries_map
-                            .entry(child_name.clone())
-                            .or_insert(WorkspaceTreeEntry {
-                                name: child_name.clone(),
-                                path: child_path.clone(),
-                                uri: WorkspaceUri::mount_uri(mount_id, Some(&child_path)),
-                                is_directory,
-                                kind: if is_directory {
-                                    WorkspaceTreeEntryKind::MountedDirectory
-                                } else {
-                                    WorkspaceTreeEntryKind::MountedFile
-                                },
-                                status: None,
-                                updated_at: Some(record.updated_at),
-                                content_preview: None,
-                                bypass_write: Some(mount.bypass_write),
-                                dirty_count: 0,
-                                conflict_count: 0,
-                                pending_delete_count: 0,
-                            });
-                    if is_directory {
-                        entry.is_directory = true;
-                        entry.kind = WorkspaceTreeEntryKind::MountedDirectory;
-                        entry.dirty_count += usize::from(record.status != MountedFileStatus::Clean);
-                        entry.conflict_count +=
-                            usize::from(record.status == MountedFileStatus::Conflicted);
-                        entry.pending_delete_count +=
-                            usize::from(record.status == MountedFileStatus::Deleted);
-                    } else {
-                        entry.status = Some(record.status);
-                        entry.updated_at = Some(record.updated_at);
+                if has_mount_state {
+                    for record in self
+                        .list_mount_file_records(mount_id, Some(&prefix))
+                        .await?
+                    {
+                        let relative = record.path.clone();
+                        let child_name = relative.split('/').next().unwrap_or("").to_string();
+                        if child_name.is_empty() {
+                            continue;
+                        }
+                        let child_path = child_name.clone();
+                        let is_directory = relative.contains('/');
+                        let entry =
+                            entries_map
+                                .entry(child_name.clone())
+                                .or_insert(WorkspaceTreeEntry {
+                                    name: child_name.clone(),
+                                    path: child_path.clone(),
+                                    uri: WorkspaceUri::mount_uri(mount_id, Some(&child_path)),
+                                    is_directory,
+                                    kind: if is_directory {
+                                        WorkspaceTreeEntryKind::MountedDirectory
+                                    } else {
+                                        WorkspaceTreeEntryKind::MountedFile
+                                    },
+                                    status: None,
+                                    updated_at: Some(record.updated_at),
+                                    content_preview: None,
+                                    bypass_write: Some(mount.bypass_write),
+                                    dirty_count: 0,
+                                    conflict_count: 0,
+                                    pending_delete_count: 0,
+                                });
+                        if is_directory {
+                            entry.is_directory = true;
+                            entry.kind = WorkspaceTreeEntryKind::MountedDirectory;
+                            entry.dirty_count += usize::from(record.status != MountedFileStatus::Clean);
+                            entry.conflict_count +=
+                                usize::from(record.status == MountedFileStatus::Conflicted);
+                            entry.pending_delete_count +=
+                                usize::from(record.status == MountedFileStatus::Deleted);
+                        } else {
+                            entry.status = Some(record.status);
+                            entry.updated_at = Some(record.updated_at);
+                        }
                     }
                 }
 
                 Ok(entries_map.into_values().collect())
             }
             WorkspaceUri::MountPath(mount_id, prefix) => {
-                self.reconcile_mount(
-                    user_id,
-                    mount_id,
-                    WorkspaceMountRevisionKind::ManualRefresh,
-                    WorkspaceMountRevisionSource::External,
-                    Some("workspace_tree".to_string()),
-                    None,
-                    "system",
-                )
-                .await?;
+                let has_mount_state = self.load_mount_state_record(mount_id).await?.is_some();
                 let mount = self.fetch_mount(user_id, mount_id).await?;
                 let dir_path = Path::new(&mount.source_root).join(&prefix);
                 let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
@@ -2751,59 +2734,61 @@ impl WorkspaceStore for LibSqlBackend {
                     }
                 }
 
-                for record in self
-                    .list_mount_file_records(mount_id, Some(&prefix))
-                    .await?
-                {
-                    let relative = if prefix.is_empty() {
-                        record.path.clone()
-                    } else if let Some(rest) = record.path.strip_prefix(&(prefix.clone() + "/")) {
-                        rest.to_string()
-                    } else {
-                        continue;
-                    };
-                    let child_name = relative.split('/').next().unwrap_or("").to_string();
-                    if child_name.is_empty() {
-                        continue;
-                    }
-                    let child_path = if prefix.is_empty() {
-                        child_name.clone()
-                    } else {
-                        format!("{prefix}/{child_name}")
-                    };
-                    let is_directory = relative.contains('/');
-                    let entry =
-                        entries_map
-                            .entry(child_name.clone())
-                            .or_insert(WorkspaceTreeEntry {
-                                name: child_name.clone(),
-                                path: child_path.clone(),
-                                uri: WorkspaceUri::mount_uri(mount_id, Some(&child_path)),
-                                is_directory,
-                                kind: if is_directory {
-                                    WorkspaceTreeEntryKind::MountedDirectory
-                                } else {
-                                    WorkspaceTreeEntryKind::MountedFile
-                                },
-                                status: None,
-                                updated_at: Some(record.updated_at),
-                                content_preview: None,
-                                bypass_write: Some(mount.bypass_write),
-                                dirty_count: 0,
-                                conflict_count: 0,
-                                pending_delete_count: 0,
-                            });
-                    if is_directory {
-                        entry.is_directory = true;
-                        entry.kind = WorkspaceTreeEntryKind::MountedDirectory;
-                        entry.dirty_count += usize::from(record.status != MountedFileStatus::Clean);
-                        entry.conflict_count +=
-                            usize::from(record.status == MountedFileStatus::Conflicted);
-                        entry.pending_delete_count +=
-                            usize::from(record.status == MountedFileStatus::Deleted);
-                    } else {
-                        entry.status = Some(record.status);
-                        entry.updated_at = Some(record.updated_at);
+                if has_mount_state {
+                    for record in self
+                        .list_mount_file_records(mount_id, Some(&prefix))
+                        .await?
+                    {
+                        let relative = if prefix.is_empty() {
+                            record.path.clone()
+                        } else if let Some(rest) = record.path.strip_prefix(&(prefix.clone() + "/")) {
+                            rest.to_string()
+                        } else {
+                            continue;
+                        };
+                        let child_name = relative.split('/').next().unwrap_or("").to_string();
+                        if child_name.is_empty() {
+                            continue;
+                        }
+                        let child_path = if prefix.is_empty() {
+                            child_name.clone()
+                        } else {
+                            format!("{prefix}/{child_name}")
+                        };
+                        let is_directory = relative.contains('/');
+                        let entry =
+                            entries_map
+                                .entry(child_name.clone())
+                                .or_insert(WorkspaceTreeEntry {
+                                    name: child_name.clone(),
+                                    path: child_path.clone(),
+                                    uri: WorkspaceUri::mount_uri(mount_id, Some(&child_path)),
+                                    is_directory,
+                                    kind: if is_directory {
+                                        WorkspaceTreeEntryKind::MountedDirectory
+                                    } else {
+                                        WorkspaceTreeEntryKind::MountedFile
+                                    },
+                                    status: None,
+                                    updated_at: Some(record.updated_at),
+                                    content_preview: None,
+                                    bypass_write: Some(mount.bypass_write),
+                                    dirty_count: 0,
+                                    conflict_count: 0,
+                                    pending_delete_count: 0,
+                                });
+                        if is_directory {
+                            entry.is_directory = true;
+                            entry.kind = WorkspaceTreeEntryKind::MountedDirectory;
+                            entry.dirty_count += usize::from(record.status != MountedFileStatus::Clean);
+                            entry.conflict_count +=
+                                usize::from(record.status == MountedFileStatus::Conflicted);
+                            entry.pending_delete_count +=
+                                usize::from(record.status == MountedFileStatus::Deleted);
+                        } else {
+                            entry.status = Some(record.status);
+                            entry.updated_at = Some(record.updated_at);
+                        }
                     }
                 }
 
@@ -2894,16 +2879,6 @@ impl WorkspaceStore for LibSqlBackend {
         mount_id: Uuid,
         path: &str,
     ) -> Result<WorkspaceMountFileView, WorkspaceError> {
-        self.reconcile_mount(
-            user_id,
-            mount_id,
-            WorkspaceMountRevisionKind::ManualRefresh,
-            WorkspaceMountRevisionSource::External,
-            Some("workspace_read".to_string()),
-            None,
-            "workspace_read",
-        )
-        .await?;
         let normalized = normalize_mount_path(path)?;
         let mount = self.fetch_mount(user_id, mount_id).await?;
         let disk_path = Path::new(&mount.source_root).join(&normalized);
@@ -4401,5 +4376,57 @@ mod tests {
             .await
             .expect("diff after keep");
         assert!(clean_diff.entries.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_workspace_tree_lists_nested_mount_directory_without_refreshing_whole_mount() {
+        let (backend, dir) = setup_backend().await;
+        let mount_root = dir.path().join("tree-project");
+        std::fs::create_dir_all(mount_root.join("nested")).expect("create nested mount root");
+        std::fs::write(mount_root.join("nested/child.txt"), "hello").expect("seed nested file");
+
+        let mount = backend
+            .create_workspace_mount(&CreateMountRequest {
+                user_id: "default".to_string(),
+                display_name: "tree-project".to_string(),
+                source_root: mount_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create mount");
+
+        let root_entries = backend
+            .list_workspace_tree(
+                "default",
+                None,
+                &WorkspaceUri::mount_uri(mount.mount.id, None),
+            )
+            .await
+            .expect("list mount root");
+        assert!(
+            root_entries.iter().any(|entry| {
+                entry.kind == WorkspaceTreeEntryKind::MountedDirectory
+                    && entry.path == "nested"
+                    && entry.uri == WorkspaceUri::mount_uri(mount.mount.id, Some("nested"))
+            }),
+            "mount root should expose nested directory"
+        );
+
+        let nested_entries = backend
+            .list_workspace_tree(
+                "default",
+                None,
+                &WorkspaceUri::mount_uri(mount.mount.id, Some("nested")),
+            )
+            .await
+            .expect("list nested mount directory");
+        assert!(
+            nested_entries.iter().any(|entry| {
+                entry.kind == WorkspaceTreeEntryKind::MountedFile
+                    && entry.path == "nested/child.txt"
+                    && entry.uri == WorkspaceUri::mount_uri(mount.mount.id, Some("nested/child.txt"))
+            }),
+            "nested directory should expose child file"
+        );
     }
 }

@@ -87,7 +87,6 @@ class WorkspaceState {
       this.currentPath = response.path;
       this.entries = response.entries;
       this.status = response.entries.length > 0 ? "工作区已就绪" : "这里还没有内容";
-      void this.#refreshAllMountChangesInBackground();
       if (previousPath !== response.path) {
         this.selectedFile = null;
         this.selectedDocument = null;
@@ -197,25 +196,22 @@ class WorkspaceState {
     const target = entry.uri ?? entry.path;
     const mountId = mountIdFromUri(target);
 
-    if (mountId) {
+    if (entry.is_directory) {
       this.clearSearch();
-      await this.loadMount(mountId);
-      if (entry.is_directory) {
-        this.selectedFile = null;
-        this.selectedDocument = null;
-        await this.fetch(target);
-      } else {
-        await this.loadFile(mountId, entry.path);
+      this.selectedFile = null;
+      this.selectedDocument = null;
+      await this.fetch(target);
+      if (!mountId) {
+        this.selectedMount = null;
+        this.mountDiff = [];
       }
       return;
     }
 
-    if (entry.is_directory) {
+    if (mountId) {
       this.clearSearch();
-      this.selectedMount = null;
-      this.selectedFile = null;
       this.selectedDocument = null;
-      await this.fetch(target);
+      await this.loadFile(mountId, entry.path);
       return;
     }
 
@@ -228,7 +224,7 @@ class WorkspaceState {
     if (mountId) {
       this.selectedDocument = null;
       this.selectedFile = null;
-      await Promise.all([this.fetch(path), this.#refreshMountState(mountId)]);
+      await this.fetch(path);
       return;
     }
 
@@ -243,6 +239,14 @@ class WorkspaceState {
     this.selectedFile = this.selectedFile?.mount_id === id ? this.selectedFile : null;
     this.selectedDocument = null;
     await this.#refreshMountState(id);
+  }
+
+  async refreshMountChanges() {
+    if (this.#mountChangesRefreshPromise) {
+      await this.#mountChangesRefreshPromise;
+      return;
+    }
+    await this.#refreshAllMountChangesInBackground();
   }
 
   async loadFile(id: string, path: string) {

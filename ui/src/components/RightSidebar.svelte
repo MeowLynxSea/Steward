@@ -45,6 +45,7 @@
     onClearPreview: () => void;
     onNavigate: (path: string) => void;
     onOpenEntry: (entry: WorkspaceEntry) => void;
+    onOpenChangesTab?: () => void;
     onRequestMount: () => void;
     onKeepMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
     onRevertMount: (mountId: string, scopePath?: string, checkpointId?: string) => void;
@@ -78,6 +79,7 @@
     onClearPreview,
     onNavigate,
     onOpenEntry,
+    onOpenChangesTab,
     onRequestMount,
     onKeepMount,
     onRevertMount,
@@ -98,7 +100,7 @@
         entries: [...group.entries].sort((left, right) => {
           const weight = (status: MountedFileStatus) => {
             if (status === "conflicted") return 0;
-            if (status === "pending_delete") return 1;
+            if (status === "deleted") return 1;
             if (status === "binary_modified") return 2;
             return 3;
           };
@@ -146,7 +148,13 @@
 
   function jumpToChanges() {
     activeTab = "changes";
+    onOpenChangesTab?.();
     closePreview();
+  }
+
+  function activateChangesTab() {
+    activeTab = "changes";
+    onOpenChangesTab?.();
   }
 
   function mountIdFromUri(uri: string) {
@@ -211,7 +219,7 @@
     switch (status) {
       case "clean": return "已同步";
       case "conflicted": return "冲突";
-      case "pending_delete": return "待删除";
+      case "deleted": return "待删除";
       case "binary_modified": return "二进制修改";
       case "added": return "新增";
       case "modified": return "修改";
@@ -250,7 +258,7 @@
         return "文件有未提交变更";
       case "added":
         return "文件是工作区新增内容";
-      case "pending_delete":
+      case "deleted":
         return "文件标记为删除";
       case "conflicted":
         return "文件存在冲突";
@@ -269,7 +277,7 @@
         return "请切换到 Changes 标签页查看 diff，并决定保留或撤销。";
       case "added":
         return "这个文件还没有提交到磁盘基线，请在 Changes 标签页完成处理。";
-      case "pending_delete":
+      case "deleted":
         return "这个文件已被标记为删除，正文预览已停用。";
       case "conflicted":
         return "这个文件同时发生了磁盘变更和工作区变更，请到 Changes 标签页解决冲突。";
@@ -290,7 +298,7 @@
         <button class="tab {activeTab === 'files' ? 'active' : ''}" onclick={() => activeTab = 'files'}>
           文件
         </button>
-        <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={() => activeTab = 'changes'}>
+        <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={activateChangesTab}>
           变更
         </button>
         {#if busyAction}
