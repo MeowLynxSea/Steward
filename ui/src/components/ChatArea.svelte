@@ -720,61 +720,74 @@
   function reflectionStatusLabel(status: ReflectionStatus | "loading" | "unloaded") {
     switch (status) {
       case "queued":
-        return "Queued";
+        return "排队中";
       case "running":
-        return "Running";
+        return "进行中";
       case "completed":
-        return "Done";
+        return "已完成";
       case "failed":
-        return "Failed";
+        return "失败";
       case "missing":
-        return "Missing";
+        return "暂无记录";
       case "loading":
-        return "Loading";
+        return "加载中";
       case "unloaded":
-        return "View";
+        return "查看";
       default:
-        return "Unknown";
+        return "未知";
     }
   }
 
   function reflectionStatusDescription(panel: ReflectionPanelState | null) {
     if (panel?.loading && !panel.detail) {
-      return "Reflection timeline for this turn.";
+      return "当前轮次的 reflection 时间线。";
     }
     if (panel?.detail?.detail) {
       return panel.detail.detail;
     }
     if (panel?.detail?.status === "queued") {
-      return "Reflection is queued and waiting for an execution slot.";
+      return "Reflection 已进入队列，正在等待执行槽位。";
     }
     if (panel?.detail?.status === "running") {
-      return "Reflection is still executing for this turn.";
+      return "Reflection 正在处理当前轮次。";
     }
     if (panel?.detail?.status === "completed") {
       switch (panel.detail.outcome) {
         case "boot_promoted":
-          return "Reflection completed and promoted memory into boot recall.";
+          return "Reflection 已完成，并将记忆提升到了启动召回。";
         case "updated":
-          return "Reflection completed and updated existing memory.";
+          return "Reflection 已完成，并更新了现有记忆。";
         case "created":
-          return "Reflection completed and stored new memory.";
+          return "Reflection 已完成，并写入了新记忆。";
         case "no_op":
-          return "Reflection completed and decided not to persist new memory.";
+          return "Reflection 已完成，并决定不写入新记忆。";
         default:
-          return "Reflection completed for this turn.";
+          return "当前轮次的 reflection 已完成。";
       }
     }
     if (panel?.detail?.status === "failed") {
-      return "Reflection failed before it could finish its memory update.";
+      return "Reflection 在完成记忆更新前失败了。";
     }
     if (panel?.detail?.status === "missing") {
-      return "No reflection artifacts were found for this turn.";
+      return "当前轮次还没有找到 reflection 记录。";
     }
     if (panel?.detail?.summary) {
       return buildCompactSummary(panel.detail.summary, 160);
     }
-    return "Reflection timeline for this turn.";
+    return "当前轮次的 reflection 时间线。";
+  }
+
+  function reflectionToolStatusLabel(status: TimelineToolCall["status"]) {
+    switch (status) {
+      case "running":
+        return "进行中";
+      case "completed":
+        return "已完成";
+      case "failed":
+        return "失败";
+      default:
+        return status;
+    }
   }
 
   function reflectionBadgeStatus(panel: ReflectionPanelState | null): ReflectionStatus | "loading" | "unloaded" {
@@ -1051,9 +1064,9 @@
                   <div class="turn-cost-bar inline-turn-cost fade-in">
                     <div class="turn-cost-copy">
                       <Zap size={12} strokeWidth={2} />
-                      <span>{entry.message.turn_cost.input_tokens.toLocaleString()} in</span>
+                      <span>{entry.message.turn_cost.input_tokens.toLocaleString()} 输入</span>
                       <span class="cost-sep">·</span>
-                      <span>{entry.message.turn_cost.output_tokens.toLocaleString()} out</span>
+                      <span>{entry.message.turn_cost.output_tokens.toLocaleString()} 输出</span>
                       {#if entry.message.turn_cost.cost_usd !== "$0.0000"}
                         <span class="cost-sep">·</span>
                         <span>{entry.message.turn_cost.cost_usd}</span>
@@ -1064,8 +1077,8 @@
                       class:is-open={activeReflectionAssistantId === entry.message.id}
                       type="button"
                       onclick={() => toggleReflectionExpand(entry.message)}
-                      aria-label="Open reflection details"
-                      title="Reflection"
+                      aria-label="打开 reflection 详情"
+                      title="Reflection 详情"
                     >
                       <Brain size={12} strokeWidth={1.9} />
                       <span class={`reflection-trigger-dot status-${reflectionBadge}`}></span>
@@ -1257,7 +1270,7 @@
         class="reflection-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Reflection details"
+        aria-label="Reflection 详情"
         tabindex="-1"
         onclick={(event) => event.stopPropagation()}
         onkeydown={(event) => {
@@ -1271,7 +1284,7 @@
         <div class="reflection-modal-head">
           <div class="reflection-modal-title-wrap">
             <div class="reflection-panel-title-row">
-              <span class="reflection-panel-title">Reflection</span>
+              <span class="reflection-panel-title">Reflection 详情</span>
               <span class={`reflection-pill large status-${activeReflectionBadge}`}>
                 {reflectionStatusLabel(activeReflectionBadge)}
               </span>
@@ -1284,7 +1297,7 @@
             class="reflection-modal-close"
             type="button"
             onclick={closeReflectionModal}
-            aria-label="Close reflection details"
+            aria-label="关闭 reflection 详情"
           >
             <X size={16} strokeWidth={2} />
           </button>
@@ -1294,13 +1307,13 @@
           {#if activeReflectionPanel?.loading && !activeReflectionPanel.detail}
             <div class="reflection-loading">
               <Loader size={15} class="spin" strokeWidth={2} />
-              <span>Syncing reflection status...</span>
+              <span>正在同步 reflection 状态...</span>
             </div>
           {/if}
 
           <div class="reflection-section">
             <div class="reflection-section-head">
-              <span>Timeline</span>
+              <span>时间线</span>
               <span>{activeReflectionTimeline.length}</span>
             </div>
             {#if activeReflectionTimeline.length > 0}
@@ -1311,16 +1324,16 @@
                       <div class="reflection-item-title">
                         {#if timelineEntry.kind === "thinking"}
                           <Brain size={13} strokeWidth={2} />
-                          <strong>Thinking</strong>
+                          <strong>思考</strong>
                         {:else if timelineEntry.kind === "tool"}
                           <Wrench size={13} strokeWidth={2} />
                           <strong>{timelineEntry.toolCall.name}</strong>
                           <span class={`reflection-inline-status tool-${timelineEntry.toolCall.status}`}>
-                            {timelineEntry.toolCall.status}
+                            {reflectionToolStatusLabel(timelineEntry.toolCall.status)}
                           </span>
                         {:else}
                           <Sparkles size={13} strokeWidth={2} />
-                          <strong>Reflection Message</strong>
+                          <strong>Reflection 消息</strong>
                         {/if}
                       </div>
                       <span class="reflection-item-time">
@@ -1335,7 +1348,7 @@
                     {:else if timelineEntry.kind === "tool"}
                       {#if timelineEntry.toolCall.parameters}
                         <div class="reflection-detail-block">
-                          <span class="reflection-detail-label">Parameters</span>
+                          <span class="reflection-detail-label">参数</span>
                           <div class="reflection-detail-body markdown-body">
                             {@html renderAuxiliaryDetail(timelineEntry.toolCall.parameters)}
                           </div>
@@ -1343,7 +1356,7 @@
                       {/if}
                       {#if timelineEntry.toolCall.resultPreview}
                         <div class="reflection-detail-block">
-                          <span class="reflection-detail-label">Result</span>
+                          <span class="reflection-detail-label">结果</span>
                           <div class="reflection-detail-body markdown-body">
                             {@html renderAuxiliaryDetail(timelineEntry.toolCall.resultPreview)}
                           </div>
@@ -1351,7 +1364,7 @@
                       {/if}
                       {#if timelineEntry.toolCall.error}
                         <div class="reflection-detail-block error">
-                          <span class="reflection-detail-label">Error</span>
+                          <span class="reflection-detail-label">错误</span>
                           <div class="reflection-detail-body markdown-body">
                             {@html renderAuxiliaryDetail(timelineEntry.toolCall.error)}
                           </div>
@@ -1374,7 +1387,7 @@
                 <div class="reflection-skeleton-line medium"></div>
               </div>
             {:else if activeReflectionTimeline.length === 0}
-              <p class="reflection-empty">No reflection activity has been recorded for this turn yet.</p>
+              <p class="reflection-empty">当前轮次暂时还没有记录到 reflection 活动。</p>
             {/if}
           </div>
         </div>
