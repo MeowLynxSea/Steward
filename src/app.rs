@@ -1100,6 +1100,30 @@ impl AppBuilder {
                 }
             }
 
+            if self.config.skills.enabled {
+                if let Err(error) = tokio::fs::create_dir_all(&self.config.skills.root_dir).await {
+                    tracing::warn!(
+                        "Failed to create skills root {}: {}",
+                        self.config.skills.root_dir.display(),
+                        error
+                    );
+                } else if let Err(error) = ws
+                    .ensure_system_allowlist(
+                        crate::workspace::WorkspaceMountKind::Skills,
+                        "Skills",
+                        self.config.skills.root_dir.display().to_string(),
+                        false,
+                    )
+                    .await
+                {
+                    tracing::warn!(
+                        "Failed to register Skills workspace mount ({}): {}",
+                        self.config.skills.root_dir.display(),
+                        error
+                    );
+                }
+            }
+
             if embeddings.is_some() {
                 let ws_bg = Arc::clone(ws);
                 tokio::spawn(async move {
@@ -1118,8 +1142,7 @@ impl AppBuilder {
 
         // Skills system
         let (skill_registry, skill_catalog) = if self.config.skills.enabled {
-            let mut registry = SkillRegistry::new(self.config.skills.local_dir.clone())
-                .with_installed_dir(self.config.skills.installed_dir.clone())
+            let mut registry = SkillRegistry::new(self.config.skills.root_dir.clone())
                 .with_max_scan_depth(self.config.skills.max_scan_depth);
             let loaded = registry.discover_all().await;
             if !loaded.is_empty() {

@@ -28,6 +28,10 @@ function allowlistDisplayNameFromPath(path: string): string {
   return segments.at(-1) ?? path;
 }
 
+function supportsWorkspaceChanges(allowlist: Pick<WorkspaceAllowlistDetail["summary"]["allowlist"], "mount_kind">) {
+  return allowlist.mount_kind !== "skills";
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -351,11 +355,13 @@ class WorkspaceState {
   }
 
   async #refreshAllowlistState(id: string) {
-    const [detail, diff] = await Promise.all([
-      apiClient.getWorkspaceAllowlist(id),
-      apiClient.getWorkspaceAllowlistDiff(id)
-    ]);
+    const detail = await apiClient.getWorkspaceAllowlist(id);
     this.selectedAllowlist = detail;
+    if (!supportsWorkspaceChanges(detail.summary.allowlist)) {
+      this.allowlistDiff = [];
+      return;
+    }
+    const diff = await apiClient.getWorkspaceAllowlistDiff(id);
     this.allowlistDiff = diff.entries;
   }
 
@@ -367,8 +373,11 @@ class WorkspaceState {
       return;
     }
 
+    const trackedAllowlists = allowlists.allowlists.filter(({ allowlist }) =>
+      supportsWorkspaceChanges(allowlist)
+    );
     const results = await Promise.all(
-      allowlists.allowlists.map(async ({ allowlist }) => {
+      trackedAllowlists.map(async ({ allowlist }) => {
         const [detail, diff] = await Promise.all([
           apiClient.getWorkspaceAllowlist(allowlist.id),
           apiClient.getWorkspaceAllowlistDiff(allowlist.id)

@@ -92,6 +92,7 @@ What replaces the old center of gravity:
 - **Background routines** for recurring jobs once the core agent loop is stable
 - **libSQL storage** for settings, sessions, runs, approvals, and workspace state
 - **Workspace retrieval** with full-text and vector search
+- **Filesystem-backed SKILL.md skills** from `~/.steward/skills`, auto-mounted into Workspace as `workspace://skills` for browsing and preview
 
 ### Safety
 

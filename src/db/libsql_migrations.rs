@@ -889,6 +889,7 @@ CREATE TABLE IF NOT EXISTS workspace_allowlists (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     display_name TEXT NOT NULL,
+    mount_kind TEXT NOT NULL DEFAULT 'user',
     source_root TEXT NOT NULL,
     bypass_read INTEGER NOT NULL DEFAULT 1,
     bypass_write INTEGER NOT NULL DEFAULT 0,
@@ -1351,6 +1352,14 @@ CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revision_anchors_allowlist
 "#,
     ),
     (26, "workspace_allowlist_tracker_cleanup", ""),
+    (
+        27,
+        "workspace_allowlist_mount_kind",
+        r#"
+ALTER TABLE workspace_allowlists
+    ADD COLUMN mount_kind TEXT NOT NULL DEFAULT 'user';
+"#,
+    ),
 ];
 
 async fn sqlite_object_exists(
@@ -1773,6 +1782,33 @@ CREATE INDEX IF NOT EXISTS idx_workspace_allowlist_revision_files_revision
     Ok(())
 }
 
+async fn run_workspace_allowlist_mount_kind_migration(
+    conn: &libsql::Transaction,
+) -> Result<(), crate::error::DatabaseError> {
+    use crate::error::DatabaseError;
+
+    if !sqlite_object_exists(conn, "table", "workspace_allowlists").await?
+        || sqlite_column_exists(conn, "workspace_allowlists", "mount_kind").await?
+    {
+        return Ok(());
+    }
+
+    conn.execute_batch(
+        r#"
+ALTER TABLE workspace_allowlists
+    ADD COLUMN mount_kind TEXT NOT NULL DEFAULT 'user';
+"#,
+    )
+    .await
+    .map_err(|e| {
+        DatabaseError::Migration(format!(
+            "Failed to add workspace_allowlists.mount_kind: {e}"
+        ))
+    })?;
+
+    Ok(())
+}
+
 /// Run incremental migrations that haven't been applied yet.
 ///
 /// Each migration is wrapped in a transaction. On success the version is
@@ -1810,6 +1846,8 @@ pub async fn run_incremental(conn: &libsql::Connection) -> Result<(), crate::err
             run_workspace_allowlist_rename_cleanup(&tx).await?;
         } else if version == 26 {
             run_workspace_allowlist_tracker_cleanup(&tx).await?;
+        } else if version == 27 {
+            run_workspace_allowlist_mount_kind_migration(&tx).await?;
         } else {
             tx.execute_batch(sql).await.map_err(|e| {
                 DatabaseError::Migration(format!(

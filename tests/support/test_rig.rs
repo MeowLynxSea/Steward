@@ -572,10 +572,8 @@ impl TestRigBuilder {
 
         // 2. Build Config::for_testing().
         let skills_dir = temp_dir.path().join("skills");
-        let installed_skills_dir = temp_dir.path().join("installed_skills");
         let _ = std::fs::create_dir_all(&skills_dir);
-        let _ = std::fs::create_dir_all(&installed_skills_dir);
-        let mut config = Config::for_testing(db_path, skills_dir, installed_skills_dir);
+        let mut config = Config::for_testing(db_path, skills_dir);
         config.agent.max_tool_iterations = max_tool_iterations;
         config.safety.injection_check_enabled = injection_check;
         config.skills.enabled = enable_skills;
@@ -682,8 +680,7 @@ impl TestRigBuilder {
             // AppBuilder did not wire them for this environment.
             if enable_skills {
                 let registry = Arc::new(std::sync::RwLock::new(
-                    steward_core::skills::SkillRegistry::new(temp_dir.path().join("skills"))
-                        .with_installed_dir(temp_dir.path().join("installed_skills")),
+                    steward_core::skills::SkillRegistry::new(temp_dir.path().join("skills")),
                 ));
                 let catalog = steward_core::skills::catalog::shared_catalog();
                 components

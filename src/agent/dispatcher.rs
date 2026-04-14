@@ -207,6 +207,7 @@ impl Agent {
             (!system_prompt_parts.is_empty()).then(|| system_prompt_parts.join("\n\n"));
 
         // Select and prepare active skills (if skills system is enabled)
+        self.maybe_refresh_skills().await;
         let active_skills = self.select_active_skills(&message.content);
 
         // Build skill context block

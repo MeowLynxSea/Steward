@@ -68,9 +68,8 @@ pub async fn run_skills_command(
 
 /// Discover skills from all configured directories.
 async fn discover_skills(config: &SkillsConfig) -> SkillRegistry {
-    let mut registry = SkillRegistry::new(config.local_dir.clone())
-        .with_installed_dir(config.installed_dir.clone())
-        .with_max_scan_depth(config.max_scan_depth);
+    let mut registry =
+        SkillRegistry::new(config.root_dir.clone()).with_max_scan_depth(config.max_scan_depth);
     registry.discover_all().await;
     registry
 }
@@ -78,8 +77,7 @@ async fn discover_skills(config: &SkillsConfig) -> SkillRegistry {
 /// Format a skill source path for display.
 fn format_source(source: &SkillSource) -> &str {
     match source {
-        SkillSource::Workspace(_) => "workspace",
-        SkillSource::User(_) => "user",
+        SkillSource::Filesystem(_) => "filesystem",
         SkillSource::Bundled(_) => "bundled",
     }
 }
@@ -119,8 +117,7 @@ async fn cmd_list(config: &SkillsConfig, verbose: bool, json: bool) -> anyhow::R
         println!("No skills found.");
         println!();
         println!("Skills directories:");
-        println!("  User:      {}", config.local_dir.display());
-        println!("  Installed: {}", config.installed_dir.display());
+        println!("  Root:      {}", config.root_dir.display());
         println!();
         println!("Use 'steward skills search <query>' to find skills on ClawHub.");
         return Ok(());
@@ -364,10 +361,9 @@ mod tests {
     fn format_source_variants() {
         use std::path::PathBuf;
         assert_eq!(
-            format_source(&SkillSource::Workspace(PathBuf::new())),
-            "workspace"
+            format_source(&SkillSource::Filesystem(PathBuf::new())),
+            "filesystem"
         );
-        assert_eq!(format_source(&SkillSource::User(PathBuf::new())), "user");
         assert_eq!(
             format_source(&SkillSource::Bundled(PathBuf::new())),
             "bundled"

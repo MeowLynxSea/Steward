@@ -130,6 +130,7 @@ Repair results: `Success`, `Retry`, `Failed`, `ManualRequired`. `Retry` does NOT
 - All state mutations on `Session`/`Thread` happen under `Arc<Mutex<Session>>` lock.
 - The agent loop is single-threaded per thread; parallel execution happens at the job/scheduler level.
 - Skills are selected **deterministically** (no LLM call) — see `skills/selector.rs`.
+- Skills are loaded from the shared `~/.steward/skills` root and may refresh between turns if the on-disk snapshot changes.
 - Tool results pass through `SafetyLayer` before returning to LLM (sanitizer → validator → policy → leak detector).
 - `SessionManager` uses double-checked locking for session creation. Read lock first (fast path), then write lock with re-check to prevent duplicate sessions.
 - `Scheduler.schedule()` holds the write lock for the entire check-insert sequence — don't hold any other locks when calling it.

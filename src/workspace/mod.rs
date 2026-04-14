@@ -51,8 +51,9 @@ pub use allowlists::{
     WorkspaceAllowlistDiffRequest, WorkspaceAllowlistFileView, WorkspaceAllowlistHistory,
     WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistRevision,
     WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource, WorkspaceAllowlistSummary,
-    WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, encode_allowlist_id,
-    normalize_allowlist_path, parse_allowlist_id,
+    WorkspaceMountKind, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
+    encode_allowlist_id, normalize_allowlist_path, parse_allowlist_id, public_allowlist_id,
+    skills_allowlist_uuid,
 };
 pub use chunker::{ChunkConfig, chunk_document};
 pub use document::{
@@ -1560,6 +1561,7 @@ impl Workspace {
                 } else {
                     WorkspaceTreeEntryKind::MemoryFile
                 },
+                mount_kind: None,
                 status: None,
                 updated_at: entry.updated_at,
                 content_preview: entry.content_preview,
@@ -1582,6 +1584,26 @@ impl Workspace {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: self.user_id.clone(),
                 display_name: display_name.into(),
+                mount_kind: WorkspaceMountKind::User,
+                source_root: source_root.into(),
+                bypass_write,
+            })
+            .await
+    }
+
+    pub async fn ensure_system_allowlist(
+        &self,
+        mount_kind: WorkspaceMountKind,
+        display_name: impl Into<String>,
+        source_root: impl Into<String>,
+        bypass_write: bool,
+    ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
+        self.storage
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: self.user_id.clone(),
+                display_name: display_name.into(),
+                mount_kind,
                 source_root: source_root.into(),
                 bypass_write,
             })
@@ -1630,8 +1652,9 @@ impl Workspace {
                 Some(ResolvedWorkspaceAllowlistPath {
                     allowlist_id: summary.allowlist.id,
                     relative_path: relative_path.clone(),
-                    workspace_uri: WorkspaceUri::allowlist_uri(
+                    workspace_uri: WorkspaceUri::allowlist_uri_with_mount_kind(
                         summary.allowlist.id,
+                        summary.allowlist.mount_kind,
                         relative_path.as_deref(),
                     ),
                     disk_path: disk_path.display().to_string(),
@@ -1951,8 +1974,11 @@ impl Workspace {
                 let Some(score) = allowlist_search_score(&relative_path, &content, query) else {
                     continue;
                 };
-                let document_path =
-                    WorkspaceUri::allowlist_uri(allowlist.allowlist.id, Some(&relative_path));
+                let document_path = WorkspaceUri::allowlist_uri_with_mount_kind(
+                    allowlist.allowlist.id,
+                    allowlist.allowlist.mount_kind,
+                    Some(&relative_path),
+                );
                 let document_id = Uuid::new_v5(&Uuid::NAMESPACE_URL, document_path.as_bytes());
                 let snippet = allowlist_search_snippet(&content, query);
                 let chunk_id = Uuid::new_v5(

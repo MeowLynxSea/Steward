@@ -377,9 +377,11 @@
                 </span>
                 <span class="tree-item-copy">
                   <span class="tree-item-name">{entryLabel(entry)}</span>
-                  {#if entryAllowlistId(entry)}
-                    <span class="tree-item-subtle">{entryAllowlistId(entry)}</span>
-                  {/if}
+                  <span class="tree-item-meta">
+                    {#if entryAllowlistId(entry)}
+                      <span class="tree-item-subtle">{entryAllowlistId(entry)}</span>
+                    {/if}
+                  </span>
                 </span>
                 {#if entry.conflict_count || entry.dirty_count || entry.pending_delete_count}
                   <span class="tree-item-badges">
@@ -411,7 +413,9 @@
                   <div>
                     <div class="allowlist-heading">
                       <strong>{group.allowlist.summary.allowlist.display_name}</strong>
-                      <span class="allowlist-id">{group.allowlist.summary.allowlist.id}</span>
+                      <div class="allowlist-meta">
+                        <span class="allowlist-id">{group.allowlist.summary.allowlist.id}</span>
+                      </div>
                     </div>
                     <div class="allowlist-stats">
                       <span>{group.allowlist.summary.dirty_count} 变更</span>
@@ -853,6 +857,14 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 1px;
+  }
+
+  .tree-item-meta,
+  .allowlist-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
 
   .tree-item-subtle,

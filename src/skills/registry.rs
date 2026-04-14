@@ -1,15 +1,12 @@
 //! Skill registry for discovering, loading, and managing available skills.
 //!
-//! Skills are discovered from three filesystem locations:
-//! 1. Workspace skills directory (`<workspace>/skills/`) -- Trusted
-//! 2. User skills directory (`~/.steward/skills/`) -- Trusted
-//! 3. Installed skills directory (`~/.steward/installed_skills/`) -- Installed
+//! Skills are discovered from a single filesystem root (typically
+//! `~/.steward/skills/`).
 //!
 //! Both flat (`skills/SKILL.md`) and subdirectory (`skills/<name>/SKILL.md`)
 //! layouts are supported. Subdirectories without `SKILL.md` are treated as
 //! bundle directories and recursed into (up to `SKILLS_MAX_SCAN_DEPTH`,
-//! default 3). Earlier locations win on name collision (workspace overrides
-//! user). Uses async I/O throughout to avoid blocking the tokio runtime.
+//! default 3). Uses async I/O throughout to avoid blocking the tokio runtime.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,8 +20,7 @@ use crate::skills::{
     normalize_line_endings,
 };
 
-/// Maximum total number of skills that can be discovered across all sources.
-/// Shared across workspace, user, and installed directories.
+/// Maximum total number of skills that can be discovered from the unified root.
 /// Prevents resource exhaustion from directories with thousands of entries.
 const MAX_DISCOVERED_SKILLS: usize = 100;
 
@@ -75,47 +71,33 @@ pub enum SkillRegistryError {
     WriteError { path: String, reason: String },
 }
 
+pub struct SkillRegistrySnapshot {
+    pub loaded_names: Vec<String>,
+    pub skills: Vec<LoadedSkill>,
+    pub fingerprint: String,
+}
+
 /// Registry of available skills.
 pub struct SkillRegistry {
     /// All loaded skills.
     skills: Vec<LoadedSkill>,
-    /// User skills directory (~/.steward/skills/). Skills here are Trusted.
-    user_dir: PathBuf,
-    /// Registry-installed skills directory (~/.steward/installed_skills/). Skills here are Installed.
-    installed_dir: Option<PathBuf>,
-    /// Optional workspace skills directory.
-    workspace_dir: Option<PathBuf>,
+    /// Root skills directory (~/.steward/skills/).
+    root_dir: PathBuf,
     /// Maximum recursion depth for bundle directory scanning (default: 3).
     max_scan_depth: usize,
+    /// Best-effort fingerprint of the filesystem tree from the last successful scan.
+    last_fingerprint: Option<String>,
 }
 
 impl SkillRegistry {
     /// Create a new skill registry.
-    pub fn new(user_dir: PathBuf) -> Self {
+    pub fn new(root_dir: PathBuf) -> Self {
         Self {
             skills: Vec::new(),
-            user_dir,
-            installed_dir: None,
-            workspace_dir: None,
+            root_dir,
             max_scan_depth: DEFAULT_MAX_SCAN_DEPTH,
+            last_fingerprint: None,
         }
-    }
-
-    /// Set the registry-installed skills directory.
-    ///
-    /// Skills installed via ClawHub or the skill tools are written here and
-    /// loaded with `SkillTrust::Installed` (read-only tool access). This
-    /// directory is separate from the user dir so that trust levels survive
-    /// restarts correctly.
-    pub fn with_installed_dir(mut self, dir: PathBuf) -> Self {
-        self.installed_dir = Some(dir);
-        self
-    }
-
-    /// Set a workspace skills directory.
-    pub fn with_workspace_dir(mut self, dir: PathBuf) -> Self {
-        self.workspace_dir = Some(dir);
-        self
     }
 
     /// Set the maximum recursion depth for bundle directory scanning.
@@ -124,82 +106,64 @@ impl SkillRegistry {
         self
     }
 
-    /// Discover and load skills from all configured directories.
-    ///
-    /// Discovery order (earlier wins on name collision):
-    /// 1. Workspace skills directory (if set) -- Trusted
-    /// 2. User skills directory -- Trusted
-    /// 3. Installed skills directory (if set) -- Installed
-    pub async fn discover_all(&mut self) -> Vec<String> {
-        let mut loaded_names: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
-
-        // 1. Workspace skills (highest priority)
-        if let Some(ws_dir) = self.workspace_dir.clone() {
-            let cap = MAX_DISCOVERED_SKILLS.saturating_sub(loaded_names.len());
-            let skills = self
-                .discover_from_dir(
-                    &ws_dir,
-                    SkillTrust::Trusted,
-                    &SkillSource::Workspace,
-                    cap,
-                    0,
-                )
-                .await;
-            self.absorb(skills, &mut seen, &mut loaded_names, "workspace");
+    pub async fn load_snapshot(
+        root_dir: &Path,
+        max_scan_depth: usize,
+    ) -> Result<SkillRegistrySnapshot, SkillRegistryError> {
+        let mut loaded_names = Vec::new();
+        let mut seen = HashSet::new();
+        let mut skills = Vec::new();
+        let discovered = Self::discover_from_dir(
+            root_dir,
+            SkillTrust::Trusted,
+            &SkillSource::Filesystem,
+            MAX_DISCOVERED_SKILLS,
+            0,
+            max_scan_depth,
+        )
+        .await;
+        for (name, skill) in discovered {
+            if !seen.insert(name.clone()) {
+                tracing::debug!("Skipping duplicate skill '{}'", name);
+                continue;
+            }
+            loaded_names.push(name);
+            skills.push(skill);
         }
-
-        // 2. User skills
-        if loaded_names.len() < MAX_DISCOVERED_SKILLS {
-            let cap = MAX_DISCOVERED_SKILLS.saturating_sub(loaded_names.len());
-            let user_dir = self.user_dir.clone();
-            let skills = self
-                .discover_from_dir(&user_dir, SkillTrust::Trusted, &SkillSource::User, cap, 0)
-                .await;
-            self.absorb(skills, &mut seen, &mut loaded_names, "user/workspace");
-        }
-
-        // 3. Installed skills (registry-installed, lowest priority)
-        if loaded_names.len() < MAX_DISCOVERED_SKILLS
-            && let Some(inst_dir) = self.installed_dir.clone()
-        {
-            let cap = MAX_DISCOVERED_SKILLS.saturating_sub(loaded_names.len());
-            let skills = self
-                .discover_from_dir(&inst_dir, SkillTrust::Installed, &SkillSource::User, cap, 0)
-                .await;
-            self.absorb(skills, &mut seen, &mut loaded_names, "user/workspace");
-        }
-
         if loaded_names.len() >= MAX_DISCOVERED_SKILLS {
             tracing::warn!(
                 "Global skill discovery cap reached ({} skills)",
                 MAX_DISCOVERED_SKILLS
             );
         }
-
-        loaded_names
+        let fingerprint = compute_directory_fingerprint(root_dir, max_scan_depth);
+        Ok(SkillRegistrySnapshot {
+            loaded_names,
+            skills,
+            fingerprint,
+        })
     }
 
-    /// Dedup and absorb discovered skills into the registry.
-    fn absorb(
-        &mut self,
-        skills: Vec<(String, LoadedSkill)>,
-        seen: &mut HashSet<String>,
-        loaded_names: &mut Vec<String>,
-        override_source: &str,
-    ) {
-        for (name, skill) in skills {
-            if seen.contains(&name) {
-                tracing::debug!(
-                    "Skipping skill '{}' (overridden by {})",
-                    name,
-                    override_source
+    pub fn apply_snapshot(&mut self, snapshot: SkillRegistrySnapshot) -> Vec<String> {
+        self.skills = snapshot.skills;
+        self.last_fingerprint = Some(snapshot.fingerprint);
+        snapshot.loaded_names
+    }
+
+    /// Discover and load skills from the configured root directory.
+    pub async fn discover_all(&mut self) -> Vec<String> {
+        match Self::load_snapshot(&self.root_dir, self.max_scan_depth).await {
+            Ok(snapshot) => self.apply_snapshot(snapshot),
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to discover skills from {:?}: {}",
+                    self.root_dir,
+                    error
                 );
-                continue;
+                self.skills.clear();
+                self.last_fingerprint = None;
+                Vec::new()
             }
-            seen.insert(name.clone());
-            loaded_names.push(name);
-            self.skills.push(skill);
         }
     }
 
@@ -210,12 +174,12 @@ impl SkillRegistry {
     /// - Subdirectory: `dir/<name>/SKILL.md`
     /// - Bundle: `dir/<bundle>/<name>/SKILL.md` (bundle has no `SKILL.md`, recursed into)
     async fn discover_from_dir<F>(
-        &self,
         dir: &Path,
         trust: SkillTrust,
         make_source: &F,
         remaining_cap: usize,
         current_depth: usize,
+        max_scan_depth: usize,
     ) -> Vec<(String, LoadedSkill)>
     where
         F: Fn(PathBuf) -> SkillSource + Send + Sync,
@@ -267,7 +231,7 @@ impl SkillRegistry {
                 if tokio::fs::try_exists(&skill_md).await.unwrap_or(false) {
                     count += 1;
                     let source = make_source(path.clone());
-                    match self.load_skill_md(&skill_md, trust, source).await {
+                    match load_and_validate_skill(&skill_md, trust, source).await {
                         Ok((name, skill)) => {
                             tracing::debug!("Loaded skill: {}", name);
                             results.push((name, skill));
@@ -280,18 +244,19 @@ impl SkillRegistry {
                             );
                         }
                     }
-                } else if current_depth < self.max_scan_depth {
+                } else if current_depth < max_scan_depth {
                     tracing::debug!(
                         "Recursing into bundle directory {:?} (depth {})",
                         path.file_name().unwrap_or_default(),
                         current_depth + 1
                     );
-                    let nested = Box::pin(self.discover_from_dir(
+                    let nested = Box::pin(Self::discover_from_dir(
                         &path,
                         trust,
                         make_source,
                         remaining_cap.saturating_sub(count),
                         current_depth + 1,
+                        max_scan_depth,
                     ))
                     .await;
                     count += nested.len();
@@ -307,7 +272,7 @@ impl SkillRegistry {
             {
                 count += 1;
                 let source = make_source(dir.to_path_buf());
-                match self.load_skill_md(&path, trust, source).await {
+                match load_and_validate_skill(&path, trust, source).await {
                     Ok((name, skill)) => {
                         tracing::info!("Loaded skill: {}", name);
                         results.push((name, skill));
@@ -320,16 +285,6 @@ impl SkillRegistry {
         }
 
         results
-    }
-
-    /// Load a single SKILL.md file.
-    async fn load_skill_md(
-        &self,
-        path: &Path,
-        trust: SkillTrust,
-        source: SkillSource,
-    ) -> Result<(String, LoadedSkill), SkillRegistryError> {
-        load_and_validate_skill(path, trust, source).await
     }
 
     /// Get all loaded skills.
@@ -369,11 +324,11 @@ impl SkillRegistry {
     /// This is a static method so it doesn't borrow `&self`, allowing callers
     /// to drop their registry lock before awaiting.
     pub async fn prepare_install_to_disk(
-        user_dir: &Path,
+        root_dir: &Path,
         skill_name: &str,
         normalized_content: &str,
     ) -> Result<(String, LoadedSkill), SkillRegistryError> {
-        let skill_dir = user_dir.join(skill_name);
+        let skill_dir = root_dir.join(skill_name);
         tokio::fs::create_dir_all(&skill_dir).await.map_err(|e| {
             SkillRegistryError::WriteError {
                 path: skill_dir.display().to_string(),
@@ -390,8 +345,8 @@ impl SkillRegistry {
             })?;
 
         // Load by re-reading from disk (validates round-trip)
-        let source = SkillSource::User(skill_dir);
-        load_and_validate_skill(&skill_path, SkillTrust::Installed, source).await
+        let source = SkillSource::Filesystem(skill_dir);
+        load_and_validate_skill(&skill_path, SkillTrust::Trusted, source).await
     }
 
     /// Commit a prepared skill into the in-memory registry.
@@ -436,9 +391,9 @@ impl SkillRegistry {
         if self.has(&skill_name) {
             return Err(SkillRegistryError::AlreadyExists { name: skill_name });
         }
-        let user_dir = self.user_dir.clone();
+        let root_dir = self.root_dir.clone();
         let (name, skill) =
-            Self::prepare_install_to_disk(&user_dir, &skill_name, &normalized).await?;
+            Self::prepare_install_to_disk(&root_dir, &skill_name, &normalized).await?;
         self.commit_install(&name, skill)?;
         Ok(name)
     }
@@ -458,11 +413,7 @@ impl SkillRegistry {
         let skill = &self.skills[idx];
 
         match &skill.source {
-            SkillSource::User(path) => Ok(path.clone()),
-            SkillSource::Workspace(_) => Err(SkillRegistryError::CannotRemove {
-                name: name.to_string(),
-                reason: "workspace skills cannot be removed via this interface".to_string(),
-            }),
+            SkillSource::Filesystem(path) => Ok(path.clone()),
             SkillSource::Bundled(_) => Err(SkillRegistryError::CannotRemove {
                 name: name.to_string(),
                 reason: "bundled skills cannot be removed".to_string(),
@@ -516,27 +467,25 @@ impl SkillRegistry {
 
     /// Clear all loaded skills and re-discover from disk.
     pub async fn reload(&mut self) -> Vec<String> {
-        self.skills.clear();
         self.discover_all().await
     }
 
-    /// Get the user skills directory path.
-    pub fn user_dir(&self) -> &Path {
-        &self.user_dir
+    /// Get the configured root skills directory path.
+    pub fn root_dir(&self) -> &Path {
+        &self.root_dir
     }
 
-    /// Get the installed skills directory path, if configured.
-    pub fn installed_dir(&self) -> Option<&Path> {
-        self.installed_dir.as_deref()
+    pub fn scan_fingerprint(&self) -> Option<&str> {
+        self.last_fingerprint.as_deref()
     }
 
-    /// Get the directory where new registry installs should be written.
-    ///
-    /// Returns the installed_dir if configured (preferred), otherwise falls
-    /// back to user_dir. In practice, the installed_dir is always set when
-    /// the app is running; the fallback exists for test registries.
+    pub fn max_scan_depth(&self) -> usize {
+        self.max_scan_depth
+    }
+
+    /// Get the directory where new skill installs should be written.
     pub fn install_target_dir(&self) -> &Path {
-        self.installed_dir.as_deref().unwrap_or(&self.user_dir)
+        &self.root_dir
     }
 }
 
@@ -664,6 +613,70 @@ pub fn compute_hash(content: &str) -> String {
     format!("sha256:{:x}", result)
 }
 
+fn compute_directory_fingerprint(root_dir: &Path, max_scan_depth: usize) -> String {
+    let mut entries = Vec::new();
+    collect_directory_fingerprint_entries(root_dir, root_dir, 0, max_scan_depth, &mut entries);
+    entries.sort();
+
+    let mut hasher = Sha256::new();
+    for entry in entries {
+        hasher.update(entry.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("sha256:{:x}", hasher.finalize())
+}
+
+fn collect_directory_fingerprint_entries(
+    root_dir: &Path,
+    dir: &Path,
+    depth: usize,
+    max_scan_depth: usize,
+    entries: &mut Vec<String>,
+) {
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(_) => return,
+    };
+
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        let metadata = match std::fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if metadata.is_symlink() {
+            continue;
+        }
+
+        let relative = path
+            .strip_prefix(root_dir)
+            .unwrap_or(path.as_path())
+            .to_string_lossy()
+            .replace('\\', "/");
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|ts| ts.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|dur| dur.as_nanos())
+            .unwrap_or(0);
+        let entry_kind = if metadata.is_dir() { "dir" } else { "file" };
+        entries.push(format!(
+            "{entry_kind}:{relative}:{}:{modified}",
+            metadata.len()
+        ));
+
+        if metadata.is_dir() && depth < max_scan_depth {
+            collect_directory_fingerprint_entries(
+                root_dir,
+                &path,
+                depth + 1,
+                max_scan_depth,
+                entries,
+            );
+        }
+    }
+}
+
 /// Helper to check gating for a `GatingRequirements`. Useful for callers that
 /// don't have the full skill loaded yet.
 pub async fn check_gating(
@@ -712,38 +725,6 @@ mod tests {
         let skill = &registry.skills()[0];
         assert_eq!(skill.trust, SkillTrust::Trusted);
         assert!(skill.prompt_content.contains("helpful test assistant"));
-    }
-
-    #[tokio::test]
-    async fn test_workspace_overrides_user() {
-        let user_dir = tempfile::tempdir().unwrap();
-        let ws_dir = tempfile::tempdir().unwrap();
-
-        // Create skill in user dir
-        let user_skill = user_dir.path().join("my-skill");
-        fs::create_dir(&user_skill).unwrap();
-        fs::write(
-            user_skill.join("SKILL.md"),
-            "---\nname: my-skill\n---\n\nUser version.\n",
-        )
-        .unwrap();
-
-        // Create same-named skill in workspace dir
-        let ws_skill = ws_dir.path().join("my-skill");
-        fs::create_dir(&ws_skill).unwrap();
-        fs::write(
-            ws_skill.join("SKILL.md"),
-            "---\nname: my-skill\n---\n\nWorkspace version.\n",
-        )
-        .unwrap();
-
-        let mut registry = SkillRegistry::new(user_dir.path().to_path_buf())
-            .with_workspace_dir(ws_dir.path().to_path_buf());
-        let loaded = registry.discover_all().await;
-
-        assert_eq!(loaded, vec!["my-skill"]);
-        assert_eq!(registry.count(), 1);
-        assert!(registry.skills()[0].prompt_content.contains("Workspace"));
     }
 
     #[tokio::test]
@@ -920,30 +901,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_remove_workspace_skill_rejected() {
-        let user_dir = tempfile::tempdir().unwrap();
-        let ws_dir = tempfile::tempdir().unwrap();
-
-        let ws_skill = ws_dir.path().join("ws-skill");
-        fs::create_dir(&ws_skill).unwrap();
-        fs::write(
-            ws_skill.join("SKILL.md"),
-            "---\nname: ws-skill\n---\n\nWorkspace prompt.\n",
-        )
-        .unwrap();
-
-        let mut registry = SkillRegistry::new(user_dir.path().to_path_buf())
-            .with_workspace_dir(ws_dir.path().to_path_buf());
-        registry.discover_all().await;
-
-        let result = registry.remove_skill("ws-skill").await;
-        assert!(matches!(
-            result,
-            Err(SkillRegistryError::CannotRemove { .. })
-        ));
-    }
-
-    #[tokio::test]
     async fn test_remove_nonexistent_fails() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = SkillRegistry::new(dir.path().to_path_buf());
@@ -1076,70 +1033,11 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
-    /// Skills in the installed_dir are discovered with SkillTrust::Installed,
-    /// not Trusted. This ensures registry-installed skills do not gain full
-    /// tool access after an agent restart.
-    #[tokio::test]
-    async fn test_installed_dir_uses_installed_trust() {
-        let user_dir = tempfile::tempdir().unwrap();
-        let inst_dir = tempfile::tempdir().unwrap();
-
-        // Place a skill in the installed dir
-        let skill_dir = inst_dir.path().join("registry-skill");
-        fs::create_dir(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: registry-skill\nversion: \"1.2.3\"\n---\n\nInstalled prompt.\n",
-        )
-        .unwrap();
-
-        let mut registry = SkillRegistry::new(user_dir.path().to_path_buf())
-            .with_installed_dir(inst_dir.path().to_path_buf());
-        let loaded = registry.discover_all().await;
-
-        assert_eq!(loaded, vec!["registry-skill"]);
-        let skill = registry.find_by_name("registry-skill").unwrap();
-        assert_eq!(
-            skill.trust,
-            SkillTrust::Installed,
-            "installed_dir skills must be Installed"
-        );
-        assert_eq!(skill.manifest.version, "1.2.3");
-    }
-
-    /// install_target_dir() returns installed_dir when set, user_dir otherwise.
     #[test]
-    fn test_install_target_dir_prefers_installed_dir() {
-        let user_dir = PathBuf::from("/tmp/user-skills");
-        let inst_dir = PathBuf::from("/tmp/installed-skills");
-
-        let registry = SkillRegistry::new(user_dir.clone()).with_installed_dir(inst_dir.clone());
-        assert_eq!(registry.install_target_dir(), inst_dir.as_path());
-
-        let registry_no_inst = SkillRegistry::new(user_dir.clone());
-        assert_eq!(registry_no_inst.install_target_dir(), user_dir.as_path());
-    }
-
-    /// User skills (user_dir) remain Trusted even when installed_dir is set.
-    #[tokio::test]
-    async fn test_user_dir_stays_trusted_with_installed_dir() {
-        let user_dir = tempfile::tempdir().unwrap();
-        let inst_dir = tempfile::tempdir().unwrap();
-
-        let skill_dir = user_dir.path().join("my-skill");
-        fs::create_dir(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: my-skill\n---\n\nUser prompt.\n",
-        )
-        .unwrap();
-
-        let mut registry = SkillRegistry::new(user_dir.path().to_path_buf())
-            .with_installed_dir(inst_dir.path().to_path_buf());
-        registry.discover_all().await;
-
-        let skill = registry.find_by_name("my-skill").unwrap();
-        assert_eq!(skill.trust, SkillTrust::Trusted);
+    fn test_install_target_dir_is_root_dir() {
+        let root_dir = PathBuf::from("/tmp/user-skills");
+        let registry = SkillRegistry::new(root_dir.clone());
+        assert_eq!(registry.install_target_dir(), root_dir.as_path());
     }
 
     #[tokio::test]
@@ -1327,51 +1225,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_global_cap_shared_across_sources() {
-        // The global cap (MAX_DISCOVERED_SKILLS=100) is shared across all
-        // sources. Workspace skills are discovered first, consuming part of
-        // the budget, leaving less for user skills.
-        let user_dir = tempfile::tempdir().unwrap();
-        let ws_dir = tempfile::tempdir().unwrap();
+    async fn test_load_snapshot_tracks_filesystem_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let skill_dir = dir.path().join("tracked-skill");
+        fs::create_dir(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: tracked-skill\n---\n\nPrompt v1.\n",
+        )
+        .unwrap();
 
-        // 10 workspace skills (discovered first, highest priority)
-        for i in 0..10 {
-            let skill_dir = ws_dir.path().join(format!("ws-skill-{:02}", i));
-            fs::create_dir(&skill_dir).unwrap();
-            fs::write(
-                skill_dir.join("SKILL.md"),
-                format!("---\nname: ws-skill-{:02}\n---\n\nPrompt.\n", i),
-            )
-            .unwrap();
-        }
+        let first = SkillRegistry::load_snapshot(dir.path(), 3).await.unwrap();
+        let first_fingerprint = first.fingerprint.clone();
 
-        // 120 user skills (more than the remaining budget of 90)
-        for i in 0..120 {
-            let skill_dir = user_dir.path().join(format!("user-skill-{:03}", i));
-            fs::create_dir(&skill_dir).unwrap();
-            fs::write(
-                skill_dir.join("SKILL.md"),
-                format!("---\nname: user-skill-{:03}\n---\n\nPrompt.\n", i),
-            )
-            .unwrap();
-        }
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: tracked-skill\n---\n\nPrompt v2.\n",
+        )
+        .unwrap();
 
-        let mut registry = SkillRegistry::new(user_dir.path().to_path_buf())
-            .with_workspace_dir(ws_dir.path().to_path_buf());
-        registry.discover_all().await;
-
-        // Total capped at 100 globally
-        assert_eq!(registry.count(), MAX_DISCOVERED_SKILLS);
-
-        // All 10 workspace skills must be present (discovered first)
-        for i in 0..10 {
-            assert!(
-                registry
-                    .find_by_name(&format!("ws-skill-{:02}", i))
-                    .is_some(),
-                "workspace skill ws-skill-{:02} should be discoverable",
-                i
-            );
-        }
+        let second = SkillRegistry::load_snapshot(dir.path(), 3).await.unwrap();
+        assert_ne!(first_fingerprint, second.fingerprint);
+        assert_eq!(second.loaded_names, vec!["tracked-skill"]);
+        assert!(
+            second.skills[0].prompt_content.contains("Prompt v2"),
+            "snapshot should reflect updated on-disk content"
+        );
     }
 }

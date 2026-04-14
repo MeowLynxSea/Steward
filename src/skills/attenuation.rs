@@ -140,7 +140,7 @@ mod tests {
             },
             prompt_content: "test".to_string(),
             trust,
-            source: SkillSource::User(PathBuf::from("/tmp")),
+            source: SkillSource::Filesystem(PathBuf::from("/tmp")),
             content_hash: "sha256:000".to_string(),
             compiled_patterns: vec![],
             lowercased_keywords: vec![],

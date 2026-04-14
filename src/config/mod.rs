@@ -118,11 +118,7 @@ impl Config {
     /// - Heartbeat, routines, builder all disabled
     /// - Safety with injection check off, 100k output limit
     #[cfg(feature = "libsql")]
-    pub fn for_testing(
-        libsql_path: std::path::PathBuf,
-        skills_dir: std::path::PathBuf,
-        installed_skills_dir: std::path::PathBuf,
-    ) -> Self {
+    pub fn for_testing(libsql_path: std::path::PathBuf, skills_dir: std::path::PathBuf) -> Self {
         Self {
             owner_id: "default".to_string(),
             database: DatabaseConfig {
@@ -164,8 +160,7 @@ impl Config {
             claude_code: ClaudeCodeConfig::default(),
             skills: SkillsConfig {
                 enabled: true,
-                local_dir: skills_dir,
-                installed_dir: installed_skills_dir,
+                root_dir: skills_dir,
                 ..SkillsConfig::default()
             },
             transcription: TranscriptionConfig::default(),

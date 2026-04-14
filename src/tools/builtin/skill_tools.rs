@@ -31,7 +31,7 @@ impl Tool for SkillListTool {
     }
 
     fn description(&self) -> &str {
-        "List all loaded skills with their trust level, source, and activation keywords."
+        "List all loaded skills from the unified filesystem-backed skills root."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -71,7 +71,7 @@ impl Tool for SkillListTool {
                     "name": s.manifest.name,
                     "description": s.manifest.description,
                     "trust": s.trust.to_string(),
-                    "source": format!("{:?}", s.source),
+                    "source": s.source.label(),
                     "keywords": s.manifest.activation.keywords,
                 });
 
@@ -165,7 +165,7 @@ impl Tool for SkillSearchTool {
             .await;
 
         // Search locally loaded skills
-        let installed_names: Vec<String> = {
+        let local_skill_names: Vec<String> = {
             let guard = self
                 .registry
                 .read()
@@ -177,11 +177,11 @@ impl Tool for SkillSearchTool {
                 .collect()
         };
 
-        // Mark catalog entries that are already installed
+        // Mark catalog entries that already exist in the local skills root.
         let catalog_json: Vec<serde_json::Value> = catalog_entries
             .iter()
             .map(|entry| {
-                let is_installed = installed_names.iter().any(|n| {
+                let present_locally = local_skill_names.iter().any(|n| {
                     // Match by slug suffix or exact name
                     entry.slug.ends_with(n.as_str()) || entry.name == *n
                 });
@@ -191,7 +191,7 @@ impl Tool for SkillSearchTool {
                     "description": entry.description,
                     "version": entry.version,
                     "score": entry.score,
-                    "installed": is_installed,
+                    "present_locally": present_locally,
                     "stars": entry.stars,
                     "downloads": entry.downloads,
                     "owner": entry.owner,
@@ -231,8 +231,8 @@ impl Tool for SkillSearchTool {
         let mut output = serde_json::json!({
             "catalog": catalog_json,
             "catalog_count": catalog_json.len(),
-            "installed": local_matches,
-            "installed_count": local_matches.len(),
+            "local_matches": local_matches,
+            "local_match_count": local_matches.len(),
             "registry_url": self.catalog.registry_url(),
         });
         if let Some(err) = catalog_error {
@@ -266,7 +266,7 @@ impl Tool for SkillInstallTool {
     }
 
     fn description(&self) -> &str {
-        "Install a skill from SKILL.md content, a URL, or by name from the ClawHub catalog."
+        "Install a trusted skill into the unified filesystem-backed skills root from SKILL.md content, a URL, or by name from the ClawHub catalog."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -285,8 +285,7 @@ impl Tool for SkillInstallTool {
                     "type": "string",
                     "description": "Raw SKILL.md content to install directly"
                 }
-            },
-            "required": ["name"]
+            }
         })
     }
 
@@ -296,7 +295,11 @@ impl Tool for SkillInstallTool {
         _ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
-        let name = require_str(&params, "name")?;
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
 
         let content = if let Some(raw) = params.get("content").and_then(|v| v.as_str()) {
             // Direct content provided
@@ -309,14 +312,19 @@ impl Tool for SkillInstallTool {
             // Fetch from explicit URL
             fetch_skill_content(url).await?
         } else {
+            let name = name.ok_or_else(|| {
+                ToolError::ExecutionFailed(
+                    "Provide one of: content, url, or name when installing a skill".to_string(),
+                )
+            })?;
             // Look up in catalog and fetch
             let download_url =
                 crate::skills::catalog::skill_download_url(self.catalog.registry_url(), name);
             fetch_skill_content(&download_url).await?
         };
 
-        // Check for duplicates and get install_dir under a brief read lock.
-        let (user_dir, skill_name_from_parse) = {
+        // Check for duplicates and get the shared skills root under a brief read lock.
+        let (root_dir, skill_name_from_parse) = {
             let guard = self
                 .registry
                 .read()
@@ -341,7 +349,7 @@ impl Tool for SkillInstallTool {
         // Perform async I/O (write to disk, validate round-trip) with no lock held.
         let (skill_name, loaded_skill) =
             crate::skills::registry::SkillRegistry::prepare_install_to_disk(
-                &user_dir,
+                &root_dir,
                 &skill_name_from_parse,
                 &crate::skills::normalize_line_endings(&content),
             )
@@ -363,9 +371,9 @@ impl Tool for SkillInstallTool {
         let output = serde_json::json!({
             "name": installed_name,
             "status": "installed",
-            "trust": "installed",
+            "trust": "trusted",
             "message": format!(
-                "Skill '{}' installed successfully. It will activate when matching keywords are detected.",
+                "Skill '{}' installed successfully into the shared skills root as a trusted skill. It will activate when matching keywords are detected.",
                 installed_name
             ),
         });
@@ -713,8 +721,7 @@ impl Tool for SkillRemoveTool {
     }
 
     fn description(&self) -> &str {
-        "Permanently remove an installed skill from disk. This action cannot be undone — \
-         the skill files will be deleted."
+        "Permanently remove a skill from the shared skills root on disk. This action cannot be undone."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -833,6 +840,75 @@ mod tests {
         assert!(schema["properties"].get("name").is_some());
         assert!(schema["properties"].get("url").is_some());
         assert!(schema["properties"].get("content").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_skill_install_accepts_content_only() {
+        let registry = test_registry();
+        let tool = SkillInstallTool::new(Arc::clone(&registry), test_catalog());
+        let ctx = JobContext::default();
+
+        let output = tool
+            .execute(
+                serde_json::json!({
+                    "content": "---\nname: content-only\n---\n\nPrompt.\n"
+                }),
+                &ctx,
+            )
+            .await
+            .expect("install skill from content");
+
+        assert_eq!(output.result["name"], "content-only");
+        assert_eq!(output.result["trust"], "trusted");
+        assert_eq!(output.result["status"], "installed");
+        assert!(registry.read().expect("registry lock").has("content-only"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_install_accepts_url_only() {
+        let tool = SkillInstallTool::new(test_registry(), test_catalog());
+        let ctx = JobContext::default();
+
+        let err = tool
+            .execute(
+                serde_json::json!({
+                    "url": "https://127.0.0.1/skill.md"
+                }),
+                &ctx,
+            )
+            .await
+            .expect_err("private URL should be rejected after url-only routing");
+
+        assert!(!err.to_string().contains("Provide one of"));
+        assert!(err.to_string().contains("private") || err.to_string().contains("loopback"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_install_accepts_name_only() {
+        let registry = test_registry();
+        let catalog = Arc::new(SkillCatalog::with_url("https://127.0.0.1:1"));
+        let tool = SkillInstallTool::new(registry, catalog);
+        let ctx = JobContext::default();
+
+        let err = tool
+            .execute(serde_json::json!({ "name": "remote-skill" }), &ctx)
+            .await
+            .expect_err("private catalog URL should be rejected after name-only routing");
+
+        assert!(!err.to_string().contains("Provide one of"));
+        assert!(err.to_string().contains("private") || err.to_string().contains("loopback"));
+    }
+
+    #[tokio::test]
+    async fn test_skill_install_requires_one_entrypoint() {
+        let tool = SkillInstallTool::new(test_registry(), test_catalog());
+        let ctx = JobContext::default();
+
+        let err = tool
+            .execute(serde_json::json!({}), &ctx)
+            .await
+            .expect_err("missing input should fail");
+        assert!(err.to_string().contains("Provide one of"));
     }
 
     #[test]

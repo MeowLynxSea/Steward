@@ -23,8 +23,8 @@ use crate::workspace::{
     WorkspaceAllowlistDiffRequest, WorkspaceAllowlistFileView, WorkspaceAllowlistHistory,
     WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistRevision,
     WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource, WorkspaceAllowlistSummary,
-    WorkspaceEntry, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, fuse_results,
-    normalize_allowlist_path,
+    WorkspaceEntry, WorkspaceMountKind, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
+    fuse_results, normalize_allowlist_path,
 };
 
 use chrono::Utc;
@@ -130,6 +130,24 @@ fn revision_source_from_str(value: &str) -> WorkspaceAllowlistRevisionSource {
     }
 }
 
+fn mount_kind_from_str(value: &str) -> WorkspaceMountKind {
+    match value {
+        "skills" => WorkspaceMountKind::Skills,
+        _ => WorkspaceMountKind::User,
+    }
+}
+
+fn mount_kind_to_str(value: WorkspaceMountKind) -> &'static str {
+    match value {
+        WorkspaceMountKind::User => "user",
+        WorkspaceMountKind::Skills => "skills",
+    }
+}
+
+fn allowlist_supports_tracking(allowlist: &WorkspaceAllowlist) -> bool {
+    allowlist.mount_kind != WorkspaceMountKind::Skills
+}
+
 fn scope_matches(path: &str, scope: Option<&str>) -> bool {
     match scope {
         None => true,
@@ -139,6 +157,63 @@ fn scope_matches(path: &str, scope: Option<&str>) -> bool {
 }
 
 impl LibSqlBackend {
+    async fn rekey_allowlist_id(
+        tx: &libsql::Transaction,
+        from_id: Uuid,
+        to_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        if from_id == to_id {
+            return Ok(());
+        }
+
+        tx.execute_batch("PRAGMA defer_foreign_keys = ON;")
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("failed to defer allowlist foreign keys: {e}"),
+            })?;
+
+        for table in [
+            "workspace_allowlist_files",
+            "workspace_allowlist_checkpoints",
+            "workspace_allowlist_revisions",
+            "workspace_allowlist_trackers",
+            "workspace_allowlist_revision_anchors",
+        ] {
+            let sql = format!("UPDATE {table} SET allowlist_id = ?2 WHERE allowlist_id = ?1");
+            tx.execute(&sql, params![from_id.to_string(), to_id.to_string()])
+                .await
+                .map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("failed to rekey {table}: {e}"),
+                })?;
+        }
+
+        tx.execute(
+            "UPDATE workspace_allowlists SET id = ?2 WHERE id = ?1",
+            params![from_id.to_string(), to_id.to_string()],
+        )
+        .await
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("failed to rekey workspace_allowlists: {e}"),
+        })?;
+
+        Ok(())
+    }
+
+    async fn fetch_allowlist_for_tracking(
+        &self,
+        user_id: &str,
+        allowlist_id: Uuid,
+        operation: &str,
+    ) -> Result<WorkspaceAllowlist, WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if !allowlist_supports_tracking(&allowlist) {
+            return Err(WorkspaceError::Unsupported {
+                operation: format!("{operation} is not available for Skills mounts"),
+            });
+        }
+        Ok(allowlist)
+    }
+
     async fn read_disk_bytes(path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
         match tokio::fs::read(path).await {
             Ok(bytes) => Ok(Some(bytes)),
@@ -467,6 +542,13 @@ impl LibSqlBackend {
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<AllowlistStateRecord, WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if !allowlist_supports_tracking(&allowlist) {
+            return Ok(AllowlistStateRecord {
+                baseline_revision_id: None,
+                head_revision_id: None,
+            });
+        }
         let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
         self.sync_allowlist_live_cache(
             allowlist_id,
@@ -572,13 +654,19 @@ impl LibSqlBackend {
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
+        let query = if allowlist_id == crate::workspace::skills_allowlist_uuid() {
+            "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
+             FROM workspace_allowlists
+             WHERE user_id = ?1 AND (id = ?2 OR mount_kind = 'skills')
+             ORDER BY CASE WHEN id = ?2 THEN 0 ELSE 1 END
+             LIMIT 1"
+        } else {
+            "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
+             FROM workspace_allowlists
+             WHERE user_id = ?1 AND id = ?2"
+        };
         let mut rows = conn
-            .query(
-                "SELECT id, user_id, display_name, source_root, bypass_read, bypass_write, created_at, updated_at
-                 FROM workspace_allowlists
-                 WHERE user_id = ?1 AND id = ?2",
-                params![user_id, allowlist_id.to_string()],
-            )
+            .query(query, params![user_id, allowlist_id.to_string()])
             .await
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: format!("allowlist query failed: {e}"),
@@ -601,11 +689,12 @@ impl LibSqlBackend {
             })?,
             user_id: get_text(&row, 1),
             display_name: get_text(&row, 2),
-            source_root: get_text(&row, 3),
-            bypass_read: get_i64(&row, 4) != 0,
-            bypass_write: get_i64(&row, 5) != 0,
-            created_at: get_ts(&row, 6),
-            updated_at: get_ts(&row, 7),
+            mount_kind: mount_kind_from_str(&get_text(&row, 3)),
+            source_root: get_text(&row, 4),
+            bypass_read: get_i64(&row, 5) != 0,
+            bypass_write: get_i64(&row, 6) != 0,
+            created_at: get_ts(&row, 7),
+            updated_at: get_ts(&row, 8),
         })
     }
 
@@ -622,7 +711,7 @@ impl LibSqlBackend {
         let mut rows = conn
             .query(
                 r#"
-                SELECT m.id, m.user_id, m.display_name, m.source_root, m.bypass_read, m.bypass_write,
+                SELECT m.id, m.user_id, m.display_name, m.mount_kind, m.source_root, m.bypass_read, m.bypass_write,
                        m.created_at, m.updated_at,
                        COALESCE(SUM(CASE WHEN f.status != 'clean' THEN 1 ELSE 0 END), 0),
                        COALESCE(SUM(CASE WHEN f.status = 'conflicted' THEN 1 ELSE 0 END), 0),
@@ -630,7 +719,7 @@ impl LibSqlBackend {
                 FROM workspace_allowlists m
                 LEFT JOIN workspace_allowlist_files f ON f.allowlist_id = m.id
                 WHERE m.user_id = ?1
-                GROUP BY m.id, m.user_id, m.display_name, m.source_root, m.bypass_read, m.bypass_write,
+                GROUP BY m.id, m.user_id, m.display_name, m.mount_kind, m.source_root, m.bypass_read, m.bypass_write,
                          m.created_at, m.updated_at
                 ORDER BY m.updated_at DESC
                 "#,
@@ -657,17 +746,31 @@ impl LibSqlBackend {
                 })?,
                 user_id: get_text(&row, 1),
                 display_name: get_text(&row, 2),
-                source_root: get_text(&row, 3),
-                bypass_read: get_i64(&row, 4) != 0,
-                bypass_write: get_i64(&row, 5) != 0,
-                created_at: get_ts(&row, 6),
-                updated_at: get_ts(&row, 7),
+                mount_kind: mount_kind_from_str(&get_text(&row, 3)),
+                source_root: get_text(&row, 4),
+                bypass_read: get_i64(&row, 5) != 0,
+                bypass_write: get_i64(&row, 6) != 0,
+                created_at: get_ts(&row, 7),
+                updated_at: get_ts(&row, 8),
             };
+            let tracking_enabled = allowlist_supports_tracking(&allowlist);
             result.push(WorkspaceAllowlistSummary {
                 allowlist,
-                dirty_count: get_i64(&row, 8) as usize,
-                conflict_count: get_i64(&row, 9) as usize,
-                pending_delete_count: get_i64(&row, 10) as usize,
+                dirty_count: if tracking_enabled {
+                    get_i64(&row, 9) as usize
+                } else {
+                    0
+                },
+                conflict_count: if tracking_enabled {
+                    get_i64(&row, 10) as usize
+                } else {
+                    0
+                },
+                pending_delete_count: if tracking_enabled {
+                    get_i64(&row, 11) as usize
+                } else {
+                    0
+                },
             });
         }
         Ok(result)
@@ -836,6 +939,7 @@ impl LibSqlBackend {
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let state = self
             .ensure_allowlist_initialized(user_id, allowlist_id)
             .await?;
@@ -847,9 +951,17 @@ impl LibSqlBackend {
             .ok_or_else(|| WorkspaceError::AllowlistNotFound {
                 allowlist_id: allowlist_id.to_string(),
             })?;
-        let checkpoints = self.collect_checkpoint_chain(allowlist_id).await?;
+        let checkpoints = if allowlist_supports_tracking(&allowlist) {
+            self.collect_checkpoint_chain(allowlist_id).await?
+        } else {
+            Vec::new()
+        };
         Ok(WorkspaceAllowlistDetail {
-            open_change_count: summary.dirty_count,
+            open_change_count: if allowlist_supports_tracking(&allowlist) {
+                summary.dirty_count
+            } else {
+                0
+            },
             summary,
             baseline_revision_id: state.baseline_revision_id,
             head_revision_id: state.head_revision_id,
@@ -1669,6 +1781,7 @@ impl WorkspaceStore for LibSqlBackend {
                         } else {
                             WorkspaceTreeEntryKind::MemoryFile
                         },
+                        mount_kind: None,
                         status: None,
                         updated_at: entry.updated_at,
                         content_preview: entry.content_preview,
@@ -1685,10 +1798,18 @@ impl WorkspaceStore for LibSqlBackend {
                         .into_iter()
                         .map(|summary| WorkspaceTreeEntry {
                             name: summary.allowlist.display_name.clone(),
-                            path: summary.allowlist.id.to_string(),
-                            uri: WorkspaceUri::allowlist_uri(summary.allowlist.id, None),
+                            path: crate::workspace::public_allowlist_id(
+                                summary.allowlist.id,
+                                summary.allowlist.mount_kind,
+                            ),
+                            uri: WorkspaceUri::allowlist_uri_with_mount_kind(
+                                summary.allowlist.id,
+                                summary.allowlist.mount_kind,
+                                None,
+                            ),
                             is_directory: true,
                             kind: WorkspaceTreeEntryKind::Allowlist,
+                            mount_kind: Some(summary.allowlist.mount_kind),
                             status: None,
                             updated_at: Some(summary.allowlist.updated_at),
                             content_preview: None,
@@ -1710,11 +1831,12 @@ impl WorkspaceStore for LibSqlBackend {
                 Ok(entries)
             }
             WorkspaceUri::AllowlistRoot(allowlist_id) => {
-                let has_allowlist_state = self
-                    .load_allowlist_state_record(allowlist_id)
-                    .await?
-                    .is_some();
                 let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+                let has_allowlist_state = allowlist_supports_tracking(&allowlist)
+                    && self
+                        .load_allowlist_state_record(allowlist_id)
+                        .await?
+                        .is_some();
                 let prefix = String::new();
                 let dir_path = Path::new(&allowlist.source_root).join(&prefix);
                 let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
@@ -1739,13 +1861,18 @@ impl WorkspaceStore for LibSqlBackend {
                             WorkspaceTreeEntry {
                                 name,
                                 path: rel.clone(),
-                                uri: WorkspaceUri::allowlist_uri(allowlist_id, Some(&rel)),
+                                uri: WorkspaceUri::allowlist_uri_with_mount_kind(
+                                    allowlist_id,
+                                    allowlist.mount_kind,
+                                    Some(&rel),
+                                ),
                                 is_directory,
                                 kind: if is_directory {
                                     WorkspaceTreeEntryKind::AllowlistedDirectory
                                 } else {
                                     WorkspaceTreeEntryKind::AllowlistedFile
                                 },
+                                mount_kind: Some(allowlist.mount_kind),
                                 status: None,
                                 updated_at: None,
                                 content_preview: None,
@@ -1776,8 +1903,9 @@ impl WorkspaceStore for LibSqlBackend {
                                 .or_insert(WorkspaceTreeEntry {
                                     name: child_name.clone(),
                                     path: child_path.clone(),
-                                    uri: WorkspaceUri::allowlist_uri(
+                                    uri: WorkspaceUri::allowlist_uri_with_mount_kind(
                                         allowlist_id,
+                                        allowlist.mount_kind,
                                         Some(&child_path),
                                     ),
                                     is_directory,
@@ -1786,6 +1914,7 @@ impl WorkspaceStore for LibSqlBackend {
                                     } else {
                                         WorkspaceTreeEntryKind::AllowlistedFile
                                     },
+                                    mount_kind: Some(allowlist.mount_kind),
                                     status: None,
                                     updated_at: Some(record.updated_at),
                                     content_preview: None,
@@ -1813,11 +1942,12 @@ impl WorkspaceStore for LibSqlBackend {
                 Ok(entries_map.into_values().collect())
             }
             WorkspaceUri::AllowlistPath(allowlist_id, prefix) => {
-                let has_allowlist_state = self
-                    .load_allowlist_state_record(allowlist_id)
-                    .await?
-                    .is_some();
                 let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+                let has_allowlist_state = allowlist_supports_tracking(&allowlist)
+                    && self
+                        .load_allowlist_state_record(allowlist_id)
+                        .await?
+                        .is_some();
                 let dir_path = Path::new(&allowlist.source_root).join(&prefix);
                 let mut entries_map: BTreeMap<String, WorkspaceTreeEntry> = BTreeMap::new();
 
@@ -1845,13 +1975,18 @@ impl WorkspaceStore for LibSqlBackend {
                             WorkspaceTreeEntry {
                                 name,
                                 path: rel.clone(),
-                                uri: WorkspaceUri::allowlist_uri(allowlist_id, Some(&rel)),
+                                uri: WorkspaceUri::allowlist_uri_with_mount_kind(
+                                    allowlist_id,
+                                    allowlist.mount_kind,
+                                    Some(&rel),
+                                ),
                                 is_directory,
                                 kind: if is_directory {
                                     WorkspaceTreeEntryKind::AllowlistedDirectory
                                 } else {
                                     WorkspaceTreeEntryKind::AllowlistedFile
                                 },
+                                mount_kind: Some(allowlist.mount_kind),
                                 status: None,
                                 updated_at: None,
                                 content_preview: None,
@@ -1893,8 +2028,9 @@ impl WorkspaceStore for LibSqlBackend {
                                 .or_insert(WorkspaceTreeEntry {
                                     name: child_name.clone(),
                                     path: child_path.clone(),
-                                    uri: WorkspaceUri::allowlist_uri(
+                                    uri: WorkspaceUri::allowlist_uri_with_mount_kind(
                                         allowlist_id,
+                                        allowlist.mount_kind,
                                         Some(&child_path),
                                     ),
                                     is_directory,
@@ -1903,6 +2039,7 @@ impl WorkspaceStore for LibSqlBackend {
                                     } else {
                                         WorkspaceTreeEntryKind::AllowlistedFile
                                     },
+                                    mount_kind: Some(allowlist.mount_kind),
                                     status: None,
                                     updated_at: Some(record.updated_at),
                                     content_preview: None,
@@ -1945,7 +2082,11 @@ impl WorkspaceStore for LibSqlBackend {
                 reason: "allowlist source must be a directory".to_string(),
             });
         }
-        let allowlist_id = Uuid::new_v4();
+        let requested_allowlist_id = if request.mount_kind == WorkspaceMountKind::Skills {
+            crate::workspace::skills_allowlist_uuid()
+        } else {
+            Uuid::new_v4()
+        };
         let now = fmt_ts(&Utc::now());
         let conn = self
             .connect()
@@ -1953,14 +2094,100 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
+        let source_root_text = source_root.display().to_string();
+
+        let mut existing_rows = conn
+            .query(
+                "SELECT id FROM workspace_allowlists WHERE user_id = ?1 AND source_root = ?2 LIMIT 1",
+                params![request.user_id.clone(), source_root_text.clone()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("allowlist lookup failed: {e}"),
+            })?;
+        if let Some(row) = existing_rows
+            .next()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("allowlist lookup failed: {e}"),
+            })?
+        {
+            let existing_id =
+                Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("invalid allowlist id: {e}"),
+                })?;
+            drop(existing_rows);
+            let allowlist_id = if request.mount_kind == WorkspaceMountKind::Skills
+                && existing_id != requested_allowlist_id
+            {
+                let tx = conn
+                    .transaction()
+                    .await
+                    .map_err(|e| WorkspaceError::SearchFailed {
+                        reason: format!("allowlist rekey transaction failed: {e}"),
+                    })?;
+                Self::rekey_allowlist_id(&tx, existing_id, requested_allowlist_id).await?;
+                tx.execute(
+                    "UPDATE workspace_allowlists
+                     SET display_name = ?2, mount_kind = ?3, bypass_write = ?4, updated_at = ?5
+                     WHERE id = ?1",
+                    params![
+                        requested_allowlist_id.to_string(),
+                        request.display_name.clone(),
+                        mount_kind_to_str(request.mount_kind),
+                        if request.bypass_write { 1 } else { 0 },
+                        now.clone(),
+                    ],
+                )
+                .await
+                .map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("allowlist update failed after rekey: {e}"),
+                })?;
+                tx.commit()
+                    .await
+                    .map_err(|e| WorkspaceError::SearchFailed {
+                        reason: format!("allowlist rekey commit failed: {e}"),
+                    })?;
+                requested_allowlist_id
+            } else {
+                conn.execute(
+                    "UPDATE workspace_allowlists
+                     SET display_name = ?3, mount_kind = ?4, bypass_write = ?5, updated_at = ?6
+                     WHERE user_id = ?1 AND source_root = ?2",
+                    params![
+                        request.user_id.clone(),
+                        source_root_text,
+                        request.display_name.clone(),
+                        mount_kind_to_str(request.mount_kind),
+                        if request.bypass_write { 1 } else { 0 },
+                        now.clone(),
+                    ],
+                )
+                .await
+                .map_err(|e| WorkspaceError::SearchFailed {
+                    reason: format!("allowlist update failed: {e}"),
+                })?;
+                existing_id
+            };
+            if request.mount_kind != WorkspaceMountKind::Skills {
+                self.ensure_allowlist_initialized(&request.user_id, allowlist_id)
+                    .await?;
+            }
+            return self
+                .get_workspace_allowlist(&request.user_id, allowlist_id)
+                .await
+                .map(|detail| detail.summary);
+        }
+
         conn.execute(
-            "INSERT INTO workspace_allowlists (id, user_id, display_name, source_root, bypass_read, bypass_write, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?6)",
+            "INSERT INTO workspace_allowlists (id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7, ?7)",
             params![
-                allowlist_id.to_string(),
+                requested_allowlist_id.to_string(),
                 request.user_id.clone(),
                 request.display_name.clone(),
-                source_root.display().to_string(),
+                mount_kind_to_str(request.mount_kind),
+                source_root_text,
                 if request.bypass_write { 1 } else { 0 },
                 now
             ],
@@ -1969,14 +2196,16 @@ impl WorkspaceStore for LibSqlBackend {
         .map_err(|e| WorkspaceError::SearchFailed {
             reason: format!("allowlist insert failed: {e}"),
         })?;
-        self.ensure_allowlist_initialized(&request.user_id, allowlist_id)
-            .await?;
+        if request.mount_kind != WorkspaceMountKind::Skills {
+            self.ensure_allowlist_initialized(&request.user_id, requested_allowlist_id)
+                .await?;
+        }
         self.list_allowlist_summaries_internal(&request.user_id)
             .await?
             .into_iter()
-            .find(|summary| summary.allowlist.id == allowlist_id)
+            .find(|summary| summary.allowlist.id == requested_allowlist_id)
             .ok_or_else(|| WorkspaceError::AllowlistNotFound {
-                allowlist_id: allowlist_id.to_string(),
+                allowlist_id: requested_allowlist_id.to_string(),
             })
     }
 
@@ -1986,6 +2215,9 @@ impl WorkspaceStore for LibSqlBackend {
     ) -> Result<Vec<WorkspaceAllowlistSummary>, WorkspaceError> {
         let summaries = self.list_allowlist_summaries_internal(user_id).await?;
         for summary in &summaries {
+            if !allowlist_supports_tracking(&summary.allowlist) {
+                continue;
+            }
             self.ensure_allowlist_initialized(user_id, summary.allowlist.id)
                 .await?;
         }
@@ -1997,16 +2229,19 @@ impl WorkspaceStore for LibSqlBackend {
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
-        self.reconcile_allowlist(
-            user_id,
-            allowlist_id,
-            WorkspaceAllowlistRevisionKind::ManualRefresh,
-            WorkspaceAllowlistRevisionSource::External,
-            Some("get_allowlist".to_string()),
-            None,
-            "system",
-        )
-        .await?;
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if allowlist_supports_tracking(&allowlist) {
+            self.reconcile_allowlist(
+                user_id,
+                allowlist_id,
+                WorkspaceAllowlistRevisionKind::ManualRefresh,
+                WorkspaceAllowlistRevisionSource::External,
+                Some("get_allowlist".to_string()),
+                None,
+                "system",
+            )
+            .await?;
+        }
         self.build_allowlist_detail_internal(user_id, allowlist_id)
             .await
     }
@@ -2026,9 +2261,12 @@ impl WorkspaceStore for LibSqlBackend {
                 path: normalized.clone(),
             }
         })?;
-        let record = self
-            .load_allowlist_file_record(allowlist_id, &normalized)
-            .await?;
+        let record = if allowlist_supports_tracking(&allowlist) {
+            self.load_allowlist_file_record(allowlist_id, &normalized)
+                .await?
+        } else {
+            None
+        };
         let status = record
             .as_ref()
             .map(|value| value.status)
@@ -2037,7 +2275,11 @@ impl WorkspaceStore for LibSqlBackend {
         Ok(WorkspaceAllowlistFileView {
             allowlist_id,
             path: normalized.clone(),
-            uri: WorkspaceUri::allowlist_uri(allowlist_id, Some(&normalized)),
+            uri: WorkspaceUri::allowlist_uri_with_mount_kind(
+                allowlist_id,
+                allowlist.mount_kind,
+                Some(&normalized),
+            ),
             disk_path: disk_path.display().to_string(),
             status,
             is_binary,
@@ -2068,19 +2310,21 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to write {}: {e}", disk_path.display()),
             })?;
-        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
-        self.sync_allowlist_from_tracker(
-            user_id,
-            allowlist_id,
-            Some(&normalized),
-            Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
-            WorkspaceAllowlistRevisionKind::ToolWrite,
-            WorkspaceAllowlistRevisionSource::WorkspaceTool,
-            Some(normalized.clone()),
-            Some(format!("updated {}", normalized)),
-            "workspace_write",
-        )
-        .await?;
+        if allowlist_supports_tracking(&allowlist) {
+            let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+            self.sync_allowlist_from_tracker(
+                user_id,
+                allowlist_id,
+                Some(&normalized),
+                Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
+                WorkspaceAllowlistRevisionKind::ToolWrite,
+                WorkspaceAllowlistRevisionSource::WorkspaceTool,
+                Some(normalized.clone()),
+                Some(format!("updated {}", normalized)),
+                "workspace_write",
+            )
+            .await?;
+        }
         self.read_workspace_allowlist_file(user_id, allowlist_id, &normalized)
             .await
     }
@@ -2113,26 +2357,35 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to delete {}: {e}", disk_path.display()),
             })?;
-        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
-        self.sync_allowlist_from_tracker(
-            user_id,
-            allowlist_id,
-            Some(&normalized),
-            Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
-            WorkspaceAllowlistRevisionKind::ToolDelete,
-            WorkspaceAllowlistRevisionSource::WorkspaceTool,
-            Some(normalized.clone()),
-            Some(format!("deleted {}", normalized)),
-            "workspace_delete",
-        )
-        .await?;
-        let record = self
-            .load_allowlist_file_record(allowlist_id, &normalized)
+        if allowlist_supports_tracking(&allowlist) {
+            let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+            self.sync_allowlist_from_tracker(
+                user_id,
+                allowlist_id,
+                Some(&normalized),
+                Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
+                WorkspaceAllowlistRevisionKind::ToolDelete,
+                WorkspaceAllowlistRevisionSource::WorkspaceTool,
+                Some(normalized.clone()),
+                Some(format!("deleted {}", normalized)),
+                "workspace_delete",
+            )
             .await?;
+        }
+        let record = if allowlist_supports_tracking(&allowlist) {
+            self.load_allowlist_file_record(allowlist_id, &normalized)
+                .await?
+        } else {
+            None
+        };
         Ok(WorkspaceAllowlistFileView {
             allowlist_id,
             path: normalized.clone(),
-            uri: WorkspaceUri::allowlist_uri(allowlist_id, Some(&normalized)),
+            uri: WorkspaceUri::allowlist_uri_with_mount_kind(
+                allowlist_id,
+                allowlist.mount_kind,
+                Some(&normalized),
+            ),
             disk_path: disk_path.display().to_string(),
             status: record
                 .as_ref()
@@ -2153,6 +2406,8 @@ impl WorkspaceStore for LibSqlBackend {
         allowlist_id: Uuid,
         scope_path: Option<&str>,
     ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(user_id, allowlist_id, "workspace diff")
+            .await?;
         self.diff_workspace_allowlist_between(&WorkspaceAllowlistDiffRequest {
             user_id: user_id.to_string(),
             allowlist_id,
@@ -2169,6 +2424,12 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &CreateCheckpointRequest,
     ) -> Result<WorkspaceAllowlistCheckpoint, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(
+            &request.user_id,
+            request.allowlist_id,
+            "workspace checkpoints",
+        )
+        .await?;
         let state = self
             .reconcile_allowlist(
                 &request.user_id,
@@ -2206,6 +2467,8 @@ impl WorkspaceStore for LibSqlBackend {
         allowlist_id: Uuid,
         limit: Option<usize>,
     ) -> Result<Vec<WorkspaceAllowlistCheckpoint>, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(user_id, allowlist_id, "workspace checkpoints")
+            .await?;
         self.ensure_allowlist_initialized(user_id, allowlist_id)
             .await?;
         let mut checkpoints = self.collect_checkpoint_chain(allowlist_id).await?;
@@ -2219,6 +2482,12 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistHistoryRequest,
     ) -> Result<WorkspaceAllowlistHistory, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(
+            &request.user_id,
+            request.allowlist_id,
+            "workspace history",
+        )
+        .await?;
         let scope = request
             .scope_path
             .as_deref()
@@ -2289,6 +2558,8 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistDiffRequest,
     ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(&request.user_id, request.allowlist_id, "workspace diff")
+            .await?;
         self.reconcile_allowlist(
             &request.user_id,
             request.allowlist_id,
@@ -2306,6 +2577,8 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &AllowlistActionRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(&request.user_id, request.allowlist_id, "workspace diff")
+            .await?;
         self.reconcile_allowlist(
             &request.user_id,
             request.allowlist_id,
@@ -2344,6 +2617,8 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &AllowlistActionRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(&request.user_id, request.allowlist_id, "workspace diff")
+            .await?;
         let target = request
             .checkpoint_id
             .map(|value| value.to_string())
@@ -2365,6 +2640,8 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &ConflictResolutionRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(&request.user_id, request.allowlist_id, "workspace diff")
+            .await?;
         let normalized = normalize_allowlist_path(&request.path)?;
         let allowlist = self
             .fetch_allowlist(&request.user_id, request.allowlist_id)
@@ -2525,23 +2802,25 @@ impl WorkspaceStore for LibSqlBackend {
                     destination_disk_path.display()
                 ),
             })?;
-        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
-        let repo_paths = vec![
-            tracker.repo_path_for_allowlist_path(&source_path),
-            tracker.repo_path_for_allowlist_path(&destination_path),
-        ];
-        self.sync_allowlist_from_tracker(
-            user_id,
-            allowlist_id,
-            None,
-            Some(repo_paths),
-            WorkspaceAllowlistRevisionKind::ToolMove,
-            WorkspaceAllowlistRevisionSource::WorkspaceTool,
-            Some(format!("{source_path} -> {destination_path}")),
-            Some(format!("moved {} to {}", source_path, destination_path)),
-            "workspace_move",
-        )
-        .await?;
+        if allowlist_supports_tracking(&allowlist) {
+            let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+            let repo_paths = vec![
+                tracker.repo_path_for_allowlist_path(&source_path),
+                tracker.repo_path_for_allowlist_path(&destination_path),
+            ];
+            self.sync_allowlist_from_tracker(
+                user_id,
+                allowlist_id,
+                None,
+                Some(repo_paths),
+                WorkspaceAllowlistRevisionKind::ToolMove,
+                WorkspaceAllowlistRevisionSource::WorkspaceTool,
+                Some(format!("{source_path} -> {destination_path}")),
+                Some(format!("moved {} to {}", source_path, destination_path)),
+                "workspace_move",
+            )
+            .await?;
+        }
         self.read_workspace_allowlist_file(user_id, allowlist_id, &destination_path)
             .await
     }
@@ -2584,18 +2863,20 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to delete directory {}: {e}", disk_path.display()),
             })?;
-        self.sync_allowlist_from_tracker(
-            user_id,
-            allowlist_id,
-            Some(&normalized),
-            None,
-            WorkspaceAllowlistRevisionKind::ToolDelete,
-            WorkspaceAllowlistRevisionSource::WorkspaceTool,
-            Some(path.to_string()),
-            Some(format!("deleted directory tree {}", path)),
-            "workspace_delete_tree",
-        )
-        .await?;
+        if allowlist_supports_tracking(&allowlist) {
+            self.sync_allowlist_from_tracker(
+                user_id,
+                allowlist_id,
+                Some(&normalized),
+                None,
+                WorkspaceAllowlistRevisionKind::ToolDelete,
+                WorkspaceAllowlistRevisionSource::WorkspaceTool,
+                Some(path.to_string()),
+                Some(format!("deleted directory tree {}", path)),
+                "workspace_delete_tree",
+            )
+            .await?;
+        }
         self.build_allowlist_detail_internal(user_id, allowlist_id)
             .await
     }
@@ -2604,6 +2885,12 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistRestoreRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(
+            &request.user_id,
+            request.allowlist_id,
+            "workspace history",
+        )
+        .await?;
         let state = self
             .reconcile_allowlist(
                 &request.user_id,
@@ -2704,6 +2991,12 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistBaselineRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        self.fetch_allowlist_for_tracking(
+            &request.user_id,
+            request.allowlist_id,
+            "workspace history",
+        )
+        .await?;
         let state = self
             .reconcile_allowlist(
                 &request.user_id,
@@ -2758,6 +3051,12 @@ impl WorkspaceStore for LibSqlBackend {
         allowlist_id: Uuid,
         scope_path: Option<&str>,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if !allowlist_supports_tracking(&allowlist) {
+            return self
+                .build_allowlist_detail_internal(user_id, allowlist_id)
+                .await;
+        }
         self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
@@ -2779,6 +3078,10 @@ impl WorkspaceStore for LibSqlBackend {
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<(), WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if !allowlist_supports_tracking(&allowlist) {
+            return Ok(());
+        }
         self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
@@ -2983,6 +3286,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3116,6 +3420,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "root-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3129,8 +3434,18 @@ mod tests {
         assert!(
             entries.iter().any(|entry| {
                 entry.kind == WorkspaceTreeEntryKind::Allowlist
-                    && entry.path == allowlist.allowlist.id.to_string()
-                    && entry.uri == WorkspaceUri::allowlist_uri(allowlist.allowlist.id, None)
+                    && entry.path
+                        == crate::workspace::public_allowlist_id(
+                            allowlist.allowlist.id,
+                            allowlist.allowlist.mount_kind,
+                        )
+                    && entry.uri
+                        == WorkspaceUri::allowlist_uri_with_mount_kind(
+                            allowlist.allowlist.id,
+                            allowlist.allowlist.mount_kind,
+                            None,
+                        )
+                    && entry.mount_kind == Some(WorkspaceMountKind::User)
             }),
             "workspace root should include allowlisted folders"
         );
@@ -3155,6 +3470,248 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_workspace_root_uses_fixed_public_skills_id() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("skills-fixed-id-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create skills root");
+
+        let allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create skills allowlist");
+
+        let entries = backend
+            .list_workspace_tree("default", None, "workspace://")
+            .await
+            .expect("list workspace root");
+        assert!(entries.iter().any(|entry| {
+            entry.kind == WorkspaceTreeEntryKind::Allowlist
+                && entry.path == "skills"
+                && entry.uri == "workspace://skills"
+                && entry.mount_kind == Some(WorkspaceMountKind::Skills)
+                && entry.name == allowlist.allowlist.display_name
+        }));
+    }
+
+    #[tokio::test]
+    async fn test_workspace_allowlist_dedupes_source_root_and_updates_mount_kind() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("skills-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
+
+        let first = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create skills allowlist");
+
+        let second = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Renamed Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: true,
+            })
+            .await
+            .expect("recreate skills allowlist");
+
+        assert_eq!(
+            first.allowlist.id, second.allowlist.id,
+            "same source_root should reuse the existing allowlist"
+        );
+        assert_eq!(second.allowlist.mount_kind, WorkspaceMountKind::Skills);
+        assert!(second.allowlist.bypass_write);
+        assert_eq!(second.allowlist.display_name, "Renamed Skills");
+
+        let summaries = backend
+            .list_workspace_allowlists("default")
+            .await
+            .expect("list allowlists");
+        let skills_entries: Vec<_> = summaries
+            .into_iter()
+            .filter(|summary| {
+                summary.allowlist.id == second.allowlist.id
+                    && summary.allowlist.mount_kind == WorkspaceMountKind::Skills
+            })
+            .collect();
+        assert_eq!(skills_entries.len(), 1, "skills root should be idempotent");
+    }
+
+    #[tokio::test]
+    async fn test_skills_allowlist_rekeys_existing_random_uuid_to_fixed_public_id() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("skills-rekey-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
+        std::fs::write(allowlist_root.join("SKILL.md"), "name: rekey-test\n")
+            .expect("seed skill manifest");
+
+        let legacy_allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Legacy".to_string(),
+                mount_kind: WorkspaceMountKind::User,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create legacy allowlist");
+
+        backend
+            .get_workspace_allowlist("default", legacy_allowlist.allowlist.id)
+            .await
+            .expect("initialize legacy tracking state");
+
+        let rekeyed = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("rekey to fixed skills allowlist id");
+
+        assert_eq!(
+            rekeyed.allowlist.id,
+            crate::workspace::skills_allowlist_uuid()
+        );
+        assert_eq!(rekeyed.allowlist.mount_kind, WorkspaceMountKind::Skills);
+
+        let conn = backend.connect().await.expect("connect");
+        for table in [
+            "workspace_allowlist_trackers",
+            "workspace_allowlist_revisions",
+            "workspace_allowlist_revision_anchors",
+        ] {
+            let mut rows = conn
+                .query(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE allowlist_id = ?1"),
+                    params![crate::workspace::skills_allowlist_uuid().to_string()],
+                )
+                .await
+                .expect("query rekeyed rows");
+            let row = rows
+                .next()
+                .await
+                .expect("fetch count row")
+                .expect("count row exists");
+            let count = get_i64(&row, 0);
+            assert!(
+                count > 0,
+                "expected {table} rows to follow the fixed skills allowlist id"
+            );
+        }
+
+        let mut old_id_rows = conn
+            .query(
+                "SELECT COUNT(*) FROM workspace_allowlists WHERE id = ?1",
+                params![legacy_allowlist.allowlist.id.to_string()],
+            )
+            .await
+            .expect("query old allowlist id");
+        let row = old_id_rows
+            .next()
+            .await
+            .expect("fetch old id count row")
+            .expect("old id count row exists");
+        assert_eq!(get_i64(&row, 0), 0);
+    }
+
+    #[tokio::test]
+    async fn test_skills_allowlist_detail_omits_tracking_state_after_write() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("skills-browse-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create skills root");
+
+        let allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create skills allowlist");
+
+        backend
+            .write_workspace_allowlist_file(
+                "default",
+                allowlist.allowlist.id,
+                "sample-skill/SKILL.md",
+                b"---\nname: sample-skill\n---\n\nPrompt.\n",
+            )
+            .await
+            .expect("write skill file");
+
+        let detail = backend
+            .get_workspace_allowlist("default", allowlist.allowlist.id)
+            .await
+            .expect("get skills allowlist detail");
+        assert_eq!(
+            detail.summary.allowlist.mount_kind,
+            WorkspaceMountKind::Skills
+        );
+        assert_eq!(detail.open_change_count, 0);
+        assert_eq!(detail.summary.dirty_count, 0);
+        assert_eq!(detail.summary.conflict_count, 0);
+        assert_eq!(detail.summary.pending_delete_count, 0);
+        assert!(detail.baseline_revision_id.is_none());
+        assert!(detail.head_revision_id.is_none());
+        assert!(detail.checkpoints.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_skills_allowlist_rejects_diff_and_history() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("skills-no-history-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create skills root");
+
+        let allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Skills".to_string(),
+                mount_kind: WorkspaceMountKind::Skills,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create skills allowlist");
+
+        let diff_err = backend
+            .diff_workspace_allowlist("default", allowlist.allowlist.id, None)
+            .await
+            .expect_err("skills allowlist should not expose diff");
+        assert!(diff_err.to_string().contains("Skills mounts"));
+
+        let history_err = backend
+            .list_workspace_allowlist_history(&WorkspaceAllowlistHistoryRequest {
+                user_id: "default".to_string(),
+                allowlist_id: allowlist.allowlist.id,
+                scope_path: None,
+                limit: 20,
+                since: None,
+                include_checkpoints: true,
+            })
+            .await
+            .expect_err("skills allowlist should not expose history");
+        assert!(history_err.to_string().contains("Skills mounts"));
+    }
+
+    #[tokio::test]
     async fn test_workspace_allowlist_rejects_parent_escape() {
         let (backend, dir) = setup_backend().await;
         let allowlist_root = dir.path().join("escape-project");
@@ -3165,6 +3722,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "escape-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3214,6 +3772,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "delete-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3336,6 +3895,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "checkpoint-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3412,6 +3972,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "new-file-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })
@@ -3473,6 +4034,7 @@ mod tests {
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "tree-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
                 source_root: allowlist_root.display().to_string(),
                 bypass_write: false,
             })

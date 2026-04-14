@@ -7,11 +7,25 @@ use uuid::Uuid;
 
 use crate::error::WorkspaceError;
 
+pub const SKILLS_ALLOWLIST_PUBLIC_ID: &str = "skills";
+
+const SKILLS_ALLOWLIST_UUID: Uuid = uuid::uuid!("8c0b8b9e-5b1d-4ef6-8a11-00000000a111");
+
+pub fn skills_allowlist_uuid() -> Uuid {
+    SKILLS_ALLOWLIST_UUID
+}
+
 pub fn encode_allowlist_id(id: Uuid) -> String {
+    if id == SKILLS_ALLOWLIST_UUID {
+        return SKILLS_ALLOWLIST_PUBLIC_ID.to_string();
+    }
     URL_SAFE_NO_PAD.encode(id.as_bytes())
 }
 
 pub fn parse_allowlist_id(input: &str) -> Result<Uuid, WorkspaceError> {
+    if input == SKILLS_ALLOWLIST_PUBLIC_ID {
+        return Ok(SKILLS_ALLOWLIST_UUID);
+    }
     if let Ok(uuid) = Uuid::parse_str(input) {
         return Ok(uuid);
     }
@@ -28,6 +42,14 @@ pub fn parse_allowlist_id(input: &str) -> Result<Uuid, WorkspaceError> {
             doc_type: input.to_string(),
         })?;
     Ok(Uuid::from_bytes(bytes))
+}
+
+pub fn public_allowlist_id(id: Uuid, mount_kind: WorkspaceMountKind) -> String {
+    if mount_kind == WorkspaceMountKind::Skills {
+        SKILLS_ALLOWLIST_PUBLIC_ID.to_string()
+    } else {
+        encode_allowlist_id(id)
+    }
 }
 
 mod allowlist_id_serde {
@@ -59,6 +81,13 @@ pub enum WorkspaceTreeEntryKind {
     Allowlist,
     AllowlistedDirectory,
     AllowlistedFile,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceMountKind {
+    User,
+    Skills,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,6 +141,7 @@ pub struct WorkspaceTreeEntry {
     pub uri: String,
     pub is_directory: bool,
     pub kind: WorkspaceTreeEntryKind,
+    pub mount_kind: Option<WorkspaceMountKind>,
     pub status: Option<AllowlistedFileStatus>,
     pub updated_at: Option<DateTime<Utc>>,
     pub content_preview: Option<String>,
@@ -127,6 +157,7 @@ pub struct WorkspaceAllowlist {
     pub id: Uuid,
     pub user_id: String,
     pub display_name: String,
+    pub mount_kind: WorkspaceMountKind,
     #[serde(skip_serializing)]
     pub source_root: String,
     pub bypass_read: bool,
@@ -243,6 +274,7 @@ pub struct ResolvedWorkspaceAllowlistPath {
 pub struct CreateAllowlistRequest {
     pub user_id: String,
     pub display_name: String,
+    pub mount_kind: WorkspaceMountKind,
     pub source_root: String,
     pub bypass_write: bool,
 }
@@ -372,6 +404,18 @@ impl WorkspaceUri {
             _ => format!("workspace://{public_id}"),
         }
     }
+
+    pub fn allowlist_uri_with_mount_kind(
+        allowlist_id: Uuid,
+        mount_kind: WorkspaceMountKind,
+        path: Option<&str>,
+    ) -> String {
+        let public_id = public_allowlist_id(allowlist_id, mount_kind);
+        match path {
+            Some(path) if !path.is_empty() => format!("workspace://{public_id}/{path}"),
+            _ => format!("workspace://{public_id}"),
+        }
+    }
 }
 
 pub fn normalize_allowlist_path(path: &str) -> Result<String, WorkspaceError> {
@@ -452,6 +496,27 @@ mod tests {
         let id = Uuid::new_v4();
         let short_id = encode_allowlist_id(id);
         assert_eq!(parse_allowlist_id(&short_id).unwrap(), id);
+    }
+
+    #[test]
+    fn skills_public_id_roundtrips() {
+        assert_eq!(encode_allowlist_id(skills_allowlist_uuid()), "skills");
+        assert_eq!(
+            parse_allowlist_id("skills").unwrap(),
+            skills_allowlist_uuid()
+        );
+        assert_eq!(
+            public_allowlist_id(skills_allowlist_uuid(), WorkspaceMountKind::Skills),
+            "skills"
+        );
+        assert_eq!(
+            WorkspaceUri::allowlist_uri_with_mount_kind(
+                skills_allowlist_uuid(),
+                WorkspaceMountKind::Skills,
+                Some("sample/SKILL.md"),
+            ),
+            "workspace://skills/sample/SKILL.md"
+        );
     }
 
     #[test]

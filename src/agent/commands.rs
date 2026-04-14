@@ -611,7 +611,7 @@ impl Agent {
                 "  /resume <id>      Resume from checkpoint\n",
                 "\n",
                 "Skills:\n",
-                "  /skills             List installed skills\n",
+                "  /skills             List local skills from ~/.steward/skills\n",
                 "  /skills search <q>  Search ClawHub registry\n",
                 "\n",
                 "Agent:\n",
@@ -749,7 +749,7 @@ impl Agent {
         }
     }
 
-    /// List installed skills.
+    /// List skills from the unified skills root.
     async fn handle_skills_list(&self) -> Result<SubmissionResult, Error> {
         let Some(registry) = self.skill_registry() else {
             return Ok(SubmissionResult::error("Skills system not enabled."));
@@ -768,11 +768,11 @@ impl Agent {
         let skills = guard.skills();
         if skills.is_empty() {
             return Ok(SubmissionResult::response(
-                "No skills installed.\n\nUse /skills search <query> to find skills on ClawHub.",
+                "No skills found in the shared skills root.\n\nUse /skills search <query> to find skills on ClawHub.",
             ));
         }
 
-        let mut out = String::from("Installed skills:\n\n");
+        let mut out = String::from("Skills in ~/.steward/skills:\n\n");
         for s in skills {
             let desc = if s.manifest.description.chars().count() > 60 {
                 let truncated: String = s.manifest.description.chars().take(57).collect();
@@ -844,7 +844,7 @@ impl Agent {
             }
         }
 
-        // Show matching installed skills
+        // Show matching local skills
         if let Some(registry) = self.skill_registry()
             && let Ok(guard) = registry.read()
         {
@@ -859,7 +859,7 @@ impl Agent {
                 .collect();
 
             if !matches.is_empty() {
-                out.push_str(&format!("Installed skills matching \"{}\":\n", query));
+                out.push_str(&format!("Local skills matching \"{}\":\n", query));
                 for s in &matches {
                     out.push_str(&format!(
                         "  {:<24} v{:<10} [{}]\n",

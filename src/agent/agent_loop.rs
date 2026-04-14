@@ -1043,6 +1043,60 @@ impl Agent {
         self.deps.skill_catalog.as_ref()
     }
 
+    pub(super) async fn maybe_refresh_skills(&self) {
+        let Some(registry) = self.skill_registry() else {
+            return;
+        };
+
+        let (root_dir, max_scan_depth, previous_fingerprint) = match registry.read() {
+            Ok(guard) => (
+                guard.root_dir().to_path_buf(),
+                guard.max_scan_depth(),
+                guard.scan_fingerprint().map(str::to_string),
+            ),
+            Err(error) => {
+                tracing::error!("Skill registry lock poisoned: {}", error);
+                return;
+            }
+        };
+
+        let snapshot =
+            match crate::skills::registry::SkillRegistry::load_snapshot(&root_dir, max_scan_depth)
+                .await
+            {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to refresh skills from {}: {}",
+                        root_dir.display(),
+                        error
+                    );
+                    return;
+                }
+            };
+
+        if previous_fingerprint.as_deref() == Some(snapshot.fingerprint.as_str()) {
+            return;
+        }
+
+        let loaded_names = snapshot.loaded_names.clone();
+        match registry.write() {
+            Ok(mut guard) => {
+                if guard.scan_fingerprint() == previous_fingerprint.as_deref() {
+                    guard.apply_snapshot(snapshot);
+                    tracing::debug!(
+                        "Reloaded {} skill(s) after filesystem change: {}",
+                        loaded_names.len(),
+                        loaded_names.join(", ")
+                    );
+                }
+            }
+            Err(error) => {
+                tracing::error!("Skill registry lock poisoned: {}", error);
+            }
+        }
+    }
+
     /// Select active skills for a message using deterministic prefiltering.
     pub(super) fn select_active_skills(
         &self,

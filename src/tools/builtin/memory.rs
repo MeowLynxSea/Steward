@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
-use crate::workspace::{Workspace, WorkspaceUri, encode_allowlist_id, paths};
+use crate::workspace::{Workspace, WorkspaceUri, paths, public_allowlist_id};
 
 // ── WorkspaceResolver ──────────────────────────────────────────────
 
@@ -687,11 +687,15 @@ impl WorkspaceTreeTool {
         Ok(allowlists
             .into_iter()
             .map(|summary| {
-                let id = encode_allowlist_id(summary.allowlist.id);
+                let id = public_allowlist_id(summary.allowlist.id, summary.allowlist.mount_kind);
                 serde_json::json!({
                     "id": id,
                     "alias": summary.allowlist.display_name,
-                    "uri": WorkspaceUri::allowlist_uri(summary.allowlist.id, None)
+                    "uri": WorkspaceUri::allowlist_uri_with_mount_kind(
+                        summary.allowlist.id,
+                        summary.allowlist.mount_kind,
+                        None
+                    )
                 })
             })
             .collect())
@@ -708,8 +712,9 @@ impl Tool for WorkspaceTreeTool {
         "View allowlisted workspace trees under `workspace://`. \
          Use workspace_read to read files shown here, NOT read_file. \
          The workspace tree is separate from the local filesystem and represents \
-         allowlisted working directories. Paths always use short allowlist ids; \
-         alias labels are informational only and cannot be used as selectors."
+         allowlisted working directories. Paths use public mount ids; the Skills \
+         mount is always `skills`, while other mounts use short ids. Alias labels \
+         are informational only and cannot be used as selectors."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {

@@ -204,8 +204,9 @@ Pending -> InProgress -> Completed -> Submitted -> Accepted
 
 SKILL.md files extend the agent's prompt with domain-specific instructions. See `.claude/rules/skills.md` for full details.
 
-- **Trust model**: Trusted (user-placed in `~/.steward/skills/` or workspace `skills/`, full tool access) vs Installed (registry, read-only tools)
-- **Selection pipeline**: gating (check bin/env/config requirements) -> scoring (keywords/patterns/tags) -> budget (fit within `SKILLS_MAX_TOKENS`) -> attenuation (trust-based tool ceiling)
+- **Storage model**: skills live in the single shared root `~/.steward/skills/`, which is also mounted into Workspace as the `Skills` system mount
+- **Desktop trust model**: currently all discovered filesystem-backed skills are treated as trusted in the desktop runtime
+- **Selection pipeline**: gating (check bin/env/config requirements) -> scoring (keywords/patterns/tags) -> budget (fit within `SKILLS_MAX_TOKENS`) -> attenuation (kept structurally, but desktop discovery currently yields trusted skills)
 - **Skill tools**: `skill_list`, `skill_search`, `skill_install`, `skill_remove`
 
 ## Configuration

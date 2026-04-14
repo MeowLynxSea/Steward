@@ -7,12 +7,9 @@
 //!
 //! # Trust Model
 //!
-//! Skills have two trust states that determine their authority:
-//! - **Trusted**: User-placed skills (local/workspace) with full tool access
-//! - **Installed**: Registry/external skills, restricted to read-only tools
-//!
-//! The effective tool ceiling is determined by the *lowest-trust* active skill,
-//! preventing privilege escalation through skill mixing.
+//! Steward's desktop runtime currently treats filesystem-backed skills as
+//! trusted prompt extensions. The attenuation layer still exists, but no
+//! built-in discovery path produces lower-trust skills today.
 
 pub mod attenuation;
 pub mod catalog;
@@ -64,9 +61,9 @@ pub fn validate_skill_name(name: &str) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillTrust {
-    /// Registry/external skill. Read-only tools only.
+    /// Legacy lower-trust ceiling retained for compatibility/testing.
     Installed = 0,
-    /// User-placed skill (local or workspace). Full trust, all tools available.
+    /// Full-trust skill. Current desktop filesystem discovery produces this.
     Trusted = 1,
 }
 
@@ -83,12 +80,25 @@ impl std::fmt::Display for SkillTrust {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SkillSource {
-    /// Workspace skills directory (<workspace>/skills/).
-    Workspace(PathBuf),
-    /// User skills directory (~/.steward/skills/).
-    User(PathBuf),
+    /// Filesystem-backed skill under the configured root directory.
+    Filesystem(PathBuf),
     /// Bundled with the application.
     Bundled(PathBuf),
+}
+
+impl SkillSource {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Filesystem(_) => "filesystem",
+            Self::Bundled(_) => "bundled",
+        }
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        match self {
+            Self::Filesystem(path) | Self::Bundled(path) => path,
+        }
+    }
 }
 
 /// Activation criteria parsed from SKILL.md frontmatter `activation` section.
@@ -519,7 +529,7 @@ metadata:
             },
             prompt_content: "test prompt".to_string(),
             trust: SkillTrust::Trusted,
-            source: SkillSource::User(PathBuf::from("/tmp/test")),
+            source: SkillSource::Filesystem(PathBuf::from("/tmp/test")),
             content_hash: "sha256:000".to_string(),
             compiled_patterns: vec![],
             lowercased_keywords: vec![],
