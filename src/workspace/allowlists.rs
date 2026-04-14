@@ -1,10 +1,53 @@
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::path::{Component, Path};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::WorkspaceError;
+
+pub fn encode_allowlist_id(id: Uuid) -> String {
+    URL_SAFE_NO_PAD.encode(id.as_bytes())
+}
+
+pub fn parse_allowlist_id(input: &str) -> Result<Uuid, WorkspaceError> {
+    if let Ok(uuid) = Uuid::parse_str(input) {
+        return Ok(uuid);
+    }
+
+    let decoded =
+        URL_SAFE_NO_PAD
+            .decode(input.as_bytes())
+            .map_err(|_| WorkspaceError::InvalidDocType {
+                doc_type: input.to_string(),
+            })?;
+    let bytes: [u8; 16] = decoded
+        .try_into()
+        .map_err(|_| WorkspaceError::InvalidDocType {
+            doc_type: input.to_string(),
+        })?;
+    Ok(Uuid::from_bytes(bytes))
+}
+
+mod allowlist_id_serde {
+    use super::*;
+
+    pub fn serialize<S>(id: &Uuid, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&encode_allowlist_id(*id))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        parse_allowlist_id(&raw).map_err(D::Error::custom)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -80,6 +123,7 @@ pub struct WorkspaceTreeEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlist {
+    #[serde(with = "allowlist_id_serde")]
     pub id: Uuid,
     pub user_id: String,
     pub display_name: String,
@@ -102,6 +146,7 @@ pub struct WorkspaceAllowlistSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlistCheckpoint {
     pub id: Uuid,
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub revision_id: Uuid,
     pub parent_checkpoint_id: Option<Uuid>,
@@ -126,6 +171,7 @@ pub struct WorkspaceAllowlistDetail {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlistRevision {
     pub id: Uuid,
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub parent_revision_id: Option<Uuid>,
     pub kind: WorkspaceAllowlistRevisionKind,
@@ -139,6 +185,7 @@ pub struct WorkspaceAllowlistRevision {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlistHistory {
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub baseline_revision_id: Option<Uuid>,
     pub head_revision_id: Option<Uuid>,
@@ -162,6 +209,7 @@ pub struct AllowlistedFileDiff {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlistDiff {
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub from_revision_id: Option<Uuid>,
     pub to_revision_id: Option<Uuid>,
@@ -170,6 +218,7 @@ pub struct WorkspaceAllowlistDiff {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceAllowlistFileView {
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub path: String,
     pub uri: String,
@@ -182,6 +231,7 @@ pub struct WorkspaceAllowlistFileView {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedWorkspaceAllowlistPath {
+    #[serde(with = "allowlist_id_serde")]
     pub allowlist_id: Uuid,
     pub relative_path: Option<String>,
     pub workspace_uri: String,
@@ -299,10 +349,7 @@ impl WorkspaceUri {
             Some((id, tail)) => (id, Some(tail)),
             None => (rest, None),
         };
-        let allowlist_id =
-            Uuid::parse_str(allowlist_id).map_err(|_| WorkspaceError::InvalidDocType {
-                doc_type: input.to_string(),
-            })?;
+        let allowlist_id = parse_allowlist_id(allowlist_id)?;
         let normalized = match path {
             Some(path) if !path.is_empty() => normalize_allowlist_path(path)?,
             _ => String::new(),
@@ -319,9 +366,10 @@ impl WorkspaceUri {
     }
 
     pub fn allowlist_uri(allowlist_id: Uuid, path: Option<&str>) -> String {
+        let public_id = encode_allowlist_id(allowlist_id);
         match path {
-            Some(path) if !path.is_empty() => format!("workspace://{allowlist_id}/{path}"),
-            _ => format!("workspace://{allowlist_id}"),
+            Some(path) if !path.is_empty() => format!("workspace://{public_id}/{path}"),
+            _ => format!("workspace://{public_id}"),
         }
     }
 }
@@ -375,12 +423,17 @@ mod tests {
     #[test]
     fn parse_direct_and_allowlists_paths() {
         let id = Uuid::new_v4();
+        let short_id = encode_allowlist_id(id);
         assert_eq!(
-            WorkspaceUri::parse(&format!("workspace://{id}/src/lib.rs")).unwrap(),
+            WorkspaceUri::parse(&format!("workspace://{short_id}/src/lib.rs")).unwrap(),
             Some(WorkspaceUri::AllowlistPath(id, "src/lib.rs".to_string()))
         );
         assert_eq!(
-            WorkspaceUri::parse(&format!("workspace://allowlists/{id}/src/lib.rs")).unwrap(),
+            WorkspaceUri::parse(&format!("workspace://allowlists/{short_id}/src/lib.rs")).unwrap(),
+            Some(WorkspaceUri::AllowlistPath(id, "src/lib.rs".to_string()))
+        );
+        assert_eq!(
+            WorkspaceUri::parse(&format!("workspace://{id}/src/lib.rs")).unwrap(),
             Some(WorkspaceUri::AllowlistPath(id, "src/lib.rs".to_string()))
         );
     }
@@ -388,8 +441,17 @@ mod tests {
     #[test]
     fn rejects_allowlist_path_escape() {
         let id = Uuid::new_v4();
-        let err = WorkspaceUri::parse(&format!("workspace://{id}/../secret.txt")).unwrap_err();
+        let short_id = encode_allowlist_id(id);
+        let err =
+            WorkspaceUri::parse(&format!("workspace://{short_id}/../secret.txt")).unwrap_err();
         assert!(err.to_string().contains("escapes root"));
+    }
+
+    #[test]
+    fn roundtrips_short_allowlist_ids() {
+        let id = Uuid::new_v4();
+        let short_id = encode_allowlist_id(id);
+        assert_eq!(parse_allowlist_id(&short_id).unwrap(), id);
     }
 
     #[test]

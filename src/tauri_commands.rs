@@ -24,10 +24,15 @@ use steward_core::ipc::{
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
 use steward_core::task_runtime::TaskStatus;
+use steward_core::workspace::parse_allowlist_id;
 
 enum DesktopDispatchPlan {
     InjectOnly,
     QueueOnly,
+}
+
+fn parse_workspace_allowlist_id(id: &str) -> Result<Uuid, String> {
+    parse_allowlist_id(id).map_err(|e| e.to_string())
 }
 
 fn plan_desktop_message_dispatch(
@@ -2437,7 +2442,7 @@ pub async fn create_workspace_allowlist(
 #[tauri::command]
 pub async fn get_workspace_allowlist(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
         .workspace
@@ -2445,7 +2450,7 @@ pub async fn get_workspace_allowlist(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .get_allowlist(id)
+        .get_allowlist(parse_workspace_allowlist_id(&id)?)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2454,7 +2459,7 @@ pub async fn get_workspace_allowlist(
 
 async fn get_workspace_allowlist_file_impl(
     state: &AppState,
-    id: Uuid,
+    id: String,
     path: &str,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistFileView, String> {
     let workspace = state
@@ -2463,7 +2468,7 @@ async fn get_workspace_allowlist_file_impl(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .read_allowlist_file(id, path)
+        .read_allowlist_file(parse_workspace_allowlist_id(&id)?, path)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2471,7 +2476,7 @@ async fn get_workspace_allowlist_file_impl(
 #[tauri::command]
 pub async fn get_workspace_allowlist_file(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     path: String,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistFileView, String> {
     get_workspace_allowlist_file_impl(&state, id, &path).await
@@ -2480,7 +2485,7 @@ pub async fn get_workspace_allowlist_file(
 #[tauri::command]
 pub async fn get_workspace_allowlist_diff(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceDiffQuery,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDiff, String> {
     let workspace = state
@@ -2490,7 +2495,7 @@ pub async fn get_workspace_allowlist_diff(
 
     let diff = workspace
         .diff_allowlist_between(
-            id,
+            parse_workspace_allowlist_id(&id)?,
             payload.scope_path,
             payload.from,
             payload.to,
@@ -2506,7 +2511,7 @@ pub async fn get_workspace_allowlist_diff(
 #[tauri::command]
 pub async fn create_workspace_checkpoint(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: CreateWorkspaceCheckpointRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistCheckpoint, String> {
     let workspace = state
@@ -2518,7 +2523,7 @@ pub async fn create_workspace_checkpoint(
 
     let checkpoint = workspace
         .create_checkpoint(
-            id,
+            parse_workspace_allowlist_id(&id)?,
             payload.label,
             payload.summary,
             created_by,
@@ -2534,7 +2539,7 @@ pub async fn create_workspace_checkpoint(
 #[tauri::command]
 pub async fn list_workspace_allowlist_checkpoints(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceCheckpointListQuery,
 ) -> Result<Vec<steward_core::workspace::WorkspaceAllowlistCheckpoint>, String> {
     let workspace = state
@@ -2543,7 +2548,7 @@ pub async fn list_workspace_allowlist_checkpoints(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .list_allowlist_checkpoints(id, payload.limit)
+        .list_allowlist_checkpoints(parse_workspace_allowlist_id(&id)?, payload.limit)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2551,7 +2556,7 @@ pub async fn list_workspace_allowlist_checkpoints(
 #[tauri::command]
 pub async fn get_workspace_allowlist_history(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceHistoryQuery,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistHistory, String> {
     let workspace = state
@@ -2561,7 +2566,7 @@ pub async fn get_workspace_allowlist_history(
 
     workspace
         .allowlist_history(
-            id,
+            parse_workspace_allowlist_id(&id)?,
             payload.scope_path,
             payload.limit.unwrap_or(20),
             payload.since,
@@ -2574,7 +2579,7 @@ pub async fn get_workspace_allowlist_history(
 #[tauri::command]
 pub async fn keep_workspace_allowlist(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceActionRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2583,7 +2588,11 @@ pub async fn keep_workspace_allowlist(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .keep_allowlist(id, payload.scope_path, payload.checkpoint_id)
+        .keep_allowlist(
+            parse_workspace_allowlist_id(&id)?,
+            payload.scope_path,
+            payload.checkpoint_id,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2593,7 +2602,7 @@ pub async fn keep_workspace_allowlist(
 #[tauri::command]
 pub async fn revert_workspace_allowlist(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceActionRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2602,7 +2611,11 @@ pub async fn revert_workspace_allowlist(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     let detail = workspace
-        .revert_allowlist(id, payload.scope_path, payload.checkpoint_id)
+        .revert_allowlist(
+            parse_workspace_allowlist_id(&id)?,
+            payload.scope_path,
+            payload.checkpoint_id,
+        )
         .await
         .map_err(|e| e.to_string())?;
 
@@ -2612,7 +2625,7 @@ pub async fn revert_workspace_allowlist(
 #[tauri::command]
 pub async fn resolve_workspace_allowlist_conflict(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: ResolveWorkspaceConflictRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2622,7 +2635,7 @@ pub async fn resolve_workspace_allowlist_conflict(
 
     let detail = workspace
         .resolve_allowlist_conflict(
-            id,
+            parse_workspace_allowlist_id(&id)?,
             payload.path,
             payload.resolution,
             payload.renamed_copy_path,
@@ -2637,7 +2650,7 @@ pub async fn resolve_workspace_allowlist_conflict(
 #[tauri::command]
 pub async fn restore_workspace_allowlist(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceRestoreRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2648,7 +2661,7 @@ pub async fn restore_workspace_allowlist(
 
     workspace
         .restore_allowlist(
-            id,
+            parse_workspace_allowlist_id(&id)?,
             payload.target,
             payload.scope_path,
             payload.set_as_baseline,
@@ -2663,7 +2676,7 @@ pub async fn restore_workspace_allowlist(
 #[tauri::command]
 pub async fn set_workspace_allowlist_baseline(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceBaselineSetRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2672,7 +2685,7 @@ pub async fn set_workspace_allowlist_baseline(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .set_allowlist_baseline(id, payload.target)
+        .set_allowlist_baseline(parse_workspace_allowlist_id(&id)?, payload.target)
         .await
         .map_err(|e| e.to_string())
 }
@@ -2680,7 +2693,7 @@ pub async fn set_workspace_allowlist_baseline(
 #[tauri::command]
 pub async fn refresh_workspace_allowlist(
     state: State<'_, AppState>,
-    id: Uuid,
+    id: String,
     payload: WorkspaceActionRequest,
 ) -> Result<steward_core::workspace::WorkspaceAllowlistDetail, String> {
     let workspace = state
@@ -2689,7 +2702,10 @@ pub async fn refresh_workspace_allowlist(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .refresh_allowlist(id, payload.scope_path.as_deref())
+        .refresh_allowlist(
+            parse_workspace_allowlist_id(&id)?,
+            payload.scope_path.as_deref(),
+        )
         .await
         .map_err(|e| e.to_string())
 }
@@ -3151,9 +3167,13 @@ mod tests {
             message_inject_tx,
         );
 
-        let file = get_workspace_allowlist_file_impl(&state, summary.allowlist.id, "notes.txt")
-            .await
-            .expect("read allowlist file");
+        let file = get_workspace_allowlist_file_impl(
+            &state,
+            steward_core::workspace::encode_allowlist_id(summary.allowlist.id),
+            "notes.txt",
+        )
+        .await
+        .expect("read allowlist file");
 
         assert_eq!(file.path, "notes.txt");
         assert_eq!(file.content.as_deref(), Some("allowlisted workspace file"));

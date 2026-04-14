@@ -43,6 +43,7 @@ use crate::context::JobContext;
 use crate::tools::tool::{
     ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
+use crate::workspace::{WorkspaceUri, encode_allowlist_id};
 
 /// Maximum output size before truncation (64KB).
 const MAX_OUTPUT_SIZE: usize = 64 * 1024;
@@ -792,23 +793,23 @@ impl ShellTool {
             )
         })?;
         let workspace = resolver.resolve(user_id).await;
-        let parsed = crate::workspace::WorkspaceUri::parse(workdir)
+        let parsed = WorkspaceUri::parse(workdir)
             .map_err(|e| ToolError::ExecutionFailed(format!("Invalid workspace workdir: {e}")))?
             .ok_or_else(|| {
                 ToolError::ExecutionFailed("Invalid workspace:// workdir".to_string())
             })?;
         match parsed {
-            crate::workspace::WorkspaceUri::Root => Err(ToolError::InvalidParameters(
+            WorkspaceUri::Root => Err(ToolError::InvalidParameters(
                 "shell workdir must target a specific allowlisted workspace, not workspace:// root"
                     .to_string(),
             )),
-            crate::workspace::WorkspaceUri::AllowlistRoot(allowlist_id) => {
+            WorkspaceUri::AllowlistRoot(allowlist_id) => {
                 let detail = workspace.get_allowlist(allowlist_id).await.map_err(|e| {
                     ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}"))
                 })?;
                 Ok(PathBuf::from(detail.summary.allowlist.source_root))
             }
-            crate::workspace::WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => {
+            WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => {
                 let detail = workspace.get_allowlist(allowlist_id).await.map_err(|e| {
                     ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}"))
                 })?;
@@ -954,7 +955,7 @@ impl Tool for ShellTool {
             "workspace_uri": workspace_path.as_ref().map(|resolved| resolved.workspace_uri.clone()),
             "workspace_allowlist_id": workspace_path
                 .as_ref()
-                .map(|resolved| resolved.allowlist_id.to_string())
+                .map(|resolved| encode_allowlist_id(resolved.allowlist_id))
         });
 
         Ok(ToolOutput::success(result, duration))
@@ -1074,13 +1075,14 @@ mod tests {
             .execute(
                 serde_json::json!({
                     "command": "printf 'from-shell\\n' > shell.txt",
-                    "workdir": format!("workspace://{allowlist_id}")
+                    "workdir": crate::workspace::WorkspaceUri::allowlist_uri(allowlist_id, None)
                 }),
                 &ctx,
             )
             .await
             .expect("shell execute");
-        let expected_workspace_uri = format!("workspace://{allowlist_id}");
+        let expected_workspace_uri =
+            crate::workspace::WorkspaceUri::allowlist_uri(allowlist_id, None);
 
         assert_eq!(
             result

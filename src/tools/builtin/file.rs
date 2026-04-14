@@ -17,7 +17,7 @@ use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
 use crate::workspace::paths as ws_paths;
-use crate::workspace::{ResolvedWorkspaceAllowlistPath, Workspace};
+use crate::workspace::{ResolvedWorkspaceAllowlistPath, Workspace, encode_allowlist_id};
 
 fn is_legacy_memory_workspace_path(path: &str) -> bool {
     let filename = std::path::Path::new(path)
@@ -209,7 +209,7 @@ impl Tool for ReadFileTool {
             "workspace_uri": allowlisted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
             "workspace_allowlist_id": allowlisted
                 .as_ref()
-                .map(|(_, resolved)| resolved.allowlist_id.to_string())
+                .map(|(_, resolved)| encode_allowlist_id(resolved.allowlist_id))
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -352,7 +352,7 @@ impl Tool for WriteFileTool {
             "bytes_written": content.len(),
             "success": true,
             "workspace_uri": allowlisted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
-            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| resolved.allowlist_id.to_string())
+            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| encode_allowlist_id(resolved.allowlist_id))
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -655,7 +655,7 @@ impl Tool for ListDirTool {
             "workspace_uri": allowlisted.as_ref().map(|(_, resolved)| resolved.workspace_uri.clone()),
             "workspace_allowlist_id": allowlisted
                 .as_ref()
-                .map(|(_, resolved)| resolved.allowlist_id.to_string())
+                .map(|(_, resolved)| encode_allowlist_id(resolved.allowlist_id))
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -899,7 +899,7 @@ impl Tool for ApplyPatchTool {
             "replacements": replacements,
             "success": true,
             "workspace_uri": allowlisted.as_ref().map(|resolved| resolved.workspace_uri.clone()),
-            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| resolved.allowlist_id.to_string())
+            "workspace_allowlist_id": allowlisted.as_ref().map(|resolved| encode_allowlist_id(resolved.allowlist_id))
         });
 
         Ok(ToolOutput::success(result, start.elapsed()))
@@ -1024,7 +1024,12 @@ mod tests {
             .get("workspace_uri")
             .and_then(|value| value.as_str())
             .expect("workspace_uri");
-        assert!(workspace_uri.starts_with(&format!("workspace://{allowlist_id}/")));
+        assert!(
+            workspace_uri.starts_with(&crate::workspace::WorkspaceUri::allowlist_uri(
+                allowlist_id,
+                None
+            ))
+        );
 
         let diff = workspace
             .diff_allowlist(allowlist_id, None)

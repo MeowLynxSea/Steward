@@ -13,6 +13,7 @@ Legacy file-based memory is no longer part of the active workspace architecture.
 ## Key Principles
 
 1. **Workspace means allowlisted files** - `workspace://...` points at real allowlisted project content
+   Public workspace ids are compact reversible short ids in URIs and tool/UI payloads; legacy UUID input is still accepted for compatibility
 2. **Real filesystem is the working tree** - allowlisted reads, writes, moves, deletes, and shell commands operate on host files directly
 3. **Git-backed trackers are the workspace truth** - every allowlist is backed by a Git tracker that owns dirty-path detection, anchors, diff, history, and restore
 4. **Background allowlist watch is tracker-driven** - the watcher collects dirty paths and asks the tracker to advance product revisions without manifest rescans
