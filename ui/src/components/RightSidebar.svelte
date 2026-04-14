@@ -230,6 +230,14 @@
     return entry.name ?? entry.path;
   }
 
+  function entryAllowlistId(entry: WorkspaceEntry) {
+    if (entry.kind !== "allowlist") {
+      return null;
+    }
+    const uri = entry.uri ?? entry.path;
+    return allowlistIdFromUri(uri);
+  }
+
   function treeIcon(entry: WorkspaceEntry) {
     if (entry.kind === "allowlist") return Folder;
     return entry.is_directory ? Folder : FileText;
@@ -367,7 +375,12 @@
                 <span class="tree-item-icon {entry.is_directory ? 'folder' : ''}">
                   <Icon size={14} strokeWidth={2} />
                 </span>
-                <span class="tree-item-name">{entryLabel(entry)}</span>
+                <span class="tree-item-copy">
+                  <span class="tree-item-name">{entryLabel(entry)}</span>
+                  {#if entryAllowlistId(entry)}
+                    <span class="tree-item-subtle">{entryAllowlistId(entry)}</span>
+                  {/if}
+                </span>
                 {#if entry.conflict_count || entry.dirty_count || entry.pending_delete_count}
                   <span class="tree-item-badges">
                     {#if entry.conflict_count}
@@ -396,7 +409,10 @@
               <section class="allowlist-group">
                 <div class="allowlist-info">
                   <div>
-                    <strong>{group.allowlist.summary.allowlist.display_name}</strong>
+                    <div class="allowlist-heading">
+                      <strong>{group.allowlist.summary.allowlist.display_name}</strong>
+                      <span class="allowlist-id">{group.allowlist.summary.allowlist.id}</span>
+                    </div>
                     <div class="allowlist-stats">
                       <span>{group.allowlist.summary.dirty_count} 变更</span>
                       <span>{group.allowlist.summary.conflict_count} 冲突</span>
@@ -822,13 +838,29 @@
   }
 
   .tree-item-name {
-    flex: 1;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
     font-size: 12px;
     line-height: 1.3;
+  }
+
+  .tree-item-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+  }
+
+  .tree-item-subtle,
+  .allowlist-id {
+    font-size: 10px;
+    line-height: 1.2;
+    color: var(--text-muted);
+    font-family: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Monaco, Consolas, monospace;
   }
 
   .badge {
@@ -950,6 +982,13 @@
     display: flex;
     gap: 8px;
     margin-top: 2px;
+  }
+
+  .allowlist-heading {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
   }
 
   .checkpoint-row {

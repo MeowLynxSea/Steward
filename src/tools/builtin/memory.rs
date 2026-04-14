@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 use crate::context::JobContext;
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput, require_str};
-use crate::workspace::{Workspace, WorkspaceUri, paths};
+use crate::workspace::{Workspace, WorkspaceUri, encode_allowlist_id, paths};
 
 // ── WorkspaceResolver ──────────────────────────────────────────────
 
@@ -676,6 +676,26 @@ impl WorkspaceTreeTool {
 
         Ok(result)
     }
+
+    async fn build_allowlist_aliases(
+        workspace: &Arc<Workspace>,
+    ) -> Result<Vec<serde_json::Value>, ToolError> {
+        let allowlists = workspace.list_allowlists().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Workspace alias lookup failed: {e}"))
+        })?;
+
+        Ok(allowlists
+            .into_iter()
+            .map(|summary| {
+                let id = encode_allowlist_id(summary.allowlist.id);
+                serde_json::json!({
+                    "id": id,
+                    "alias": summary.allowlist.display_name,
+                    "uri": WorkspaceUri::allowlist_uri(summary.allowlist.id, None)
+                })
+            })
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -688,7 +708,8 @@ impl Tool for WorkspaceTreeTool {
         "View allowlisted workspace trees under `workspace://`. \
          Use workspace_read to read files shown here, NOT read_file. \
          The workspace tree is separate from the local filesystem and represents \
-         allowlisted working directories."
+         allowlisted working directories. Paths always use short allowlist ids; \
+         alias labels are informational only and cannot be used as selectors."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -739,9 +760,15 @@ impl Tool for WorkspaceTreeTool {
         let workspace = self.resolver.resolve(&ctx.user_id).await;
         let tree = Self::build_tree(&workspace, path, 1, depth).await?;
 
-        // Compact output: just the tree array
+        let aliases = Self::build_allowlist_aliases(&workspace).await?;
+
         Ok(ToolOutput::success(
-            serde_json::Value::Array(tree),
+            serde_json::json!({
+                "path": path,
+                "tree": tree,
+                "allowlist_aliases": aliases,
+                "note": "Use workspace://<id>/... with the short id. Aliases are human-readable labels only and are not valid path selectors."
+            }),
             start.elapsed(),
         ))
     }
