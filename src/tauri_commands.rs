@@ -993,7 +993,17 @@ fn reflection_detail_from_summary(content: &str) -> Option<String> {
 }
 
 fn clean_reflection_message_content(content: &str) -> String {
-    reflection_detail_from_summary(content).unwrap_or_else(|| content.to_string())
+    if let Some(detail) = reflection_detail_from_summary(content) {
+        return detail;
+    }
+
+    match reflection_outcome_from_summary(content).as_deref() {
+        Some("no_op") => return "无需进行任何操作".to_string(),
+        Some(_) => return String::new(),
+        None => {}
+    }
+
+    content.to_string()
 }
 
 fn routine_run_trigger_string<'a>(
@@ -2783,11 +2793,20 @@ mod tests {
 
     #[test]
     fn clean_reflection_message_content_prefers_detail_text() {
-        let cleaned = clean_reflection_message_content(
+        let cleaned = super::clean_reflection_message_content(
             "memory_reflection outcome=no_op | thread_id=e00e029d-74f4-42ab-9b06-f1ad56eb65aa | detail=Only keep this sentence.",
         );
 
         assert_eq!(cleaned, "Only keep this sentence.");
+    }
+
+    #[test]
+    fn clean_reflection_message_content_maps_no_op_without_detail() {
+        let cleaned = super::clean_reflection_message_content(
+            "memory_reflection outcome=no_op | thread_id=e181b721-a72f-4302-8064-45d0c75629e8",
+        );
+
+        assert_eq!(cleaned, "无需进行任何操作");
     }
 
     fn backend(id: &str) -> BackendInstance {
