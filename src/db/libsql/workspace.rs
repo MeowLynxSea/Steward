@@ -2,26 +2,29 @@
 
 use async_trait::async_trait;
 use libsql::params;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 use uuid::Uuid;
 
+use super::workspace_tracker::AllowlistTrackerStatus;
 use super::{
     LibSqlBackend, fmt_ts, get_i64, get_opt_text, get_opt_ts, get_text, get_ts,
     row_to_memory_document,
 };
 use crate::db::WorkspaceStore;
 use crate::error::{DatabaseError, WorkspaceError};
+#[cfg(test)]
+use crate::workspace::WorkspaceAllowlistChangeKind;
 use crate::workspace::{
-    AllowlistActionRequest, AllowlistedFileDiff, AllowlistedFileStatus, ConflictResolutionRequest,
+    AllowlistActionRequest, AllowlistedFileStatus, ConflictResolutionRequest,
     CreateAllowlistRequest, CreateCheckpointRequest, MemoryChunk, MemoryDocument, RankedResult,
     SearchConfig, SearchResult, WorkspaceAllowlist, WorkspaceAllowlistBaselineRequest,
-    WorkspaceAllowlistChangeKind, WorkspaceAllowlistCheckpoint, WorkspaceAllowlistDetail,
-    WorkspaceAllowlistDiff, WorkspaceAllowlistDiffRequest, WorkspaceAllowlistFileView,
-    WorkspaceAllowlistHistory, WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest,
-    WorkspaceAllowlistRevision, WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource,
-    WorkspaceAllowlistSummary, WorkspaceEntry, WorkspaceTreeEntry, WorkspaceTreeEntryKind,
-    WorkspaceUri, fuse_results, normalize_allowlist_path,
+    WorkspaceAllowlistCheckpoint, WorkspaceAllowlistDetail, WorkspaceAllowlistDiff,
+    WorkspaceAllowlistDiffRequest, WorkspaceAllowlistFileView, WorkspaceAllowlistHistory,
+    WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistRevision,
+    WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource, WorkspaceAllowlistSummary,
+    WorkspaceEntry, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri, fuse_results,
+    normalize_allowlist_path,
 };
 
 use chrono::Utc;
@@ -59,36 +62,17 @@ pub(crate) fn resolve_embedding_dimension() -> Option<usize> {
 }
 
 #[derive(Debug, Clone)]
-struct SnapshotRecord {
-    id: Uuid,
-    content: Vec<u8>,
-    is_binary: bool,
-    hash: String,
-}
-
-#[derive(Debug, Clone)]
 struct AllowlistFileRecord {
     path: String,
     status: AllowlistedFileStatus,
     is_binary: bool,
-    base_snapshot_id: Option<Uuid>,
-    working_snapshot_id: Option<Uuid>,
     updated_at: chrono::DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
-struct ManifestEntry {
-    snapshot_id: Uuid,
-    is_binary: bool,
-    size_bytes: i64,
-    modified_at: Option<i64>,
-    file_mode: Option<i64>,
-}
-
-#[derive(Debug, Clone)]
-struct AllowlistStateRecord {
-    baseline_revision_id: Option<Uuid>,
-    head_revision_id: Option<Uuid>,
+pub(crate) struct AllowlistStateRecord {
+    pub baseline_revision_id: Option<Uuid>,
+    pub head_revision_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,20 +85,6 @@ struct RevisionRef {
     summary: Option<String>,
     created_by: String,
     created_at: chrono::DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-struct ManifestChange {
-    path: String,
-    before: Option<ManifestEntry>,
-    after: Option<ManifestEntry>,
-    status: AllowlistedFileStatus,
-    change_kind: WorkspaceAllowlistChangeKind,
-    is_binary: bool,
-}
-
-fn compute_content_hash(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn classify_binary(bytes: &[u8]) -> bool {
@@ -136,17 +106,6 @@ fn status_from_str(value: &str) -> AllowlistedFileStatus {
     }
 }
 
-fn status_to_str(status: AllowlistedFileStatus) -> &'static str {
-    match status {
-        AllowlistedFileStatus::Clean => "clean",
-        AllowlistedFileStatus::Modified => "modified",
-        AllowlistedFileStatus::Added => "added",
-        AllowlistedFileStatus::Deleted => "deleted",
-        AllowlistedFileStatus::Conflicted => "conflicted",
-        AllowlistedFileStatus::BinaryModified => "binary_modified",
-    }
-}
-
 fn revision_kind_from_str(value: &str) -> WorkspaceAllowlistRevisionKind {
     match value {
         "tool_write" => WorkspaceAllowlistRevisionKind::ToolWrite,
@@ -162,45 +121,12 @@ fn revision_kind_from_str(value: &str) -> WorkspaceAllowlistRevisionKind {
     }
 }
 
-fn revision_kind_to_str(value: WorkspaceAllowlistRevisionKind) -> &'static str {
-    match value {
-        WorkspaceAllowlistRevisionKind::Initial => "initial",
-        WorkspaceAllowlistRevisionKind::ToolWrite => "tool_write",
-        WorkspaceAllowlistRevisionKind::ToolPatch => "tool_patch",
-        WorkspaceAllowlistRevisionKind::ToolMove => "tool_move",
-        WorkspaceAllowlistRevisionKind::ToolDelete => "tool_delete",
-        WorkspaceAllowlistRevisionKind::Shell => "shell",
-        WorkspaceAllowlistRevisionKind::FsWatch => "fs_watch",
-        WorkspaceAllowlistRevisionKind::ManualRefresh => "manual_refresh",
-        WorkspaceAllowlistRevisionKind::Restore => "restore",
-        WorkspaceAllowlistRevisionKind::Accept => "accept",
-    }
-}
-
 fn revision_source_from_str(value: &str) -> WorkspaceAllowlistRevisionSource {
     match value {
         "shell" => WorkspaceAllowlistRevisionSource::Shell,
         "external" => WorkspaceAllowlistRevisionSource::External,
         "system" => WorkspaceAllowlistRevisionSource::System,
         _ => WorkspaceAllowlistRevisionSource::WorkspaceTool,
-    }
-}
-
-fn revision_source_to_str(value: WorkspaceAllowlistRevisionSource) -> &'static str {
-    match value {
-        WorkspaceAllowlistRevisionSource::WorkspaceTool => "workspace_tool",
-        WorkspaceAllowlistRevisionSource::Shell => "shell",
-        WorkspaceAllowlistRevisionSource::External => "external",
-        WorkspaceAllowlistRevisionSource::System => "system",
-    }
-}
-
-fn change_kind_to_str(value: WorkspaceAllowlistChangeKind) -> &'static str {
-    match value {
-        WorkspaceAllowlistChangeKind::Added => "added",
-        WorkspaceAllowlistChangeKind::Modified => "modified",
-        WorkspaceAllowlistChangeKind::Deleted => "deleted",
-        WorkspaceAllowlistChangeKind::Moved => "moved",
     }
 }
 
@@ -212,172 +138,7 @@ fn scope_matches(path: &str, scope: Option<&str>) -> bool {
     }
 }
 
-fn manifest_entry_equals(left: Option<&ManifestEntry>, right: Option<&ManifestEntry>) -> bool {
-    match (left, right) {
-        (None, None) => true,
-        (Some(left), Some(right)) => {
-            left.snapshot_id == right.snapshot_id
-                && left.file_mode == right.file_mode
-                && left.is_binary == right.is_binary
-                && left.size_bytes == right.size_bytes
-        }
-        _ => false,
-    }
-}
-
-fn allowlist_status_for_entries(
-    before: Option<&ManifestEntry>,
-    after: Option<&ManifestEntry>,
-) -> Option<(AllowlistedFileStatus, WorkspaceAllowlistChangeKind, bool)> {
-    match (before, after) {
-        (None, Some(after)) => Some((
-            AllowlistedFileStatus::Added,
-            WorkspaceAllowlistChangeKind::Added,
-            after.is_binary,
-        )),
-        (Some(before), None) => Some((
-            AllowlistedFileStatus::Deleted,
-            WorkspaceAllowlistChangeKind::Deleted,
-            before.is_binary,
-        )),
-        (Some(before), Some(after)) if !manifest_entry_equals(Some(before), Some(after)) => Some((
-            if before.is_binary || after.is_binary {
-                AllowlistedFileStatus::BinaryModified
-            } else {
-                AllowlistedFileStatus::Modified
-            },
-            WorkspaceAllowlistChangeKind::Modified,
-            before.is_binary || after.is_binary,
-        )),
-        _ => None,
-    }
-}
-
-fn summarize_change_counts(changes: usize) -> Option<String> {
-    if changes == 0 {
-        None
-    } else if changes == 1 {
-        Some("1 file changed".to_string())
-    } else {
-        Some(format!("{changes} files changed"))
-    }
-}
-
-fn render_text_diff(path: &str, before: Option<&str>, after: Option<&str>) -> Option<String> {
-    match (before, after) {
-        (Some(before), Some(after)) if before != after => Some(format!(
-            "--- from/{path}\n+++ to/{path}\n- {}\n+ {}",
-            before.replace('\n', "\n- "),
-            after.replace('\n', "\n+ ")
-        )),
-        (None, Some(after)) => Some(format!("+++ to/{path}\n+ {}", after.replace('\n', "\n+ "))),
-        (Some(before), None) => Some(format!(
-            "--- from/{path}\n- {}",
-            before.replace('\n', "\n- ")
-        )),
-        _ => None,
-    }
-}
-
-fn metadata_file_mode(metadata: &std::fs::Metadata) -> Option<i64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        Some(i64::from(metadata.permissions().mode()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = metadata;
-        None
-    }
-}
-
-fn metadata_mtime(metadata: &std::fs::Metadata) -> Option<i64> {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|value| value.as_secs() as i64)
-}
-
-fn collect_manifest_changes(
-    before: &BTreeMap<String, ManifestEntry>,
-    after: &BTreeMap<String, ManifestEntry>,
-    scope: Option<&str>,
-) -> Vec<ManifestChange> {
-    let mut paths = BTreeSet::new();
-    for path in before.keys() {
-        if scope_matches(path, scope) {
-            paths.insert(path.clone());
-        }
-    }
-    for path in after.keys() {
-        if scope_matches(path, scope) {
-            paths.insert(path.clone());
-        }
-    }
-
-    let mut changes = Vec::new();
-    for path in paths {
-        let before_entry = before.get(&path).cloned();
-        let after_entry = after.get(&path).cloned();
-        if let Some((status, change_kind, is_binary)) =
-            allowlist_status_for_entries(before_entry.as_ref(), after_entry.as_ref())
-        {
-            changes.push(ManifestChange {
-                path,
-                before: before_entry,
-                after: after_entry,
-                status,
-                change_kind,
-                is_binary,
-            });
-        }
-    }
-
-    let mut deletes: HashMap<String, usize> = HashMap::new();
-    let mut adds: HashMap<String, usize> = HashMap::new();
-    for (idx, change) in changes.iter().enumerate() {
-        match change.change_kind {
-            WorkspaceAllowlistChangeKind::Deleted => {
-                if let Some(before) = &change.before {
-                    deletes.insert(before.snapshot_id.to_string(), idx);
-                }
-            }
-            WorkspaceAllowlistChangeKind::Added => {
-                if let Some(after) = &change.after {
-                    adds.insert(after.snapshot_id.to_string(), idx);
-                }
-            }
-            _ => {}
-        }
-    }
-    for (hash_key, delete_idx) in deletes {
-        if let Some(add_idx) = adds.get(&hash_key) {
-            if let Some(delete_change) = changes.get_mut(delete_idx) {
-                delete_change.change_kind = WorkspaceAllowlistChangeKind::Moved;
-            }
-            if let Some(add_change) = changes.get_mut(*add_idx) {
-                add_change.change_kind = WorkspaceAllowlistChangeKind::Moved;
-            }
-        }
-    }
-
-    changes
-}
-
 impl LibSqlBackend {
-    async fn read_snapshot_required(
-        &self,
-        snapshot_id: Uuid,
-    ) -> Result<SnapshotRecord, WorkspaceError> {
-        self.read_snapshot(snapshot_id)
-            .await?
-            .ok_or_else(|| WorkspaceError::SearchFailed {
-                reason: format!("missing snapshot {snapshot_id}"),
-            })
-    }
-
     async fn read_disk_bytes(path: &Path) -> Result<Option<Vec<u8>>, WorkspaceError> {
         match tokio::fs::read(path).await {
             Ok(bytes) => Ok(Some(bytes)),
@@ -392,75 +153,13 @@ impl LibSqlBackend {
         &self,
         allowlist_id: Uuid,
     ) -> Result<Option<AllowlistStateRecord>, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let mut rows = conn
-            .query(
-                "SELECT baseline_revision_id, head_revision_id
-                 FROM workspace_allowlist_state
-                 WHERE allowlist_id = ?1",
-                params![allowlist_id.to_string()],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("allowlist state query failed: {e}"),
-            })?;
-        let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("allowlist state query failed: {e}"),
-            })?
-        else {
-            return Ok(None);
-        };
-
-        Ok(Some(AllowlistStateRecord {
-            baseline_revision_id: get_opt_text(&row, 0).and_then(|v| Uuid::parse_str(&v).ok()),
-            head_revision_id: get_opt_text(&row, 1).and_then(|v| Uuid::parse_str(&v).ok()),
-        }))
-    }
-
-    async fn save_allowlist_state_record(
-        &self,
-        allowlist_id: Uuid,
-        baseline_revision_id: Option<Uuid>,
-        head_revision_id: Option<Uuid>,
-    ) -> Result<(), WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let now = fmt_ts(&Utc::now());
-        conn.execute(
-            r#"
-            INSERT INTO workspace_allowlist_state (
-                allowlist_id, baseline_revision_id, head_revision_id, last_reconciled_at
-            )
-            VALUES (?1, ?2, ?3, ?4)
-            ON CONFLICT(allowlist_id) DO UPDATE SET
-                baseline_revision_id = excluded.baseline_revision_id,
-                head_revision_id = excluded.head_revision_id,
-                last_reconciled_at = excluded.last_reconciled_at
-            "#,
-            params![
-                allowlist_id.to_string(),
-                baseline_revision_id.map(|v| v.to_string()),
-                head_revision_id.map(|v| v.to_string()),
-                now
-            ],
-        )
-        .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("allowlist state upsert failed: {e}"),
-        })?;
-        Ok(())
+        Ok(self
+            .load_allowlist_tracker(allowlist_id)
+            .await?
+            .map(|tracker| AllowlistStateRecord {
+                baseline_revision_id: tracker.baseline_revision_id,
+                head_revision_id: tracker.head_revision_id,
+            }))
     }
 
     async fn touch_allowlist_updated_at(&self, allowlist_id: Uuid) -> Result<(), WorkspaceError> {
@@ -544,6 +243,11 @@ impl LibSqlBackend {
                 "SELECT id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
                  FROM workspace_allowlist_revisions
                  WHERE allowlist_id = ?1 AND created_at >= ?2
+                   AND id IN (
+                       SELECT product_revision_id
+                       FROM workspace_allowlist_revision_anchors
+                       WHERE allowlist_id = ?1
+                   )
                  ORDER BY created_at DESC",
             );
             if let Some(limit) = limit {
@@ -556,6 +260,11 @@ impl LibSqlBackend {
                 "SELECT id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
                  FROM workspace_allowlist_revisions
                  WHERE allowlist_id = ?1
+                   AND id IN (
+                       SELECT product_revision_id
+                       FROM workspace_allowlist_revision_anchors
+                       WHERE allowlist_id = ?1
+                   )
                  ORDER BY created_at DESC",
             );
             if let Some(limit) = limit {
@@ -590,180 +299,6 @@ impl LibSqlBackend {
             });
         }
         Ok(revisions)
-    }
-
-    async fn load_manifest_entries(
-        &self,
-        revision_id: Uuid,
-    ) -> Result<BTreeMap<String, ManifestEntry>, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let mut rows = conn
-            .query(
-                "SELECT relative_path, snapshot_id, file_mode, size_bytes, modified_at, is_binary
-                 FROM workspace_allowlist_manifests
-                 WHERE revision_id = ?1
-                 ORDER BY relative_path",
-                params![revision_id.to_string()],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("manifest query failed: {e}"),
-            })?;
-        let mut entries = BTreeMap::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("manifest query failed: {e}"),
-            })?
-        {
-            let snapshot_id_text =
-                get_opt_text(&row, 1).ok_or_else(|| WorkspaceError::SearchFailed {
-                    reason: "manifest row missing snapshot".to_string(),
-                })?;
-            let snapshot_id =
-                Uuid::parse_str(&snapshot_id_text).map_err(|e| WorkspaceError::SearchFailed {
-                    reason: format!("invalid manifest snapshot id: {e}"),
-                })?;
-            entries.insert(
-                get_text(&row, 0),
-                ManifestEntry {
-                    snapshot_id,
-                    file_mode: row.get::<Option<i64>>(2).ok().flatten(),
-                    size_bytes: get_i64(&row, 3),
-                    modified_at: row.get::<Option<i64>>(4).ok().flatten(),
-                    is_binary: get_i64(&row, 5) != 0,
-                },
-            );
-        }
-        Ok(entries)
-    }
-
-    async fn write_manifest_entries(
-        &self,
-        revision_id: Uuid,
-        manifest: &BTreeMap<String, ManifestEntry>,
-    ) -> Result<(), WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        for (path, entry) in manifest {
-            conn.execute(
-                "INSERT INTO workspace_allowlist_manifests (
-                    revision_id, relative_path, snapshot_id, file_mode, size_bytes, modified_at, is_binary
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![
-                    revision_id.to_string(),
-                    path.clone(),
-                    entry.snapshot_id.to_string(),
-                    entry.file_mode,
-                    entry.size_bytes,
-                    entry.modified_at,
-                    if entry.is_binary { 1 } else { 0 }
-                ],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("manifest insert failed: {e}"),
-            })?;
-        }
-        Ok(())
-    }
-
-    async fn insert_revision_record(
-        &self,
-        allowlist_id: Uuid,
-        parent_revision_id: Option<Uuid>,
-        kind: WorkspaceAllowlistRevisionKind,
-        source: WorkspaceAllowlistRevisionSource,
-        trigger: Option<String>,
-        summary: Option<String>,
-        created_by: impl Into<String>,
-    ) -> Result<Uuid, WorkspaceError> {
-        let revision_id = Uuid::new_v4();
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        conn.execute(
-            "INSERT INTO workspace_allowlist_revisions (
-                id, allowlist_id, parent_revision_id, kind, source, trigger, summary, created_by, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                revision_id.to_string(),
-                allowlist_id.to_string(),
-                parent_revision_id.map(|v| v.to_string()),
-                revision_kind_to_str(kind),
-                revision_source_to_str(source),
-                trigger,
-                summary,
-                created_by.into(),
-                fmt_ts(&Utc::now())
-            ],
-        )
-        .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("revision insert failed: {e}"),
-        })?;
-        Ok(revision_id)
-    }
-
-    async fn insert_revision_changes(
-        &self,
-        revision_id: Uuid,
-        changes: &[ManifestChange],
-    ) -> Result<(), WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        for change in changes {
-            let rename_from = if change.change_kind == WorkspaceAllowlistChangeKind::Moved {
-                change.before.as_ref().map(|_| change.path.clone())
-            } else {
-                None
-            };
-            let rename_to = if change.change_kind == WorkspaceAllowlistChangeKind::Moved {
-                change.after.as_ref().map(|_| change.path.clone())
-            } else {
-                None
-            };
-            conn.execute(
-                "INSERT INTO workspace_allowlist_revision_files (
-                    revision_id, relative_path, change_kind, before_snapshot_id, after_snapshot_id,
-                    before_mode, after_mode, is_binary, rename_from, rename_to
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    revision_id.to_string(),
-                    change.path.clone(),
-                    change_kind_to_str(change.change_kind),
-                    change.before.as_ref().map(|v| v.snapshot_id.to_string()),
-                    change.after.as_ref().map(|v| v.snapshot_id.to_string()),
-                    change.before.as_ref().and_then(|v| v.file_mode),
-                    change.after.as_ref().and_then(|v| v.file_mode),
-                    if change.is_binary { 1 } else { 0 },
-                    rename_from,
-                    rename_to
-                ],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("revision change insert failed: {e}"),
-            })?;
-        }
-        Ok(())
     }
 
     async fn list_revision_changed_files(
@@ -804,86 +339,17 @@ impl LibSqlBackend {
         Ok(result)
     }
 
-    async fn clear_allowlist_live_cache(&self, allowlist_id: Uuid) -> Result<(), WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        conn.execute(
-            "DELETE FROM workspace_allowlist_files WHERE allowlist_id = ?1",
-            params![allowlist_id.to_string()],
-        )
-        .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("allowlist cache clear failed: {e}"),
-        })?;
-        Ok(())
-    }
-
     async fn sync_allowlist_live_cache(
         &self,
         allowlist_id: Uuid,
-        baseline_revision_id: Option<Uuid>,
-        head_revision_id: Option<Uuid>,
+        _baseline_revision_id: Option<Uuid>,
+        _head_revision_id: Option<Uuid>,
     ) -> Result<(), WorkspaceError> {
-        let baseline = match baseline_revision_id {
-            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
-            None => BTreeMap::new(),
-        };
-        let head = match head_revision_id {
-            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
-            None => BTreeMap::new(),
-        };
-        self.clear_allowlist_live_cache(allowlist_id).await?;
-        for change in collect_manifest_changes(&baseline, &head, None) {
-            let base_snapshot_id = change.before.as_ref().map(|v| v.snapshot_id);
-            let working_snapshot_id = change.after.as_ref().map(|v| v.snapshot_id);
-            self.upsert_allowlist_file_record(
-                allowlist_id,
-                &change.path,
-                change.status,
-                change.is_binary,
-                base_snapshot_id,
-                working_snapshot_id,
-            )
-            .await?;
-        }
-        Ok(())
+        self.rebuild_allowlist_live_cache_from_tracker(allowlist_id)
+            .await
     }
 
-    async fn create_revision_from_manifest(
-        &self,
-        allowlist_id: Uuid,
-        parent_revision_id: Option<Uuid>,
-        previous_manifest: &BTreeMap<String, ManifestEntry>,
-        next_manifest: &BTreeMap<String, ManifestEntry>,
-        kind: WorkspaceAllowlistRevisionKind,
-        source: WorkspaceAllowlistRevisionSource,
-        trigger: Option<String>,
-        summary: Option<String>,
-        created_by: impl Into<String>,
-    ) -> Result<Uuid, WorkspaceError> {
-        let changes = collect_manifest_changes(previous_manifest, next_manifest, None);
-        let revision_id = self
-            .insert_revision_record(
-                allowlist_id,
-                parent_revision_id,
-                kind,
-                source,
-                trigger,
-                summary.or_else(|| summarize_change_counts(changes.len())),
-                created_by,
-            )
-            .await?;
-        self.write_manifest_entries(revision_id, next_manifest)
-            .await?;
-        self.insert_revision_changes(revision_id, &changes).await?;
-        Ok(revision_id)
-    }
-
-    async fn get_checkpoint_record(
+    pub(crate) async fn get_checkpoint_record(
         &self,
         allowlist_id: Uuid,
         checkpoint_id: Uuid,
@@ -919,6 +385,13 @@ impl LibSqlBackend {
             .ok_or_else(|| WorkspaceError::SearchFailed {
                 reason: "checkpoint missing revision_id".to_string(),
             })?;
+        if self
+            .load_tracker_anchor_for_revision(allowlist_id, revision_id)
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
         Ok(Some(WorkspaceAllowlistCheckpoint {
             id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
                 reason: format!("invalid checkpoint id: {e}"),
@@ -989,213 +462,23 @@ impl LibSqlBackend {
             })
     }
 
-    async fn scan_allowlist_manifest(
-        &self,
-        allowlist_id: Uuid,
-        source_root: &Path,
-    ) -> Result<BTreeMap<String, ManifestEntry>, WorkspaceError> {
-        fn collect_paths(
-            root: &Path,
-            dir: &Path,
-            entries: &mut Vec<(String, PathBuf, std::fs::Metadata)>,
-        ) -> Result<(), WorkspaceError> {
-            let read_dir = std::fs::read_dir(dir).map_err(|e| WorkspaceError::IoError {
-                reason: format!("failed to read directory {}: {e}", dir.display()),
-            })?;
-            for entry in read_dir {
-                let entry = entry.map_err(|e| WorkspaceError::IoError {
-                    reason: format!("failed to read directory entry: {e}"),
-                })?;
-                let path = entry.path();
-                let metadata = entry.metadata().map_err(|e| WorkspaceError::IoError {
-                    reason: format!("failed to read metadata {}: {e}", path.display()),
-                })?;
-                if metadata.is_dir() {
-                    collect_paths(root, &path, entries)?;
-                } else if metadata.is_file() {
-                    let rel = path
-                        .strip_prefix(root)
-                        .map_err(|e| WorkspaceError::IoError {
-                            reason: format!("failed to strip allowlist prefix: {e}"),
-                        })?
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    entries.push((rel, path, metadata));
-                }
-            }
-            Ok(())
-        }
-
-        let mut files = Vec::new();
-        collect_paths(source_root, source_root, &mut files)?;
-        files.sort_by(|left, right| left.0.cmp(&right.0));
-
-        let mut manifest = BTreeMap::new();
-        for (relative_path, absolute_path, metadata) in files {
-            let bytes =
-                tokio::fs::read(&absolute_path)
-                    .await
-                    .map_err(|e| WorkspaceError::IoError {
-                        reason: format!("failed to read {}: {e}", absolute_path.display()),
-                    })?;
-            let snapshot = self
-                .insert_snapshot(allowlist_id, &relative_path, &bytes)
-                .await?;
-            manifest.insert(
-                relative_path,
-                ManifestEntry {
-                    snapshot_id: snapshot.id,
-                    is_binary: snapshot.is_binary,
-                    size_bytes: metadata.len() as i64,
-                    modified_at: metadata_mtime(&metadata),
-                    file_mode: metadata_file_mode(&metadata),
-                },
-            );
-        }
-        Ok(manifest)
-    }
-
-    async fn materialize_legacy_allowlist_overlay_if_needed(
-        &self,
-        user_id: &str,
-        allowlist_id: Uuid,
-    ) -> Result<bool, WorkspaceError> {
-        let records = self.list_allowlist_file_records(allowlist_id, None).await?;
-        if records.is_empty() {
-            return Ok(false);
-        }
-        if records
-            .iter()
-            .any(|record| record.status == AllowlistedFileStatus::Conflicted)
-        {
-            return Err(WorkspaceError::AllowlistConflict {
-                path: allowlist_id.to_string(),
-                reason: "legacy overlay conflict blocks migration to real filesystem mode"
-                    .to_string(),
-            });
-        }
-        let has_dirty = records
-            .iter()
-            .any(|record| record.status != AllowlistedFileStatus::Clean);
-        if !has_dirty {
-            return Ok(false);
-        }
-
-        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
-        for record in records {
-            let disk_path = Path::new(&allowlist.source_root).join(&record.path);
-            match record.status {
-                AllowlistedFileStatus::Deleted => {
-                    if tokio::fs::try_exists(&disk_path).await.map_err(|e| {
-                        WorkspaceError::IoError {
-                            reason: format!("failed to check {}: {e}", disk_path.display()),
-                        }
-                    })? {
-                        tokio::fs::remove_file(&disk_path).await.map_err(|e| {
-                            WorkspaceError::IoError {
-                                reason: format!("failed to delete {}: {e}", disk_path.display()),
-                            }
-                        })?;
-                    }
-                }
-                AllowlistedFileStatus::Clean => {}
-                _ => {
-                    let snapshot_id = record
-                        .working_snapshot_id
-                        .or(record.base_snapshot_id)
-                        .ok_or_else(|| WorkspaceError::AllowlistConflict {
-                            path: record.path.clone(),
-                            reason: "legacy overlay record is missing content snapshot".to_string(),
-                        })?;
-                    let snapshot = self.read_snapshot_required(snapshot_id).await?;
-                    if let Some(parent) = disk_path.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                            WorkspaceError::IoError {
-                                reason: format!("failed to create {}: {e}", parent.display()),
-                            }
-                        })?;
-                    }
-                    tokio::fs::write(&disk_path, snapshot.content)
-                        .await
-                        .map_err(|e| WorkspaceError::IoError {
-                            reason: format!("failed to write {}: {e}", disk_path.display()),
-                        })?;
-                }
-            }
-        }
-        Ok(true)
-    }
-
     async fn ensure_allowlist_initialized(
         &self,
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<AllowlistStateRecord, WorkspaceError> {
-        if let Some(state) = self.load_allowlist_state_record(allowlist_id).await? {
-            return Ok(state);
-        }
-
-        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
-        let initial_disk_manifest = self
-            .scan_allowlist_manifest(allowlist_id, Path::new(&allowlist.source_root))
-            .await?;
-        let initial_revision_id = self
-            .create_revision_from_manifest(
-                allowlist_id,
-                None,
-                &BTreeMap::new(),
-                &initial_disk_manifest,
-                WorkspaceAllowlistRevisionKind::Initial,
-                WorkspaceAllowlistRevisionSource::System,
-                Some("initial_scan".to_string()),
-                Some("initial disk scan".to_string()),
-                "system",
-            )
-            .await?;
-        self.create_checkpoint_record(
+        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+        self.sync_allowlist_live_cache(
             allowlist_id,
-            initial_revision_id,
-            Some("pre-real-fs-migration".to_string()),
-            Some("state before real filesystem migration".to_string()),
-            "system".to_string(),
-            true,
+            tracker.baseline_revision_id,
+            tracker.head_revision_id,
         )
         .await?;
-
-        let overlay_materialized = self
-            .materialize_legacy_allowlist_overlay_if_needed(user_id, allowlist_id)
-            .await?;
-        let (baseline_revision_id, head_revision_id) = if overlay_materialized {
-            let migrated_manifest = self
-                .scan_allowlist_manifest(allowlist_id, Path::new(&allowlist.source_root))
-                .await?;
-            let migration_revision_id = self
-                .create_revision_from_manifest(
-                    allowlist_id,
-                    Some(initial_revision_id),
-                    &initial_disk_manifest,
-                    &migrated_manifest,
-                    WorkspaceAllowlistRevisionKind::ManualRefresh,
-                    WorkspaceAllowlistRevisionSource::System,
-                    Some("migration_import".to_string()),
-                    Some("imported legacy overlay into real filesystem".to_string()),
-                    "system",
-                )
-                .await?;
-            (Some(migration_revision_id), Some(migration_revision_id))
-        } else {
-            (Some(initial_revision_id), Some(initial_revision_id))
-        };
-
-        self.save_allowlist_state_record(allowlist_id, baseline_revision_id, head_revision_id)
-            .await?;
-        self.sync_allowlist_live_cache(allowlist_id, baseline_revision_id, head_revision_id)
-            .await?;
         self.touch_allowlist_updated_at(allowlist_id).await?;
 
         Ok(AllowlistStateRecord {
-            baseline_revision_id,
-            head_revision_id,
+            baseline_revision_id: tracker.baseline_revision_id,
+            head_revision_id: tracker.head_revision_id,
         })
     }
 
@@ -1209,40 +492,20 @@ impl LibSqlBackend {
         summary: Option<String>,
         created_by: impl Into<String>,
     ) -> Result<AllowlistStateRecord, WorkspaceError> {
-        let mut state = self
-            .ensure_allowlist_initialized(user_id, allowlist_id)
+        let created_by = created_by.into();
+        let state = self
+            .sync_allowlist_from_tracker(
+                user_id,
+                allowlist_id,
+                None,
+                None,
+                kind,
+                source,
+                trigger,
+                summary,
+                &created_by,
+            )
             .await?;
-        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
-        let head_manifest = match state.head_revision_id {
-            Some(revision_id) => self.load_manifest_entries(revision_id).await?,
-            None => BTreeMap::new(),
-        };
-        let disk_manifest = self
-            .scan_allowlist_manifest(allowlist_id, Path::new(&allowlist.source_root))
-            .await?;
-        let changes = collect_manifest_changes(&head_manifest, &disk_manifest, None);
-        if !changes.is_empty() {
-            let new_revision_id = self
-                .create_revision_from_manifest(
-                    allowlist_id,
-                    state.head_revision_id,
-                    &head_manifest,
-                    &disk_manifest,
-                    kind,
-                    source,
-                    trigger,
-                    summary.or_else(|| summarize_change_counts(changes.len())),
-                    created_by,
-                )
-                .await?;
-            state.head_revision_id = Some(new_revision_id);
-        }
-        self.save_allowlist_state_record(
-            allowlist_id,
-            state.baseline_revision_id,
-            state.head_revision_id,
-        )
-        .await?;
         self.sync_allowlist_live_cache(
             allowlist_id,
             state.baseline_revision_id,
@@ -1298,7 +561,7 @@ impl LibSqlBackend {
         }
     }
 
-    async fn fetch_allowlist(
+    pub(crate) async fn fetch_allowlist(
         &self,
         user_id: &str,
         allowlist_id: Uuid,
@@ -1410,123 +673,6 @@ impl LibSqlBackend {
         Ok(result)
     }
 
-    async fn read_snapshot(
-        &self,
-        snapshot_id: Uuid,
-    ) -> Result<Option<SnapshotRecord>, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let mut rows = conn
-            .query(
-                "SELECT id, content, is_binary, content_hash FROM workspace_allowlist_snapshots WHERE id = ?1",
-                params![snapshot_id.to_string()],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("snapshot query failed: {e}"),
-            })?;
-        let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("snapshot query failed: {e}"),
-            })?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(SnapshotRecord {
-            id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("invalid snapshot id: {e}"),
-            })?,
-            content: row
-                .get::<Vec<u8>>(1)
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: format!("invalid snapshot content: {e}"),
-                })?,
-            is_binary: get_i64(&row, 2) != 0,
-            hash: get_text(&row, 3),
-        }))
-    }
-
-    async fn insert_snapshot(
-        &self,
-        allowlist_id: Uuid,
-        path: &str,
-        content: &[u8],
-    ) -> Result<SnapshotRecord, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let hash = compute_content_hash(content);
-        let is_binary = classify_binary(content);
-        let mut existing_rows = conn
-            .query(
-                "SELECT id, content, is_binary, content_hash
-                 FROM workspace_allowlist_snapshots
-                 WHERE allowlist_id = ?1 AND relative_path = ?2 AND content_hash = ?3
-                 ORDER BY created_at DESC
-                 LIMIT 1",
-                params![allowlist_id.to_string(), path, hash.clone()],
-            )
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("snapshot dedupe query failed: {e}"),
-            })?;
-        if let Some(row) = existing_rows
-            .next()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("snapshot dedupe query failed: {e}"),
-            })?
-        {
-            return Ok(SnapshotRecord {
-                id: Uuid::parse_str(&get_text(&row, 0)).map_err(|e| {
-                    WorkspaceError::SearchFailed {
-                        reason: format!("invalid snapshot id: {e}"),
-                    }
-                })?,
-                content: row
-                    .get::<Vec<u8>>(1)
-                    .map_err(|e| WorkspaceError::SearchFailed {
-                        reason: format!("invalid snapshot content: {e}"),
-                    })?,
-                is_binary: get_i64(&row, 2) != 0,
-                hash: get_text(&row, 3),
-            });
-        }
-        let snapshot = SnapshotRecord {
-            id: Uuid::new_v4(),
-            content: content.to_vec(),
-            is_binary,
-            hash,
-        };
-        conn.execute(
-            "INSERT INTO workspace_allowlist_snapshots (id, allowlist_id, relative_path, content, is_binary, content_hash, size_bytes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![
-                snapshot.id.to_string(),
-                allowlist_id.to_string(),
-                path,
-                snapshot.content.clone(),
-                if snapshot.is_binary { 1 } else { 0 },
-                snapshot.hash.clone(),
-                snapshot.content.len() as i64
-            ],
-        )
-        .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("snapshot insert failed: {e}"),
-        })?;
-        Ok(snapshot)
-    }
-
     async fn load_allowlist_file_record(
         &self,
         allowlist_id: Uuid,
@@ -1540,7 +686,7 @@ impl LibSqlBackend {
             })?;
         let mut rows = conn
             .query(
-                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, updated_at
+                "SELECT relative_path, status, is_binary, updated_at
                  FROM workspace_allowlist_files
                  WHERE allowlist_id = ?1 AND relative_path = ?2",
                 params![allowlist_id.to_string(), path],
@@ -1562,66 +708,8 @@ impl LibSqlBackend {
             path: get_text(&row, 0),
             status: status_from_str(&get_text(&row, 1)),
             is_binary: get_i64(&row, 2) != 0,
-            base_snapshot_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
-            working_snapshot_id: get_opt_text(&row, 4).and_then(|v| Uuid::parse_str(&v).ok()),
-            updated_at: get_ts(&row, 5),
+            updated_at: get_ts(&row, 3),
         }))
-    }
-
-    async fn upsert_allowlist_file_record(
-        &self,
-        allowlist_id: Uuid,
-        path: &str,
-        status: AllowlistedFileStatus,
-        is_binary: bool,
-        base_snapshot_id: Option<Uuid>,
-        working_snapshot_id: Option<Uuid>,
-    ) -> Result<AllowlistFileRecord, WorkspaceError> {
-        let conn = self
-            .connect()
-            .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: e.to_string(),
-            })?;
-        let now = fmt_ts(&Utc::now());
-        conn.execute(
-            r#"
-            INSERT INTO workspace_allowlist_files (
-                allowlist_id, relative_path, status, is_binary, base_snapshot_id, working_snapshot_id,
-                remote_hash, base_hash, working_hash, conflict_reason, created_at, updated_at
-            )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)
-            ON CONFLICT(allowlist_id, relative_path) DO UPDATE SET
-                status = excluded.status,
-                is_binary = excluded.is_binary,
-                base_snapshot_id = excluded.base_snapshot_id,
-                working_snapshot_id = excluded.working_snapshot_id,
-                updated_at = excluded.updated_at
-            "#,
-            params![
-                allowlist_id.to_string(),
-                path,
-                status_to_str(status),
-                if is_binary { 1 } else { 0 },
-                base_snapshot_id.map(|v| v.to_string()),
-                working_snapshot_id.map(|v| v.to_string()),
-                Option::<String>::None,
-                Option::<String>::None,
-                Option::<String>::None,
-                Option::<String>::None,
-                now
-            ],
-        )
-        .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("allowlist file upsert failed: {e}"),
-        })?;
-        self.load_allowlist_file_record(allowlist_id, path)
-            .await?
-            .ok_or_else(|| WorkspaceError::AllowlistPathNotFound {
-                allowlist_id: allowlist_id.to_string(),
-                path: path.to_string(),
-            })
     }
 
     async fn list_allowlist_file_records(
@@ -1647,7 +735,7 @@ impl LibSqlBackend {
         };
         let mut rows = conn
             .query(
-                "SELECT relative_path, status, is_binary, base_snapshot_id, working_snapshot_id, updated_at
+                "SELECT relative_path, status, is_binary, updated_at
                  FROM workspace_allowlist_files
                  WHERE allowlist_id = ?1 AND relative_path LIKE ?2
                  ORDER BY relative_path",
@@ -1669,9 +757,7 @@ impl LibSqlBackend {
                 path: get_text(&row, 0),
                 status: status_from_str(&get_text(&row, 1)),
                 is_binary: get_i64(&row, 2) != 0,
-                base_snapshot_id: get_opt_text(&row, 3).and_then(|v| Uuid::parse_str(&v).ok()),
-                working_snapshot_id: get_opt_text(&row, 4).and_then(|v| Uuid::parse_str(&v).ok()),
-                updated_at: get_ts(&row, 5),
+                updated_at: get_ts(&row, 3),
             });
         }
         Ok(result)
@@ -1716,6 +802,13 @@ impl LibSqlBackend {
                 .ok_or_else(|| WorkspaceError::SearchFailed {
                     reason: format!("checkpoint {checkpoint_id} missing revision_id"),
                 })?;
+            if self
+                .load_tracker_anchor_for_revision(allowlist_id, revision_id)
+                .await?
+                .is_none()
+            {
+                continue;
+            }
             let changed_files = self.list_revision_changed_files(revision_id, None).await?;
             result.push(WorkspaceAllowlistCheckpoint {
                 id: checkpoint_id,
@@ -2975,9 +2068,12 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to write {}: {e}", disk_path.display()),
             })?;
-        self.reconcile_allowlist(
+        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            Some(&normalized),
+            Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
             WorkspaceAllowlistRevisionKind::ToolWrite,
             WorkspaceAllowlistRevisionSource::WorkspaceTool,
             Some(normalized.clone()),
@@ -3017,9 +2113,12 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to delete {}: {e}", disk_path.display()),
             })?;
-        self.reconcile_allowlist(
+        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            Some(&normalized),
+            Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
             WorkspaceAllowlistRevisionKind::ToolDelete,
             WorkspaceAllowlistRevisionSource::WorkspaceTool,
             Some(normalized.clone()),
@@ -3190,156 +2289,49 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistDiffRequest,
     ) -> Result<WorkspaceAllowlistDiff, WorkspaceError> {
-        let scope = request
-            .scope_path
-            .as_deref()
-            .map(normalize_allowlist_path)
-            .transpose()?;
-        let state = self
-            .reconcile_allowlist(
-                &request.user_id,
-                request.allowlist_id,
-                WorkspaceAllowlistRevisionKind::ManualRefresh,
-                WorkspaceAllowlistRevisionSource::External,
-                Some("workspace_diff".to_string()),
-                None,
-                "system",
-            )
-            .await?;
-        let from_revision_id = self
-            .resolve_revision_target(
-                request.allowlist_id,
-                &state,
-                request.from.as_deref().unwrap_or("baseline"),
-            )
-            .await?;
-        let to_revision_id = self
-            .resolve_revision_target(
-                request.allowlist_id,
-                &state,
-                request.to.as_deref().unwrap_or("head"),
-            )
-            .await?;
-        let from_manifest = self.load_manifest_entries(from_revision_id).await?;
-        let to_manifest = self.load_manifest_entries(to_revision_id).await?;
-        let allowlist = self
-            .fetch_allowlist(&request.user_id, request.allowlist_id)
-            .await?;
-        let mut changes = collect_manifest_changes(&from_manifest, &to_manifest, scope.as_deref());
-        if let Some(max_files) = request.max_files {
-            changes.truncate(max_files);
-        }
-
-        let mut entries = Vec::new();
-        for change in changes {
-            let base_snapshot = match change.before.as_ref() {
-                Some(entry) => Some(self.read_snapshot_required(entry.snapshot_id).await?),
-                None => None,
-            };
-            let working_snapshot = match change.after.as_ref() {
-                Some(entry) => Some(self.read_snapshot_required(entry.snapshot_id).await?),
-                None => None,
-            };
-            let base_content = if request.include_content {
-                base_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| bytes_to_text(&snapshot.content))
-            } else {
-                None
-            };
-            let working_content = if request.include_content {
-                working_snapshot
-                    .as_ref()
-                    .and_then(|snapshot| bytes_to_text(&snapshot.content))
-            } else {
-                None
-            };
-            let remote_content =
-                if to_revision_id == state.head_revision_id.unwrap_or(to_revision_id) {
-                    let disk_path = Path::new(&allowlist.source_root).join(&change.path);
-                    Self::read_disk_bytes(&disk_path)
-                        .await?
-                        .and_then(|bytes| bytes_to_text(&bytes))
-                } else {
-                    None
-                };
-            let diff_text = if request.include_content && !change.is_binary {
-                render_text_diff(
-                    &change.path,
-                    base_content.as_deref(),
-                    working_content.as_deref(),
-                )
-            } else {
-                None
-            };
-            entries.push(AllowlistedFileDiff {
-                path: change.path.clone(),
-                uri: WorkspaceUri::allowlist_uri(request.allowlist_id, Some(&change.path)),
-                status: change.status,
-                change_kind: change.change_kind,
-                is_binary: change.is_binary,
-                base_content,
-                working_content,
-                remote_content,
-                diff_text,
-                conflict_reason: None,
-            });
-        }
-
-        Ok(WorkspaceAllowlistDiff {
-            allowlist_id: request.allowlist_id,
-            from_revision_id: Some(from_revision_id),
-            to_revision_id: Some(to_revision_id),
-            entries,
-        })
+        self.reconcile_allowlist(
+            &request.user_id,
+            request.allowlist_id,
+            WorkspaceAllowlistRevisionKind::ManualRefresh,
+            WorkspaceAllowlistRevisionSource::External,
+            Some("workspace_diff".to_string()),
+            None,
+            "system",
+        )
+        .await?;
+        self.build_diff_from_tracker(request).await
     }
 
     async fn keep_workspace_allowlist(
         &self,
         request: &AllowlistActionRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
-        let state = self
-            .reconcile_allowlist(
-                &request.user_id,
-                request.allowlist_id,
-                WorkspaceAllowlistRevisionKind::ManualRefresh,
-                WorkspaceAllowlistRevisionSource::External,
-                Some("keep_allowlist".to_string()),
-                None,
-                "system",
-            )
-            .await?;
-        let head_revision_id =
-            state
-                .head_revision_id
-                .ok_or_else(|| WorkspaceError::AllowlistConflict {
-                    path: request.allowlist_id.to_string(),
-                    reason: "cannot keep allowlist without a head revision".to_string(),
-                })?;
-        let head_manifest = self.load_manifest_entries(head_revision_id).await?;
-        let accept_revision_id = self
-            .create_revision_from_manifest(
-                request.allowlist_id,
-                Some(head_revision_id),
-                &head_manifest,
-                &head_manifest,
-                WorkspaceAllowlistRevisionKind::Accept,
-                WorkspaceAllowlistRevisionSource::System,
-                Some("keep_allowlist".to_string()),
-                Some("accepted current workspace tree as baseline".to_string()),
-                "system",
-            )
-            .await?;
-        self.save_allowlist_state_record(
+        self.reconcile_allowlist(
+            &request.user_id,
             request.allowlist_id,
-            Some(accept_revision_id),
-            Some(accept_revision_id),
+            WorkspaceAllowlistRevisionKind::ManualRefresh,
+            WorkspaceAllowlistRevisionSource::External,
+            Some("keep_allowlist".to_string()),
+            None,
+            "system",
         )
         .await?;
+        let mut tracker = self
+            .load_allowlist_tracker(request.allowlist_id)
+            .await?
+            .ok_or_else(|| WorkspaceError::AllowlistNotFound {
+                allowlist_id: request.allowlist_id.to_string(),
+            })?;
+        tracker.baseline_anchor = tracker.head_anchor.clone();
+        tracker.baseline_revision_id = tracker.head_revision_id;
+        tracker.status = AllowlistTrackerStatus::Ready;
+        tracker.last_verified_at = Some(Utc::now());
+        self.save_allowlist_tracker(&tracker).await?;
+        self.update_tracker_refs(&tracker).await?;
         self.sync_allowlist_live_cache(
             request.allowlist_id,
-            Some(accept_revision_id),
-            Some(accept_revision_id),
+            tracker.baseline_revision_id,
+            tracker.head_revision_id,
         )
         .await?;
         self.touch_allowlist_updated_at(request.allowlist_id)
@@ -3414,12 +2406,18 @@ impl WorkspaceStore for LibSqlBackend {
                     .map_err(|e| WorkspaceError::IoError {
                         reason: format!("failed to write copy {}: {e}", disk_path.display()),
                     })?;
-                self.reconcile_allowlist(
+                let tracker = self
+                    .ensure_allowlist_tracker(&request.user_id, request.allowlist_id)
+                    .await?;
+                let copy_trigger = copy_path.clone();
+                self.sync_allowlist_from_tracker(
                     &request.user_id,
                     request.allowlist_id,
+                    Some(&copy_path),
+                    Some(vec![tracker.repo_path_for_allowlist_path(&copy_path)]),
                     WorkspaceAllowlistRevisionKind::ToolWrite,
                     WorkspaceAllowlistRevisionSource::WorkspaceTool,
-                    Some(copy_path),
+                    Some(copy_trigger),
                     Some("wrote copy during conflict resolution".to_string()),
                     "workspace_conflict",
                 )
@@ -3444,12 +2442,18 @@ impl WorkspaceStore for LibSqlBackend {
                     .map_err(|e| WorkspaceError::IoError {
                         reason: format!("failed to write merged file {}: {e}", disk_path.display()),
                     })?;
-                self.reconcile_allowlist(
+                let tracker = self
+                    .ensure_allowlist_tracker(&request.user_id, request.allowlist_id)
+                    .await?;
+                let normalized_trigger = normalized.clone();
+                self.sync_allowlist_from_tracker(
                     &request.user_id,
                     request.allowlist_id,
+                    Some(&normalized),
+                    Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
                     WorkspaceAllowlistRevisionKind::ToolPatch,
                     WorkspaceAllowlistRevisionSource::WorkspaceTool,
-                    Some(normalized),
+                    Some(normalized_trigger),
                     Some("manual merge resolution".to_string()),
                     "workspace_conflict",
                 )
@@ -3521,9 +2525,16 @@ impl WorkspaceStore for LibSqlBackend {
                     destination_disk_path.display()
                 ),
             })?;
-        self.reconcile_allowlist(
+        let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
+        let repo_paths = vec![
+            tracker.repo_path_for_allowlist_path(&source_path),
+            tracker.repo_path_for_allowlist_path(&destination_path),
+        ];
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            None,
+            Some(repo_paths),
             WorkspaceAllowlistRevisionKind::ToolMove,
             WorkspaceAllowlistRevisionSource::WorkspaceTool,
             Some(format!("{source_path} -> {destination_path}")),
@@ -3573,9 +2584,11 @@ impl WorkspaceStore for LibSqlBackend {
             .map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to delete directory {}: {e}", disk_path.display()),
             })?;
-        self.reconcile_allowlist(
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            Some(&normalized),
+            None,
             WorkspaceAllowlistRevisionKind::ToolDelete,
             WorkspaceAllowlistRevisionSource::WorkspaceTool,
             Some(path.to_string()),
@@ -3591,12 +2604,7 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &WorkspaceAllowlistRestoreRequest,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
-        let scope = request
-            .scope_path
-            .as_deref()
-            .map(normalize_allowlist_path)
-            .transpose()?;
-        let mut state = self
+        let state = self
             .reconcile_allowlist(
                 &request.user_id,
                 request.allowlist_id,
@@ -3617,6 +2625,16 @@ impl WorkspaceStore for LibSqlBackend {
         let target_revision_id = self
             .resolve_revision_target(request.allowlist_id, &state, &request.target)
             .await?;
+        let target_anchor = self
+            .load_tracker_anchor_for_revision(request.allowlist_id, target_revision_id)
+            .await?
+            .ok_or_else(|| WorkspaceError::AllowlistConflict {
+                path: request.allowlist_id.to_string(),
+                reason: format!(
+                    "target '{}' is not backed by a tracker anchor",
+                    request.target
+                ),
+            })?;
         if request.dry_run {
             return self
                 .build_allowlist_detail_internal(&request.user_id, request.allowlist_id)
@@ -3637,93 +2655,20 @@ impl WorkspaceStore for LibSqlBackend {
             )
             .await?;
         }
-
-        let allowlist = self
-            .fetch_allowlist(&request.user_id, request.allowlist_id)
-            .await?;
-        let current_manifest = self.load_manifest_entries(head_revision_id).await?;
-        let target_manifest = self.load_manifest_entries(target_revision_id).await?;
-        let desired_manifest = if let Some(scope) = scope.as_deref() {
-            let mut desired = current_manifest.clone();
-            desired.retain(|path, _| !scope_matches(path, Some(scope)));
-            for (path, entry) in &target_manifest {
-                if scope_matches(path, Some(scope)) {
-                    desired.insert(path.clone(), entry.clone());
-                }
-            }
-            desired
-        } else {
-            target_manifest.clone()
-        };
-        let changes = collect_manifest_changes(&current_manifest, &desired_manifest, None);
-        let mut recovery_bundle = Vec::new();
-        for change in &changes {
-            let disk_path = Path::new(&allowlist.source_root).join(&change.path);
-            recovery_bundle.push((disk_path.clone(), Self::read_disk_bytes(&disk_path).await?));
-        }
-
-        let apply_result = async {
-            for change in &changes {
-                let disk_path = Path::new(&allowlist.source_root).join(&change.path);
-                match &change.after {
-                    Some(entry) => {
-                        let snapshot = self.read_snapshot_required(entry.snapshot_id).await?;
-                        if let Some(parent) = disk_path.parent() {
-                            tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                                WorkspaceError::IoError {
-                                    reason: format!("failed to create {}: {e}", parent.display()),
-                                }
-                            })?;
-                        }
-                        tokio::fs::write(&disk_path, snapshot.content)
-                            .await
-                            .map_err(|e| WorkspaceError::IoError {
-                                reason: format!("failed to restore {}: {e}", disk_path.display()),
-                            })?;
-                    }
-                    None => {
-                        if tokio::fs::try_exists(&disk_path).await.map_err(|e| {
-                            WorkspaceError::IoError {
-                                reason: format!("failed to check {}: {e}", disk_path.display()),
-                            }
-                        })? {
-                            tokio::fs::remove_file(&disk_path).await.map_err(|e| {
-                                WorkspaceError::IoError {
-                                    reason: format!(
-                                        "failed to delete {}: {e}",
-                                        disk_path.display()
-                                    ),
-                                }
-                            })?;
-                        }
-                    }
-                }
-            }
-            Ok::<(), WorkspaceError>(())
-        }
-        .await;
-
-        if let Err(error) = apply_result {
-            for (path, bytes) in recovery_bundle.into_iter().rev() {
-                match bytes {
-                    Some(bytes) => {
-                        if let Some(parent) = path.parent() {
-                            let _ = tokio::fs::create_dir_all(parent).await;
-                        }
-                        let _ = tokio::fs::write(&path, bytes).await;
-                    }
-                    None => {
-                        let _ = tokio::fs::remove_file(&path).await;
-                    }
-                }
-            }
-            return Err(error);
-        }
-
-        state = self
-            .reconcile_allowlist(
+        let changed_repo_paths = self
+            .restore_allowlist_from_anchor(
                 &request.user_id,
                 request.allowlist_id,
+                &target_anchor,
+                request.scope_path.as_deref(),
+            )
+            .await?;
+        let state = self
+            .sync_allowlist_from_tracker(
+                &request.user_id,
+                request.allowlist_id,
+                request.scope_path.as_deref(),
+                Some(changed_repo_paths),
                 WorkspaceAllowlistRevisionKind::Restore,
                 WorkspaceAllowlistRevisionSource::System,
                 Some(request.target.clone()),
@@ -3732,16 +2677,22 @@ impl WorkspaceStore for LibSqlBackend {
             )
             .await?;
         if request.set_as_baseline {
-            self.save_allowlist_state_record(
-                request.allowlist_id,
-                state.head_revision_id,
-                state.head_revision_id,
-            )
-            .await?;
+            let mut tracker = self
+                .load_allowlist_tracker(request.allowlist_id)
+                .await?
+                .ok_or_else(|| WorkspaceError::AllowlistNotFound {
+                    allowlist_id: request.allowlist_id.to_string(),
+                })?;
+            tracker.baseline_anchor = tracker.head_anchor.clone();
+            tracker.baseline_revision_id = state.head_revision_id;
+            tracker.status = AllowlistTrackerStatus::Ready;
+            tracker.last_verified_at = Some(Utc::now());
+            self.save_allowlist_tracker(&tracker).await?;
+            self.update_tracker_refs(&tracker).await?;
             self.sync_allowlist_live_cache(
                 request.allowlist_id,
-                state.head_revision_id,
-                state.head_revision_id,
+                tracker.baseline_revision_id,
+                tracker.head_revision_id,
             )
             .await?;
         }
@@ -3767,16 +2718,32 @@ impl WorkspaceStore for LibSqlBackend {
         let target_revision_id = self
             .resolve_revision_target(request.allowlist_id, &state, &request.target)
             .await?;
-        self.save_allowlist_state_record(
-            request.allowlist_id,
-            Some(target_revision_id),
-            state.head_revision_id,
-        )
-        .await?;
+        let target_anchor = self
+            .load_tracker_anchor_for_revision(request.allowlist_id, target_revision_id)
+            .await?
+            .ok_or_else(|| WorkspaceError::AllowlistConflict {
+                path: request.allowlist_id.to_string(),
+                reason: format!(
+                    "target '{}' is not backed by a tracker anchor",
+                    request.target
+                ),
+            })?;
+        let mut tracker = self
+            .load_allowlist_tracker(request.allowlist_id)
+            .await?
+            .ok_or_else(|| WorkspaceError::AllowlistNotFound {
+                allowlist_id: request.allowlist_id.to_string(),
+            })?;
+        tracker.baseline_anchor = Some(target_anchor);
+        tracker.baseline_revision_id = Some(target_revision_id);
+        tracker.last_verified_at = Some(Utc::now());
+        tracker.status = AllowlistTrackerStatus::Ready;
+        self.save_allowlist_tracker(&tracker).await?;
+        self.update_tracker_refs(&tracker).await?;
         self.sync_allowlist_live_cache(
             request.allowlist_id,
-            Some(target_revision_id),
-            state.head_revision_id,
+            tracker.baseline_revision_id,
+            tracker.head_revision_id,
         )
         .await?;
         self.touch_allowlist_updated_at(request.allowlist_id)
@@ -3789,11 +2756,13 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         user_id: &str,
         allowlist_id: Uuid,
-        _scope_path: Option<&str>,
+        scope_path: Option<&str>,
     ) -> Result<WorkspaceAllowlistDetail, WorkspaceError> {
-        self.reconcile_allowlist(
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            scope_path,
+            None,
             WorkspaceAllowlistRevisionKind::ManualRefresh,
             WorkspaceAllowlistRevisionSource::External,
             Some("workspace_refresh".to_string()),
@@ -3810,9 +2779,11 @@ impl WorkspaceStore for LibSqlBackend {
         user_id: &str,
         allowlist_id: Uuid,
     ) -> Result<(), WorkspaceError> {
-        self.reconcile_allowlist(
+        self.sync_allowlist_from_tracker(
             user_id,
             allowlist_id,
+            None,
+            None,
             WorkspaceAllowlistRevisionKind::FsWatch,
             WorkspaceAllowlistRevisionSource::External,
             Some("workspace_watch".to_string()),

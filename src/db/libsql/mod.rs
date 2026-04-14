@@ -17,6 +17,7 @@ mod templates;
 mod tool_failures;
 mod users;
 mod workspace;
+mod workspace_tracker;
 
 use std::path::Path;
 use std::sync::Arc;

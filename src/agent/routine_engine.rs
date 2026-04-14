@@ -1102,13 +1102,8 @@ impl RoutineEngine {
                 return;
             }
             if routine.name == "memory_reflection" {
-                emit_memory_reflection_status(
-                    &engine.notify_tx,
-                    &run,
-                    &routine.name,
-                    "running",
-                )
-                .await;
+                emit_memory_reflection_status(&engine.notify_tx, &run, &routine.name, "running")
+                    .await;
             }
             execute_routine(engine, routine, run).await;
         })
@@ -3679,7 +3674,10 @@ mod tests {
             .await
             .expect("queued status should be emitted")
             .expect("queued status event");
-        assert_eq!(queued_status_event.metadata["display_kind"], "reflection_status");
+        assert_eq!(
+            queued_status_event.metadata["display_kind"],
+            "reflection_status"
+        );
         assert_eq!(queued_status_event.metadata["status"], "queued");
     }
 }

@@ -89,16 +89,20 @@ export const apiClient = {
   approveTask(id: string, approvalId?: string, always = false) {
     return invoke<TaskRecord>("approve_task", {
       id,
-      approval_id: approvalId ?? null,
-      always
+      payload: {
+        approval_id: approvalId ?? null,
+        always
+      }
     });
   },
 
   rejectTask(id: string, approvalId?: string, reason?: string) {
     return invoke<TaskRecord>("reject_task", {
       id,
-      approval_id: approvalId ?? null,
-      reason: reason ?? null
+      payload: {
+        approval_id: approvalId ?? null,
+        reason: reason ?? null
+      }
     });
   },
 
@@ -107,7 +111,10 @@ export const apiClient = {
   },
 
   patchTaskMode(id: string, mode: "ask" | "yolo") {
-    return invoke<TaskRecord>("patch_task_mode", { id, mode });
+    return invoke<TaskRecord>("patch_task_mode", {
+      id,
+      payload: { mode }
+    });
   },
 
   getWorkbenchCapabilities() {

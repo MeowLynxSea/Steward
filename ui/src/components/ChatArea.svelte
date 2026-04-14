@@ -1204,6 +1204,7 @@
   {#if task?.pending_approval}
     <TaskApprovalCard
       {task}
+      modal={true}
       bind:rejectReason
       onApprove={() => task && onApproveTask(task)}
       onApproveAlways={() => task && onApproveTaskAlways(task)}

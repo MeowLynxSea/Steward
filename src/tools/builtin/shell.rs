@@ -245,6 +245,35 @@ static LOW_RISK_PATTERNS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     ]
 });
 
+/// Command fragments that strongly suggest the shell invocation may have mutated
+/// the filesystem and therefore needs an allowlist refresh.
+static FILESYSTEM_MUTATION_HINTS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+    vec![
+        "touch ",
+        "mkdir ",
+        "rmdir ",
+        "cp ",
+        "mv ",
+        "rm ",
+        "install ",
+        "tee ",
+        "truncate ",
+        "dd ",
+        "sed -i",
+        "awk -i",
+        "perl -i",
+        "python -m compileall",
+        "git apply",
+        "git checkout",
+        "git restore",
+        "cargo fmt",
+        "rustfmt ",
+        "npm install",
+        "pnpm install",
+        "yarn install",
+    ]
+});
+
 /// Medium-risk command prefixes: mutations that are generally reversible, plus commands with
 /// potentially destructive flags (e.g. `sed -i`, `awk -i inplace`, `find -delete`).
 static MEDIUM_RISK_PATTERNS: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
@@ -525,6 +554,27 @@ fn has_command_token(lower: &str, token: &str) -> bool {
         }
     }
     false
+}
+
+fn command_needs_allowlist_refresh(cmd: &str) -> bool {
+    let lower = cmd.to_lowercase();
+
+    if lower.contains(">>") {
+        return true;
+    }
+
+    if lower.contains(" >")
+        || lower.starts_with('>')
+        || lower.contains(" 2>")
+        || lower.contains(" 1>")
+        || lower.contains(" &>")
+    {
+        return true;
+    }
+
+    FILESYSTEM_MUTATION_HINTS
+        .iter()
+        .any(|hint| matches_command_pattern(&lower, hint))
 }
 
 /// Shell command execution tool.
@@ -811,12 +861,30 @@ impl ShellTool {
             .await?;
         let workspace_path = if let Some(resolver) = self.workspace_resolver.as_ref() {
             let workspace = resolver.resolve(user_id).await;
-            workspace
-                .refresh_allowlist_for_disk_path(&cwd)
-                .await
-                .map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Allowlisted refresh failed: {e}"))
-                })?
+            let resolved = workspace.resolve_allowlist_path(&cwd).await.map_err(|e| {
+                ToolError::ExecutionFailed(format!("Allowlisted resolve failed: {e}"))
+            })?;
+            if command_needs_allowlist_refresh(cmd)
+                && let Some(ref resolved_path) = resolved
+            {
+                let workspace = Arc::clone(&workspace);
+                let allowlist_id = resolved_path.allowlist_id;
+                let scope_path = resolved_path.relative_path.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = workspace
+                        .refresh_allowlist(allowlist_id, scope_path.as_deref())
+                        .await
+                    {
+                        tracing::warn!(
+                            allowlist_id = %allowlist_id,
+                            scope_path = ?scope_path,
+                            "asynchronous shell allowlist sync failed: {}",
+                            error
+                        );
+                    }
+                });
+            }
+            resolved
         } else {
             None
         };
@@ -1106,6 +1174,18 @@ mod tests {
     fn test_timeout_builder() {
         let tool = ShellTool::new().with_timeout(Duration::from_secs(60));
         assert_eq!(tool.timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn test_command_needs_allowlist_refresh() {
+        assert!(!command_needs_allowlist_refresh("echo hello, world"));
+        assert!(!command_needs_allowlist_refresh("pwd"));
+        assert!(command_needs_allowlist_refresh(
+            "printf 'hello\\n' > greeting.txt"
+        ));
+        assert!(command_needs_allowlist_refresh("echo hi >> notes.txt"));
+        assert!(command_needs_allowlist_refresh("cargo fmt"));
+        assert!(command_needs_allowlist_refresh("mkdir -p tmp/logs"));
     }
 
     // ── Command token matching ─────────────────────────────────────────

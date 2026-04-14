@@ -11,6 +11,7 @@ import type {
   StreamEnvelope,
   StreamingState,
   TaskDetail,
+  TaskRecord,
   TurnCostInfo,
   ToolDecision
 } from "../types";
@@ -304,6 +305,38 @@ class SessionsState {
     }
   }
 
+  async approveTask(task: TaskRecord, always = false) {
+    this.error = null;
+    try {
+      this.status = `${always ? "Always allowing" : "Approving"} ${task.title}`;
+      const updatedTask = await apiClient.approveTask(task.id, task.pending_approval?.id, always);
+      this.#applyActiveTaskUpdate(updatedTask);
+      await this.refreshActiveTaskDetail();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to approve task";
+    } finally {
+      this.status = "";
+    }
+  }
+
+  async rejectTask(task: TaskRecord, reason: string) {
+    this.error = null;
+    try {
+      this.status = `Rejecting ${task.title}`;
+      const updatedTask = await apiClient.rejectTask(
+        task.id,
+        task.pending_approval?.id,
+        reason.trim() || "rejected by user"
+      );
+      this.#applyActiveTaskUpdate(updatedTask);
+      await this.refreshActiveTaskDetail();
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to reject task";
+    } finally {
+      this.status = "";
+    }
+  }
+
   disconnect() {
     this.#stopPollFallback();
     this.#streamingAssistantId = null;
@@ -398,6 +431,33 @@ class SessionsState {
       this.error = e instanceof Error ? e.message : "Failed to load active run detail";
     } finally {
       this.activeTaskLoading = false;
+    }
+  }
+
+  #applyActiveTaskUpdate(task: TaskRecord) {
+    if (!this.active) {
+      return;
+    }
+
+    const activeTask = this.active.active_thread_task;
+    if (activeTask?.id !== task.id) {
+      return;
+    }
+
+    this.active = {
+      ...this.active,
+      active_thread_task: task
+    };
+
+    if (this.activeTaskDetail?.task.id === task.id) {
+      this.activeTaskDetail = {
+        ...this.activeTaskDetail,
+        task
+      };
+    }
+
+    if (["completed", "failed", "cancelled", "rejected"].includes(task.status)) {
+      this.#finishStreamingFromTerminalState();
     }
   }
 

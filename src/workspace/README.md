@@ -13,9 +13,9 @@ Legacy file-based memory is no longer part of the active workspace architecture.
 ## Key Principles
 
 1. **Workspace means allowlisted files** - `workspace://...` points at real allowlisted project content
-2. **Real filesystem is the source of truth** - allowlisted reads, writes, moves, deletes, and shell commands operate on the host files directly
-3. **Revisions track filesystem states** - diff/history/checkpoint/restore compare real tree states instead of an overlay copy
-4. **Background allowlist watch keeps history current** - a workspace watcher polls allowlisted roots and records external edits as `fs_watch` revisions
+2. **Real filesystem is the working tree** - allowlisted reads, writes, moves, deletes, and shell commands operate on host files directly
+3. **Git-backed trackers are the workspace truth** - every allowlist is backed by a Git tracker that owns dirty-path detection, anchors, diff, history, and restore
+4. **Background allowlist watch is tracker-driven** - the watcher collects dirty paths and asks the tracker to advance product revisions without manifest rescans
 5. **Agent memory is separate** - long-term memory lives in `src/memory/`, not here
 6. **Hybrid search is discovery** - workspace search helps find allowlisted file context
 7. **No workspace memory truth** - long-term memory does not live in workspace markdown files
@@ -76,7 +76,7 @@ Current LLM-facing workspace tools are allowlist-oriented:
 - **`workspace_checkpoint_create` / `workspace_checkpoint_list`** - Create and inspect named restore points
 - **`workspace_restore`** - Force real files back to a target revision/checkpoint/baseline
 - **`workspace_baseline_set`** - Change the default diff reference without modifying disk
-- **`workspace_refresh`** - Force a reconcile scan of the real allowlisted tree
+- **`workspace_refresh`** - Ask the tracker to re-sync the current allowlisted working tree
 
 ## Hybrid Search (RRF)
 

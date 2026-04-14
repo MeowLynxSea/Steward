@@ -145,15 +145,24 @@
   const noBackend = $derived(settingsStore.data.backends.length === 0);
 
   function handleApproveTask(task: TaskRecord) {
-    void tasksStore.approve(task);
+    void (async () => {
+      await sessionsStore.approveTask(task);
+      await tasksStore.refresh();
+    })();
   }
 
   function handleApproveTaskAlways(task: TaskRecord) {
-    void tasksStore.approve(task, true);
+    void (async () => {
+      await sessionsStore.approveTask(task, true);
+      await tasksStore.refresh();
+    })();
   }
 
   function handleRejectTask(task: TaskRecord, reason: string) {
-    void tasksStore.reject(task, reason);
+    void (async () => {
+      await sessionsStore.rejectTask(task, reason);
+      await tasksStore.refresh();
+    })();
   }
 
   function handleUseWorkspaceResult(result: WorkspaceSearchResult) {

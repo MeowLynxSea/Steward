@@ -9,6 +9,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use steward_core::agent::session::Session;
+use steward_core::agent::submission::Submission;
 use steward_core::channels::IncomingMessage;
 use steward_core::desktop_runtime::AppState;
 use steward_core::history::ConversationMessage;
@@ -22,6 +23,7 @@ use steward_core::ipc::{
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
+use steward_core::task_runtime::TaskStatus;
 
 enum DesktopDispatchPlan {
     InjectOnly,
@@ -770,6 +772,133 @@ fn desktop_message_metadata(
         "notify_user": owner_id,
         "notify_thread_id": thread_id.to_string(),
     })
+}
+
+fn merge_desktop_message_metadata(
+    base: &serde_json::Value,
+    session_id: Uuid,
+    thread_id: Uuid,
+    owner_id: &str,
+) -> serde_json::Value {
+    let mut metadata = match base {
+        serde_json::Value::Object(map) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+
+    metadata.insert(
+        "desktop_session_id".to_string(),
+        serde_json::Value::String(session_id.to_string()),
+    );
+    metadata.insert(
+        "notify_user".to_string(),
+        serde_json::Value::String(owner_id.to_string()),
+    );
+    metadata.insert(
+        "notify_thread_id".to_string(),
+        serde_json::Value::String(thread_id.to_string()),
+    );
+
+    serde_json::Value::Object(metadata)
+}
+
+fn session_id_from_metadata(metadata: &serde_json::Value) -> Option<Uuid> {
+    metadata
+        .get("desktop_session_id")
+        .and_then(|value| value.as_str())
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+async fn find_session_id_for_thread(state: &AppState, thread_id: Uuid) -> Option<Uuid> {
+    let sessions = state
+        .agent_session_manager
+        .list_sessions(&state.owner_id)
+        .await;
+
+    for (session_id, session) in sessions {
+        let sess = session.lock().await;
+        if sess.threads.contains_key(&thread_id) {
+            return Some(session_id);
+        }
+    }
+
+    None
+}
+
+async fn inject_task_approval_submission(
+    state: &AppState,
+    task: &steward_core::ipc::TaskRecord,
+    approval_id: Uuid,
+    approved: bool,
+    always: bool,
+) -> Result<(), String> {
+    let mut session_id = session_id_from_metadata(&task.route.metadata);
+    if session_id.is_none() {
+        session_id = find_session_id_for_thread(state, task.id).await;
+    }
+    if session_id.is_none()
+        && let Ok(thread_id) = Uuid::parse_str(&task.route.thread_id)
+    {
+        session_id = find_session_id_for_thread(state, thread_id).await;
+    }
+
+    let payload = serde_json::to_string(&Submission::ExecApproval {
+        request_id: approval_id,
+        approved,
+        always,
+    })
+    .map_err(|error| format!("Failed to serialize approval submission: {error}"))?;
+
+    let mut message = IncomingMessage::new(&task.route.channel, &task.route.user_id, payload)
+        .with_owner_id(task.route.owner_id.clone())
+        .with_sender_id(task.route.sender_id.clone())
+        .with_thread(task.route.thread_id.clone());
+
+    if let Some(session_id) = session_id {
+        message = message.with_metadata(merge_desktop_message_metadata(
+            &task.route.metadata,
+            session_id,
+            task.id,
+            &state.owner_id,
+        ));
+    } else {
+        message = message.with_metadata(task.route.metadata.clone());
+    }
+
+    if let Some(timezone) = task.route.timezone.as_deref() {
+        message = message.with_timezone(timezone.to_string());
+    }
+
+    state
+        .message_inject_tx
+        .send(message)
+        .await
+        .map_err(|error| format!("Failed to inject approval submission: {error}"))
+}
+
+async fn wait_for_task_approval_transition(
+    state: &AppState,
+    task_id: Uuid,
+    prior_approval_id: Option<Uuid>,
+) -> Option<steward_core::ipc::TaskRecord> {
+    let timeout_at = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let mut latest = None;
+
+    while std::time::Instant::now() < timeout_at {
+        if let Some(task) = state.task_runtime.get_task(task_id).await {
+            let current_approval_id = task.pending_approval.as_ref().map(|pending| pending.id);
+            let transitioned = task.status != TaskStatus::WaitingApproval
+                || current_approval_id != prior_approval_id;
+
+            latest = Some(task.clone());
+            if transitioned {
+                return Some(task);
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    latest
 }
 
 fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
@@ -1556,9 +1685,7 @@ pub async fn get_reflection_details(
     let detail = summary.as_deref().and_then(reflection_detail_from_summary);
     let has_artifacts = !tool_calls.is_empty() || !messages.is_empty();
 
-    let outcome = summary
-        .as_deref()
-        .and_then(reflection_outcome_from_summary);
+    let outcome = summary.as_deref().and_then(reflection_outcome_from_summary);
 
     let status = if let Some(run) = matched_run.as_ref() {
         match run.status {
@@ -1957,22 +2084,24 @@ pub async fn approve_task(
         }
     }
 
-    let message = steward_core::channels::IncomingMessage::new(
-        &task.route.channel,
-        &task.route.user_id,
-        "approval",
-    )
-    .with_owner_id(task.route.owner_id.clone())
-    .with_sender_id(task.route.sender_id.clone())
-    .with_thread(task.route.thread_id.clone());
+    let approval_id = task
+        .pending_approval
+        .as_ref()
+        .map(|pending| pending.id)
+        .ok_or_else(|| {
+            "Task is awaiting approval but no approval payload is attached".to_string()
+        })?;
 
-    state.task_runtime.mark_running(&message, id).await;
+    inject_task_approval_submission(&state, &task, approval_id, true, payload.always).await?;
 
-    let task = state
-        .task_runtime
-        .get_task(id)
-        .await
-        .ok_or_else(|| "Task not found after approval".to_string())?;
+    let task = match wait_for_task_approval_transition(&state, id, Some(approval_id)).await {
+        Some(task) => task,
+        None => state
+            .task_runtime
+            .get_task(id)
+            .await
+            .ok_or_else(|| "Task not found after approval".to_string())?,
+    };
 
     Ok(task)
 }
@@ -1983,16 +2112,45 @@ pub async fn reject_task(
     id: Uuid,
     payload: RejectTaskRequest,
 ) -> Result<steward_core::ipc::TaskRecord, String> {
-    let reason = payload
-        .reason
-        .unwrap_or_else(|| "Rejected via IPC".to_string());
-    state.task_runtime.mark_rejected(id, reason).await;
-
     let task = state
         .task_runtime
         .get_task(id)
         .await
         .ok_or_else(|| "Task not found".to_string())?;
+
+    if task.status != steward_core::task_runtime::TaskStatus::WaitingApproval {
+        return Err(format!(
+            "Task is not awaiting approval (current status: {:?})",
+            task.status
+        ));
+    }
+
+    if let Some(approval_id) = payload.approval_id {
+        if let Some(ref pending) = task.pending_approval {
+            if pending.id != approval_id {
+                return Err("Approval ID mismatch".to_string());
+            }
+        }
+    }
+
+    let approval_id = task
+        .pending_approval
+        .as_ref()
+        .map(|pending| pending.id)
+        .ok_or_else(|| {
+            "Task is awaiting approval but no approval payload is attached".to_string()
+        })?;
+
+    inject_task_approval_submission(&state, &task, approval_id, false, false).await?;
+
+    let task = match wait_for_task_approval_transition(&state, id, Some(approval_id)).await {
+        Some(task) => task,
+        None => state
+            .task_runtime
+            .get_task(id)
+            .await
+            .ok_or_else(|| "Task not found after rejection".to_string())?,
+    };
 
     Ok(task)
 }

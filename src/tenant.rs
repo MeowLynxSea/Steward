@@ -515,10 +515,7 @@ impl AdminScope {
         self.inner.batch_get_last_run_status(routine_ids).await
     }
 
-    pub async fn count_running_routine_runs(
-        &self,
-        routine_id: Uuid,
-    ) -> Result<i64, DatabaseError> {
+    pub async fn count_running_routine_runs(&self, routine_id: Uuid) -> Result<i64, DatabaseError> {
         self.inner.count_running_routine_runs(routine_id).await
     }
 
