@@ -75,6 +75,33 @@ pub struct TurnCostResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReflectionMessageResponse {
+    pub id: Uuid,
+    pub content: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReflectionToolCallResponse {
+    pub id: Uuid,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub tool_call: ThreadToolCallResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReflectionDetailResponse {
+    pub assistant_message_id: Uuid,
+    pub status: String,
+    pub outcome: Option<String>,
+    pub summary: Option<String>,
+    pub detail: Option<String>,
+    pub run_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub run_completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub tool_calls: Vec<ReflectionToolCallResponse>,
+    pub messages: Vec<ReflectionMessageResponse>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ThreadMessageResponse {
     pub id: Uuid,
     pub kind: String,

@@ -4,6 +4,7 @@ import type {
   MemoryNodeDetail,
   MemorySidebarSection,
   MemoryTimelineEntry,
+  ReflectionDetail,
   MemoryChangeSet,
   MemoryVersion,
   MemorySearchHit,
@@ -52,6 +53,13 @@ export const apiClient = {
 
   getSession(id: string) {
     return invoke<SessionDetail>("get_session", { id });
+  },
+
+  getReflectionDetails(threadId: string, assistantMessageId: string) {
+    return invoke<ReflectionDetail>("get_reflection_details", {
+      thread_id: threadId,
+      assistant_message_id: assistantMessageId
+    });
   },
 
   deleteSession(id: string) {

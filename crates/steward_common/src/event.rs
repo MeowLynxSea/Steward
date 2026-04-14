@@ -39,7 +39,27 @@ pub enum AppEvent {
     #[serde(rename = "response")]
     Response { content: String, thread_id: String },
     #[serde(rename = "reflection")]
-    Reflection { content: String, thread_id: String },
+    Reflection {
+        content: String,
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        routine_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<String>,
+    },
+    #[serde(rename = "reflection_status")]
+    ReflectionStatus {
+        status: String,
+        thread_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        routine_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<String>,
+    },
     #[serde(rename = "thinking")]
     Thinking {
         message: String,
@@ -55,6 +75,12 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         parameters: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        routine_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
     #[serde(rename = "tool_completed")]
@@ -67,6 +93,12 @@ pub enum AppEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         parameters: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        routine_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
     #[serde(rename = "tool_result")]
@@ -74,6 +106,12 @@ pub enum AppEvent {
         name: String,
         tool_call_id: String,
         preview: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        routine_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        assistant_message_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
     },
@@ -235,6 +273,7 @@ impl AppEvent {
         match self {
             Self::Response { .. } => "response",
             Self::Reflection { .. } => "reflection",
+            Self::ReflectionStatus { .. } => "reflection_status",
             Self::Thinking { .. } => "thinking",
             Self::ToolStarted { .. } => "tool_started",
             Self::ToolCompleted { .. } => "tool_completed",
@@ -280,6 +319,16 @@ mod tests {
             AppEvent::Reflection {
                 content: String::new(),
                 thread_id: String::new(),
+                source: None,
+                routine_name: None,
+                assistant_message_id: None,
+            },
+            AppEvent::ReflectionStatus {
+                status: String::new(),
+                thread_id: String::new(),
+                source: None,
+                routine_name: None,
+                assistant_message_id: None,
             },
             AppEvent::Thinking {
                 message: String::new(),
@@ -290,6 +339,9 @@ mod tests {
                 name: String::new(),
                 tool_call_id: String::new(),
                 parameters: None,
+                source: None,
+                routine_name: None,
+                assistant_message_id: None,
                 thread_id: None,
             },
             AppEvent::ToolCompleted {
@@ -298,12 +350,18 @@ mod tests {
                 success: true,
                 error: None,
                 parameters: None,
+                source: None,
+                routine_name: None,
+                assistant_message_id: None,
                 thread_id: None,
             },
             AppEvent::ToolResult {
                 name: String::new(),
                 tool_call_id: String::new(),
                 preview: String::new(),
+                source: None,
+                routine_name: None,
+                assistant_message_id: None,
                 thread_id: None,
             },
             AppEvent::StreamChunk {
@@ -435,6 +493,9 @@ mod tests {
         let original = AppEvent::Reflection {
             content: "memory_reflection outcome=created".to_string(),
             thread_id: "t2".to_string(),
+            source: Some("routine".to_string()),
+            routine_name: Some("memory_reflection".to_string()),
+            assistant_message_id: Some("assistant-1".to_string()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let deserialized: AppEvent = serde_json::from_str(&json).unwrap();

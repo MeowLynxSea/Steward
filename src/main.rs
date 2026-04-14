@@ -46,6 +46,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
         let thread_id: Option<String> = match &event {
             steward_common::AppEvent::Response { thread_id, .. } => Some(thread_id.clone()),
             steward_common::AppEvent::Reflection { thread_id, .. } => Some(thread_id.clone()),
+            steward_common::AppEvent::ReflectionStatus { thread_id, .. } => Some(thread_id.clone()),
             steward_common::AppEvent::Thinking { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ToolStarted { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ToolCompleted { thread_id, .. } => thread_id.clone(),
@@ -66,8 +67,33 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::Response { content, .. } => {
                 serde_json::json!({ "content": content })
             }
-            steward_common::AppEvent::Reflection { content, .. } => {
-                serde_json::json!({ "content": content })
+            steward_common::AppEvent::Reflection {
+                content,
+                source,
+                routine_name,
+                assistant_message_id,
+                ..
+            } => {
+                serde_json::json!({
+                    "content": content,
+                    "source": source,
+                    "routine_name": routine_name,
+                    "assistant_message_id": assistant_message_id
+                })
+            }
+            steward_common::AppEvent::ReflectionStatus {
+                status,
+                source,
+                routine_name,
+                assistant_message_id,
+                ..
+            } => {
+                serde_json::json!({
+                    "status": status,
+                    "source": source,
+                    "routine_name": routine_name,
+                    "assistant_message_id": assistant_message_id
+                })
             }
             steward_common::AppEvent::Thinking {
                 message,
@@ -80,9 +106,19 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                 name,
                 tool_call_id,
                 parameters,
+                source,
+                routine_name,
+                assistant_message_id,
                 ..
             } => {
-                serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "parameters": parameters })
+                serde_json::json!({
+                    "name": name,
+                    "tool_call_id": tool_call_id,
+                    "parameters": parameters,
+                    "source": source,
+                    "routine_name": routine_name,
+                    "assistant_message_id": assistant_message_id
+                })
             }
             steward_common::AppEvent::ToolCompleted {
                 name,
@@ -90,6 +126,9 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                 success,
                 error,
                 parameters,
+                source,
+                routine_name,
+                assistant_message_id,
                 ..
             } => {
                 serde_json::json!({
@@ -97,16 +136,29 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                     "tool_call_id": tool_call_id,
                     "success": success,
                     "error": error,
-                    "parameters": parameters
+                    "parameters": parameters,
+                    "source": source,
+                    "routine_name": routine_name,
+                    "assistant_message_id": assistant_message_id
                 })
             }
             steward_common::AppEvent::ToolResult {
                 name,
                 tool_call_id,
                 preview,
+                source,
+                routine_name,
+                assistant_message_id,
                 ..
             } => {
-                serde_json::json!({ "name": name, "tool_call_id": tool_call_id, "preview": preview })
+                serde_json::json!({
+                    "name": name,
+                    "tool_call_id": tool_call_id,
+                    "preview": preview,
+                    "source": source,
+                    "routine_name": routine_name,
+                    "assistant_message_id": assistant_message_id
+                })
             }
             steward_common::AppEvent::StreamChunk { content, .. } => {
                 serde_json::json!({ "content": content })
@@ -494,6 +546,7 @@ fn main() {
             tauri_commands::list_sessions,
             tauri_commands::create_session,
             tauri_commands::get_session,
+            tauri_commands::get_reflection_details,
             tauri_commands::delete_session,
             tauri_commands::send_session_message,
             tauri_commands::list_tasks,

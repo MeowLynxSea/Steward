@@ -197,6 +197,20 @@ impl TenantScope {
         self.inner.list_routine_runs(routine_id, limit).await
     }
 
+    pub async fn list_queued_routine_runs(
+        &self,
+        routine_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RoutineRun>, DatabaseError> {
+        if self.get_routine(routine_id).await?.is_none() {
+            return Err(DatabaseError::NotFound {
+                entity: "routine".to_string(),
+                id: routine_id.to_string(),
+            });
+        }
+        self.inner.list_queued_routine_runs(routine_id, limit).await
+    }
+
     pub async fn get_webhook_routine_by_path(
         &self,
         path: &str,
@@ -501,8 +515,26 @@ impl AdminScope {
         self.inner.batch_get_last_run_status(routine_ids).await
     }
 
-    pub async fn count_running_routine_runs(&self, routine_id: Uuid) -> Result<i64, DatabaseError> {
+    pub async fn count_running_routine_runs(
+        &self,
+        routine_id: Uuid,
+    ) -> Result<i64, DatabaseError> {
         self.inner.count_running_routine_runs(routine_id).await
+    }
+
+    pub async fn list_queued_routine_runs(
+        &self,
+        routine_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RoutineRun>, DatabaseError> {
+        self.inner.list_queued_routine_runs(routine_id, limit).await
+    }
+
+    pub async fn list_stale_lightweight_routine_runs(
+        &self,
+        before: DateTime<Utc>,
+    ) -> Result<Vec<RoutineRun>, DatabaseError> {
+        self.inner.list_stale_lightweight_routine_runs(before).await
     }
 
     pub async fn update_routine_runtime(
@@ -528,6 +560,16 @@ impl AdminScope {
 
     pub async fn create_routine_run(&self, run: &RoutineRun) -> Result<(), DatabaseError> {
         self.inner.create_routine_run(run).await
+    }
+
+    pub async fn transition_routine_run_to_running(
+        &self,
+        id: Uuid,
+        started_at: DateTime<Utc>,
+    ) -> Result<bool, DatabaseError> {
+        self.inner
+            .transition_routine_run_to_running(id, started_at)
+            .await
     }
 
     pub async fn complete_routine_run(

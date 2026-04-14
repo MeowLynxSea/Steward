@@ -165,6 +165,45 @@ fn desktop_app_event_for_outgoing_response(
         Some("reflection") => steward_common::AppEvent::Reflection {
             content: response.content.clone(),
             thread_id,
+            source: response
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            routine_name: response
+                .metadata
+                .get("routine_name")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            assistant_message_id: response
+                .metadata
+                .get("assistant_message_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+        },
+        Some("reflection_status") => steward_common::AppEvent::ReflectionStatus {
+            status: response
+                .metadata
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            thread_id,
+            source: response
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            routine_name: response
+                .metadata
+                .get("routine_name")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            assistant_message_id: response
+                .metadata
+                .get("assistant_message_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
         },
         Some("tool_started") => steward_common::AppEvent::ToolStarted {
             name: response
@@ -182,6 +221,21 @@ fn desktop_app_event_for_outgoing_response(
             parameters: response
                 .metadata
                 .get("parameters")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            source: response
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            routine_name: response
+                .metadata
+                .get("routine_name")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            assistant_message_id: response
+                .metadata
+                .get("assistant_message_id")
                 .and_then(|value| value.as_str())
                 .map(str::to_owned),
             thread_id: Some(thread_id),
@@ -205,6 +259,21 @@ fn desktop_app_event_for_outgoing_response(
                 .and_then(|value| value.as_str())
                 .unwrap_or_default()
                 .to_string(),
+            source: response
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            routine_name: response
+                .metadata
+                .get("routine_name")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            assistant_message_id: response
+                .metadata
+                .get("assistant_message_id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
             thread_id: Some(thread_id),
         },
         Some("tool_completed") => steward_common::AppEvent::ToolCompleted {
@@ -233,6 +302,21 @@ fn desktop_app_event_for_outgoing_response(
             parameters: response
                 .metadata
                 .get("parameters")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            source: response
+                .metadata
+                .get("source")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            routine_name: response
+                .metadata
+                .get("routine_name")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            assistant_message_id: response
+                .metadata
+                .get("assistant_message_id")
                 .and_then(|value| value.as_str())
                 .map(str::to_owned),
             thread_id: Some(thread_id),
@@ -2339,6 +2423,9 @@ fn status_update_to_app_event(
             name: name.clone(),
             tool_call_id: tool_call_id.clone(),
             parameters: parameters.clone(),
+            source: None,
+            routine_name: None,
+            assistant_message_id: None,
             thread_id,
         }),
         StatusUpdate::ToolCompleted {
@@ -2353,6 +2440,9 @@ fn status_update_to_app_event(
             success: *success,
             error: error.clone(),
             parameters: parameters.clone(),
+            source: None,
+            routine_name: None,
+            assistant_message_id: None,
             thread_id,
         }),
         StatusUpdate::ToolResult {
@@ -2363,6 +2453,9 @@ fn status_update_to_app_event(
             name: name.clone(),
             tool_call_id: tool_call_id.clone(),
             preview: preview.clone(),
+            source: None,
+            routine_name: None,
+            assistant_message_id: None,
             thread_id,
         }),
         StatusUpdate::StreamChunk(content) => Some(steward_common::AppEvent::StreamChunk {
@@ -2712,14 +2805,26 @@ mod tests {
         let mut response = OutgoingResponse::text("memory_reflection outcome=created");
         response.thread_id = Some("thread-42".to_string());
         response.metadata = serde_json::json!({
-            "display_kind": "reflection"
+            "display_kind": "reflection",
+            "source": "routine",
+            "routine_name": "memory_reflection",
+            "assistant_message_id": "assistant-42",
         });
 
         let event = desktop_app_event_for_outgoing_response(&response);
         match event {
-            steward_common::AppEvent::Reflection { content, thread_id } => {
+            steward_common::AppEvent::Reflection {
+                content,
+                thread_id,
+                source,
+                routine_name,
+                assistant_message_id,
+            } => {
                 assert_eq!(content, "memory_reflection outcome=created");
                 assert_eq!(thread_id, "thread-42");
+                assert_eq!(source.as_deref(), Some("routine"));
+                assert_eq!(routine_name.as_deref(), Some("memory_reflection"));
+                assert_eq!(assistant_message_id.as_deref(), Some("assistant-42"));
             }
             other => panic!("expected reflection event, got {other:?}"),
         }
@@ -2760,11 +2865,17 @@ mod tests {
                 name,
                 tool_call_id,
                 parameters,
+                source,
+                routine_name,
+                assistant_message_id,
                 thread_id,
             } => {
                 assert_eq!(name, "create_memory");
                 assert_eq!(tool_call_id, "call_mem_1");
                 assert_eq!(parameters.as_deref(), Some("{\"title\":\"No emoji\"}"));
+                assert_eq!(source, None);
+                assert_eq!(routine_name, None);
+                assert_eq!(assistant_message_id, None);
                 assert_eq!(thread_id.as_deref(), Some("thread-99"));
             }
             other => panic!("expected tool_started event, got {other:?}"),

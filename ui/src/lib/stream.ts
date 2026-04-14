@@ -4,6 +4,7 @@ import type { StreamEnvelope } from "./types";
 const STREAM_EVENT_TYPES = [
   "session:response",
   "session:reflection",
+  "session:reflection_status",
   "session:approval_needed",
   "session:status",
   "session:error",

@@ -3,6 +3,7 @@ import { notify } from "../tauri";
 import { createEventStream, type StreamHandle } from "../stream";
 import type {
   ActiveToolCall,
+  ReflectionStatus,
   SessionDetail,
   SessionTitleUpdatePayload,
   ThreadMessage,
@@ -27,6 +28,7 @@ function emptyStreamingState(): StreamingState {
     suggestions: [],
     turnCost: null,
     images: [],
+    reflectionSignal: null,
     isStreaming: false
   };
 }
@@ -101,6 +103,42 @@ function isSessionTitleUpdatePayload(payload: unknown): payload is SessionTitleU
     (candidate.emoji === null || typeof candidate.emoji === "string") &&
     typeof candidate.pending === "boolean"
   );
+}
+
+function reflectionAssistantMessageId(
+  payload: unknown
+): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  if (candidate.source !== "routine" || candidate.routine_name !== "memory_reflection") {
+    return null;
+  }
+
+  return typeof candidate.assistant_message_id === "string"
+    ? candidate.assistant_message_id
+    : null;
+}
+
+function reflectionLifecycleStatus(payload: unknown): ReflectionStatus | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidate = payload as Record<string, unknown>;
+  switch (candidate.status) {
+    case "queued":
+    case "running":
+    case "completed":
+    case "failed":
+    case "missing":
+    case "unknown":
+      return candidate.status;
+    default:
+      return null;
+  }
 }
 
 class SessionsState {
@@ -413,9 +451,37 @@ class SessionsState {
 
       case "session.reflection": {
         const { content } = event.payload as { content: string };
+        const assistantMessageId = reflectionAssistantMessageId(event.payload);
         this.#stopPollFallback();
         this.#streamingThinkingId = null;
         this.#appendReflectionMessage(content);
+        if (assistantMessageId) {
+          this.streaming = {
+            ...this.streaming,
+            reflectionSignal: {
+              assistantMessageId,
+              kind: "reflection",
+              sequence: event.sequence
+            }
+          };
+        }
+        break;
+      }
+
+      case "session.reflection_status": {
+        const assistantMessageId = reflectionAssistantMessageId(event.payload);
+        const status = reflectionLifecycleStatus(event.payload);
+        if (assistantMessageId) {
+          this.streaming = {
+            ...this.streaming,
+            reflectionSignal: {
+              assistantMessageId,
+              kind: "reflection_status",
+              status: status ?? undefined,
+              sequence: event.sequence
+            }
+          };
+        }
         break;
       }
 
@@ -441,6 +507,7 @@ class SessionsState {
           tool_call_id?: string;
           parameters?: string;
         };
+        const assistantMessageId = reflectionAssistantMessageId(event.payload);
         this.#streamingAssistantId = null;
         this.#streamingThinkingId = null;
         const newTool: ActiveToolCall = {
@@ -458,6 +525,13 @@ class SessionsState {
         this.streaming = {
           ...this.streaming,
           toolCalls: [...this.streaming.toolCalls, newTool],
+          reflectionSignal: assistantMessageId
+            ? {
+                assistantMessageId,
+                kind: "tool_started",
+                sequence: event.sequence
+              }
+            : this.streaming.reflectionSignal,
           isStreaming: true,
           thinking: false,
           thinkingMessageId: null,
@@ -474,6 +548,7 @@ class SessionsState {
           error?: string;
           parameters?: string;
         };
+        const assistantMessageId = reflectionAssistantMessageId(event.payload);
         const updatedCalls = [...this.streaming.toolCalls];
         const nextTool = (tool: ActiveToolCall): ActiveToolCall => ({
           ...tool,
@@ -484,7 +559,17 @@ class SessionsState {
         });
         this.#updateStreamingToolCall(updatedCalls, tool_call_id, name, nextTool);
         this.#updateLatestToolCall(tool_call_id, name, nextTool);
-        this.streaming = { ...this.streaming, toolCalls: updatedCalls };
+        this.streaming = {
+          ...this.streaming,
+          toolCalls: updatedCalls,
+          reflectionSignal: assistantMessageId
+            ? {
+                assistantMessageId,
+                kind: "tool_completed",
+                sequence: event.sequence
+              }
+            : this.streaming.reflectionSignal
+        };
         break;
       }
 
@@ -494,11 +579,22 @@ class SessionsState {
           tool_call_id?: string;
           preview: string;
         };
+        const assistantMessageId = reflectionAssistantMessageId(event.payload);
         const updatedCalls = [...this.streaming.toolCalls];
         const nextTool = (tool: ActiveToolCall) => ({ ...tool, resultPreview: preview });
         this.#updateStreamingToolCall(updatedCalls, tool_call_id, name, nextTool);
         this.#updateLatestToolCall(tool_call_id, name, nextTool);
-        this.streaming = { ...this.streaming, toolCalls: updatedCalls };
+        this.streaming = {
+          ...this.streaming,
+          toolCalls: updatedCalls,
+          reflectionSignal: assistantMessageId
+            ? {
+                assistantMessageId,
+                kind: "tool_result",
+                sequence: event.sequence
+              }
+            : this.streaming.reflectionSignal
+        };
         break;
       }
 

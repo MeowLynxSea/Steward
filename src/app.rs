@@ -195,7 +195,19 @@ If nothing to do, do nothing."#;
             updated_at: Utc::now(),
         };
         db.create_routine(&routine).await?;
+        tracing::info!(
+            user_id,
+            routine_id = %routine.id,
+            enabled = routine.enabled,
+            "Seeded default memory_reflection routine"
+        );
     } else if let Some(mut routine) = existing {
+        tracing::info!(
+            user_id,
+            routine_id = %routine.id,
+            enabled = routine.enabled,
+            "Default memory_reflection routine already present"
+        );
         let should_upgrade_prompt = match &routine.action {
             RoutineAction::Lightweight { prompt, .. } => prompt == LEGACY_MEMORY_REFLECTION_PROMPT,
             RoutineAction::FullJob { .. } => false,
@@ -205,6 +217,11 @@ If nothing to do, do nothing."#;
                 *prompt = MEMORY_REFLECTION_PROMPT.to_string();
             }
             db.update_routine(&routine).await?;
+            tracing::info!(
+                user_id,
+                routine_id = %routine.id,
+                "Upgraded legacy memory_reflection prompt"
+            );
         }
     }
 

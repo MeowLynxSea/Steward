@@ -830,6 +830,257 @@ fn turn_cost_from_message_metadata(
     })
 }
 
+#[derive(Debug, Clone)]
+struct DbReflectionTurn {
+    user_content: String,
+    assistant_message_id: Option<Uuid>,
+    assistant_content: Option<String>,
+    assistant_created_at: Option<chrono::DateTime<chrono::Utc>>,
+    reflection_messages: Vec<ConversationMessage>,
+    tool_call_messages: Vec<ConversationMessage>,
+}
+
+fn thread_tool_call_response_from_value(
+    call: &serde_json::Value,
+) -> steward_core::ipc::ThreadToolCallResponse {
+    let parameters = call.get("parameters").and_then(format_tool_parameters);
+    let result_preview = call
+        .get("result")
+        .or_else(|| call.get("result_preview"))
+        .map(|value| match value {
+            serde_json::Value::String(text) => normalize_tool_output_text(text),
+            other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+        });
+    let error = call
+        .get("error")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let rationale = call
+        .get("rationale")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned);
+    let started_at = parse_optional_timestamp(call.get("started_at"));
+    let completed_at = parse_optional_timestamp(call.get("completed_at"));
+
+    steward_core::ipc::ThreadToolCallResponse {
+        name: call
+            .get("name")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        status: if error.is_some() {
+            "failed".to_string()
+        } else if completed_at.is_some() || result_preview.is_some() {
+            "completed".to_string()
+        } else {
+            "running".to_string()
+        },
+        started_at,
+        completed_at,
+        parameters,
+        result_preview,
+        error,
+        rationale,
+    }
+}
+
+fn reflection_tool_call_response_from_message(
+    message: &ConversationMessage,
+) -> Option<steward_core::ipc::ReflectionToolCallResponse> {
+    let call = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
+    Some(steward_core::ipc::ReflectionToolCallResponse {
+        id: message.id,
+        created_at: message.created_at,
+        tool_call: thread_tool_call_response_from_value(&call),
+    })
+}
+
+fn reflection_message_response(
+    message: &ConversationMessage,
+) -> steward_core::ipc::ReflectionMessageResponse {
+    steward_core::ipc::ReflectionMessageResponse {
+        id: message.id,
+        content: clean_reflection_message_content(&message.content),
+        created_at: message.created_at,
+    }
+}
+
+fn build_db_reflection_turns(db_messages: &[ConversationMessage]) -> Vec<DbReflectionTurn> {
+    let mut turns = Vec::new();
+    let mut current_turn: Option<DbReflectionTurn> = None;
+
+    for message in db_messages {
+        match message.role.as_str() {
+            "user" => {
+                if let Some(turn) = current_turn.take() {
+                    turns.push(turn);
+                }
+                current_turn = Some(DbReflectionTurn {
+                    user_content: message.content.clone(),
+                    assistant_message_id: None,
+                    assistant_content: None,
+                    assistant_created_at: None,
+                    reflection_messages: Vec::new(),
+                    tool_call_messages: Vec::new(),
+                });
+            }
+            "assistant" => {
+                if let Some(turn) = current_turn.as_mut()
+                    && turn.assistant_message_id.is_none()
+                {
+                    turn.assistant_message_id = Some(message.id);
+                    turn.assistant_content = Some(message.content.clone());
+                    turn.assistant_created_at = Some(message.created_at);
+                }
+            }
+            "reflection" => {
+                if let Some(turn) = current_turn.as_mut() {
+                    turn.reflection_messages.push(message.clone());
+                }
+            }
+            "tool_call" => {
+                if let Some(turn) = current_turn.as_mut()
+                    && turn.assistant_message_id.is_some()
+                {
+                    turn.tool_call_messages.push(message.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(turn) = current_turn {
+        turns.push(turn);
+    }
+
+    turns
+}
+
+fn parse_reflection_summary_parts(content: &str) -> (Option<String>, Option<String>) {
+    let mut outcome = None;
+    let mut detail = None;
+
+    for part in content
+        .split('|')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
+        if let Some(raw) = part.strip_prefix("memory_reflection outcome=") {
+            outcome = Some(raw.trim().to_string());
+            continue;
+        }
+        if let Some(raw) = part.strip_prefix("outcome=") {
+            outcome = Some(raw.trim().to_string());
+            continue;
+        }
+        if let Some(raw) = part.strip_prefix("detail=") {
+            let value = raw.trim();
+            if !value.is_empty() {
+                detail = Some(value.to_string());
+            }
+        }
+    }
+
+    (outcome, detail)
+}
+
+fn reflection_outcome_from_summary(content: &str) -> Option<String> {
+    parse_reflection_summary_parts(content).0
+}
+
+fn reflection_detail_from_summary(content: &str) -> Option<String> {
+    parse_reflection_summary_parts(content).1
+}
+
+fn clean_reflection_message_content(content: &str) -> String {
+    reflection_detail_from_summary(content).unwrap_or_else(|| content.to_string())
+}
+
+fn routine_run_trigger_string<'a>(
+    run: &'a steward_core::agent::routine::RoutineRun,
+    key: &str,
+) -> Option<&'a str> {
+    run.trigger_payload
+        .as_ref()
+        .and_then(|payload| payload.get(key))
+        .and_then(|value| value.as_str())
+}
+
+fn routine_run_trigger_timestamp(
+    run: &steward_core::agent::routine::RoutineRun,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    parse_optional_timestamp(
+        run.trigger_payload
+            .as_ref()
+            .and_then(|payload| payload.get("timestamp")),
+    )
+    .or(Some(run.started_at))
+}
+
+fn select_reflection_run(
+    runs: &[steward_core::agent::routine::RoutineRun],
+    thread_id: Uuid,
+    assistant_message_id: Uuid,
+    user_content: &str,
+    assistant_content: &str,
+    assistant_created_at: Option<chrono::DateTime<chrono::Utc>>,
+) -> Option<steward_core::agent::routine::RoutineRun> {
+    let thread_id_text = thread_id.to_string();
+    let assistant_message_id_text = assistant_message_id.to_string();
+
+    if let Some(exact_match) = runs.iter().find(|run| {
+        routine_run_trigger_string(run, "thread_id") == Some(thread_id_text.as_str())
+            && routine_run_trigger_string(run, "assistant_message_id")
+                == Some(assistant_message_id_text.as_str())
+    }) {
+        return Some(exact_match.clone());
+    }
+
+    let mut best_match: Option<(steward_core::agent::routine::RoutineRun, i64)> = None;
+
+    for run in runs {
+        if routine_run_trigger_string(run, "thread_id") != Some(thread_id_text.as_str()) {
+            continue;
+        }
+        if routine_run_trigger_string(run, "user_input") != Some(user_content)
+            || routine_run_trigger_string(run, "assistant_output") != Some(assistant_content)
+        {
+            continue;
+        }
+
+        let distance = match (assistant_created_at, routine_run_trigger_timestamp(run)) {
+            (Some(assistant_created_at), Some(triggered_at)) => assistant_created_at
+                .signed_duration_since(triggered_at)
+                .num_milliseconds()
+                .abs(),
+            _ => 0,
+        };
+
+        match best_match {
+            Some((_, best_distance)) if best_distance <= distance => {}
+            _ => best_match = Some((run.clone(), distance)),
+        }
+    }
+
+    best_match.map(|(run, _)| run)
+}
+
+fn missing_reflection_detail(
+    assistant_message_id: Uuid,
+) -> steward_core::ipc::ReflectionDetailResponse {
+    steward_core::ipc::ReflectionDetailResponse {
+        assistant_message_id,
+        status: "missing".to_string(),
+        outcome: None,
+        summary: None,
+        detail: None,
+        run_started_at: None,
+        run_completed_at: None,
+        tool_calls: Vec::new(),
+        messages: Vec::new(),
+    }
+}
+
 fn build_thread_messages_from_db_messages(
     db_messages: &[ConversationMessage],
 ) -> Vec<steward_core::ipc::ThreadMessageResponse> {
@@ -885,7 +1136,7 @@ fn build_thread_messages_from_db_messages(
                     id: msg.id,
                     kind: "reflection".to_string(),
                     role: None,
-                    content: Some(msg.content.clone()),
+                    content: Some(clean_reflection_message_content(&msg.content)),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
@@ -897,25 +1148,6 @@ fn build_thread_messages_from_db_messages(
                     Ok(value) => value,
                     Err(_) => continue,
                 };
-                let parameters = call.get("parameters").and_then(format_tool_parameters);
-                let result_preview = call
-                    .get("result")
-                    .or_else(|| call.get("result_preview"))
-                    .map(|value| match value {
-                        serde_json::Value::String(text) => normalize_tool_output_text(text),
-                        other => serde_json::to_string_pretty(other)
-                            .unwrap_or_else(|_| other.to_string()),
-                    });
-                let error = call
-                    .get("error")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned);
-                let rationale = call
-                    .get("rationale")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned);
-                let started_at = parse_optional_timestamp(call.get("started_at"));
-                let completed_at = parse_optional_timestamp(call.get("completed_at"));
 
                 messages.push(steward_core::ipc::ThreadMessageResponse {
                     id: msg.id,
@@ -925,26 +1157,7 @@ fn build_thread_messages_from_db_messages(
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
-                    tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
-                        name: call
-                            .get("name")
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("unknown")
-                            .to_string(),
-                        status: if error.is_some() {
-                            "failed".to_string()
-                        } else if completed_at.is_some() || result_preview.is_some() {
-                            "completed".to_string()
-                        } else {
-                            "running".to_string()
-                        },
-                        started_at,
-                        completed_at,
-                        parameters,
-                        result_preview,
-                        error,
-                        rationale,
-                    }),
+                    tool_call: Some(thread_tool_call_response_from_value(&call)),
                 });
             }
             "tool_calls" => {
@@ -1265,6 +1478,116 @@ pub async fn get_session(
 }
 
 #[tauri::command]
+pub async fn get_reflection_details(
+    state: State<'_, AppState>,
+    thread_id: Uuid,
+    assistant_message_id: Uuid,
+) -> Result<steward_core::ipc::ReflectionDetailResponse, String> {
+    let Some(db) = state.db.as_ref() else {
+        return Ok(missing_reflection_detail(assistant_message_id));
+    };
+
+    let db_messages = db
+        .list_conversation_messages(thread_id)
+        .await
+        .map_err(|error| error.to_string())?;
+    let turns = build_db_reflection_turns(&db_messages);
+    let Some(turn) = turns
+        .iter()
+        .find(|turn| turn.assistant_message_id == Some(assistant_message_id))
+    else {
+        return Ok(missing_reflection_detail(assistant_message_id));
+    };
+
+    let tool_calls = turn
+        .tool_call_messages
+        .iter()
+        .filter_map(reflection_tool_call_response_from_message)
+        .collect::<Vec<_>>();
+    let messages = turn
+        .reflection_messages
+        .iter()
+        .map(reflection_message_response)
+        .collect::<Vec<_>>();
+
+    let matched_run = if let Some(routine) = db
+        .get_routine_by_name(&state.owner_id, "memory_reflection")
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let runs = db
+            .list_routine_runs(routine.id, 500)
+            .await
+            .map_err(|error| error.to_string())?;
+        turn.assistant_content
+            .as_deref()
+            .and_then(|assistant_content| {
+                select_reflection_run(
+                    &runs,
+                    thread_id,
+                    assistant_message_id,
+                    &turn.user_content,
+                    assistant_content,
+                    turn.assistant_created_at,
+                )
+            })
+    } else {
+        None
+    };
+
+    let summary = matched_run
+        .as_ref()
+        .and_then(|run| run.result_summary.clone())
+        .or_else(|| {
+            turn.reflection_messages
+                .last()
+                .map(|message| message.content.clone())
+        });
+    let detail = summary.as_deref().and_then(reflection_detail_from_summary);
+    let has_artifacts = !tool_calls.is_empty() || !messages.is_empty();
+
+    let outcome = summary
+        .as_deref()
+        .and_then(reflection_outcome_from_summary);
+
+    let status = if let Some(run) = matched_run.as_ref() {
+        match run.status {
+            steward_core::agent::routine::RunStatus::Queued => "queued".to_string(),
+            steward_core::agent::routine::RunStatus::Running => "running".to_string(),
+            steward_core::agent::routine::RunStatus::Failed => "failed".to_string(),
+            steward_core::agent::routine::RunStatus::Ok
+            | steward_core::agent::routine::RunStatus::Attention => "completed".to_string(),
+        }
+    } else if summary.is_some() || has_artifacts {
+        "completed".to_string()
+    } else if turn.assistant_message_id == Some(assistant_message_id) {
+        "missing".to_string()
+    } else if has_artifacts {
+        "unknown".to_string()
+    } else {
+        "missing".to_string()
+    };
+
+    Ok(steward_core::ipc::ReflectionDetailResponse {
+        assistant_message_id,
+        status,
+        outcome,
+        summary,
+        detail,
+        run_started_at: matched_run.as_ref().and_then(|run| {
+            if run.status == steward_core::agent::routine::RunStatus::Queued {
+                None
+            } else {
+                Some(run.started_at)
+            }
+        }),
+        run_completed_at: matched_run.as_ref().and_then(|run| run.completed_at),
+        tool_calls,
+        messages,
+    })
+}
+
+#[tauri::command]
 pub async fn delete_session(
     state: State<'_, AppState>,
     id: Uuid,
@@ -1401,6 +1724,8 @@ pub async fn send_session_message(
 
 #[cfg(test)]
 mod db_message_tests {
+    use chrono::Utc;
+
     use super::{
         DesktopDispatchPlan, build_session_title_context, build_thread_messages,
         desktop_message_metadata, parse_generated_session_title, plan_desktop_message_dispatch,
@@ -2227,8 +2552,9 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        build_thread_messages_from_db_messages, get_workspace_allowlist_file_impl,
-        reload_llm_runtime, sync_llm_settings_to_store,
+        build_db_reflection_turns, build_thread_messages_from_db_messages,
+        get_workspace_allowlist_file_impl, parse_reflection_summary_parts, reload_llm_runtime,
+        select_reflection_run, sync_llm_settings_to_store,
     };
     use steward_core::agent::SessionManager;
     use steward_core::desktop_runtime::AppState;
@@ -2315,9 +2641,153 @@ mod tests {
         assert_eq!(reflection.role, None);
         assert_eq!(
             reflection.content.as_deref(),
-            Some("memory_reflection outcome=created | detail=Stored style preference.")
+            Some("Stored style preference.")
         );
         assert_eq!(reflection.turn_number, 0);
+    }
+
+    #[test]
+    fn build_db_reflection_turns_only_collects_post_assistant_tool_calls() {
+        let user_id = uuid::Uuid::new_v4();
+        let pre_assistant_tool_call_id = uuid::Uuid::new_v4();
+        let assistant_id = uuid::Uuid::new_v4();
+        let reflection_tool_call_id = uuid::Uuid::new_v4();
+        let reflection_id = uuid::Uuid::new_v4();
+        let created_at = Utc::now();
+        let messages = vec![
+            steward_core::history::ConversationMessage {
+                id: user_id,
+                role: "user".to_string(),
+                content: "Remember my workflow".to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: pre_assistant_tool_call_id,
+                role: "tool_call".to_string(),
+                content: serde_json::json!({
+                    "name": "search_workspace",
+                    "parameters": {"query": "workflow"}
+                })
+                .to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: assistant_id,
+                role: "assistant".to_string(),
+                content: "I will remember that.".to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: reflection_tool_call_id,
+                role: "tool_call".to_string(),
+                content: serde_json::json!({
+                    "name": "create_memory",
+                    "result_preview": "saved"
+                })
+                .to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+            steward_core::history::ConversationMessage {
+                id: reflection_id,
+                role: "reflection".to_string(),
+                content: "memory_reflection outcome=created | detail=Stored workflow.".to_string(),
+                metadata: serde_json::json!({}),
+                created_at,
+            },
+        ];
+
+        let turns = build_db_reflection_turns(&messages);
+        let turn = turns.first().expect("turn");
+
+        assert_eq!(turn.assistant_message_id, Some(assistant_id));
+        assert_eq!(turn.tool_call_messages.len(), 1);
+        assert_eq!(turn.tool_call_messages[0].id, reflection_tool_call_id);
+        assert_eq!(turn.reflection_messages.len(), 1);
+        assert_eq!(turn.reflection_messages[0].id, reflection_id);
+    }
+
+    #[test]
+    fn select_reflection_run_prefers_exact_assistant_message_id() {
+        let routine_id = uuid::Uuid::new_v4();
+        let assistant_message_id = uuid::Uuid::new_v4();
+        let newer_assistant_message_id = uuid::Uuid::new_v4();
+        let thread_id = uuid::Uuid::new_v4();
+        let started_at = Utc::now();
+        let earlier = steward_core::agent::routine::RoutineRun {
+            id: uuid::Uuid::new_v4(),
+            routine_id,
+            trigger_type: "event".to_string(),
+            trigger_detail: Some("agent:turn_completed".to_string()),
+            trigger_payload: Some(serde_json::json!({
+                "thread_id": thread_id.to_string(),
+                "assistant_message_id": assistant_message_id.to_string(),
+                "user_input": "same",
+                "assistant_output": "same",
+                "timestamp": started_at.to_rfc3339(),
+            })),
+            started_at,
+            completed_at: None,
+            status: steward_core::agent::routine::RunStatus::Running,
+            result_summary: None,
+            tokens_used: None,
+            job_id: None,
+            created_at: started_at,
+        };
+        let later = steward_core::agent::routine::RoutineRun {
+            id: uuid::Uuid::new_v4(),
+            routine_id,
+            trigger_type: "event".to_string(),
+            trigger_detail: Some("agent:turn_completed".to_string()),
+            trigger_payload: Some(serde_json::json!({
+                "thread_id": thread_id.to_string(),
+                "assistant_message_id": newer_assistant_message_id.to_string(),
+                "user_input": "same",
+                "assistant_output": "same",
+                "timestamp": (started_at + chrono::TimeDelta::seconds(20)).to_rfc3339(),
+            })),
+            started_at: started_at + chrono::TimeDelta::seconds(20),
+            completed_at: None,
+            status: steward_core::agent::routine::RunStatus::Running,
+            result_summary: None,
+            tokens_used: None,
+            job_id: None,
+            created_at: started_at + chrono::TimeDelta::seconds(20),
+        };
+
+        let matched = select_reflection_run(
+            &[later, earlier.clone()],
+            thread_id,
+            assistant_message_id,
+            "same",
+            "same",
+            Some(started_at),
+        )
+        .expect("matched run");
+
+        assert_eq!(matched.id, earlier.id);
+    }
+
+    #[test]
+    fn parse_reflection_summary_parts_extracts_outcome_and_detail() {
+        let (outcome, detail) = parse_reflection_summary_parts(
+            "memory_reflection outcome=boot_promoted | detail=Promoted to boot memory.",
+        );
+
+        assert_eq!(outcome.as_deref(), Some("boot_promoted"));
+        assert_eq!(detail.as_deref(), Some("Promoted to boot memory."));
+    }
+
+    #[test]
+    fn clean_reflection_message_content_prefers_detail_text() {
+        let cleaned = clean_reflection_message_content(
+            "memory_reflection outcome=no_op | thread_id=e00e029d-74f4-42ab-9b06-f1ad56eb65aa | detail=Only keep this sentence.",
+        );
+
+        assert_eq!(cleaned, "Only keep this sentence.");
     }
 
     fn backend(id: &str) -> BackendInstance {

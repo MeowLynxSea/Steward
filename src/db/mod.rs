@@ -507,6 +507,11 @@ pub trait RoutineStore: Send + Sync {
     ) -> Result<(), DatabaseError>;
     async fn delete_routine(&self, id: Uuid) -> Result<bool, DatabaseError>;
     async fn create_routine_run(&self, run: &RoutineRun) -> Result<(), DatabaseError>;
+    async fn transition_routine_run_to_running(
+        &self,
+        id: Uuid,
+        started_at: DateTime<Utc>,
+    ) -> Result<bool, DatabaseError>;
     async fn complete_routine_run(
         &self,
         id: Uuid,
@@ -518,6 +523,15 @@ pub trait RoutineStore: Send + Sync {
         &self,
         routine_id: Uuid,
         limit: i64,
+    ) -> Result<Vec<RoutineRun>, DatabaseError>;
+    async fn list_queued_routine_runs(
+        &self,
+        routine_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RoutineRun>, DatabaseError>;
+    async fn list_stale_lightweight_routine_runs(
+        &self,
+        before: DateTime<Utc>,
     ) -> Result<Vec<RoutineRun>, DatabaseError>;
     async fn count_running_routine_runs(&self, routine_id: Uuid) -> Result<i64, DatabaseError>;
     async fn count_running_routine_runs_batch(

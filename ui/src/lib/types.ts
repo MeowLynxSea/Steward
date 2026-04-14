@@ -67,6 +67,21 @@ export interface ThreadMessage {
   tool_call: TimelineToolCall | null;
 }
 
+export type ReflectionStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "missing"
+  | "unknown";
+
+export type ReflectionOutcome =
+  | "boot_promoted"
+  | "updated"
+  | "created"
+  | "no_op"
+  | "unknown";
+
 export type ToolCallStatus = "running" | "completed" | "failed";
 
 export interface TimelineToolCall {
@@ -78,6 +93,30 @@ export interface TimelineToolCall {
   resultPreview: string | null;
   error: string | null;
   rationale: string | null;
+}
+
+export interface ReflectionToolCall {
+  id: string;
+  created_at: string;
+  tool_call: TimelineToolCall;
+}
+
+export interface ReflectionMessage {
+  id: string;
+  content: string;
+  created_at: string;
+}
+
+export interface ReflectionDetail {
+  assistant_message_id: string;
+  status: ReflectionStatus;
+  outcome: ReflectionOutcome | null;
+  summary: string | null;
+  detail: string | null;
+  run_started_at: string | null;
+  run_completed_at: string | null;
+  tool_calls: ReflectionToolCall[];
+  messages: ReflectionMessage[];
 }
 
 export interface SessionDetail {
@@ -470,6 +509,13 @@ export interface ToolDecision {
   rationale: string;
 }
 
+export interface ReflectionStreamSignal {
+  assistantMessageId: string;
+  kind: "reflection" | "reflection_status" | "tool_started" | "tool_result" | "tool_completed";
+  status?: ReflectionStatus;
+  sequence: number;
+}
+
 export interface TurnCostInfo {
   input_tokens: number;
   output_tokens: number;
@@ -499,6 +545,8 @@ export interface StreamingState {
   turnCost: TurnCostInfo | null;
   /** Generated images */
   images: Array<{ dataUrl: string; path: string | null }>;
+  /** Latest reflection-related event tied to a specific assistant turn */
+  reflectionSignal: ReflectionStreamSignal | null;
   /** Whether a response is actively streaming */
   isStreaming: boolean;
 }

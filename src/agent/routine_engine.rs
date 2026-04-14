@@ -52,6 +52,12 @@ struct TriggeredRoutine {
     detail: String,
 }
 
+struct QueuedRoutineExecution {
+    ctx: EngineContext,
+    routine: Routine,
+    run: RoutineRun,
+}
+
 struct RoutineExecutionReport {
     status: RunStatus,
     summary: Option<String>,
@@ -132,6 +138,9 @@ pub struct RoutineEngine {
     tools: Arc<ToolRegistry>,
     /// Safety layer for tool output sanitization.
     safety: Arc<SafetyLayer>,
+    /// Worker queue for starting persisted queued routine runs without creating
+    /// recursive async `Send` cycles in the compiler.
+    queued_execution_tx: mpsc::Sender<QueuedRoutineExecution>,
     /// Timestamp when this engine instance was created. Used by
     /// `sync_dispatched_runs` to distinguish orphaned runs (from a previous
     /// process) from actively-watched runs (from this process).
@@ -152,6 +161,16 @@ impl RoutineEngine {
         tools: Arc<ToolRegistry>,
         safety: Arc<SafetyLayer>,
     ) -> Self {
+        let (queued_execution_tx, mut queued_execution_rx) =
+            mpsc::channel::<QueuedRoutineExecution>(64);
+        std::mem::drop(tokio::spawn(async move {
+            while let Some(work) = queued_execution_rx.recv().await {
+                std::mem::drop(tokio::spawn(async move {
+                    execute_routine(work.ctx, work.routine, work.run).await;
+                }));
+            }
+        }));
+
         Self {
             config,
             store,
@@ -165,6 +184,7 @@ impl RoutineEngine {
             extension_manager,
             tools,
             safety,
+            queued_execution_tx,
             boot_time: Utc::now(),
         }
     }
@@ -180,6 +200,7 @@ impl RoutineEngine {
         match self.store.list_event_routines().await {
             Ok(routines) => {
                 let mut cache = Vec::new();
+                let mut memory_reflection_cached = false;
                 for routine in routines {
                     match &routine.trigger {
                         Trigger::Event { pattern, .. } => {
@@ -203,6 +224,15 @@ impl RoutineEngine {
                             }
                         }
                         Trigger::SystemEvent { .. } => {
+                            if routine.name == "memory_reflection" {
+                                memory_reflection_cached = true;
+                                tracing::info!(
+                                    routine_id = %routine.id,
+                                    enabled = routine.enabled,
+                                    user_id = %routine.user_id,
+                                    "Loaded memory_reflection into routine event cache"
+                                );
+                            }
                             cache.push(EventMatcher::System {
                                 routine: routine.clone(),
                             });
@@ -212,7 +242,11 @@ impl RoutineEngine {
                 }
                 let count = cache.len();
                 *self.event_cache.write().await = cache;
-                tracing::trace!("Refreshed event cache: {} routines", count);
+                tracing::info!(
+                    count,
+                    memory_reflection_cached,
+                    "Refreshed routine event cache"
+                );
             }
             Err(e) => {
                 tracing::error!("Failed to refresh event cache: {}", e);
@@ -370,11 +404,28 @@ impl RoutineEngine {
     ) -> usize {
         let cache = self.event_cache.read().await;
 
+        let is_turn_completed = source.eq_ignore_ascii_case("agent")
+            && event_type.eq_ignore_ascii_case("turn_completed");
+        if is_turn_completed {
+            tracing::info!(
+                user_id = ?user_id,
+                thread_id = payload.get("thread_id").and_then(|v| v.as_str()),
+                assistant_message_id = payload
+                    .get("assistant_message_id")
+                    .and_then(|v| v.as_str()),
+                cache_len = cache.len(),
+                "Evaluating system event against routine cache"
+            );
+        }
+
         // Early return if there are no system-event matchers at all.
         if !cache
             .iter()
             .any(|m| matches!(m, EventMatcher::System { .. }))
         {
+            if is_turn_completed {
+                tracing::warn!("No system-event routines are currently cached");
+            }
             return 0;
         }
 
@@ -423,6 +474,13 @@ impl RoutineEngine {
             if let Some(uid) = user_id
                 && routine.user_id != uid
             {
+                if is_turn_completed && routine.name == "memory_reflection" {
+                    tracing::warn!(
+                        routine_user_id = %routine.user_id,
+                        request_user_id = %uid,
+                        "Skipping memory_reflection because user_id did not match"
+                    );
+                }
                 continue;
             }
 
@@ -454,6 +512,31 @@ impl RoutineEngine {
             let running_count = concurrent_counts.get(&routine.id).copied().unwrap_or(0);
             if running_count >= routine.guardrails.max_concurrent as i64 {
                 tracing::debug!(routine = %routine.name, "Skipped: max concurrent reached");
+                if is_turn_completed && routine.name == "memory_reflection" {
+                    tracing::warn!(
+                        running_count,
+                        max_concurrent = routine.guardrails.max_concurrent,
+                        "Queueing memory_reflection because max_concurrent was reached"
+                    );
+                    let detail = truncate(&format!("{source}:{event_type}"), 200);
+                    if let Err(error) = self
+                        .enqueue_triggered_run(
+                            routine,
+                            "system_event",
+                            Some(detail),
+                            Some(payload.clone()),
+                        )
+                        .await
+                    {
+                        tracing::error!(
+                            routine_id = %routine.id,
+                            error = %error,
+                            "Failed to queue memory_reflection run"
+                        );
+                    } else {
+                        fired += 1;
+                    }
+                }
                 continue;
             }
 
@@ -463,6 +546,16 @@ impl RoutineEngine {
             }
 
             let detail = truncate(&format!("{source}:{event_type}"), 200);
+            if is_turn_completed && routine.name == "memory_reflection" {
+                tracing::info!(
+                    routine_id = %routine.id,
+                    thread_id = payload.get("thread_id").and_then(|v| v.as_str()),
+                    assistant_message_id = payload
+                        .get("assistant_message_id")
+                        .and_then(|v| v.as_str()),
+                    "Matched and firing memory_reflection for system event"
+                );
+            }
             self.spawn_fire(
                 routine.clone(),
                 "system_event",
@@ -470,6 +563,10 @@ impl RoutineEngine {
                 Some(payload.clone()),
             );
             fired += 1;
+        }
+
+        if is_turn_completed {
+            tracing::info!(fired, "Completed system event routine evaluation");
         }
 
         fired
@@ -832,6 +929,7 @@ impl RoutineEngine {
             extension_manager: self.extension_manager.clone(),
             tools: self.tools.clone(),
             safety: self.safety.clone(),
+            queued_execution_tx: self.queued_execution_tx.clone(),
         };
 
         tokio::spawn(async move {
@@ -918,6 +1016,7 @@ impl RoutineEngine {
             extension_manager: self.extension_manager.clone(),
             tools: self.tools.clone(),
             safety: self.safety.clone(),
+            queued_execution_tx: self.queued_execution_tx.clone(),
         };
 
         tokio::spawn(async move {
@@ -974,17 +1073,76 @@ impl RoutineEngine {
             extension_manager: self.extension_manager.clone(),
             tools: self.tools.clone(),
             safety: self.safety.clone(),
+            queued_execution_tx: self.queued_execution_tx.clone(),
         };
 
         // Record the run in DB, then spawn execution
         let store = self.store.clone();
         tokio::spawn(async move {
+            if routine.name == "memory_reflection" {
+                tracing::info!(
+                    routine_id = %routine.id,
+                    run_id = %run.id,
+                    trigger_type = %run.trigger_type,
+                    thread_id = run
+                        .trigger_payload
+                        .as_ref()
+                        .and_then(|payload| payload.get("thread_id"))
+                        .and_then(|value| value.as_str()),
+                    assistant_message_id = run
+                        .trigger_payload
+                        .as_ref()
+                        .and_then(|payload| payload.get("assistant_message_id"))
+                        .and_then(|value| value.as_str()),
+                    "Spawning memory_reflection routine run"
+                );
+            }
             if let Err(e) = store.create_routine_run(&run).await {
                 tracing::error!(routine = %routine.name, "Failed to record run: {}", e);
                 return;
             }
+            if routine.name == "memory_reflection" {
+                emit_memory_reflection_status(
+                    &engine.notify_tx,
+                    &run,
+                    &routine.name,
+                    "running",
+                )
+                .await;
+            }
             execute_routine(engine, routine, run).await;
         })
+    }
+
+    async fn enqueue_triggered_run(
+        &self,
+        routine: &Routine,
+        trigger_type: &str,
+        trigger_detail: Option<String>,
+        trigger_payload: Option<serde_json::Value>,
+    ) -> Result<(), crate::error::DatabaseError> {
+        let run = RoutineRun {
+            id: Uuid::new_v4(),
+            routine_id: routine.id,
+            trigger_type: trigger_type.to_string(),
+            trigger_detail,
+            trigger_payload,
+            started_at: Utc::now(),
+            completed_at: None,
+            status: RunStatus::Queued,
+            result_summary: None,
+            tokens_used: None,
+            job_id: None,
+            created_at: Utc::now(),
+        };
+
+        self.store.create_routine_run(&run).await?;
+
+        if routine.name == "memory_reflection" {
+            emit_memory_reflection_status(&self.notify_tx, &run, &routine.name, "queued").await;
+        }
+
+        Ok(())
     }
 
     fn check_cooldown(&self, routine: &Routine) -> bool {
@@ -1009,6 +1167,100 @@ impl RoutineEngine {
                 );
                 false
             }
+        }
+    }
+
+    pub async fn recover_stale_lightweight_runs(&self) {
+        let stale_runs = match self
+            .store
+            .list_stale_lightweight_routine_runs(self.boot_time)
+            .await
+        {
+            Ok(runs) => runs,
+            Err(error) => {
+                tracing::error!("Failed to list stale lightweight routine runs: {}", error);
+                return;
+            }
+        };
+
+        if stale_runs.is_empty() {
+            return;
+        }
+
+        tracing::warn!(
+            count = stale_runs.len(),
+            "Recovering stale lightweight routine runs from a previous process"
+        );
+
+        let mut recovered_routine_ids = Vec::new();
+        for run in stale_runs {
+            let routine = match self.store.get_routine(run.routine_id).await {
+                Ok(Some(routine)) => routine,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::error!(
+                        run_id = %run.id,
+                        routine_id = %run.routine_id,
+                        "Failed to load routine while recovering stale run: {}", error
+                    );
+                    continue;
+                }
+            };
+
+            let summary = "Recovered stale lightweight routine run from a previous process.";
+            if let Err(error) = self
+                .store
+                .complete_routine_run(run.id, RunStatus::Failed, Some(summary), None)
+                .await
+            {
+                tracing::error!(
+                    run_id = %run.id,
+                    routine = %routine.name,
+                    "Failed to mark stale lightweight run as failed: {}", error
+                );
+                continue;
+            }
+
+            if routine.name == "memory_reflection" {
+                emit_memory_reflection_status(&self.notify_tx, &run, &routine.name, "failed").await;
+            }
+
+            recovered_routine_ids.push(routine.id);
+        }
+
+        recovered_routine_ids.sort_unstable();
+        recovered_routine_ids.dedup();
+
+        for routine_id in recovered_routine_ids {
+            let Some(routine) = self.store.get_routine(routine_id).await.ok().flatten() else {
+                continue;
+            };
+            if !routine.enabled {
+                continue;
+            }
+            let routine_workspace = if routine.user_id == self.workspace.user_id() {
+                self.workspace.clone()
+            } else {
+                Arc::new(Workspace::new_with_db(
+                    &routine.user_id,
+                    Arc::clone(self.store.db()),
+                ))
+            };
+            let engine = EngineContext {
+                config: self.config.clone(),
+                store: self.store.clone(),
+                llm: self.llm.clone(),
+                workspace: routine_workspace,
+                memory: self.memory.clone(),
+                notify_tx: self.notify_tx.clone(),
+                running_count: self.running_count.clone(),
+                scheduler: self.scheduler.clone(),
+                extension_manager: self.extension_manager.clone(),
+                tools: self.tools.clone(),
+                safety: self.safety.clone(),
+                queued_execution_tx: self.queued_execution_tx.clone(),
+            };
+            drain_queued_routine_runs(engine, routine).await;
         }
     }
 }
@@ -1100,6 +1352,7 @@ impl FullJobWatcher {
 }
 
 /// Shared context passed to the execution function.
+#[derive(Clone)]
 struct EngineContext {
     config: RoutineConfig,
     store: AdminScope,
@@ -1112,12 +1365,154 @@ struct EngineContext {
     extension_manager: Option<Arc<ExtensionManager>>,
     tools: Arc<ToolRegistry>,
     safety: Arc<SafetyLayer>,
+    queued_execution_tx: mpsc::Sender<QueuedRoutineExecution>,
+}
+
+async fn emit_memory_reflection_status(
+    tx: &mpsc::Sender<OutgoingResponse>,
+    run: &RoutineRun,
+    routine_name: &str,
+    status: &str,
+) {
+    let Some(thread_id) = run
+        .trigger_payload
+        .as_ref()
+        .and_then(|payload| payload.get("thread_id"))
+        .and_then(|value| value.as_str())
+    else {
+        return;
+    };
+
+    let response = OutgoingResponse {
+        content: status.to_string(),
+        thread_id: Some(thread_id.to_string()),
+        attachments: Vec::new(),
+        metadata: serde_json::json!({
+            "display_kind": "reflection_status",
+            "source": "routine",
+            "routine_name": routine_name,
+            "assistant_message_id": run
+                .trigger_payload
+                .as_ref()
+                .and_then(|payload| payload.get("assistant_message_id"))
+                .and_then(|value| value.as_str()),
+            "status": status,
+            "run_id": run.id,
+        }),
+    };
+
+    if let Err(error) = tx.send(response).await {
+        tracing::error!(
+            routine = %routine_name,
+            run_id = %run.id,
+            status,
+            "Failed to emit memory reflection status: {}", error
+        );
+    }
+}
+
+async fn drain_queued_routine_runs(ctx: EngineContext, routine: Routine) {
+    let current_running = match ctx.store.count_running_routine_runs(routine.id).await {
+        Ok(count) => count,
+        Err(error) => {
+            tracing::error!(
+                routine = %routine.name,
+                "Failed to count running routine runs while draining queue: {}", error
+            );
+            return;
+        }
+    };
+
+    let available_slots = routine.guardrails.max_concurrent as i64 - current_running;
+    if available_slots <= 0 {
+        return;
+    }
+
+    let queued_runs = match ctx
+        .store
+        .list_queued_routine_runs(routine.id, available_slots)
+        .await
+    {
+        Ok(runs) => runs,
+        Err(error) => {
+            tracing::error!(
+                routine = %routine.name,
+                "Failed to list queued routine runs: {}", error
+            );
+            return;
+        }
+    };
+
+    for run in queued_runs {
+        let started_at = Utc::now();
+        let claimed = match ctx
+            .store
+            .transition_routine_run_to_running(run.id, started_at)
+            .await
+        {
+            Ok(claimed) => claimed,
+            Err(error) => {
+                tracing::error!(
+                    routine = %routine.name,
+                    run_id = %run.id,
+                    "Failed to transition queued run to running: {}", error
+                );
+                continue;
+            }
+        };
+        if !claimed {
+            continue;
+        }
+
+        let mut running_run = run.clone();
+        running_run.status = RunStatus::Running;
+        running_run.started_at = started_at;
+
+        if routine.name == "memory_reflection" {
+            emit_memory_reflection_status(&ctx.notify_tx, &running_run, &routine.name, "running")
+                .await;
+        }
+
+        if let Err(error) = ctx
+            .queued_execution_tx
+            .send(QueuedRoutineExecution {
+                ctx: ctx.clone(),
+                routine: routine.clone(),
+                run: running_run,
+            })
+            .await
+        {
+            tracing::error!(
+                routine = %routine.name,
+                run_id = %run.id,
+                "Failed to enqueue claimed routine run for execution: {}", error
+            );
+        }
+    }
 }
 
 /// Execute a routine run. Handles both lightweight and full_job modes.
 async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) {
     // Increment running count (atomic: survives panics in the execution below)
     ctx.running_count.fetch_add(1, Ordering::Relaxed);
+
+    if routine.name == "memory_reflection" {
+        tracing::info!(
+            routine_id = %routine.id,
+            run_id = %run.id,
+            thread_id = run
+                .trigger_payload
+                .as_ref()
+                .and_then(|payload| payload.get("thread_id"))
+                .and_then(|value| value.as_str()),
+            assistant_message_id = run
+                .trigger_payload
+                .as_ref()
+                .and_then(|payload| payload.get("assistant_message_id"))
+                .and_then(|value| value.as_str()),
+            "Starting memory_reflection routine execution"
+        );
+    }
 
     let result = match &routine.action {
         RoutineAction::Lightweight {
@@ -1194,6 +1589,17 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
         ));
     }
 
+    if routine.name == "memory_reflection" {
+        tracing::info!(
+            routine_id = %routine.id,
+            run_id = %run.id,
+            status = %status,
+            executed_tools = ?executed_tools,
+            summary = ?summary,
+            "Finished memory_reflection routine execution"
+        );
+    }
+
     // Complete the run record
     if let Err(e) = ctx
         .store
@@ -1201,6 +1607,20 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
         .await
     {
         tracing::error!(routine = %routine.name, "Failed to complete run record: {}", e);
+    }
+
+    if routine.name == "memory_reflection" {
+        emit_memory_reflection_status(
+            &ctx.notify_tx,
+            &run,
+            &routine.name,
+            if status == RunStatus::Failed {
+                "failed"
+            } else {
+                "completed"
+            },
+        )
+        .await;
     }
 
     // Update routine runtime state
@@ -1293,6 +1713,12 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
         thread_id.as_deref(),
     )
     .await;
+
+    let drain_ctx = ctx.clone();
+    let drain_routine = routine.clone();
+    std::mem::drop(tokio::spawn(async move {
+        drain_queued_routine_runs(drain_ctx, drain_routine).await;
+    }));
 }
 
 async fn mirror_memory_reflection_to_source_thread(
@@ -1302,8 +1728,22 @@ async fn mirror_memory_reflection_to_source_thread(
     summary: &str,
 ) {
     let Some(thread_id) = source_thread_id_from_trigger_payload(run) else {
+        tracing::warn!(
+            routine = %routine.name,
+            run_id = %run.id,
+            "Skipping memory_reflection mirror because source thread_id was missing"
+        );
         return;
     };
+    let assistant_message_id = source_assistant_message_id_from_trigger_payload(run);
+
+    tracing::info!(
+        routine = %routine.name,
+        run_id = %run.id,
+        thread_id = %thread_id,
+        assistant_message_id = ?assistant_message_id,
+        "Mirroring memory_reflection summary back to source thread"
+    );
 
     if let Err(e) = ctx
         .store
@@ -1324,6 +1764,7 @@ async fn mirror_memory_reflection_to_source_thread(
         "source": "routine",
         "routine_name": routine.name,
         "owner_id": routine.user_id,
+        "assistant_message_id": assistant_message_id,
         "display_kind": "reflection",
     });
 
@@ -1355,6 +1796,14 @@ fn source_thread_id_from_trigger_payload(run: &RoutineRun) -> Option<Uuid> {
     }
 }
 
+fn source_assistant_message_id_from_trigger_payload(run: &RoutineRun) -> Option<String> {
+    run.trigger_payload
+        .as_ref()
+        .and_then(|payload| payload.get("assistant_message_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
 async fn mirror_memory_reflection_tool_calls_to_source_thread(
     ctx: &EngineContext,
     routine: &Routine,
@@ -1362,8 +1811,23 @@ async fn mirror_memory_reflection_tool_calls_to_source_thread(
     tool_traces: &[RoutineToolTrace],
 ) {
     let Some(thread_id) = source_thread_id_from_trigger_payload(run) else {
+        tracing::warn!(
+            routine = %routine.name,
+            run_id = %run.id,
+            "Skipping memory_reflection tool mirroring because source thread_id was missing"
+        );
         return;
     };
+    let assistant_message_id = source_assistant_message_id_from_trigger_payload(run);
+
+    tracing::info!(
+        routine = %routine.name,
+        run_id = %run.id,
+        thread_id = %thread_id,
+        assistant_message_id = ?assistant_message_id,
+        tool_count = tool_traces.len(),
+        "Mirroring memory_reflection tool traces back to source thread"
+    );
 
     for trace in tool_traces {
         let persisted = serde_json::json!({
@@ -1403,6 +1867,7 @@ async fn mirror_memory_reflection_tool_calls_to_source_thread(
                 "source": "routine",
                 "routine_name": routine.name,
                 "owner_id": routine.user_id,
+                "assistant_message_id": assistant_message_id.clone(),
                 "display_kind": "tool_started",
                 "tool_name": trace.name,
                 "tool_call_id": trace.call_id,
@@ -1420,6 +1885,7 @@ async fn mirror_memory_reflection_tool_calls_to_source_thread(
                     "source": "routine",
                     "routine_name": routine.name,
                     "owner_id": routine.user_id,
+                    "assistant_message_id": assistant_message_id.clone(),
                     "display_kind": "tool_result",
                     "tool_name": trace.name,
                     "tool_call_id": trace.call_id,
@@ -1437,6 +1903,7 @@ async fn mirror_memory_reflection_tool_calls_to_source_thread(
                 "source": "routine",
                 "routine_name": routine.name,
                 "owner_id": routine.user_id,
+                "assistant_message_id": assistant_message_id.clone(),
                 "display_kind": "tool_completed",
                 "tool_name": trace.name,
                 "tool_call_id": trace.call_id,
@@ -2205,6 +2672,7 @@ async fn send_notification(
         RunStatus::Ok => notify.on_success,
         RunStatus::Attention => notify.on_attention,
         RunStatus::Failed => notify.on_failure,
+        RunStatus::Queued => false,
         RunStatus::Running => false,
     };
 
@@ -2216,6 +2684,7 @@ async fn send_notification(
         RunStatus::Ok => "✅",
         RunStatus::Attention => "🔔",
         RunStatus::Failed => "❌",
+        RunStatus::Queued => "🕓",
         RunStatus::Running => "⏳",
     };
 
@@ -2253,6 +2722,7 @@ pub fn spawn_cron_ticker(
         // dispatching any new work, so we don't confuse fresh dispatches
         // with crash orphans.
         engine.sync_dispatched_runs().await;
+        engine.recover_stale_lightweight_runs().await;
 
         // Run one cron check immediately so routines due at startup don't
         // wait an extra full polling interval.
@@ -2272,6 +2742,7 @@ pub fn spawn_cron_ticker(
             // Sync first: only processes runs from before boot_time, so it
             // never races with FullJobWatcher instances from this process.
             engine.sync_dispatched_runs().await;
+            engine.recover_stale_lightweight_runs().await;
             engine.check_cron_triggers().await;
 
             if last_refresh.elapsed() >= refresh_interval {
@@ -2373,6 +2844,7 @@ mod tests {
     fn test_run_status_icons() {
         // Just verify the mapping doesn't panic
         for status in [
+            RunStatus::Queued,
             RunStatus::Ok,
             RunStatus::Attention,
             RunStatus::Failed,
@@ -2810,6 +3282,7 @@ mod tests {
             RunStatus::Ok => config.on_success,
             RunStatus::Attention => config.on_attention,
             RunStatus::Failed => config.on_failure,
+            RunStatus::Queued => false,
             RunStatus::Running => false,
         };
         assert!(!should_notify);
@@ -2818,6 +3291,7 @@ mod tests {
     #[test]
     fn test_full_job_dispatch_returns_running_status() {
         assert_eq!(RunStatus::Running.to_string(), "running");
+        assert_eq!(RunStatus::Queued.to_string(), "queued");
     }
 
     /// Regression test for #1317: FullJobWatcher maps terminal job states correctly.
@@ -3074,5 +3548,138 @@ mod tests {
         assert_eq!(mirrored.metadata["source"], "routine");
         assert_eq!(mirrored.metadata["routine_name"], "memory_reflection");
         assert_eq!(mirrored.metadata["display_kind"], "reflection");
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_memory_reflection_queues_when_another_run_is_active() {
+        use crate::db::Database;
+        use crate::tenant::AdminScope;
+        use crate::testing::StubLlm;
+        use crate::testing::test_db;
+        use crate::workspace::Workspace;
+        use steward_safety::{SafetyConfig, SafetyLayer};
+
+        let (db, _tmp_dir): (Arc<dyn Database>, tempfile::TempDir) = test_db().await;
+        let user_id = "memory-user";
+        let source_thread_id = Uuid::new_v4();
+        let assistant_message_id = Uuid::new_v4();
+        db.ensure_conversation(
+            source_thread_id,
+            "desktop",
+            user_id,
+            Some(&source_thread_id.to_string()),
+        )
+        .await
+        .expect("seed source conversation");
+
+        let routine = Routine {
+            id: Uuid::new_v4(),
+            name: "memory_reflection".to_string(),
+            description: "test".to_string(),
+            user_id: user_id.to_string(),
+            enabled: true,
+            trigger: Trigger::SystemEvent {
+                source: "agent".to_string(),
+                event_type: "turn_completed".to_string(),
+                filters: std::collections::HashMap::new(),
+            },
+            action: RoutineAction::Lightweight {
+                prompt: "Inspect trigger payload and do nothing unless needed.".to_string(),
+                context_paths: vec![],
+                max_tokens: 256,
+                use_tools: false,
+                max_tool_rounds: 1,
+            },
+            guardrails: RoutineGuardrails::default(),
+            notify: NotifyConfig::default(),
+            last_run_at: None,
+            next_fire_at: None,
+            run_count: 0,
+            consecutive_failures: 0,
+            state: serde_json::json!({}),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        db.create_routine(&routine).await.expect("create routine");
+
+        let existing_run = crate::agent::RoutineRun {
+            id: Uuid::new_v4(),
+            routine_id: routine.id,
+            trigger_type: "system_event".to_string(),
+            trigger_detail: Some("agent:turn_completed".to_string()),
+            trigger_payload: Some(serde_json::json!({
+                "thread_id": source_thread_id.to_string(),
+                "assistant_message_id": Uuid::new_v4().to_string(),
+                "user_input": "old",
+                "assistant_output": "old",
+                "timestamp": "2026-04-14T00:00:00Z",
+            })),
+            started_at: Utc::now(),
+            completed_at: None,
+            status: RunStatus::Running,
+            result_summary: None,
+            tokens_used: None,
+            job_id: None,
+            created_at: Utc::now(),
+        };
+        db.create_routine_run(&existing_run)
+            .await
+            .expect("create active run");
+
+        let (notify_tx, mut notify_rx) = mpsc::channel(4);
+        let engine = super::RoutineEngine::new(
+            RoutineConfig::default(),
+            AdminScope::new(Arc::clone(&db)),
+            Arc::new(StubLlm::new("ROUTINE_OK")),
+            Arc::new(Workspace::new_with_db(user_id, Arc::clone(&db))),
+            None,
+            notify_tx,
+            None,
+            None,
+            Arc::new(crate::tools::ToolRegistry::new()),
+            Arc::new(SafetyLayer::new(&SafetyConfig {
+                max_output_length: 100_000,
+                injection_check_enabled: false,
+            })),
+        );
+        engine.refresh_event_cache().await;
+
+        let payload = serde_json::json!({
+            "thread_id": source_thread_id.to_string(),
+            "assistant_message_id": assistant_message_id.to_string(),
+            "user_input": "Actually, queue this reflection",
+            "assistant_output": "I will remember that.",
+            "timestamp": "2026-04-14T00:00:30Z"
+        });
+        let fired = engine
+            .emit_system_event("agent", "turn_completed", &payload, Some(user_id))
+            .await;
+        assert_eq!(fired, 1);
+
+        let runs = db
+            .list_routine_runs(routine.id, 10)
+            .await
+            .expect("list runs");
+        let queued = runs
+            .iter()
+            .find(|run| run.status == RunStatus::Queued)
+            .expect("queued run");
+        let assistant_message_id_text = assistant_message_id.to_string();
+        assert_eq!(
+            queued
+                .trigger_payload
+                .as_ref()
+                .and_then(|value| value.get("assistant_message_id"))
+                .and_then(|value| value.as_str()),
+            Some(assistant_message_id_text.as_str())
+        );
+
+        let queued_status_event = tokio::time::timeout(Duration::from_secs(1), notify_rx.recv())
+            .await
+            .expect("queued status should be emitted")
+            .expect("queued status event");
+        assert_eq!(queued_status_event.metadata["display_kind"], "reflection_status");
+        assert_eq!(queued_status_event.metadata["status"], "queued");
     }
 }

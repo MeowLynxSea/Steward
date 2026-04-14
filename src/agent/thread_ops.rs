@@ -115,23 +115,55 @@ impl Agent {
     async fn emit_turn_completed_memory_event(
         &self,
         user_id: &str,
+        session: &Arc<Mutex<Session>>,
         thread_id: Uuid,
         user_input: &str,
         assistant_output: &str,
     ) {
         let Some(engine) = self.routine_engine().await else {
+            tracing::warn!(
+                user_id,
+                thread_id = %thread_id,
+                "Skipping turn_completed memory event because routine engine is unavailable"
+            );
             return;
+        };
+        let (user_message_id, assistant_message_id) = {
+            let session = session.lock().await;
+            session
+                .threads
+                .get(&thread_id)
+                .and_then(|thread| thread.last_turn())
+                .map(|turn| (turn.user_message_id, turn.assistant_message_id))
+                .unwrap_or((None, None))
         };
         let payload = serde_json::json!({
             "thread_id": thread_id.to_string(),
             "user_input": user_input,
             "assistant_output": assistant_output,
+            "user_message_id": user_message_id.map(|id| id.to_string()),
+            "assistant_message_id": assistant_message_id.map(|id| id.to_string()),
             "timestamp": Utc::now().to_rfc3339(),
         });
+        tracing::info!(
+            user_id,
+            thread_id = %thread_id,
+            user_message_id = ?user_message_id,
+            assistant_message_id = ?assistant_message_id,
+            user_input_len = user_input.len(),
+            assistant_output_len = assistant_output.len(),
+            "Emitting turn_completed memory event"
+        );
         let fired = engine
             .emit_system_event("agent", "turn_completed", &payload, Some(user_id))
             .await;
-        tracing::debug!(thread_id = %thread_id, fired, "Emitted turn_completed system event");
+        tracing::info!(
+            user_id,
+            thread_id = %thread_id,
+            assistant_message_id = ?assistant_message_id,
+            fired,
+            "Finished turn_completed memory event dispatch"
+        );
     }
 
     /// Hydrate a historical thread from DB into memory if not already present.
@@ -724,6 +756,7 @@ impl Agent {
                 // so lightweight reflection routines can decide to CRUD memory conservatively.
                 self.emit_turn_completed_memory_event(
                     &message.user_id,
+                    &session,
                     thread_id,
                     &message.content,
                     &response,
@@ -2287,6 +2320,7 @@ impl Agent {
 
                     self.emit_turn_completed_memory_event(
                         &message.user_id,
+                        &session,
                         thread_id,
                         &message.content,
                         &response,
@@ -2731,6 +2765,8 @@ impl Agent {
 fn rebuild_chat_messages_from_db(
     db_messages: &[crate::history::ConversationMessage],
 ) -> Vec<ChatMessage> {
+    use crate::llm::ToolCall;
+
     let mut result = Vec::new();
     let mut pending_thinking_segments: Vec<String> = Vec::new();
 

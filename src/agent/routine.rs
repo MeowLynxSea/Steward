@@ -454,6 +454,7 @@ impl Default for NotifyConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
+    Queued,
     Running,
     Ok,
     Attention,
@@ -463,6 +464,7 @@ pub enum RunStatus {
 impl std::fmt::Display for RunStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RunStatus::Queued => write!(f, "queued"),
             RunStatus::Running => write!(f, "running"),
             RunStatus::Ok => write!(f, "ok"),
             RunStatus::Attention => write!(f, "attention"),
@@ -475,6 +477,7 @@ impl FromStr for RunStatus {
     type Err = RoutineError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
+            "queued" => Ok(RunStatus::Queued),
             "running" => Ok(RunStatus::Running),
             "ok" => Ok(RunStatus::Ok),
             "attention" => Ok(RunStatus::Attention),
@@ -846,6 +849,7 @@ mod tests {
     #[test]
     fn test_run_status_display_parse() {
         for status in [
+            RunStatus::Queued,
             RunStatus::Running,
             RunStatus::Ok,
             RunStatus::Attention,

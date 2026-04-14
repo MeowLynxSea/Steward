@@ -564,7 +564,7 @@ mod advanced {
                 .active_thread
                 .and_then(|tid| sess.threads.get_mut(&tid))
                 .expect("active thread should exist after turn 1");
-            thread.queue_message("What is 2+2?".to_string());
+            thread.queue_message("What is 2+2?".to_string(), chrono::Utc::now());
             assert_eq!(thread.pending_messages.len(), 1);
         }
 

@@ -339,6 +339,26 @@ impl RoutineStore for LibSqlBackend {
         Ok(())
     }
 
+    async fn transition_routine_run_to_running(
+        &self,
+        id: Uuid,
+        started_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, DatabaseError> {
+        let conn = self.connect().await?;
+        let changed = conn
+            .execute(
+                r#"
+                    UPDATE routine_runs
+                    SET status = 'running', started_at = ?2
+                    WHERE id = ?1 AND status = 'queued'
+                "#,
+                params![id.to_string(), fmt_ts(&started_at)],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        Ok(changed > 0)
+    }
+
     async fn complete_routine_run(
         &self,
         id: Uuid,
@@ -381,6 +401,61 @@ impl RoutineStore for LibSqlBackend {
                     ROUTINE_RUN_COLUMNS
                 ),
                 params![routine_id.to_string(), limit],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut runs = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            runs.push(row_to_routine_run_libsql(&row)?);
+        }
+        Ok(runs)
+    }
+
+    async fn list_queued_routine_runs(
+        &self,
+        routine_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<RoutineRun>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                &format!(
+                    "SELECT {} FROM routine_runs WHERE routine_id = ?1 AND status = 'queued' ORDER BY created_at ASC LIMIT ?2",
+                    ROUTINE_RUN_COLUMNS
+                ),
+                params![routine_id.to_string(), limit],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut runs = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            runs.push(row_to_routine_run_libsql(&row)?);
+        }
+        Ok(runs)
+    }
+
+    async fn list_stale_lightweight_routine_runs(
+        &self,
+        before: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<RoutineRun>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                &format!(
+                    "SELECT {} FROM routine_runs WHERE status = 'running' AND job_id IS NULL AND started_at < ?1 ORDER BY started_at ASC",
+                    ROUTINE_RUN_COLUMNS
+                ),
+                params![fmt_ts(&before)],
             )
             .await
             .map_err(|e| DatabaseError::Query(e.to_string()))?;

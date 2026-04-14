@@ -8,15 +8,19 @@
     Zap,
     Image,
     Brain,
-    Sparkles
+    Sparkles,
+    X
   } from "lucide-svelte";
   import type {
+    ReflectionDetail,
+    ReflectionStatus,
     SessionDetail,
     ThreadMessage,
     StreamingState,
     TaskRecord,
     TimelineToolCall
   } from "../lib/types";
+  import { apiClient } from "../lib/api";
   import { renderMarkdown } from "../lib/markdown";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
   import { onDestroy } from "svelte";
@@ -39,6 +43,32 @@
     | { kind: "message"; message: ThreadMessage }
     | { kind: "auxiliary_group"; id: string; messages: ThreadMessage[] };
 
+  type ReflectionPanelState = {
+    loading: boolean;
+    error: string | null;
+    detail: ReflectionDetail | null;
+  };
+
+  type ReflectionTimelineEntry =
+    | {
+        id: string;
+        kind: "thinking";
+        createdAt: string;
+        content: string;
+      }
+    | {
+        id: string;
+        kind: "tool";
+        createdAt: string;
+        toolCall: TimelineToolCall;
+      }
+    | {
+        id: string;
+        kind: "message";
+        createdAt: string;
+        content: string;
+      };
+
   let {
     session,
     task,
@@ -58,6 +88,8 @@
   let textareaRef: HTMLTextAreaElement | null = $state(null);
   let messageListRef: HTMLDivElement | null = $state(null);
   let expandedToolCalls = $state<Set<string>>(new Set());
+  let activeReflectionAssistantId = $state<string | null>(null);
+  let reflectionPanels = $state<Record<string, ReflectionPanelState>>({});
   let imagesExpanded = $state(false);
   let animatedAssistantId = $state<string | null>(null);
   let animatedAssistantText = $state("");
@@ -68,8 +100,11 @@
   let settlingAuxiliarySummaries = $state<Set<string>>(new Set());
   let lastLiveThinkingId = $state<string | null>(null);
   let lastComposerSeedId = $state<string | null>(null);
+  let lastReflectionThreadId = $state<string | null>(null);
+  let lastReflectionSignalKey = $state<string | null>(null);
 
   const auxiliarySummaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const reflectionPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   const hasMessages = $derived(session && session.thread_messages.length > 0);
   const hasStreamingContent = $derived(
@@ -83,6 +118,19 @@
       streaming.toolCalls.length > 0 ||
       streaming.reasoning ||
       streaming.images.length > 0
+    );
+  });
+  const activeReflectionMessage = $derived.by(() => {
+    if (!activeReflectionAssistantId) {
+      return null;
+    }
+    return (
+      session?.thread_messages.find(
+        (message) =>
+          message.id === activeReflectionAssistantId &&
+          message.kind === "message" &&
+          message.role === "assistant"
+      ) ?? null
     );
   });
   const displayEntries = $derived.by<DisplayEntry[]>(() => {
@@ -120,6 +168,55 @@
 
     flushAux();
     return entries;
+  });
+  const observedReflectionTimelines = $derived.by<Map<string, ReflectionTimelineEntry[]>>(() => {
+    const messages = session?.thread_messages ?? [];
+    const processes = new Map<string, ReflectionTimelineEntry[]>();
+    const assistantIndexes = messages
+      .map((message, index) => ({ message, index }))
+      .filter(
+        ({ message }) => message.kind === "message" && message.role === "assistant"
+      );
+
+    for (const { message, index } of assistantIndexes) {
+      const entries: ReflectionTimelineEntry[] = [];
+      for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
+        const candidate = messages[cursor];
+        if (candidate.kind === "message" && candidate.role === "user") {
+          break;
+        }
+        if (candidate.kind === "thinking" && (candidate.content ?? "").trim()) {
+          entries.push({
+            id: candidate.id,
+            kind: "thinking",
+            createdAt: candidate.created_at,
+            content: candidate.content ?? ""
+          });
+          continue;
+        }
+        if (candidate.kind === "tool_call" && candidate.tool_call) {
+          entries.push({
+            id: candidate.id,
+            kind: "tool",
+            createdAt: candidate.created_at,
+            toolCall: candidate.tool_call
+          });
+          continue;
+        }
+        if (candidate.kind === "reflection" && (candidate.content ?? "").trim()) {
+          entries.push({
+            id: candidate.id,
+            kind: "message",
+            createdAt: candidate.created_at,
+            content: candidate.content ?? ""
+          });
+        }
+      }
+
+      processes.set(message.id, entries);
+    }
+
+    return processes;
   });
   const reasoningSummary = $derived(buildCompactSummary(streaming.reasoning ?? "", 110));
   const imageSummary = $derived(streaming.images.length > 0 ? `已生成 ${streaming.images.length} 张图片` : "");
@@ -201,6 +298,55 @@
     textareaRef?.focus();
   });
 
+  $effect(() => {
+    const threadId = session?.active_thread_id ?? null;
+    if (threadId === lastReflectionThreadId) {
+      return;
+    }
+    for (const timer of reflectionPollTimers.values()) {
+      clearTimeout(timer);
+    }
+    reflectionPollTimers.clear();
+    activeReflectionAssistantId = null;
+    reflectionPanels = {};
+    lastReflectionThreadId = threadId;
+    lastReflectionSignalKey = null;
+  });
+
+  $effect(() => {
+    const signal = streaming.reflectionSignal;
+    const threadId = session?.active_thread_id ?? null;
+    if (!signal || !threadId) {
+      return;
+    }
+
+    const signalKey = `${threadId}:${signal.assistantMessageId}:${signal.sequence}:${signal.kind}`;
+    if (signalKey === lastReflectionSignalKey) {
+      return;
+    }
+    lastReflectionSignalKey = signalKey;
+
+    if (signal.kind === "reflection_status" && signal.status) {
+      seedReflectionLifecycleStatus(signal.assistantMessageId, signal.status);
+    }
+
+    if (activeReflectionAssistantId !== signal.assistantMessageId) {
+      return;
+    }
+
+    const assistantMessage = session?.thread_messages.find(
+      (message) =>
+        message.id === signal.assistantMessageId &&
+        message.kind === "message" &&
+        message.role === "assistant"
+    );
+    if (!assistantMessage) {
+      return;
+    }
+
+    void loadReflectionDetails(assistantMessage, true);
+  });
+
   function toggleToolCallExpand(id: string) {
     const next = new Set(expandedToolCalls);
     if (next.has(id)) {
@@ -209,6 +355,155 @@
       next.add(id);
     }
     expandedToolCalls = next;
+  }
+
+  function clearReflectionPoll(assistantId: string) {
+    const timer = reflectionPollTimers.get(assistantId);
+    if (timer) {
+      clearTimeout(timer);
+      reflectionPollTimers.delete(assistantId);
+    }
+  }
+
+  function reflectionPanelForMessage(message: ThreadMessage) {
+    return reflectionPanels[message.id] ?? null;
+  }
+
+  function observedReflectionTimelineForMessage(message: ThreadMessage) {
+    return observedReflectionTimelines.get(message.id) ?? [];
+  }
+
+  function seedReflectionLifecycleStatus(assistantMessageId: string, status: ReflectionStatus) {
+    const existing = reflectionPanels[assistantMessageId];
+    const detail = existing?.detail
+      ? { ...existing.detail, status }
+      : {
+          assistant_message_id: assistantMessageId,
+          status,
+          outcome: null,
+          summary: null,
+          detail: null,
+          run_started_at: null,
+          run_completed_at: null,
+          tool_calls: [],
+          messages: []
+        };
+
+    reflectionPanels = {
+      ...reflectionPanels,
+      [assistantMessageId]: {
+        loading: existing?.loading ?? false,
+        error: existing?.error ?? null,
+        detail
+      }
+    };
+  }
+
+  function scheduleReflectionPoll(message: ThreadMessage) {
+    const threadId = session?.active_thread_id ?? null;
+    if (!threadId) {
+      return;
+    }
+    clearReflectionPoll(message.id);
+    reflectionPollTimers.set(
+      message.id,
+      setTimeout(() => {
+        if (session?.active_thread_id !== threadId) {
+          clearReflectionPoll(message.id);
+          return;
+        }
+        void loadReflectionDetails(message, true);
+      }, 1400)
+    );
+  }
+
+  async function loadReflectionDetails(message: ThreadMessage, force = false) {
+    if (!session) {
+      return;
+    }
+
+    const existing = reflectionPanels[message.id];
+    if (
+      !force &&
+      (existing?.loading ||
+        (existing?.detail &&
+          (existing.detail.summary !== null ||
+            existing.detail.detail !== null ||
+            existing.detail.tool_calls.length > 0 ||
+            existing.detail.messages.length > 0 ||
+            existing.detail.run_started_at !== null ||
+            existing.detail.run_completed_at !== null ||
+            existing.detail.status === "completed" ||
+            existing.detail.status === "failed" ||
+            existing.detail.status === "missing")))
+    ) {
+      return;
+    }
+
+    reflectionPanels = {
+      ...reflectionPanels,
+      [message.id]: {
+        loading: true,
+        error: null,
+        detail: existing?.detail ?? null
+      }
+    };
+
+    try {
+      const detail = await apiClient.getReflectionDetails(session.active_thread_id, message.id);
+      const optimisticStatus = existing?.detail?.status;
+      const resolvedDetail =
+        detail.status === "missing" &&
+        (optimisticStatus === "queued" || optimisticStatus === "running")
+          ? {
+              ...detail,
+              status: optimisticStatus
+            }
+          : detail;
+      reflectionPanels = {
+        ...reflectionPanels,
+        [message.id]: {
+          loading: false,
+          error: null,
+          detail: resolvedDetail
+        }
+      };
+
+      if (
+        (resolvedDetail.status === "queued" || resolvedDetail.status === "running") &&
+        activeReflectionAssistantId === message.id
+      ) {
+        scheduleReflectionPoll(message);
+      } else {
+        clearReflectionPoll(message.id);
+      }
+    } catch (error) {
+      clearReflectionPoll(message.id);
+      reflectionPanels = {
+        ...reflectionPanels,
+        [message.id]: {
+          loading: false,
+          error: error instanceof Error ? error.message : "Failed to load reflection details.",
+          detail: existing?.detail ?? null
+        }
+      };
+    }
+  }
+
+  function closeReflectionModal() {
+    if (activeReflectionAssistantId) {
+      clearReflectionPoll(activeReflectionAssistantId);
+    }
+    activeReflectionAssistantId = null;
+  }
+
+  function toggleReflectionExpand(message: ThreadMessage) {
+    if (activeReflectionAssistantId === message.id) {
+      closeReflectionModal();
+      return;
+    }
+    activeReflectionAssistantId = message.id;
+    void loadReflectionDetails(message, true);
   }
 
   function toggleImagesExpand() {
@@ -422,6 +717,85 @@
     return renderMarkdown(trimmed);
   }
 
+  function reflectionStatusLabel(status: ReflectionStatus | "loading" | "unloaded") {
+    switch (status) {
+      case "queued":
+        return "Queued";
+      case "running":
+        return "Running";
+      case "completed":
+        return "Done";
+      case "failed":
+        return "Failed";
+      case "missing":
+        return "Missing";
+      case "loading":
+        return "Loading";
+      case "unloaded":
+        return "View";
+      default:
+        return "Unknown";
+    }
+  }
+
+  function reflectionStatusDescription(panel: ReflectionPanelState | null) {
+    if (panel?.loading && !panel.detail) {
+      return "Reflection timeline for this turn.";
+    }
+    if (panel?.detail?.detail) {
+      return panel.detail.detail;
+    }
+    if (panel?.detail?.status === "queued") {
+      return "Reflection is queued and waiting for an execution slot.";
+    }
+    if (panel?.detail?.status === "running") {
+      return "Reflection is still executing for this turn.";
+    }
+    if (panel?.detail?.status === "completed") {
+      switch (panel.detail.outcome) {
+        case "boot_promoted":
+          return "Reflection completed and promoted memory into boot recall.";
+        case "updated":
+          return "Reflection completed and updated existing memory.";
+        case "created":
+          return "Reflection completed and stored new memory.";
+        case "no_op":
+          return "Reflection completed and decided not to persist new memory.";
+        default:
+          return "Reflection completed for this turn.";
+      }
+    }
+    if (panel?.detail?.status === "failed") {
+      return "Reflection failed before it could finish its memory update.";
+    }
+    if (panel?.detail?.status === "missing") {
+      return "No reflection artifacts were found for this turn.";
+    }
+    if (panel?.detail?.summary) {
+      return buildCompactSummary(panel.detail.summary, 160);
+    }
+    return "Reflection timeline for this turn.";
+  }
+
+  function reflectionBadgeStatus(panel: ReflectionPanelState | null): ReflectionStatus | "loading" | "unloaded" {
+    if (panel?.loading && !panel.detail) {
+      return "loading";
+    }
+    return panel?.detail?.status ?? "unloaded";
+  }
+
+  function formatAuxiliaryTimestamp(value: string) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  }
+
   function displayedAssistantContent(message: ThreadMessage) {
     if (message.id === animatedAssistantId) {
       return animatedAssistantText;
@@ -523,6 +897,10 @@
       clearTimeout(timer);
     }
     auxiliarySummaryTimers.clear();
+    for (const timer of reflectionPollTimers.values()) {
+      clearTimeout(timer);
+    }
+    reflectionPollTimers.clear();
   });
 </script>
 
@@ -666,15 +1044,33 @@
                 {@html renderMarkdown(displayedAssistantContent(entry.message))}
               </div>
               {#if entry.message.turn_cost}
-                <div class="turn-cost-bar inline-turn-cost fade-in">
-                  <Zap size={12} strokeWidth={2} />
-                  <span>{entry.message.turn_cost.input_tokens.toLocaleString()} in</span>
-                  <span class="cost-sep">·</span>
-                  <span>{entry.message.turn_cost.output_tokens.toLocaleString()} out</span>
-                  {#if entry.message.turn_cost.cost_usd !== "$0.0000"}
-                    <span class="cost-sep">·</span>
-                    <span>{entry.message.turn_cost.cost_usd}</span>
-                  {/if}
+                {@const reflectionPanel = reflectionPanelForMessage(entry.message)}
+                {@const reflectionTimeline = observedReflectionTimelineForMessage(entry.message)}
+                {@const reflectionBadge = reflectionBadgeStatus(reflectionPanel)}
+                <div class="turn-meta-stack">
+                  <div class="turn-cost-bar inline-turn-cost fade-in">
+                    <div class="turn-cost-copy">
+                      <Zap size={12} strokeWidth={2} />
+                      <span>{entry.message.turn_cost.input_tokens.toLocaleString()} in</span>
+                      <span class="cost-sep">·</span>
+                      <span>{entry.message.turn_cost.output_tokens.toLocaleString()} out</span>
+                      {#if entry.message.turn_cost.cost_usd !== "$0.0000"}
+                        <span class="cost-sep">·</span>
+                        <span>{entry.message.turn_cost.cost_usd}</span>
+                      {/if}
+                    </div>
+                    <button
+                      class="reflection-trigger"
+                      class:is-open={activeReflectionAssistantId === entry.message.id}
+                      type="button"
+                      onclick={() => toggleReflectionExpand(entry.message)}
+                      aria-label="Open reflection details"
+                      title="Reflection"
+                    >
+                      <Brain size={12} strokeWidth={1.9} />
+                      <span class={`reflection-trigger-dot status-${reflectionBadge}`}></span>
+                    </button>
+                  </div>
                 </div>
               {/if}
             </div>
@@ -840,6 +1236,151 @@
       {/if}
     </div>
   </div>
+
+  {#if activeReflectionMessage}
+    {@const activeReflectionPanel = reflectionPanelForMessage(activeReflectionMessage)}
+    {@const activeReflectionTimeline = observedReflectionTimelineForMessage(activeReflectionMessage)}
+    {@const activeReflectionBadge = reflectionBadgeStatus(activeReflectionPanel)}
+    <div
+      class="reflection-modal-backdrop fade-in"
+      role="presentation"
+      tabindex="-1"
+      onclick={closeReflectionModal}
+      onkeydown={(event) => {
+        if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          closeReflectionModal();
+        }
+      }}
+    >
+      <div
+        class="reflection-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Reflection details"
+        tabindex="-1"
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeReflectionModal();
+          }
+        }}
+      >
+        <div class="reflection-modal-head">
+          <div class="reflection-modal-title-wrap">
+            <div class="reflection-panel-title-row">
+              <span class="reflection-panel-title">Reflection</span>
+              <span class={`reflection-pill large status-${activeReflectionBadge}`}>
+                {reflectionStatusLabel(activeReflectionBadge)}
+              </span>
+            </div>
+            <p class="reflection-panel-subtitle">
+              {reflectionStatusDescription(activeReflectionPanel)}
+            </p>
+          </div>
+          <button
+            class="reflection-modal-close"
+            type="button"
+            onclick={closeReflectionModal}
+            aria-label="Close reflection details"
+          >
+            <X size={16} strokeWidth={2} />
+          </button>
+        </div>
+
+        <div class="reflection-modal-body">
+          {#if activeReflectionPanel?.loading && !activeReflectionPanel.detail}
+            <div class="reflection-loading">
+              <Loader size={15} class="spin" strokeWidth={2} />
+              <span>Syncing reflection status...</span>
+            </div>
+          {/if}
+
+          <div class="reflection-section">
+            <div class="reflection-section-head">
+              <span>Timeline</span>
+              <span>{activeReflectionTimeline.length}</span>
+            </div>
+            {#if activeReflectionTimeline.length > 0}
+              <div class="reflection-list">
+                {#each activeReflectionTimeline as timelineEntry}
+                  <div class="reflection-list-item">
+                    <div class="reflection-item-header">
+                      <div class="reflection-item-title">
+                        {#if timelineEntry.kind === "thinking"}
+                          <Brain size={13} strokeWidth={2} />
+                          <strong>Thinking</strong>
+                        {:else if timelineEntry.kind === "tool"}
+                          <Wrench size={13} strokeWidth={2} />
+                          <strong>{timelineEntry.toolCall.name}</strong>
+                          <span class={`reflection-inline-status tool-${timelineEntry.toolCall.status}`}>
+                            {timelineEntry.toolCall.status}
+                          </span>
+                        {:else}
+                          <Sparkles size={13} strokeWidth={2} />
+                          <strong>Reflection Message</strong>
+                        {/if}
+                      </div>
+                      <span class="reflection-item-time">
+                        {formatAuxiliaryTimestamp(timelineEntry.createdAt)}
+                      </span>
+                    </div>
+
+                    {#if timelineEntry.kind === "thinking"}
+                      <div class="reflection-detail-body markdown-body">
+                        {@html renderMarkdown(timelineEntry.content)}
+                      </div>
+                    {:else if timelineEntry.kind === "tool"}
+                      {#if timelineEntry.toolCall.parameters}
+                        <div class="reflection-detail-block">
+                          <span class="reflection-detail-label">Parameters</span>
+                          <div class="reflection-detail-body markdown-body">
+                            {@html renderAuxiliaryDetail(timelineEntry.toolCall.parameters)}
+                          </div>
+                        </div>
+                      {/if}
+                      {#if timelineEntry.toolCall.resultPreview}
+                        <div class="reflection-detail-block">
+                          <span class="reflection-detail-label">Result</span>
+                          <div class="reflection-detail-body markdown-body">
+                            {@html renderAuxiliaryDetail(timelineEntry.toolCall.resultPreview)}
+                          </div>
+                        </div>
+                      {/if}
+                      {#if timelineEntry.toolCall.error}
+                        <div class="reflection-detail-block error">
+                          <span class="reflection-detail-label">Error</span>
+                          <div class="reflection-detail-body markdown-body">
+                            {@html renderAuxiliaryDetail(timelineEntry.toolCall.error)}
+                          </div>
+                        </div>
+                      {/if}
+                    {:else}
+                      <div class="reflection-detail-body markdown-body">
+                        {@html renderMarkdown(timelineEntry.content)}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+
+            {#if activeReflectionPanel?.detail?.status === "queued" || activeReflectionPanel?.detail?.status === "running"}
+              <div class="reflection-live-skeleton" aria-hidden="true">
+                <div class="reflection-skeleton-line short"></div>
+                <div class="reflection-skeleton-line full"></div>
+                <div class="reflection-skeleton-line medium"></div>
+              </div>
+            {:else if activeReflectionTimeline.length === 0}
+              <p class="reflection-empty">No reflection activity has been recorded for this turn yet.</p>
+            {/if}
+          </div>
+        </div>
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -1395,6 +1936,13 @@
   }
 
   /* Turn cost */
+  .turn-meta-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-start;
+  }
+
   .turn-cost-bar {
     display: flex;
     align-items: center;
@@ -1403,10 +1951,418 @@
     font-size: 12px;
     color: var(--text-muted);
     width: fit-content;
+    max-width: 100%;
+    flex-wrap: wrap;
   }
 
   .inline-turn-cost {
     margin-top: 10px;
+  }
+
+  .turn-cost-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .reflection-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.18s ease, opacity 0.18s ease, transform 0.18s ease;
+    font: inherit;
+    position: relative;
+    opacity: 0.9;
+    margin-left: 12px;
+  }
+
+  .reflection-trigger:hover {
+    color: var(--text-primary);
+    opacity: 1;
+  }
+
+  .reflection-trigger.is-open {
+    color: var(--text-primary);
+    opacity: 1;
+    transform: translateY(-1px);
+  }
+
+  .reflection-trigger-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    position: absolute;
+    right: -2px;
+    bottom: 1px;
+    border: 1.5px solid var(--bg-surface);
+    background: var(--text-muted);
+  }
+
+  .reflection-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .reflection-pill.large {
+    padding: 3px 9px;
+  }
+
+  .status-completed {
+    color: #14532d;
+    background: rgba(134, 239, 172, 0.28);
+    border-color: rgba(34, 197, 94, 0.28);
+  }
+
+  .status-queued {
+    color: #92400e;
+    background: rgba(253, 230, 138, 0.28);
+    border-color: rgba(217, 119, 6, 0.24);
+  }
+
+  .status-running,
+  .status-loading {
+    color: #1d4ed8;
+    background: rgba(147, 197, 253, 0.28);
+    border-color: rgba(59, 130, 246, 0.24);
+  }
+
+  .status-failed {
+    color: #991b1b;
+    background: rgba(252, 165, 165, 0.25);
+    border-color: rgba(239, 68, 68, 0.24);
+  }
+
+  .status-missing,
+  .status-unknown,
+  .status-unloaded {
+    color: var(--text-muted);
+    background: var(--bg-hover);
+    border-color: var(--border-default);
+  }
+
+  .reflection-trigger-dot.status-completed {
+    background: #16a34a;
+    border-color: var(--bg-surface);
+  }
+
+  .reflection-trigger-dot.status-queued {
+    background: #d97706;
+    border-color: var(--bg-surface);
+  }
+
+  .reflection-trigger-dot.status-running,
+  .reflection-trigger-dot.status-loading {
+    background: #2563eb;
+    border-color: var(--bg-surface);
+  }
+
+  .reflection-trigger-dot.status-failed {
+    background: #dc2626;
+    border-color: var(--bg-surface);
+  }
+
+  .reflection-trigger-dot.status-missing,
+  .reflection-trigger-dot.status-unknown,
+  .reflection-trigger-dot.status-unloaded {
+    background: var(--text-muted);
+    border-color: var(--bg-surface);
+  }
+
+  .reflection-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 60;
+    background: rgba(15, 23, 42, 0.32);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: reflection-backdrop-in 0.18s ease-out both;
+  }
+
+  .reflection-modal {
+    width: min(760px, 100%);
+    max-height: min(78vh, 820px);
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 18px;
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.24);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    animation: reflection-modal-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .reflection-modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 18px 20px 14px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-surface);
+  }
+
+  .reflection-modal-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .reflection-modal-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .reflection-modal-close:hover {
+    color: var(--text-primary);
+  }
+
+  .reflection-modal-body {
+    padding: 16px 20px 20px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: var(--bg-primary);
+  }
+
+  @keyframes reflection-backdrop-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes reflection-modal-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .reflection-panel-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .reflection-panel-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    color: var(--text-primary);
+  }
+
+  .reflection-panel-subtitle {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .reflection-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .reflection-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+  }
+
+  .reflection-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+  }
+
+  .reflection-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .reflection-list-item {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .reflection-item-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .reflection-item-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text-primary);
+  }
+
+  .reflection-item-title strong {
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .reflection-item-time {
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .reflection-inline-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 6px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .reflection-inline-status.tool-running {
+    color: #1d4ed8;
+    background: rgba(147, 197, 253, 0.28);
+    border-color: rgba(59, 130, 246, 0.24);
+  }
+
+  .reflection-inline-status.tool-completed {
+    color: #14532d;
+    background: rgba(134, 239, 172, 0.28);
+    border-color: rgba(34, 197, 94, 0.28);
+  }
+
+  .reflection-inline-status.tool-failed {
+    color: #991b1b;
+    background: rgba(252, 165, 165, 0.25);
+    border-color: rgba(239, 68, 68, 0.24);
+  }
+
+  .reflection-detail-block {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-left: 21px;
+  }
+
+  .reflection-detail-block.error {
+    color: var(--accent-danger-text);
+  }
+
+  .reflection-detail-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+  }
+
+  .reflection-detail-body {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.58;
+  }
+
+  .reflection-empty {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.5;
+    padding-top: 8px;
+  }
+
+  .reflection-live-skeleton {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 16px;
+  }
+
+  .reflection-skeleton-line {
+    height: 10px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--bg-hover) 88%, transparent) 0%,
+      color-mix(in srgb, var(--bg-elevated) 96%, white 4%) 50%,
+      color-mix(in srgb, var(--bg-hover) 88%, transparent) 100%
+    );
+    background-size: 220% 100%;
+    animation: reflection-skeleton-shimmer 1.35s ease-in-out infinite;
+  }
+
+  .reflection-skeleton-line.short {
+    width: 28%;
+  }
+
+  .reflection-skeleton-line.medium {
+    width: 56%;
+  }
+
+  .reflection-skeleton-line.full {
+    width: 100%;
+  }
+
+  @keyframes reflection-skeleton-shimmer {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: -100% 50%;
+    }
   }
 
   .cost-sep {
