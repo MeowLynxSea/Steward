@@ -4,26 +4,41 @@
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use chrono::Utc;
 use tauri::State;
 use uuid::Uuid;
 
 use steward_core::agent::session::Session;
 use steward_core::agent::submission::Submission;
-use steward_core::channels::IncomingMessage;
+use steward_core::channels::{AttachmentKind, IncomingAttachment, IncomingMessage};
 use steward_core::desktop_runtime::AppState;
+use steward_core::extensions::ExtensionKind;
 use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceAllowlistRequest,
-    CreateWorkspaceCheckpointRequest, MemoryGraphSearchRequest, MemoryReviewActionRequest,
-    PatchSettingsRequest, PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
+    CreateWorkspaceCheckpointRequest, McpActivityItemResponse, McpActivityListResponse,
+    McpAddResourceToThreadResponse, McpAuthResponse, McpCompleteArgumentRequest,
+    McpCompleteArgumentResponse, McpPromptGetRequest, McpPromptListResponse, McpPromptResponse,
+    McpReadResourceResponse, McpResourceListResponse, McpResourceTemplateListResponse,
+    McpRespondElicitationRequest, McpRespondElicitationResponse, McpRespondSamplingRequest,
+    McpRespondSamplingResponse, McpRootGrantResponse, McpRootsResponse,
+    McpSaveResourceSnapshotResponse, McpServerListResponse, McpServerSummaryResponse,
+    McpServerUpsertRequest, McpServerUpsertResponse, McpSetRootsRequest, McpTestResponse,
+    McpToolListResponse, MemoryGraphSearchRequest, MemoryReviewActionRequest, PatchSettingsRequest,
+    PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
     SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceBaselineSetRequest,
     WorkspaceCheckpointListQuery, WorkspaceDiffQuery, WorkspaceHistoryQuery,
     WorkspaceRestoreRequest, WorkspaceSearchRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
-use steward_core::task_runtime::TaskStatus;
+use steward_core::task_runtime::{TaskMode, TaskStatus};
+use steward_core::tools::mcp::config::McpTransportConfig;
+use steward_core::tools::mcp::{
+    BlobResourceContents, CompletionReference, McpServerConfig, McpServersFile, OAuthConfig,
+    ReadResourceResult, ResourceContents, TextResourceContents,
+};
 use steward_core::workspace::parse_allowlist_id;
 
 enum DesktopDispatchPlan {
@@ -33,6 +48,25 @@ enum DesktopDispatchPlan {
 
 fn parse_workspace_allowlist_id(id: &str) -> Result<Uuid, String> {
     parse_allowlist_id(id).map_err(|e| e.to_string())
+}
+
+const MCP_ROOTS_SETTINGS_PREFIX: &str = "mcp.roots.";
+const MCP_SUBSCRIPTIONS_SETTINGS_PREFIX: &str = "mcp.subscriptions.";
+const MCP_NEGOTIATED_SETTINGS_PREFIX: &str = "mcp.negotiated.";
+const MCP_HEALTH_CHECK_SETTINGS_PREFIX: &str = "mcp.health_check.";
+const MCP_ACTIVITY_SETTINGS_KEY: &str = "mcp.activity";
+const MCP_ACTIVITY_LIMIT: usize = 100;
+
+fn mcp_subscriptions_key(server_name: &str) -> String {
+    format!("{MCP_SUBSCRIPTIONS_SETTINGS_PREFIX}{server_name}")
+}
+
+fn mcp_negotiated_key(server_name: &str) -> String {
+    format!("{MCP_NEGOTIATED_SETTINGS_PREFIX}{server_name}")
+}
+
+fn mcp_health_check_key(server_name: &str) -> String {
+    format!("{MCP_HEALTH_CHECK_SETTINGS_PREFIX}{server_name}")
 }
 
 fn plan_desktop_message_dispatch(
@@ -80,6 +114,328 @@ fn build_settings_response(
         llm_onboarding_required: !llm_ready,
         llm_readiness_error,
     }
+}
+
+async fn require_extension_manager(
+    state: &AppState,
+) -> Result<&std::sync::Arc<steward_core::extensions::ExtensionManager>, String> {
+    state
+        .extension_manager
+        .as_ref()
+        .ok_or_else(|| "Extension manager not available".to_string())
+}
+
+fn transport_summary(
+    config: &McpServerConfig,
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    Vec<String>,
+    std::collections::HashMap<String, String>,
+    Option<String>,
+) {
+    match &config.transport {
+        Some(McpTransportConfig::Stdio { command, args, .. }) => (
+            "stdio".to_string(),
+            None,
+            Some(command.clone()),
+            args.clone(),
+            match &config.transport {
+                Some(McpTransportConfig::Stdio { env, .. }) => env.clone(),
+                _ => std::collections::HashMap::new(),
+            },
+            None,
+        ),
+        Some(McpTransportConfig::Unix { socket_path }) => (
+            "unix".to_string(),
+            None,
+            None,
+            Vec::new(),
+            std::collections::HashMap::new(),
+            Some(socket_path.clone()),
+        ),
+        _ => (
+            "http".to_string(),
+            Some(config.url.clone()),
+            None,
+            Vec::new(),
+            std::collections::HashMap::new(),
+            None,
+        ),
+    }
+}
+
+fn summarize_mcp_server(
+    config: &McpServerConfig,
+    installed: Option<&steward_core::extensions::InstalledExtension>,
+    negotiated_protocol_version: Option<String>,
+    negotiated_capabilities: Option<serde_json::Value>,
+    last_health_check: Option<chrono::DateTime<chrono::Utc>>,
+    subscribed_resource_uris: Vec<String>,
+) -> McpServerSummaryResponse {
+    let (transport, url, command, args, env, socket_path) = transport_summary(config);
+    McpServerSummaryResponse {
+        name: config.name.clone(),
+        transport,
+        url,
+        command,
+        args,
+        env,
+        socket_path,
+        headers: config.headers.clone(),
+        enabled: config.enabled,
+        description: config.description.clone(),
+        client_id: config.oauth.as_ref().map(|oauth| oauth.client_id.clone()),
+        authorization_url: config
+            .oauth
+            .as_ref()
+            .and_then(|oauth| oauth.authorization_url.clone()),
+        token_url: config
+            .oauth
+            .as_ref()
+            .and_then(|oauth| oauth.token_url.clone()),
+        scopes: config
+            .oauth
+            .as_ref()
+            .map(|oauth| oauth.scopes.clone())
+            .unwrap_or_default(),
+        authenticated: installed.map(|item| item.authenticated).unwrap_or(false),
+        requires_auth: config.requires_auth(),
+        active: installed.map(|item| item.active).unwrap_or(false),
+        tool_count: installed.map(|item| item.tools.len()).unwrap_or(0),
+        negotiated_protocol_version,
+        negotiated_capabilities,
+        last_health_check,
+        subscribed_resource_uris,
+    }
+}
+
+async fn list_mcp_server_summaries(
+    state: &AppState,
+) -> Result<Vec<McpServerSummaryResponse>, String> {
+    let manager = require_extension_manager(state).await?;
+    let configs = manager
+        .list_mcp_server_configs(&state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let installed = manager
+        .list(Some(ExtensionKind::McpServer), false, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let installed_map: std::collections::HashMap<_, _> = installed
+        .into_iter()
+        .map(|item| (item.name.clone(), item))
+        .collect();
+    let mut summaries = Vec::with_capacity(configs.len());
+    for config in &configs {
+        let (protocol_version, capabilities) = load_mcp_negotiated(state, &config.name).await?;
+        let last_health_check = load_mcp_last_health_check(state, &config.name).await?;
+        let subscribed_resource_uris = load_mcp_subscriptions(state, &config.name).await?;
+        summaries.push(summarize_mcp_server(
+            config,
+            installed_map.get(&config.name),
+            protocol_version,
+            capabilities,
+            last_health_check,
+            subscribed_resource_uris,
+        ));
+    }
+    Ok(summaries)
+}
+
+async fn load_mcp_servers_canonical(state: &AppState) -> Result<McpServersFile, String> {
+    let Some(store) = state.db.as_deref() else {
+        return steward_core::tools::mcp::config::load_mcp_servers()
+            .await
+            .map_err(|e| e.to_string());
+    };
+
+    if let Ok(Some(value)) = store
+        .get_setting(&state.owner_id, "mcp_servers")
+        .await
+        .map_err(|e| e.to_string())
+        && let Ok(config) = serde_json::from_value::<McpServersFile>(value)
+    {
+        return Ok(config);
+    }
+
+    let imported_marker = store
+        .get_setting(&state.owner_id, "mcp_config_imported_at")
+        .await
+        .map_err(|e| e.to_string())?;
+    if imported_marker.is_some() {
+        return Ok(McpServersFile::default());
+    }
+
+    let config = steward_core::tools::mcp::config::load_mcp_servers()
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(
+            &state.owner_id,
+            "mcp_servers",
+            &serde_json::to_value(&config).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(
+            &state.owner_id,
+            "mcp_config_imported_at",
+            &serde_json::json!(chrono::Utc::now()),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(config)
+}
+
+async fn load_mcp_roots(
+    state: &AppState,
+    server_name: &str,
+) -> Result<Vec<McpRootGrantResponse>, String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(Vec::new());
+    };
+    let key = format!("{MCP_ROOTS_SETTINGS_PREFIX}{server_name}");
+    match store
+        .get_setting(&state.owner_id, &key)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(value) => serde_json::from_value(value).map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn load_mcp_subscriptions(
+    state: &AppState,
+    server_name: &str,
+) -> Result<Vec<String>, String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(Vec::new());
+    };
+    match store
+        .get_setting(&state.owner_id, &mcp_subscriptions_key(server_name))
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(value) => serde_json::from_value(value).map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn load_mcp_negotiated(
+    state: &AppState,
+    server_name: &str,
+) -> Result<(Option<String>, Option<serde_json::Value>), String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok((None, None));
+    };
+    let Some(value) = store
+        .get_setting(&state.owner_id, &mcp_negotiated_key(server_name))
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok((None, None));
+    };
+
+    Ok((
+        value
+            .get("protocol_version")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        value.get("capabilities").cloned(),
+    ))
+}
+
+async fn load_mcp_last_health_check(
+    state: &AppState,
+    server_name: &str,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(None);
+    };
+    let Some(value) = store
+        .get_setting(&state.owner_id, &mcp_health_check_key(server_name))
+        .await
+        .map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+async fn save_mcp_roots(
+    state: &AppState,
+    server_name: &str,
+    roots: &[McpRootGrantResponse],
+) -> Result<(), String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(());
+    };
+    let key = format!("{MCP_ROOTS_SETTINGS_PREFIX}{server_name}");
+    store
+        .set_setting(
+            &state.owner_id,
+            &key,
+            &serde_json::to_value(roots).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+async fn load_mcp_activity(state: &AppState) -> Result<Vec<McpActivityItemResponse>, String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(Vec::new());
+    };
+    match store
+        .get_setting(&state.owner_id, MCP_ACTIVITY_SETTINGS_KEY)
+        .await
+        .map_err(|e| e.to_string())?
+    {
+        Some(value) => serde_json::from_value(value).map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn record_mcp_activity(
+    state: &AppState,
+    server_name: &str,
+    kind: &str,
+    title: impl Into<String>,
+    detail: Option<String>,
+) -> Result<(), String> {
+    let Some(store) = state.db.as_deref() else {
+        return Ok(());
+    };
+
+    let mut items = load_mcp_activity(state).await?;
+    items.insert(
+        0,
+        McpActivityItemResponse {
+            id: Uuid::new_v4().to_string(),
+            server_name: server_name.to_string(),
+            kind: kind.to_string(),
+            title: title.into(),
+            detail,
+            created_at: Utc::now(),
+        },
+    );
+    if items.len() > MCP_ACTIVITY_LIMIT {
+        items.truncate(MCP_ACTIVITY_LIMIT);
+    }
+    store
+        .set_setting(
+            &state.owner_id,
+            MCP_ACTIVITY_SETTINGS_KEY,
+            &serde_json::to_value(&items).map_err(|e| e.to_string())?,
+        )
+        .await
+        .map_err(|e| e.to_string())
 }
 
 async fn sync_llm_settings_to_store(
@@ -827,6 +1183,110 @@ async fn find_session_id_for_thread(state: &AppState, thread_id: Uuid) -> Option
     }
 
     None
+}
+
+fn requested_task_mode(mode: Option<&str>) -> Option<TaskMode> {
+    mode.map(TaskMode::from_str)
+}
+
+fn mcp_context_attachment_extension(mime: &str) -> &'static str {
+    match mime.split(';').next().unwrap_or(mime).trim() {
+        "text/markdown" => ".md",
+        "text/html" => ".html",
+        "text/csv" => ".csv",
+        "application/json" => ".json",
+        "application/pdf" => ".pdf",
+        "image/png" => ".png",
+        "image/jpeg" => ".jpg",
+        "image/webp" => ".webp",
+        "audio/mpeg" => ".mp3",
+        "audio/wav" => ".wav",
+        _ if mime.starts_with("text/") => ".txt",
+        _ => ".bin",
+    }
+}
+
+fn text_from_blob_bytes(mime: &str, bytes: &[u8]) -> Option<String> {
+    let text_like = mime.starts_with("text/")
+        || matches!(
+            mime,
+            "application/json" | "application/xml" | "application/javascript"
+        );
+    if !text_like {
+        return None;
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn mcp_attachment_filename(index: usize, mime: &str) -> String {
+    format!(
+        "mcp-resource-{index:03}{}",
+        mcp_context_attachment_extension(mime)
+    )
+}
+
+fn build_attachment_from_text(index: usize, content: &TextResourceContents) -> IncomingAttachment {
+    let mime = content
+        .mime_type
+        .clone()
+        .unwrap_or_else(|| "text/plain".to_string());
+    let bytes = content.text.as_bytes().to_vec();
+    IncomingAttachment {
+        id: format!("mcp-resource-{index}"),
+        kind: AttachmentKind::from_mime_type(&mime),
+        mime_type: mime.clone(),
+        filename: Some(mcp_attachment_filename(index, &mime)),
+        size_bytes: Some(bytes.len() as u64),
+        source_url: Some(content.uri.clone()),
+        storage_key: None,
+        extracted_text: Some(content.text.clone()),
+        data: bytes,
+        duration_secs: None,
+    }
+}
+
+fn build_attachment_from_blob(
+    index: usize,
+    content: &BlobResourceContents,
+) -> Result<IncomingAttachment, String> {
+    let mime = content
+        .mime_type
+        .clone()
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(content.blob.as_bytes())
+        .map_err(|error| {
+            format!(
+                "Failed to decode MCP blob resource '{}': {error}",
+                content.uri
+            )
+        })?;
+    Ok(IncomingAttachment {
+        id: format!("mcp-resource-{index}"),
+        kind: AttachmentKind::from_mime_type(&mime),
+        mime_type: mime.clone(),
+        filename: Some(mcp_attachment_filename(index, &mime)),
+        size_bytes: Some(bytes.len() as u64),
+        source_url: Some(content.uri.clone()),
+        storage_key: None,
+        extracted_text: text_from_blob_bytes(&mime, &bytes),
+        data: bytes,
+        duration_secs: None,
+    })
+}
+
+fn build_mcp_context_attachments(
+    resource: &ReadResourceResult,
+) -> Result<Vec<IncomingAttachment>, String> {
+    let mut attachments = Vec::with_capacity(resource.contents.len());
+    for (index, content) in resource.contents.iter().enumerate() {
+        let attachment = match content {
+            ResourceContents::Text(text) => build_attachment_from_text(index + 1, text),
+            ResourceContents::Blob(blob) => build_attachment_from_blob(index + 1, blob)?,
+        };
+        attachments.push(attachment);
+    }
+    Ok(attachments)
 }
 
 async fn inject_task_approval_submission(
@@ -1801,11 +2261,20 @@ pub async fn send_session_message(
     tracing::info!(thread_id = %thread_id, "About to match thread state");
     let title_context = build_session_title_context(thread, payload.content.trim());
     let dispatch_plan = plan_desktop_message_dispatch(thread, &payload.content, Utc::now())?;
+    let requested_mode = requested_task_mode(payload.mode.as_deref());
     drop(sess);
 
     match dispatch_plan {
         DesktopDispatchPlan::QueueOnly => {
-            let active_thread_task = state.task_runtime.get_task(thread_id).await;
+            let active_thread_task = if let Some(mode) = requested_mode {
+                if let Some(task) = state.task_runtime.toggle_mode(thread_id, mode).await {
+                    Some(task)
+                } else {
+                    state.task_runtime.get_task(thread_id).await
+                }
+            } else {
+                state.task_runtime.get_task(thread_id).await
+            };
             let active_thread_task_id = active_thread_task.as_ref().map(|task| task.id);
             let request_id =
                 mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
@@ -1838,7 +2307,16 @@ pub async fn send_session_message(
                 .await
                 .map_err(|e| format!("Failed to inject message: {}", e))?;
             tracing::info!(thread_id = %thread_id, "Message injected successfully");
-            let active_thread_task = state.task_runtime.ensure_task(&msg, thread_id).await;
+            let active_thread_task = if let Some(mode) = requested_mode {
+                let _ = state.task_runtime.ensure_task(&msg, thread_id).await;
+                state
+                    .task_runtime
+                    .toggle_mode(thread_id, mode)
+                    .await
+                    .ok_or_else(|| "Failed to update task mode".to_string())?
+            } else {
+                state.task_runtime.ensure_task(&msg, thread_id).await
+            };
             let active_thread_task_id = Some(active_thread_task.id);
             let request_id =
                 mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
@@ -1862,6 +2340,142 @@ pub async fn send_session_message(
             })
         }
     }
+}
+
+#[tauri::command]
+pub async fn add_mcp_resource_to_thread_context(
+    state: State<'_, AppState>,
+    session_id: Uuid,
+    name: String,
+    uri: String,
+) -> Result<McpAddResourceToThreadResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let resource = manager
+        .read_mcp_resource(&name, &state.owner_id, &uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    let attachments = build_mcp_context_attachments(&resource)?;
+    if attachments.is_empty() {
+        return Err("MCP resource had no readable content to attach".to_string());
+    }
+
+    let session_manager = &state.agent_session_manager;
+    let session = session_manager
+        .get_session_by_id(&state.owner_id, session_id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+
+    let (thread_id, created_thread) = {
+        let mut sess = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock())
+            .await
+            .map_err(|_| "Session lock timeout".to_string())?;
+        match sess
+            .active_thread
+            .or_else(|| sess.threads.keys().copied().next())
+        {
+            Some(thread_id) => (thread_id, false),
+            None => {
+                let thread_id = sess.create_thread().id;
+                (thread_id, true)
+            }
+        }
+    };
+
+    if created_thread {
+        session_manager
+            .persist_session_snapshot(&state.owner_id, &session)
+            .await;
+    }
+
+    let mut sess = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock())
+        .await
+        .map_err(|_| "Session lock timeout".to_string())?;
+    let thread = sess
+        .threads
+        .get_mut(&thread_id)
+        .ok_or_else(|| "Thread not found".to_string())?;
+    match thread.state {
+        steward_core::agent::session::ThreadState::Idle
+        | steward_core::agent::session::ThreadState::Interrupted => {}
+        steward_core::agent::session::ThreadState::Processing => {
+            return Err(
+                "Current thread is already processing. Wait for it to finish before adding MCP context."
+                    .to_string(),
+            );
+        }
+        steward_core::agent::session::ThreadState::AwaitingApproval => {
+            return Err(
+                "Current thread is awaiting approval. Resolve that approval before adding MCP context."
+                    .to_string(),
+            );
+        }
+        steward_core::agent::session::ThreadState::Completed => {
+            return Err(
+                "Current thread has completed. Start a new thread before adding MCP context."
+                    .to_string(),
+            );
+        }
+    }
+
+    let summary = format!(
+        "Use the attached MCP resource as context for this conversation.\n\nServer: {name}\nResource URI: {uri}"
+    );
+    let title_context = build_session_title_context(thread, &summary);
+    drop(sess);
+
+    let attachment_count = attachments.len();
+    let metadata = merge_desktop_message_metadata(
+        &serde_json::json!({
+            "mcp_resource_context": {
+                "server_name": name.clone(),
+                "uri": uri.clone(),
+                "content_count": attachment_count,
+            }
+        }),
+        session_id,
+        thread_id,
+        &state.owner_id,
+    );
+    let msg = IncomingMessage::new("desktop", state.owner_id.clone(), summary)
+        .with_thread(thread_id.to_string())
+        .with_metadata(metadata)
+        .with_attachments(attachments.clone());
+
+    state
+        .message_inject_tx
+        .send(msg.clone())
+        .await
+        .map_err(|error| format!("Failed to inject MCP resource context: {error}"))?;
+
+    let active_thread_task = state.task_runtime.ensure_task(&msg, thread_id).await;
+    let request_id =
+        mark_session_title_pending(&state, &state.owner_id, session_id, thread_id, &session).await;
+    spawn_session_title_summary(
+        &state,
+        &state.owner_id,
+        session_id,
+        thread_id,
+        request_id,
+        title_context,
+        Arc::clone(&session),
+    );
+
+    record_mcp_activity(
+        &state,
+        &name,
+        "resource",
+        "Added MCP resource to thread context",
+        Some(format!("{} · {} attachments", uri, attachment_count)),
+    )
+    .await?;
+
+    Ok(McpAddResourceToThreadResponse {
+        session_id,
+        active_thread_id: thread_id,
+        active_thread_task_id: Some(active_thread_task.id),
+        active_thread_task: Some(active_thread_task),
+        attachment_count,
+    })
 }
 
 #[cfg(test)]
@@ -2048,6 +2662,15 @@ pub async fn delete_task(
     state: State<'_, AppState>,
     id: Uuid,
 ) -> Result<steward_core::ipc::TaskRecord, String> {
+    if let Some(manager) = state.extension_manager.as_ref()
+        && let Some(task) = manager
+            .cancel_pending_mcp_task(id)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        return Ok(task);
+    }
+
     let task = state
         .task_runtime
         .get_task(id)
@@ -2060,6 +2683,39 @@ pub async fn delete_task(
         .await;
 
     Ok(task)
+}
+
+#[tauri::command]
+pub async fn cancel_task(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<steward_core::ipc::TaskRecord, String> {
+    if let Some(manager) = state.extension_manager.as_ref()
+        && let Some(task) = manager
+            .cancel_pending_mcp_task(id)
+            .await
+            .map_err(|e| e.to_string())?
+    {
+        return Ok(task);
+    }
+
+    let task = state
+        .task_runtime
+        .get_task(id)
+        .await
+        .ok_or_else(|| "Task not found".to_string())?;
+
+    state
+        .task_runtime
+        .mark_cancelled(id, "Cancelled via IPC")
+        .await;
+
+    state
+        .task_runtime
+        .get_task(id)
+        .await
+        .ok_or_else(|| "Task not found after cancellation".to_string())
+        .or(Ok(task))
 }
 
 #[tauri::command]
@@ -2720,12 +3376,487 @@ pub async fn get_workbench_capabilities(
 ) -> Result<steward_core::ipc::WorkbenchCapabilitiesResponse, String> {
     let tool_count = state.tools.count();
     let active_tool_names = state.tools.list().await;
+    let mcp_servers = list_mcp_server_summaries(&state).await.unwrap_or_default();
 
     Ok(steward_core::ipc::WorkbenchCapabilitiesResponse {
         workspace_available: state.workspace.is_some(),
         tool_count,
         dev_loaded_tools: active_tool_names,
-        mcp_servers: Vec::new(),
+        mcp_servers: mcp_servers
+            .into_iter()
+            .map(|server| steward_core::ipc::WorkbenchMcpServerResponse {
+                name: server.name,
+                transport: server.transport,
+                enabled: server.enabled,
+                auth_mode: if server.requires_auth {
+                    if server.authenticated {
+                        "authenticated".to_string()
+                    } else {
+                        "required".to_string()
+                    }
+                } else {
+                    "none".to_string()
+                },
+                description: server.description,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+pub async fn list_mcp_servers(state: State<'_, AppState>) -> Result<McpServerListResponse, String> {
+    let _ = load_mcp_servers_canonical(&state).await?;
+    Ok(McpServerListResponse {
+        servers: list_mcp_server_summaries(&state).await?,
+    })
+}
+
+#[tauri::command]
+pub async fn upsert_mcp_server(
+    state: State<'_, AppState>,
+    payload: McpServerUpsertRequest,
+) -> Result<McpServerUpsertResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let transport = payload.transport.to_ascii_lowercase();
+    let mut config = match transport.as_str() {
+        "stdio" => McpServerConfig::new_stdio(
+            payload.name.clone(),
+            payload
+                .command
+                .clone()
+                .ok_or_else(|| "command is required for stdio transport".to_string())?,
+            payload.args.clone(),
+            payload.env.clone(),
+        ),
+        "unix" => McpServerConfig::new_unix(
+            payload.name.clone(),
+            payload
+                .socket_path
+                .clone()
+                .ok_or_else(|| "socket_path is required for unix transport".to_string())?,
+        ),
+        "http" => McpServerConfig::new(
+            payload.name.clone(),
+            payload
+                .url
+                .clone()
+                .ok_or_else(|| "url is required for http transport".to_string())?,
+        ),
+        other => return Err(format!("Unsupported MCP transport '{other}'")),
+    };
+
+    config.headers = payload.headers.clone();
+    config.enabled = payload.enabled.unwrap_or(true);
+    config.description = payload.description.clone();
+    if let Some(client_id) = payload.client_id.clone() {
+        let mut oauth = OAuthConfig::new(client_id);
+        if let (Some(auth), Some(token)) =
+            (payload.authorization_url.clone(), payload.token_url.clone())
+        {
+            oauth = oauth.with_endpoints(auth, token);
+        }
+        if !payload.scopes.is_empty() {
+            oauth = oauth.with_scopes(payload.scopes.clone());
+        }
+        config.oauth = Some(oauth);
+    }
+    if transport == "http" {
+        config.transport = Some(McpTransportConfig::Http);
+    }
+
+    let saved = manager
+        .upsert_mcp_server(&state.owner_id, config)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &saved.name,
+        "server",
+        "Updated MCP server configuration",
+        saved.description.clone(),
+    )
+    .await?;
+    let summary = list_mcp_server_summaries(&state)
+        .await?
+        .into_iter()
+        .find(|item| item.name == saved.name)
+        .ok_or_else(|| "Saved MCP server not found after update".to_string())?;
+    Ok(McpServerUpsertResponse { server: summary })
+}
+
+#[tauri::command]
+pub async fn delete_mcp_server(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let manager = require_extension_manager(&state).await?;
+    let message = manager
+        .remove(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(&state, &name, "server", "Removed MCP server", None).await?;
+    Ok(message)
+}
+
+#[tauri::command]
+pub async fn test_mcp_server(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpTestResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    manager
+        .test_mcp_server(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(&state, &name, "health", "Tested MCP connection", None).await?;
+    Ok(McpTestResponse {
+        ok: true,
+        message: "Connection successful".to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn begin_mcp_auth(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpAuthResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let result = manager
+        .auth(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let message = match &result.status {
+        steward_core::extensions::AuthStatus::Authenticated => {
+            "Authentication complete".to_string()
+        }
+        steward_core::extensions::AuthStatus::AwaitingAuthorization { auth_url, .. } => {
+            format!("Authorization started: {auth_url}")
+        }
+        steward_core::extensions::AuthStatus::AwaitingToken { instructions, .. } => {
+            instructions.clone()
+        }
+        steward_core::extensions::AuthStatus::NeedsSetup { instructions, .. } => {
+            instructions.clone()
+        }
+        steward_core::extensions::AuthStatus::NoAuthRequired => {
+            "This server does not require authentication".to_string()
+        }
+    };
+    record_mcp_activity(
+        &state,
+        &name,
+        "auth",
+        "Ran MCP authentication",
+        Some(message.clone()),
+    )
+    .await?;
+    Ok(McpAuthResponse {
+        authenticated: result.is_authenticated(),
+        message,
+    })
+}
+
+#[tauri::command]
+pub async fn finish_mcp_auth(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpAuthResponse, String> {
+    let summaries = list_mcp_server_summaries(&state).await?;
+    let server = summaries
+        .into_iter()
+        .find(|item| item.name == name)
+        .ok_or_else(|| format!("Unknown MCP server '{name}'"))?;
+    Ok(McpAuthResponse {
+        authenticated: server.authenticated,
+        message: if server.authenticated {
+            "Authentication complete".to_string()
+        } else if server.requires_auth {
+            "Authentication still required".to_string()
+        } else {
+            "This server does not require authentication".to_string()
+        },
+    })
+}
+
+#[tauri::command]
+pub async fn list_mcp_tools(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpToolListResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let tools = manager
+        .list_mcp_tools(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &name,
+        "tools",
+        "Loaded MCP tools",
+        Some(format!("{} tools", tools.len())),
+    )
+    .await?;
+    Ok(McpToolListResponse { tools })
+}
+
+#[tauri::command]
+pub async fn list_mcp_resources(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpResourceListResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let resources = manager
+        .list_mcp_resources(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &name,
+        "resources",
+        "Loaded MCP resources",
+        Some(format!("{} resources", resources.len())),
+    )
+    .await?;
+    Ok(McpResourceListResponse { resources })
+}
+
+#[tauri::command]
+pub async fn read_mcp_resource(
+    state: State<'_, AppState>,
+    name: String,
+    uri: String,
+) -> Result<McpReadResourceResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let resource = manager
+        .read_mcp_resource(&name, &state.owner_id, &uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(&state, &name, "resource", "Read MCP resource", Some(uri)).await?;
+    Ok(McpReadResourceResponse { resource })
+}
+
+#[tauri::command]
+pub async fn save_mcp_resource_snapshot(
+    state: State<'_, AppState>,
+    name: String,
+    uri: String,
+) -> Result<McpSaveResourceSnapshotResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let snapshot_path = manager
+        .save_mcp_resource_snapshot(&name, &state.owner_id, &uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpSaveResourceSnapshotResponse {
+        snapshot_path: snapshot_path.display().to_string(),
+    })
+}
+
+#[tauri::command]
+pub async fn list_mcp_resource_templates(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpResourceTemplateListResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let templates = manager
+        .list_mcp_resource_templates(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpResourceTemplateListResponse { templates })
+}
+
+#[tauri::command]
+pub async fn subscribe_mcp_resource(
+    state: State<'_, AppState>,
+    name: String,
+    uri: String,
+) -> Result<(), String> {
+    let manager = require_extension_manager(&state).await?;
+    manager
+        .subscribe_mcp_resource(&name, &state.owner_id, &uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &name,
+        "subscription",
+        "Subscribed to MCP resource",
+        Some(uri),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn unsubscribe_mcp_resource(
+    state: State<'_, AppState>,
+    name: String,
+    uri: String,
+) -> Result<(), String> {
+    let manager = require_extension_manager(&state).await?;
+    manager
+        .unsubscribe_mcp_resource(&name, &state.owner_id, &uri)
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &name,
+        "subscription",
+        "Unsubscribed from MCP resource",
+        Some(uri),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn list_mcp_prompts(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpPromptListResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let prompts = manager
+        .list_mcp_prompts(&name, &state.owner_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpPromptListResponse { prompts })
+}
+
+#[tauri::command]
+pub async fn get_mcp_prompt(
+    state: State<'_, AppState>,
+    name: String,
+    prompt_name: String,
+    payload: McpPromptGetRequest,
+) -> Result<McpPromptResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let prompt = manager
+        .get_mcp_prompt(
+            &name,
+            &state.owner_id,
+            &prompt_name,
+            if payload.arguments.is_empty() {
+                None
+            } else {
+                Some(payload.arguments)
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    record_mcp_activity(
+        &state,
+        &name,
+        "prompt",
+        "Resolved MCP prompt",
+        Some(prompt_name),
+    )
+    .await?;
+    Ok(McpPromptResponse { prompt })
+}
+
+#[tauri::command]
+pub async fn complete_mcp_argument(
+    state: State<'_, AppState>,
+    name: String,
+    payload: McpCompleteArgumentRequest,
+) -> Result<McpCompleteArgumentResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let reference = match payload.reference_type.as_str() {
+        "prompt" => CompletionReference::Prompt {
+            name: payload.reference_name.clone(),
+        },
+        "resource" => CompletionReference::Resource {
+            uri: payload.reference_name.clone(),
+        },
+        other => return Err(format!("Unsupported MCP completion reference '{other}'")),
+    };
+    let completion = manager
+        .complete_mcp_argument(
+            &name,
+            &state.owner_id,
+            reference,
+            &payload.argument_name,
+            &payload.value,
+            if payload.context_arguments.is_empty() {
+                None
+            } else {
+                Some(payload.context_arguments)
+            },
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpCompleteArgumentResponse { completion })
+}
+
+#[tauri::command]
+pub async fn get_mcp_roots(
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<McpRootsResponse, String> {
+    Ok(McpRootsResponse {
+        roots: load_mcp_roots(&state, &name).await?,
+    })
+}
+
+#[tauri::command]
+pub async fn set_mcp_roots(
+    state: State<'_, AppState>,
+    name: String,
+    payload: McpSetRootsRequest,
+) -> Result<McpRootsResponse, String> {
+    save_mcp_roots(&state, &name, &payload.roots).await?;
+    if let Some(manager) = state.extension_manager.as_ref() {
+        manager
+            .notify_mcp_roots_changed(&name)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    record_mcp_activity(
+        &state,
+        &name,
+        "roots",
+        "Updated MCP roots",
+        Some(format!("{} roots", payload.roots.len())),
+    )
+    .await?;
+    Ok(McpRootsResponse {
+        roots: payload.roots,
+    })
+}
+
+#[tauri::command]
+pub async fn respond_mcp_sampling(
+    state: State<'_, AppState>,
+    task_id: Uuid,
+    payload: McpRespondSamplingRequest,
+) -> Result<McpRespondSamplingResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let task = manager
+        .respond_mcp_sampling(
+            task_id,
+            &payload.action,
+            payload.request,
+            payload.generated_text,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpRespondSamplingResponse { task })
+}
+
+#[tauri::command]
+pub async fn respond_mcp_elicitation(
+    state: State<'_, AppState>,
+    task_id: Uuid,
+    payload: McpRespondElicitationRequest,
+) -> Result<McpRespondElicitationResponse, String> {
+    let manager = require_extension_manager(&state).await?;
+    let task = manager
+        .respond_mcp_elicitation(task_id, &payload.action, payload.content)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(McpRespondElicitationResponse { task })
+}
+
+#[tauri::command]
+pub async fn list_mcp_activity(
+    state: State<'_, AppState>,
+) -> Result<McpActivityListResponse, String> {
+    Ok(McpActivityListResponse {
+        items: load_mcp_activity(&state).await?,
     })
 }
 
@@ -2733,11 +3864,13 @@ pub async fn get_workbench_capabilities(
 mod tests {
     use std::sync::Arc;
 
+    use base64::Engine as _;
     use chrono::Utc;
 
     use super::{
-        build_db_reflection_turns, build_thread_messages_from_db_messages,
-        get_workspace_allowlist_file_impl, parse_reflection_summary_parts, reload_llm_runtime,
+        build_db_reflection_turns, build_mcp_context_attachments,
+        build_thread_messages_from_db_messages, get_workspace_allowlist_file_impl,
+        parse_reflection_summary_parts, reload_llm_runtime, requested_task_mode,
         select_reflection_run, sync_llm_settings_to_store,
     };
     use steward_core::agent::SessionManager;
@@ -2983,6 +4116,55 @@ mod tests {
         assert_eq!(cleaned, "无需进行任何操作");
     }
 
+    #[test]
+    fn requested_task_mode_parses_known_values() {
+        assert_eq!(
+            requested_task_mode(Some("ask")),
+            Some(steward_core::task_runtime::TaskMode::Ask)
+        );
+        assert_eq!(
+            requested_task_mode(Some("yolo")),
+            Some(steward_core::task_runtime::TaskMode::Yolo)
+        );
+        assert_eq!(requested_task_mode(None), None);
+    }
+
+    #[test]
+    fn build_mcp_context_attachments_preserves_text_and_blob_resources() {
+        let resource = steward_core::tools::mcp::ReadResourceResult {
+            contents: vec![
+                steward_core::tools::mcp::ResourceContents::Text(
+                    steward_core::tools::mcp::TextResourceContents {
+                        uri: "mcp://notes/1".to_string(),
+                        mime_type: Some("text/markdown".to_string()),
+                        text: "# Notes".to_string(),
+                    },
+                ),
+                steward_core::tools::mcp::ResourceContents::Blob(
+                    steward_core::tools::mcp::BlobResourceContents {
+                        uri: "mcp://image/2".to_string(),
+                        mime_type: Some("image/png".to_string()),
+                        blob: base64::engine::general_purpose::STANDARD.encode(b"png-bytes"),
+                    },
+                ),
+            ],
+        };
+
+        let attachments = build_mcp_context_attachments(&resource).expect("attachments");
+
+        assert_eq!(attachments.len(), 2);
+        assert_eq!(
+            attachments[0].filename.as_deref(),
+            Some("mcp-resource-001.md")
+        );
+        assert_eq!(attachments[0].extracted_text.as_deref(), Some("# Notes"));
+        assert_eq!(
+            attachments[1].kind,
+            steward_core::channels::AttachmentKind::Image
+        );
+        assert_eq!(attachments[1].data, b"png-bytes");
+    }
+
     fn backend(id: &str) -> BackendInstance {
         BackendInstance {
             id: id.to_string(),
@@ -3086,6 +4268,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             Arc::new(McpSessionManager::new()),
             None,
+            None,
             message_inject_tx,
         );
         let settings = Settings {
@@ -3163,6 +4346,7 @@ mod tests {
             Arc::new(TaskRuntime::new()),
             Arc::new(ToolRegistry::new()),
             Arc::new(McpSessionManager::new()),
+            None,
             None,
             message_inject_tx,
         );

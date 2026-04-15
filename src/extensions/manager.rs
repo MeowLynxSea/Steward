@@ -7,7 +7,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use base64::Engine as _;
+use chrono::Utc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
 use crate::channels::ChannelManager;
 use crate::channels::wasm::{ChannelCapabilitiesFile, WasmChannelLoader, WasmChannelRuntime};
@@ -20,13 +23,22 @@ use crate::extensions::{
     UpgradeOutcome, UpgradeResult,
 };
 use crate::hooks::HookRegistry;
+use crate::ipc::{McpActivityItemResponse, McpRootGrantResponse};
+use crate::llm::{ChatMessage, CompletionRequest, ContentPart, ImageUrl, LlmProvider, Role};
 use crate::secrets::{CreateSecretParams, SecretsStore};
+use crate::task_runtime::{TaskMode, TaskOperation, TaskPendingApproval, TaskRuntime};
 use crate::tools::ToolRegistry;
 use crate::tools::mcp::auth::{authorize_mcp_server, is_authenticated};
 use crate::tools::mcp::config::{McpServerConfig, McpServersFile};
 use crate::tools::mcp::create_client_from_config;
 use crate::tools::mcp::session::McpSessionManager;
-use crate::tools::mcp::{McpClient, McpProcessManager};
+use crate::tools::mcp::transport::McpInboundMessage;
+use crate::tools::mcp::{
+    CompleteResult, CompletionReference, GetPromptResult, McpClient, McpElicitationRequest,
+    McpElicitationResult, McpPrimitiveSchemaDefinition, McpProcessManager, McpPrompt, McpResource,
+    McpResourceTemplate, McpSamplingContentBlock, McpSamplingRequest, McpSamplingResult, McpTool,
+    ReadResourceResult,
+};
 use crate::tools::wasm::{
     CapabilitiesFile, ToolFieldSetupSchema, WasmToolLoader, WasmToolRuntime,
     check_wit_version_compat, discover_tools,
@@ -44,13 +56,49 @@ const ALLOWED_GLOBAL_SETUP_SETTING_PATHS: &[&str] = &[
     "cheap_backend_id",
     "cheap_model_uses_primary",
 ];
+const MCP_ROOTS_SETTINGS_PREFIX: &str = "mcp.roots.";
+const MCP_SUBSCRIPTIONS_SETTINGS_PREFIX: &str = "mcp.subscriptions.";
+const MCP_NEGOTIATED_SETTINGS_PREFIX: &str = "mcp.negotiated.";
+const MCP_HEALTH_CHECK_SETTINGS_PREFIX: &str = "mcp.health_check.";
+const MCP_ACTIVITY_SETTINGS_KEY: &str = "mcp.activity";
+const MCP_ACTIVITY_LIMIT: usize = 100;
+
+#[derive(Clone)]
+struct PendingMcpSamplingRequest {
+    server_name: String,
+    request_id: serde_json::Value,
+    request: McpSamplingRequest,
+}
+
+#[derive(Clone)]
+struct PendingMcpElicitationRequest {
+    server_name: String,
+    request_id: serde_json::Value,
+    request: McpElicitationRequest,
+}
+
+#[derive(Clone)]
+struct McpRuntimeContext {
+    mcp_session_manager: Arc<McpSessionManager>,
+    mcp_process_manager: Arc<McpProcessManager>,
+    secrets: Arc<dyn SecretsStore + Send + Sync>,
+    tool_registry: Arc<ToolRegistry>,
+    store: Option<Arc<dyn crate::db::Database>>,
+    owner_id: String,
+    runtime_llm: Arc<RwLock<Option<Arc<dyn LlmProvider>>>>,
+    task_runtime: Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+    pending_sampling_requests: Arc<RwLock<HashMap<Uuid, PendingMcpSamplingRequest>>>,
+    pending_elicitation_requests: Arc<RwLock<HashMap<Uuid, PendingMcpElicitationRequest>>>,
+    mcp_clients: Arc<RwLock<HashMap<String, Arc<McpClient>>>>,
+    reconnecting_servers: Arc<RwLock<HashSet<String>>>,
+}
 
 pub struct ExtensionManager {
     registry: ExtensionRegistry,
     discovery: OnlineDiscovery,
     mcp_session_manager: Arc<McpSessionManager>,
     mcp_process_manager: Arc<McpProcessManager>,
-    mcp_clients: RwLock<HashMap<String, Arc<McpClient>>>,
+    mcp_clients: Arc<RwLock<HashMap<String, Arc<McpClient>>>>,
     wasm_tool_runtime: Option<Arc<WasmToolRuntime>>,
     wasm_tools_dir: PathBuf,
     wasm_channels_dir: PathBuf,
@@ -63,6 +111,11 @@ pub struct ExtensionManager {
     hooks: Option<Arc<HookRegistry>>,
     user_id: String,
     store: Option<Arc<dyn crate::db::Database>>,
+    runtime_llm: Arc<RwLock<Option<Arc<dyn LlmProvider>>>>,
+    task_runtime: Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+    pending_sampling_requests: Arc<RwLock<HashMap<Uuid, PendingMcpSamplingRequest>>>,
+    pending_elicitation_requests: Arc<RwLock<HashMap<Uuid, PendingMcpElicitationRequest>>>,
+    reconnecting_servers: Arc<RwLock<HashSet<String>>>,
 }
 
 impl ExtensionManager {
@@ -117,7 +170,7 @@ impl ExtensionManager {
             discovery: OnlineDiscovery::new(),
             mcp_session_manager,
             mcp_process_manager,
-            mcp_clients: RwLock::new(HashMap::new()),
+            mcp_clients: Arc::new(RwLock::new(HashMap::new())),
             wasm_tool_runtime,
             wasm_tools_dir,
             wasm_channels_dir,
@@ -130,6 +183,11 @@ impl ExtensionManager {
             hooks,
             user_id,
             store,
+            runtime_llm: Arc::new(RwLock::new(None)),
+            task_runtime: Arc::new(RwLock::new(None)),
+            pending_sampling_requests: Arc::new(RwLock::new(HashMap::new())),
+            pending_elicitation_requests: Arc::new(RwLock::new(HashMap::new())),
+            reconnecting_servers: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -138,6 +196,12 @@ impl ExtensionManager {
     }
 
     pub(crate) async fn inject_mcp_client(&self, name: String, client: Arc<McpClient>) {
+        if let Err(error) =
+            Self::sync_mcp_tools_with_registry(&self.tool_registry, &name, &client).await
+        {
+            tracing::warn!(server = %name, %error, "Failed to sync injected MCP client tools");
+        }
+        self.spawn_mcp_inbound_listener(name.clone(), Arc::clone(&client));
         self.mcp_clients.write().await.insert(name, client);
     }
 
@@ -147,6 +211,15 @@ impl ExtensionManager {
 
     pub fn secrets(&self) -> &Arc<dyn SecretsStore + Send + Sync> {
         &self.secrets
+    }
+
+    pub async fn bind_runtime_services(
+        &self,
+        llm: Arc<dyn LlmProvider>,
+        task_runtime: Arc<TaskRuntime>,
+    ) {
+        *self.runtime_llm.write().await = Some(llm);
+        *self.task_runtime.write().await = Some(task_runtime);
     }
 
     pub async fn set_active_channels(&self, names: Vec<String>) {
@@ -469,6 +542,655 @@ impl ExtensionManager {
         Ok(extensions)
     }
 
+    pub async fn list_mcp_server_configs(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<McpServerConfig>, ExtensionError> {
+        Ok(self.load_mcp_servers(user_id).await?.servers)
+    }
+
+    pub async fn upsert_mcp_server(
+        &self,
+        user_id: &str,
+        config: McpServerConfig,
+    ) -> Result<McpServerConfig, ExtensionError> {
+        config
+            .validate()
+            .map_err(|e| ExtensionError::Config(e.to_string()))?;
+        if let Some(store) = &self.store {
+            let mut servers = self.load_mcp_servers(user_id).await?;
+            servers.upsert(config.clone());
+            crate::tools::mcp::config::save_mcp_servers_to_db(store.as_ref(), user_id, &servers)
+                .await
+                .map_err(|e| ExtensionError::Config(e.to_string()))?;
+        } else {
+            crate::tools::mcp::config::add_mcp_server(config.clone())
+                .await
+                .map_err(|e| ExtensionError::Config(e.to_string()))?;
+        }
+
+        if !config.enabled {
+            self.mcp_clients.write().await.remove(&config.name);
+            self.reconnecting_servers.write().await.remove(&config.name);
+            let prefix = format!("{}_", config.name);
+            let stale_tools: Vec<String> = self
+                .tool_registry
+                .list()
+                .await
+                .into_iter()
+                .filter(|tool| tool.starts_with(&prefix))
+                .collect();
+            for tool in stale_tools {
+                self.tool_registry.unregister(&tool).await;
+            }
+            Self::fail_pending_requests_for_server(
+                &self.task_runtime,
+                &self.pending_sampling_requests,
+                &self.pending_elicitation_requests,
+                &config.name,
+                "MCP server was disabled before the request could complete",
+            )
+            .await;
+        }
+
+        Ok(config)
+    }
+
+    pub async fn test_mcp_server(&self, name: &str, user_id: &str) -> Result<(), ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .test_connection()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        self.persist_mcp_health_check(name).await;
+        Ok(())
+    }
+
+    pub async fn list_mcp_tools(
+        &self,
+        name: &str,
+        user_id: &str,
+    ) -> Result<Vec<McpTool>, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .list_tools()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn list_mcp_resources(
+        &self,
+        name: &str,
+        user_id: &str,
+    ) -> Result<Vec<McpResource>, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .list_resources()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn read_mcp_resource(
+        &self,
+        name: &str,
+        user_id: &str,
+        uri: &str,
+    ) -> Result<ReadResourceResult, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .read_resource(uri)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn save_mcp_resource_snapshot(
+        &self,
+        name: &str,
+        user_id: &str,
+        uri: &str,
+    ) -> Result<PathBuf, ExtensionError> {
+        let resource = self.read_mcp_resource(name, user_id, uri).await?;
+        let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ");
+        let snapshot_dir = crate::bootstrap::steward_base_dir()
+            .join("mcp-snapshots")
+            .join(Self::sanitize_snapshot_segment(name))
+            .join(format!(
+                "{}-{}",
+                timestamp,
+                Self::sanitize_snapshot_segment(uri)
+            ));
+        tokio::fs::create_dir_all(&snapshot_dir)
+            .await
+            .map_err(|e| ExtensionError::Other(e.to_string()))?;
+
+        let mut saved_files = Vec::new();
+        for (index, content) in resource.contents.iter().enumerate() {
+            match content {
+                crate::tools::mcp::ResourceContents::Text(text) => {
+                    let filename = format!(
+                        "{:03}{}",
+                        index + 1,
+                        Self::extension_for_mime(text.mime_type.as_deref()).unwrap_or(".txt")
+                    );
+                    let path = snapshot_dir.join(&filename);
+                    tokio::fs::write(&path, text.text.as_bytes())
+                        .await
+                        .map_err(|e| ExtensionError::Other(e.to_string()))?;
+                    saved_files.push(filename);
+                }
+                crate::tools::mcp::ResourceContents::Blob(blob) => {
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(blob.blob.as_bytes())
+                        .map_err(|e| ExtensionError::Other(e.to_string()))?;
+                    let filename = format!(
+                        "{:03}{}",
+                        index + 1,
+                        Self::extension_for_mime(blob.mime_type.as_deref()).unwrap_or(".bin")
+                    );
+                    let path = snapshot_dir.join(&filename);
+                    tokio::fs::write(&path, bytes)
+                        .await
+                        .map_err(|e| ExtensionError::Other(e.to_string()))?;
+                    saved_files.push(filename);
+                }
+            }
+        }
+
+        let manifest = serde_json::json!({
+            "server_name": name,
+            "uri": uri,
+            "saved_at": Utc::now(),
+            "content_count": resource.contents.len(),
+            "files": saved_files,
+        });
+        tokio::fs::write(
+            snapshot_dir.join("manifest.json"),
+            serde_json::to_vec_pretty(&manifest)
+                .map_err(|e| ExtensionError::Other(e.to_string()))?,
+        )
+        .await
+        .map_err(|e| ExtensionError::Other(e.to_string()))?;
+
+        Self::record_mcp_activity_with_store(
+            self.store.as_ref(),
+            &self.user_id,
+            name,
+            "snapshot",
+            "Saved MCP resource snapshot",
+            Some(snapshot_dir.display().to_string()),
+        )
+        .await;
+
+        Ok(snapshot_dir)
+    }
+
+    pub async fn list_mcp_resource_templates(
+        &self,
+        name: &str,
+        user_id: &str,
+    ) -> Result<Vec<McpResourceTemplate>, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .list_resource_templates()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn list_mcp_prompts(
+        &self,
+        name: &str,
+        user_id: &str,
+    ) -> Result<Vec<McpPrompt>, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .list_prompts()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn get_mcp_prompt(
+        &self,
+        name: &str,
+        user_id: &str,
+        prompt_name: &str,
+        arguments: Option<HashMap<String, String>>,
+    ) -> Result<GetPromptResult, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .get_prompt(prompt_name, arguments)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn complete_mcp_argument(
+        &self,
+        name: &str,
+        user_id: &str,
+        reference: CompletionReference,
+        argument_name: &str,
+        value: &str,
+        context_arguments: Option<HashMap<String, String>>,
+    ) -> Result<CompleteResult, ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .complete(reference, argument_name, value, context_arguments)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn subscribe_mcp_resource(
+        &self,
+        name: &str,
+        user_id: &str,
+        uri: &str,
+    ) -> Result<(), ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .subscribe_resource(uri)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        let mut subscriptions = Self::load_mcp_resource_subscriptions_from_store(
+            self.store.as_ref(),
+            &self.user_id,
+            name,
+        )
+        .await;
+        if !subscriptions.iter().any(|existing| existing == uri) {
+            subscriptions.push(uri.to_string());
+            subscriptions.sort();
+            self.save_mcp_resource_subscriptions_to_store(name, &subscriptions)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn unsubscribe_mcp_resource(
+        &self,
+        name: &str,
+        user_id: &str,
+        uri: &str,
+    ) -> Result<(), ExtensionError> {
+        let client = self.ensure_mcp_client(name, user_id).await?;
+        client
+            .unsubscribe_resource(uri)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        let mut subscriptions = Self::load_mcp_resource_subscriptions_from_store(
+            self.store.as_ref(),
+            &self.user_id,
+            name,
+        )
+        .await;
+        subscriptions.retain(|existing| existing != uri);
+        self.save_mcp_resource_subscriptions_to_store(name, &subscriptions)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn notify_mcp_roots_changed(&self, name: &str) -> Result<(), ExtensionError> {
+        let Some(client) = self.mcp_clients.read().await.get(name).cloned() else {
+            return Ok(());
+        };
+        client
+            .send_notification("notifications/roots/list_changed", None)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))
+    }
+
+    pub async fn respond_mcp_sampling(
+        &self,
+        task_id: Uuid,
+        action: &str,
+        request_override: Option<McpSamplingRequest>,
+        generated_text: Option<String>,
+    ) -> Result<crate::task_runtime::TaskRecord, ExtensionError> {
+        let pending = self
+            .pending_sampling_requests
+            .read()
+            .await
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| {
+                ExtensionError::ActivationFailed(
+                    "No pending MCP sampling request found".to_string(),
+                )
+            })?;
+        let task_runtime = self
+            .task_runtime
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ExtensionError::Other("Task runtime not available".to_string()))?;
+
+        match action {
+            "generate" => {
+                let effective_request = request_override.unwrap_or_else(|| pending.request.clone());
+                let preview = self
+                    .generate_mcp_sampling_preview(&effective_request)
+                    .await?;
+                let metadata = Self::sampling_task_metadata(
+                    &pending.server_name,
+                    &effective_request,
+                    Some(&preview),
+                );
+                let task = task_runtime
+                    .update_result_metadata(task_id, metadata)
+                    .await
+                    .ok_or_else(|| {
+                        ExtensionError::ActivationFailed("MCP task not found".to_string())
+                    })?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "sampling",
+                    "Generated MCP sampling preview",
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            "approve" => {
+                let effective_request = request_override.unwrap_or_else(|| pending.request.clone());
+                let result = if let Some(text) = generated_text {
+                    McpSamplingResult {
+                        role: "assistant".to_string(),
+                        content: McpSamplingContentBlock::Text {
+                            text,
+                            annotations: None,
+                        },
+                        model: Some(
+                            self.runtime_llm
+                                .read()
+                                .await
+                                .as_ref()
+                                .map(|llm| llm.active_model_name()),
+                        )
+                        .flatten(),
+                        stop_reason: Some("endTurn".to_string()),
+                    }
+                } else if let Some(existing) =
+                    task_runtime.get_task(task_id).await.and_then(|task| {
+                        task.result_metadata
+                            .and_then(|metadata| metadata.get("preview").cloned())
+                            .and_then(|value| {
+                                serde_json::from_value::<McpSamplingResult>(value).ok()
+                            })
+                    })
+                {
+                    existing
+                } else {
+                    self.generate_mcp_sampling_preview(&effective_request)
+                        .await?
+                };
+
+                let payload = serde_json::to_value(&result)
+                    .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+                let task_metadata = Self::sampling_task_metadata(
+                    &pending.server_name,
+                    &effective_request,
+                    Some(&result),
+                );
+                let task = self
+                    .finish_pending_sampling(task_id, &pending, payload, task_metadata)
+                    .await?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "sampling",
+                    "Approved MCP sampling response",
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            "decline" => {
+                let task = self
+                    .reject_pending_sampling(task_id, &pending, false)
+                    .await?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "sampling",
+                    "Declined MCP sampling response",
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            "cancel" => {
+                self.notify_mcp_request_cancelled(
+                    &pending.server_name,
+                    &pending.request_id,
+                    "Cancelled from MCP panel",
+                )
+                .await;
+                let task = self
+                    .reject_pending_sampling(task_id, &pending, true)
+                    .await?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "sampling",
+                    "Cancelled MCP sampling response",
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            other => Err(ExtensionError::ActivationFailed(format!(
+                "Unsupported MCP sampling action '{other}'"
+            ))),
+        }
+    }
+
+    pub async fn respond_mcp_elicitation(
+        &self,
+        task_id: Uuid,
+        action: &str,
+        content: Option<HashMap<String, serde_json::Value>>,
+    ) -> Result<crate::task_runtime::TaskRecord, ExtensionError> {
+        let pending = self
+            .pending_elicitation_requests
+            .read()
+            .await
+            .get(&task_id)
+            .cloned()
+            .ok_or_else(|| {
+                ExtensionError::ActivationFailed(
+                    "No pending MCP elicitation request found".to_string(),
+                )
+            })?;
+        let task_runtime = self
+            .task_runtime
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ExtensionError::Other("Task runtime not available".to_string()))?;
+
+        match action {
+            "accept" => {
+                let content = content.unwrap_or_default();
+                Self::validate_mcp_elicitation_content(&pending.request, &content)?;
+                let result = McpElicitationResult {
+                    action: "accept".to_string(),
+                    content: Some(content.clone()),
+                };
+                let payload = serde_json::to_value(&result)
+                    .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+                let task_metadata = Self::elicitation_task_metadata(
+                    &pending.server_name,
+                    &pending.request,
+                    Some(&content),
+                    Some("accept"),
+                );
+                self.pending_elicitation_requests
+                    .write()
+                    .await
+                    .remove(&task_id);
+                let client = self
+                    .mcp_clients
+                    .read()
+                    .await
+                    .get(&pending.server_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ExtensionError::ActivationFailed("MCP client not found".to_string())
+                    })?;
+                client
+                    .respond_success(pending.request_id.clone(), payload)
+                    .await
+                    .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+                task_runtime
+                    .mark_completed_with_result(task_id, Some(task_metadata))
+                    .await;
+                let task = task_runtime.get_task(task_id).await.ok_or_else(|| {
+                    ExtensionError::ActivationFailed("MCP task not found".to_string())
+                })?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "elicitation",
+                    "Accepted MCP elicitation response",
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            "decline" | "cancel" => {
+                if action == "cancel" {
+                    self.notify_mcp_request_cancelled(
+                        &pending.server_name,
+                        &pending.request_id,
+                        "Cancelled from MCP panel",
+                    )
+                    .await;
+                }
+                let result = McpElicitationResult {
+                    action: action.to_string(),
+                    content: None,
+                };
+                let payload = serde_json::to_value(&result)
+                    .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+                let task_metadata = Self::elicitation_task_metadata(
+                    &pending.server_name,
+                    &pending.request,
+                    None,
+                    Some(action),
+                );
+                self.pending_elicitation_requests
+                    .write()
+                    .await
+                    .remove(&task_id);
+                let client = self
+                    .mcp_clients
+                    .read()
+                    .await
+                    .get(&pending.server_name)
+                    .cloned()
+                    .ok_or_else(|| {
+                        ExtensionError::ActivationFailed("MCP client not found".to_string())
+                    })?;
+                client
+                    .respond_success(pending.request_id.clone(), payload)
+                    .await
+                    .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+                if action == "cancel" {
+                    task_runtime
+                        .mark_cancelled(task_id, "Cancelled from MCP panel")
+                        .await;
+                } else {
+                    task_runtime
+                        .mark_rejected(task_id, "Declined from MCP panel")
+                        .await;
+                }
+                let task = task_runtime
+                    .update_result_metadata(task_id, task_metadata)
+                    .await
+                    .ok_or_else(|| {
+                        ExtensionError::ActivationFailed("MCP task not found".to_string())
+                    })?;
+                Self::record_mcp_activity_with_store(
+                    self.store.as_ref(),
+                    &self.user_id,
+                    &pending.server_name,
+                    "elicitation",
+                    if action == "cancel" {
+                        "Cancelled MCP elicitation response"
+                    } else {
+                        "Declined MCP elicitation response"
+                    },
+                    None,
+                )
+                .await;
+                Ok(task)
+            }
+            other => Err(ExtensionError::ActivationFailed(format!(
+                "Unsupported MCP elicitation action '{other}'"
+            ))),
+        }
+    }
+
+    pub async fn cancel_pending_mcp_task(
+        &self,
+        task_id: Uuid,
+    ) -> Result<Option<crate::task_runtime::TaskRecord>, ExtensionError> {
+        if self
+            .pending_sampling_requests
+            .read()
+            .await
+            .contains_key(&task_id)
+        {
+            return self
+                .respond_mcp_sampling(task_id, "cancel", None, None)
+                .await
+                .map(Some);
+        }
+
+        if self
+            .pending_elicitation_requests
+            .read()
+            .await
+            .contains_key(&task_id)
+        {
+            return self
+                .respond_mcp_elicitation(task_id, "cancel", None)
+                .await
+                .map(Some);
+        }
+
+        Ok(None)
+    }
+
+    async fn notify_mcp_request_cancelled(
+        &self,
+        server_name: &str,
+        request_id: &serde_json::Value,
+        reason: &str,
+    ) {
+        let Some(client) = self.mcp_clients.read().await.get(server_name).cloned() else {
+            return;
+        };
+        let params = serde_json::json!({
+            "requestId": request_id,
+            "reason": reason,
+        });
+        if let Err(error) = client
+            .send_notification("notifications/cancelled", Some(params))
+            .await
+        {
+            tracing::debug!(
+                server = %server_name,
+                %error,
+                "Failed to send MCP cancelled notification"
+            );
+        }
+    }
+
     pub async fn remove(&self, name: &str, user_id: &str) -> Result<String, ExtensionError> {
         Self::validate_extension_name(name)?;
         match self.determine_installed_kind(name, user_id).await? {
@@ -484,6 +1206,15 @@ impl ExtensionManager {
                     self.tool_registry.unregister(tool).await;
                 }
                 self.mcp_clients.write().await.remove(name);
+                self.reconnecting_servers.write().await.remove(name);
+                let failed_pending_count = Self::fail_pending_requests_for_server(
+                    &self.task_runtime,
+                    &self.pending_sampling_requests,
+                    &self.pending_elicitation_requests,
+                    name,
+                    "MCP server was removed before the request could complete",
+                )
+                .await;
                 self.remove_mcp_server(name, user_id).await?;
                 if let Ok(server) = self.get_mcp_server(name, user_id).await {
                     let _ = self
@@ -496,9 +1227,14 @@ impl ExtensionManager {
                         .await;
                 }
                 Ok(format!(
-                    "Removed MCP server '{}' and {} tool(s)",
+                    "Removed MCP server '{}' and {} tool(s){}",
                     name,
-                    tool_names.len()
+                    tool_names.len(),
+                    if failed_pending_count > 0 {
+                        format!(", failed {failed_pending_count} pending MCP task(s)")
+                    } else {
+                        String::new()
+                    }
                 ))
             }
             ExtensionKind::WasmTool => {
@@ -1300,18 +2036,7 @@ impl ExtensionManager {
             .iter()
             .map(|tool| format!("{}_{}", name, tool.name))
             .collect();
-        for tool in client
-            .create_tools()
-            .await
-            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?
-        {
-            self.tool_registry.register(tool).await;
-        }
-
-        self.mcp_clients
-            .write()
-            .await
-            .insert(name.to_string(), Arc::new(client));
+        let _ = self.cache_and_attach_mcp_client(name, client).await?;
 
         Ok(ActivateResult {
             name: name.to_string(),
@@ -1523,6 +2248,1598 @@ impl ExtensionManager {
             .ok_or_else(|| ExtensionError::NotInstalled(name.to_string()))
     }
 
+    fn mcp_roots_setting_key(server_name: &str) -> String {
+        format!("{MCP_ROOTS_SETTINGS_PREFIX}{server_name}")
+    }
+
+    fn mcp_subscriptions_setting_key(server_name: &str) -> String {
+        format!("{MCP_SUBSCRIPTIONS_SETTINGS_PREFIX}{server_name}")
+    }
+
+    fn mcp_negotiated_setting_key(server_name: &str) -> String {
+        format!("{MCP_NEGOTIATED_SETTINGS_PREFIX}{server_name}")
+    }
+
+    fn mcp_health_check_setting_key(server_name: &str) -> String {
+        format!("{MCP_HEALTH_CHECK_SETTINGS_PREFIX}{server_name}")
+    }
+
+    fn summarize_mcp_detail(params: &Option<serde_json::Value>) -> Option<String> {
+        let Some(params) = params else {
+            return None;
+        };
+        let detail = serde_json::to_string(params).ok()?;
+        let max_chars = 240;
+        if detail.chars().count() <= max_chars {
+            return Some(detail);
+        }
+        let byte_offset = detail
+            .char_indices()
+            .nth(max_chars)
+            .map(|(idx, _)| idx)
+            .unwrap_or(detail.len());
+        Some(format!("{}…", &detail[..byte_offset]))
+    }
+
+    async fn load_mcp_root_grants_from_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+    ) -> Vec<McpRootGrantResponse> {
+        let Some(store) = store else {
+            return Vec::new();
+        };
+        match store
+            .get_setting(owner_id, &Self::mcp_roots_setting_key(server_name))
+            .await
+        {
+            Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
+            Ok(None) | Err(_) => Vec::new(),
+        }
+    }
+
+    async fn load_mcp_resource_subscriptions_from_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+    ) -> Vec<String> {
+        let Some(store) = store else {
+            return Vec::new();
+        };
+        match store
+            .get_setting(owner_id, &Self::mcp_subscriptions_setting_key(server_name))
+            .await
+        {
+            Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
+            Ok(None) | Err(_) => Vec::new(),
+        }
+    }
+
+    async fn save_mcp_resource_subscriptions_to_store(
+        &self,
+        server_name: &str,
+        subscriptions: &[String],
+    ) -> Result<(), ExtensionError> {
+        let Some(store) = self.store.as_ref() else {
+            return Ok(());
+        };
+        let value = serde_json::to_value(subscriptions)
+            .map_err(|e| ExtensionError::Other(e.to_string()))?;
+        store
+            .set_setting(
+                &self.user_id,
+                &Self::mcp_subscriptions_setting_key(server_name),
+                &value,
+            )
+            .await
+            .map_err(|e| ExtensionError::Other(e.to_string()))
+    }
+
+    async fn persist_mcp_health_check(&self, server_name: &str) {
+        Self::persist_mcp_health_check_with_store(self.store.as_ref(), &self.user_id, server_name)
+            .await;
+    }
+
+    async fn record_mcp_activity_with_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+        kind: &str,
+        title: impl Into<String>,
+        detail: Option<String>,
+    ) {
+        let Some(store) = store else {
+            return;
+        };
+
+        let mut items: Vec<McpActivityItemResponse> =
+            match store.get_setting(owner_id, MCP_ACTIVITY_SETTINGS_KEY).await {
+                Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
+                Ok(None) | Err(_) => Vec::new(),
+            };
+
+        items.insert(
+            0,
+            McpActivityItemResponse {
+                id: Uuid::new_v4().to_string(),
+                server_name: server_name.to_string(),
+                kind: kind.to_string(),
+                title: title.into(),
+                detail,
+                created_at: Utc::now(),
+            },
+        );
+        if items.len() > MCP_ACTIVITY_LIMIT {
+            items.truncate(MCP_ACTIVITY_LIMIT);
+        }
+
+        let Ok(value) = serde_json::to_value(&items) else {
+            return;
+        };
+        if let Err(error) = store
+            .set_setting(owner_id, MCP_ACTIVITY_SETTINGS_KEY, &value)
+            .await
+        {
+            tracing::warn!(%error, server = %server_name, "Failed to persist MCP activity");
+        }
+    }
+
+    fn mcp_runtime_context(&self) -> McpRuntimeContext {
+        McpRuntimeContext {
+            mcp_session_manager: Arc::clone(&self.mcp_session_manager),
+            mcp_process_manager: Arc::clone(&self.mcp_process_manager),
+            secrets: Arc::clone(&self.secrets),
+            tool_registry: Arc::clone(&self.tool_registry),
+            store: self.store.clone(),
+            owner_id: self.user_id.clone(),
+            runtime_llm: Arc::clone(&self.runtime_llm),
+            task_runtime: Arc::clone(&self.task_runtime),
+            pending_sampling_requests: Arc::clone(&self.pending_sampling_requests),
+            pending_elicitation_requests: Arc::clone(&self.pending_elicitation_requests),
+            mcp_clients: Arc::clone(&self.mcp_clients),
+            reconnecting_servers: Arc::clone(&self.reconnecting_servers),
+        }
+    }
+
+    async fn restore_mcp_resource_subscriptions_with_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+        client: &Arc<McpClient>,
+    ) -> Result<(), ExtensionError> {
+        let subscriptions =
+            Self::load_mcp_resource_subscriptions_from_store(store, owner_id, server_name).await;
+        for uri in subscriptions {
+            client
+                .subscribe_resource(&uri)
+                .await
+                .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        }
+        Ok(())
+    }
+
+    async fn sync_mcp_tools_with_registry(
+        tool_registry: &Arc<ToolRegistry>,
+        server_name: &str,
+        client: &Arc<McpClient>,
+    ) -> Result<(), ExtensionError> {
+        let prefix = format!("{server_name}_");
+        let existing: Vec<String> = tool_registry
+            .list()
+            .await
+            .into_iter()
+            .filter(|tool| tool.starts_with(&prefix))
+            .collect();
+
+        let tools = client
+            .create_tools()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        let new_names: HashSet<String> = tools.iter().map(|tool| tool.name().to_string()).collect();
+
+        for stale in existing {
+            if !new_names.contains(&stale) {
+                tool_registry.unregister(&stale).await;
+            }
+        }
+
+        for tool in tools {
+            tool_registry.register(tool).await;
+        }
+
+        Ok(())
+    }
+
+    fn spawn_mcp_inbound_listener(&self, server_name: String, client: Arc<McpClient>) {
+        Self::spawn_mcp_inbound_listener_with_context(
+            server_name,
+            client,
+            self.mcp_runtime_context(),
+        );
+    }
+
+    fn spawn_mcp_inbound_listener_with_context(
+        server_name: String,
+        client: Arc<McpClient>,
+        ctx: McpRuntimeContext,
+    ) {
+        let Some(mut inbound) = client.subscribe_inbound() else {
+            return;
+        };
+
+        tokio::spawn(async move {
+            loop {
+                match inbound.recv().await {
+                    Ok(McpInboundMessage::Notification(notification)) => {
+                        let detail = Self::summarize_mcp_detail(&notification.params);
+                        match notification.method.as_str() {
+                            "notifications/tools/list_changed" => {
+                                client.invalidate_tools_cache().await;
+                                match Self::sync_mcp_tools_with_registry(
+                                    &ctx.tool_registry,
+                                    &server_name,
+                                    &client,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        Self::record_mcp_activity_with_store(
+                                            ctx.store.as_ref(),
+                                            &ctx.owner_id,
+                                            &server_name,
+                                            "tools",
+                                            "Refreshed MCP tool list",
+                                            detail,
+                                        )
+                                        .await;
+                                    }
+                                    Err(error) => {
+                                        Self::record_mcp_activity_with_store(
+                                            ctx.store.as_ref(),
+                                            &ctx.owner_id,
+                                            &server_name,
+                                            "error",
+                                            "Failed to refresh MCP tool list",
+                                            Some(error.to_string()),
+                                        )
+                                        .await;
+                                    }
+                                }
+                            }
+                            "notifications/resources/list_changed" => {
+                                client.invalidate_resources_cache().await;
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "resource",
+                                    "MCP resources changed",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/prompts/list_changed" => {
+                                client.invalidate_prompts_cache().await;
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "prompt",
+                                    "MCP prompts changed",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/resources/updated" => {
+                                client.invalidate_resources_cache().await;
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "resource",
+                                    "MCP resource updated",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/progress" => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "progress",
+                                    "MCP progress update",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/message" => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "message",
+                                    "MCP server message",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/cancelled" => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "cancelled",
+                                    "MCP request cancelled",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            "notifications/roots/list_changed" => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "roots",
+                                    "MCP server requested roots refresh",
+                                    detail,
+                                )
+                                .await;
+                            }
+                            other => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "notification",
+                                    format!("Received MCP notification '{other}'"),
+                                    detail,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    Ok(McpInboundMessage::Request(request)) => {
+                        match request.method.as_str() {
+                            "roots/list" => {
+                                let roots = Self::load_mcp_root_grants_from_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                )
+                                .await
+                                .into_iter()
+                                .map(|root| {
+                                    serde_json::json!({
+                                        "uri": root.uri,
+                                        "name": root.name,
+                                    })
+                                })
+                                .collect::<Vec<_>>();
+
+                                if let Err(error) = client
+                                    .respond_success(
+                                        request.id.clone(),
+                                        serde_json::json!({ "roots": roots }),
+                                    )
+                                    .await
+                                {
+                                    Self::record_mcp_activity_with_store(
+                                        ctx.store.as_ref(),
+                                        &ctx.owner_id,
+                                        &server_name,
+                                        "error",
+                                        "Failed to answer MCP roots/list",
+                                        Some(error.to_string()),
+                                    )
+                                    .await;
+                                } else {
+                                    Self::record_mcp_activity_with_store(
+                                        ctx.store.as_ref(),
+                                        &ctx.owner_id,
+                                        &server_name,
+                                        "roots",
+                                        "Answered MCP roots/list",
+                                        None,
+                                    )
+                                    .await;
+                                }
+                            }
+                            "sampling/createMessage" => {
+                                let params = request
+                                    .params
+                                    .clone()
+                                    .ok_or_else(|| {
+                                        ExtensionError::ActivationFailed(
+                                            "Missing sampling request params".to_string(),
+                                        )
+                                    })
+                                    .and_then(|params| {
+                                        serde_json::from_value::<McpSamplingRequest>(params)
+                                            .map_err(|e| {
+                                                ExtensionError::ActivationFailed(format!(
+                                                    "Invalid sampling request: {e}"
+                                                ))
+                                            })
+                                    });
+
+                                match params {
+                                    Ok(params) => {
+                                        let preferred_mode = Self::mcp_sampling_mode_for_request(
+                                            &ctx.task_runtime,
+                                            &client,
+                                        )
+                                        .await;
+
+                                        if preferred_mode == TaskMode::Yolo {
+                                            if let Some(task_id) = Self::create_mcp_sampling_task(
+                                                &ctx.task_runtime,
+                                                &server_name,
+                                                &params,
+                                                TaskMode::Yolo,
+                                            )
+                                            .await
+                                            {
+                                                Self::record_mcp_activity_with_store(
+                                                    ctx.store.as_ref(),
+                                                    &ctx.owner_id,
+                                                    &server_name,
+                                                    "sampling",
+                                                    "Auto-running MCP sampling in Yolo mode",
+                                                    Some(format!("Task {}", task_id)),
+                                                )
+                                                .await;
+
+                                                match Self::generate_mcp_sampling_preview_with_runtime(
+                                                    &ctx.runtime_llm,
+                                                    &params,
+                                                )
+                                                .await
+                                                {
+                                                    Ok(result) => {
+                                                        let payload = match serde_json::to_value(&result) {
+                                                            Ok(payload) => payload,
+                                                            Err(error) => {
+                                                                let _ = client
+                                                                    .respond_error(
+                                                                        request.id.clone(),
+                                                                        -32603,
+                                                                        &error.to_string(),
+                                                                        None,
+                                                                    )
+                                                                    .await;
+                                                                if let Some(runtime) =
+                                                                    ctx.task_runtime.read().await.clone()
+                                                                {
+                                                                    runtime
+                                                                        .mark_failed(task_id, error.to_string())
+                                                                        .await;
+                                                                }
+                                                                continue;
+                                                            }
+                                                        };
+                                                        let metadata = Self::sampling_task_metadata(
+                                                            &server_name,
+                                                            &params,
+                                                            Some(&result),
+                                                        );
+                                                        match client
+                                                            .respond_success(
+                                                                request.id.clone(),
+                                                                payload,
+                                                            )
+                                                            .await
+                                                        {
+                                                            Ok(()) => {
+                                                                if let Some(runtime) =
+                                                                    ctx.task_runtime.read().await.clone()
+                                                                {
+                                                                    runtime
+                                                                        .mark_completed_with_result(
+                                                                            task_id,
+                                                                            Some(metadata),
+                                                                        )
+                                                                        .await;
+                                                                }
+                                                                Self::record_mcp_activity_with_store(
+                                                                    ctx.store.as_ref(),
+                                                                    &ctx.owner_id,
+                                                                    &server_name,
+                                                                    "sampling",
+                                                                    "Returned MCP sampling response automatically",
+                                                                    Some(format!("Task {}", task_id)),
+                                                                )
+                                                                .await;
+                                                            }
+                                                            Err(error) => {
+                                                                if let Some(runtime) =
+                                                                    ctx.task_runtime.read().await.clone()
+                                                                {
+                                                                    runtime
+                                                                        .mark_failed(
+                                                                            task_id,
+                                                                            error.to_string(),
+                                                                        )
+                                                                        .await;
+                                                                }
+                                                                Self::record_mcp_activity_with_store(
+                                                                    ctx.store.as_ref(),
+                                                                    &ctx.owner_id,
+                                                                    &server_name,
+                                                                    "error",
+                                                                    "Failed to return MCP sampling response",
+                                                                    Some(error.to_string()),
+                                                                )
+                                                                .await;
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(error) => {
+                                                        let _ = client
+                                                            .respond_error(
+                                                                request.id.clone(),
+                                                                -32603,
+                                                                &error.to_string(),
+                                                                None,
+                                                            )
+                                                            .await;
+                                                        if let Some(runtime) =
+                                                            ctx.task_runtime.read().await.clone()
+                                                        {
+                                                            runtime
+                                                                .mark_failed(task_id, error.to_string())
+                                                                .await;
+                                                        }
+                                                        Self::record_mcp_activity_with_store(
+                                                            ctx.store.as_ref(),
+                                                            &ctx.owner_id,
+                                                            &server_name,
+                                                            "error",
+                                                            "Failed to auto-run MCP sampling request",
+                                                            Some(error.to_string()),
+                                                        )
+                                                        .await;
+                                                    }
+                                                }
+                                            } else {
+                                                let _ = client
+                                                    .respond_error(
+                                                        request.id.clone(),
+                                                        -32001,
+                                                        "MCP sampling requires desktop task runtime support",
+                                                        None,
+                                                    )
+                                                    .await;
+                                            }
+                                        } else {
+                                            if let Some(task_id) = Self::create_mcp_sampling_task(
+                                                &ctx.task_runtime,
+                                                &server_name,
+                                                &params,
+                                                TaskMode::Ask,
+                                            )
+                                            .await
+                                            {
+                                                ctx.pending_sampling_requests.write().await.insert(
+                                                    task_id,
+                                                    PendingMcpSamplingRequest {
+                                                        server_name: server_name.clone(),
+                                                        request_id: request.id.clone(),
+                                                        request: params.clone(),
+                                                    },
+                                                );
+                                                Self::record_mcp_activity_with_store(
+                                                    ctx.store.as_ref(),
+                                                    &ctx.owner_id,
+                                                    &server_name,
+                                                    "sampling",
+                                                    "Queued MCP sampling approval",
+                                                    Some(format!("Task {}", task_id)),
+                                                )
+                                                .await;
+                                            } else {
+                                                let _ = client
+                                                    .respond_error(
+                                                        request.id.clone(),
+                                                        -32001,
+                                                        "MCP sampling requires desktop task runtime support",
+                                                        None,
+                                                    )
+                                                    .await;
+                                            }
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let _ = client
+                                            .respond_error(
+                                                request.id.clone(),
+                                                -32602,
+                                                error.to_string(),
+                                                None,
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
+                            "elicitation/create" => {
+                                let params = request
+                                    .params
+                                    .clone()
+                                    .ok_or_else(|| {
+                                        ExtensionError::ActivationFailed(
+                                            "Missing elicitation request params".to_string(),
+                                        )
+                                    })
+                                    .and_then(|params| {
+                                        serde_json::from_value::<McpElicitationRequest>(params)
+                                            .map_err(|e| {
+                                                ExtensionError::ActivationFailed(format!(
+                                                    "Invalid elicitation request: {e}"
+                                                ))
+                                            })
+                                    });
+
+                                match params {
+                                    Ok(params) => {
+                                        if let Some(task_id) = Self::create_mcp_elicitation_task(
+                                            &ctx.task_runtime,
+                                            &server_name,
+                                            &params,
+                                        )
+                                        .await
+                                        {
+                                            ctx.pending_elicitation_requests.write().await.insert(
+                                                task_id,
+                                                PendingMcpElicitationRequest {
+                                                    server_name: server_name.clone(),
+                                                    request_id: request.id.clone(),
+                                                    request: params.clone(),
+                                                },
+                                            );
+                                            Self::record_mcp_activity_with_store(
+                                                ctx.store.as_ref(),
+                                                &ctx.owner_id,
+                                                &server_name,
+                                                "elicitation",
+                                                "Queued MCP elicitation approval",
+                                                Some(format!("Task {}", task_id)),
+                                            )
+                                            .await;
+                                        } else {
+                                            let _ = client
+                                            .respond_error(
+                                                request.id.clone(),
+                                                -32001,
+                                                "MCP elicitation requires desktop task runtime support",
+                                                None,
+                                            )
+                                            .await;
+                                        }
+                                    }
+                                    Err(error) => {
+                                        let _ = client
+                                            .respond_error(
+                                                request.id.clone(),
+                                                -32602,
+                                                error.to_string(),
+                                                None,
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
+                            other => {
+                                let _ = client
+                                    .respond_error(
+                                        request.id.clone(),
+                                        -32601,
+                                        format!("Unsupported MCP method '{other}'"),
+                                        None,
+                                    )
+                                    .await;
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "request",
+                                    format!("Rejected unsupported MCP request '{other}'"),
+                                    Self::summarize_mcp_detail(&request.params),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        let removed_current = {
+                            let mut clients = ctx.mcp_clients.write().await;
+                            match clients.get(&server_name) {
+                                Some(active_client) if Arc::ptr_eq(active_client, &client) => {
+                                    clients.remove(&server_name);
+                                    true
+                                }
+                                _ => false,
+                            }
+                        };
+
+                        if removed_current {
+                            Self::unregister_mcp_tools_for_server(&ctx.tool_registry, &server_name)
+                                .await;
+                        }
+                        let failed_pending_count = Self::fail_pending_requests_for_server(
+                            &ctx.task_runtime,
+                            &ctx.pending_sampling_requests,
+                            &ctx.pending_elicitation_requests,
+                            &server_name,
+                            "MCP connection closed before the request could complete",
+                        )
+                        .await;
+
+                        Self::record_mcp_activity_with_store(
+                            ctx.store.as_ref(),
+                            &ctx.owner_id,
+                            &server_name,
+                            "connection",
+                            if removed_current {
+                                "MCP connection closed; client evicted until reconnect"
+                            } else {
+                                "MCP inbound stream closed"
+                            },
+                            (failed_pending_count > 0).then(|| {
+                                format!(
+                                    "Failed {failed_pending_count} pending MCP approval task(s)"
+                                )
+                            }),
+                        )
+                        .await;
+                        if removed_current {
+                            Self::spawn_background_mcp_reconnect(server_name.clone(), ctx.clone());
+                        }
+                        break;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            server = %server_name,
+                            skipped,
+                            "Lagged while consuming inbound MCP messages"
+                        );
+                        Self::record_mcp_activity_with_store(
+                            ctx.store.as_ref(),
+                            &ctx.owner_id,
+                            &server_name,
+                            "warning",
+                            "Lagged while processing MCP activity",
+                            Some(format!("Skipped {skipped} inbound messages")),
+                        )
+                        .await;
+                    }
+                }
+            }
+        });
+    }
+
+    async fn attach_mcp_client_with_context(
+        name: &str,
+        client: McpClient,
+        ctx: &McpRuntimeContext,
+    ) -> Result<Arc<McpClient>, ExtensionError> {
+        let client = Arc::new(client);
+        let init_result = client
+            .initialize()
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        Self::persist_mcp_negotiated_state_with_store(
+            ctx.store.as_ref(),
+            &ctx.owner_id,
+            name,
+            &init_result,
+        )
+        .await;
+        Self::restore_mcp_resource_subscriptions_with_store(
+            ctx.store.as_ref(),
+            &ctx.owner_id,
+            name,
+            &client,
+        )
+        .await?;
+        Self::sync_mcp_tools_with_registry(&ctx.tool_registry, name, &client).await?;
+        ctx.mcp_clients
+            .write()
+            .await
+            .insert(name.to_string(), Arc::clone(&client));
+        Self::spawn_mcp_inbound_listener_with_context(
+            name.to_string(),
+            Arc::clone(&client),
+            ctx.clone(),
+        );
+        Self::persist_mcp_health_check_with_store(ctx.store.as_ref(), &ctx.owner_id, name).await;
+        Ok(client)
+    }
+
+    async fn cache_and_attach_mcp_client(
+        &self,
+        name: &str,
+        client: McpClient,
+    ) -> Result<Arc<McpClient>, ExtensionError> {
+        Self::attach_mcp_client_with_context(name, client, &self.mcp_runtime_context()).await
+    }
+
+    async fn load_mcp_server_for_reconnect(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        name: &str,
+    ) -> Result<Option<McpServerConfig>, ExtensionError> {
+        let servers = if let Some(store) = store {
+            crate::tools::mcp::config::load_mcp_servers_from_db(store.as_ref(), owner_id)
+                .await
+                .map_err(|e| ExtensionError::Config(e.to_string()))?
+        } else {
+            crate::tools::mcp::config::load_mcp_servers()
+                .await
+                .map_err(|e| ExtensionError::Config(e.to_string()))?
+        };
+        Ok(servers.get(name).cloned())
+    }
+
+    async fn persist_mcp_negotiated_state_with_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+        result: &crate::tools::mcp::InitializeResult,
+    ) {
+        let Some(store) = store else {
+            return;
+        };
+        let value = serde_json::json!({
+            "protocol_version": result.protocol_version,
+            "capabilities": result.capabilities,
+            "server_info": result.server_info,
+            "instructions": result.instructions,
+        });
+        if let Err(error) = store
+            .set_setting(
+                owner_id,
+                &Self::mcp_negotiated_setting_key(server_name),
+                &value,
+            )
+            .await
+        {
+            tracing::warn!(%error, server = %server_name, "Failed to persist MCP negotiated state");
+        }
+    }
+
+    async fn persist_mcp_health_check_with_store(
+        store: Option<&Arc<dyn crate::db::Database>>,
+        owner_id: &str,
+        server_name: &str,
+    ) {
+        let Some(store) = store else {
+            return;
+        };
+        if let Err(error) = store
+            .set_setting(
+                owner_id,
+                &Self::mcp_health_check_setting_key(server_name),
+                &serde_json::json!(Utc::now()),
+            )
+            .await
+        {
+            tracing::warn!(%error, server = %server_name, "Failed to persist MCP health check");
+        }
+    }
+
+    fn spawn_background_mcp_reconnect(server_name: String, ctx: McpRuntimeContext) {
+        tokio::spawn(async move {
+            let should_start = {
+                let mut reconnecting = ctx.reconnecting_servers.write().await;
+                reconnecting.insert(server_name.clone())
+            };
+            if !should_start {
+                return;
+            }
+
+            let delays_secs = [2_u64, 5, 10, 20, 30];
+            let mut attempt = 0_usize;
+
+            loop {
+                if ctx.mcp_clients.read().await.contains_key(&server_name) {
+                    break;
+                }
+
+                let server = match Self::load_mcp_server_for_reconnect(
+                    ctx.store.as_ref(),
+                    &ctx.owner_id,
+                    &server_name,
+                )
+                .await
+                {
+                    Ok(Some(server)) if server.enabled => server,
+                    Ok(Some(_)) | Ok(None) => {
+                        Self::record_mcp_activity_with_store(
+                            ctx.store.as_ref(),
+                            &ctx.owner_id,
+                            &server_name,
+                            "connection",
+                            "Stopped MCP reconnect because the server is disabled or removed",
+                            None,
+                        )
+                        .await;
+                        break;
+                    }
+                    Err(error) => {
+                        Self::record_mcp_activity_with_store(
+                            ctx.store.as_ref(),
+                            &ctx.owner_id,
+                            &server_name,
+                            "error",
+                            "Failed to load MCP server config for reconnect",
+                            Some(error.to_string()),
+                        )
+                        .await;
+                        break;
+                    }
+                };
+
+                attempt += 1;
+                match create_client_from_config(
+                    server,
+                    &ctx.mcp_session_manager,
+                    &ctx.mcp_process_manager,
+                    Some(Arc::clone(&ctx.secrets)),
+                    &ctx.owner_id,
+                )
+                .await
+                {
+                    Ok(client) => {
+                        match Self::attach_mcp_client_with_context(&server_name, client, &ctx).await
+                        {
+                            Ok(_) => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "connection",
+                                    "Reconnected MCP client automatically",
+                                    Some(format!("Recovered after {attempt} attempt(s)")),
+                                )
+                                .await;
+                                break;
+                            }
+                            Err(error) => {
+                                Self::record_mcp_activity_with_store(
+                                    ctx.store.as_ref(),
+                                    &ctx.owner_id,
+                                    &server_name,
+                                    "warning",
+                                    "Automatic MCP reconnect attempt failed",
+                                    Some(format!("Attempt {attempt}: {error}")),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        Self::record_mcp_activity_with_store(
+                            ctx.store.as_ref(),
+                            &ctx.owner_id,
+                            &server_name,
+                            "warning",
+                            "Failed to create MCP client during reconnect",
+                            Some(format!("Attempt {attempt}: {error}")),
+                        )
+                        .await;
+                    }
+                }
+
+                if attempt >= delays_secs.len() {
+                    Self::record_mcp_activity_with_store(
+                        ctx.store.as_ref(),
+                        &ctx.owner_id,
+                        &server_name,
+                        "error",
+                        "Stopped automatic MCP reconnect attempts",
+                        Some(format!("Exceeded {} attempts", delays_secs.len())),
+                    )
+                    .await;
+                    break;
+                }
+
+                tokio::time::sleep(std::time::Duration::from_secs(delays_secs[attempt - 1])).await;
+            }
+
+            ctx.reconnecting_servers.write().await.remove(&server_name);
+        });
+    }
+
+    async fn unregister_mcp_tools_for_server(tool_registry: &Arc<ToolRegistry>, server_name: &str) {
+        let prefix = format!("{server_name}_");
+        let stale_tools: Vec<String> = tool_registry
+            .list()
+            .await
+            .into_iter()
+            .filter(|tool| tool.starts_with(&prefix))
+            .collect();
+        for tool in stale_tools {
+            tool_registry.unregister(&tool).await;
+        }
+    }
+
+    async fn fail_pending_requests_for_server(
+        task_runtime: &Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+        pending_sampling_requests: &Arc<RwLock<HashMap<Uuid, PendingMcpSamplingRequest>>>,
+        pending_elicitation_requests: &Arc<RwLock<HashMap<Uuid, PendingMcpElicitationRequest>>>,
+        server_name: &str,
+        reason: &str,
+    ) -> usize {
+        let sampling_task_ids: Vec<Uuid> = {
+            let pending = pending_sampling_requests.read().await;
+            pending
+                .iter()
+                .filter_map(|(task_id, pending)| {
+                    (pending.server_name == server_name).then_some(*task_id)
+                })
+                .collect()
+        };
+        let elicitation_task_ids: Vec<Uuid> = {
+            let pending = pending_elicitation_requests.read().await;
+            pending
+                .iter()
+                .filter_map(|(task_id, pending)| {
+                    (pending.server_name == server_name).then_some(*task_id)
+                })
+                .collect()
+        };
+
+        if let Some(runtime) = task_runtime.read().await.clone() {
+            for task_id in &sampling_task_ids {
+                let metadata = serde_json::json!({
+                    "kind": "sampling",
+                    "server_name": server_name,
+                    "failure_reason": reason,
+                });
+                runtime
+                    .mark_failed_with_result(*task_id, reason.to_string(), Some(metadata))
+                    .await;
+            }
+            for task_id in &elicitation_task_ids {
+                let metadata = serde_json::json!({
+                    "kind": "elicitation",
+                    "server_name": server_name,
+                    "failure_reason": reason,
+                });
+                runtime
+                    .mark_failed_with_result(*task_id, reason.to_string(), Some(metadata))
+                    .await;
+            }
+        }
+
+        if !sampling_task_ids.is_empty() {
+            let ids: std::collections::HashSet<Uuid> = sampling_task_ids.iter().copied().collect();
+            pending_sampling_requests
+                .write()
+                .await
+                .retain(|task_id, _| !ids.contains(task_id));
+        }
+        if !elicitation_task_ids.is_empty() {
+            let ids: std::collections::HashSet<Uuid> =
+                elicitation_task_ids.iter().copied().collect();
+            pending_elicitation_requests
+                .write()
+                .await
+                .retain(|task_id, _| !ids.contains(task_id));
+        }
+
+        sampling_task_ids.len() + elicitation_task_ids.len()
+    }
+
+    async fn create_mcp_sampling_task(
+        task_runtime: &Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+        server_name: &str,
+        request: &McpSamplingRequest,
+        mode: TaskMode,
+    ) -> Option<Uuid> {
+        let task_runtime = task_runtime.read().await.clone()?;
+        let metadata = Self::sampling_task_metadata(server_name, request, None);
+        let title = format!("MCP sampling request from {server_name}");
+        let task = task_runtime
+            .create_workflow_task("mcp:sampling", title, mode, Some(metadata.clone()))
+            .await;
+        if mode == TaskMode::Ask {
+            let pending = TaskPendingApproval {
+                id: task.id,
+                risk: "model_sampling".to_string(),
+                summary: "MCP server requested model sampling".to_string(),
+                operations: vec![TaskOperation {
+                    kind: "mcp_sampling".to_string(),
+                    tool_name: server_name.to_string(),
+                    parameters: metadata,
+                    path: None,
+                    destination_path: None,
+                }],
+                allow_always: false,
+            };
+            let _ = task_runtime.set_waiting_approval(task.id, pending).await;
+        }
+        Some(task.id)
+    }
+
+    async fn mcp_sampling_mode_for_request(
+        task_runtime: &Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+        client: &Arc<McpClient>,
+    ) -> TaskMode {
+        let Some(conversation_id) = client.current_conversation_id().await else {
+            return TaskMode::Ask;
+        };
+        let Some(task_runtime) = task_runtime.read().await.clone() else {
+            return TaskMode::Ask;
+        };
+        task_runtime.mode_for_task(conversation_id).await
+    }
+
+    async fn create_mcp_elicitation_task(
+        task_runtime: &Arc<RwLock<Option<Arc<TaskRuntime>>>>,
+        server_name: &str,
+        request: &McpElicitationRequest,
+    ) -> Option<Uuid> {
+        let task_runtime = task_runtime.read().await.clone()?;
+        let metadata = Self::elicitation_task_metadata(server_name, request, None, None);
+        let title = format!("MCP elicitation request from {server_name}");
+        let task = task_runtime
+            .create_workflow_task(
+                "mcp:elicitation",
+                title,
+                TaskMode::Ask,
+                Some(metadata.clone()),
+            )
+            .await;
+        let pending = TaskPendingApproval {
+            id: task.id,
+            risk: "user_input".to_string(),
+            summary: "MCP server requested elicitation".to_string(),
+            operations: vec![TaskOperation {
+                kind: "mcp_elicitation".to_string(),
+                tool_name: server_name.to_string(),
+                parameters: metadata,
+                path: None,
+                destination_path: None,
+            }],
+            allow_always: false,
+        };
+        let _ = task_runtime.set_waiting_approval(task.id, pending).await;
+        Some(task.id)
+    }
+
+    fn sampling_task_metadata(
+        server_name: &str,
+        request: &McpSamplingRequest,
+        preview: Option<&McpSamplingResult>,
+    ) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "kind": "sampling",
+            "server_name": server_name,
+            "request": request,
+        });
+        if let Some(preview) = preview {
+            value["preview"] = serde_json::to_value(preview).unwrap_or(serde_json::Value::Null);
+        }
+        value
+    }
+
+    fn elicitation_task_metadata(
+        server_name: &str,
+        request: &McpElicitationRequest,
+        content: Option<&HashMap<String, serde_json::Value>>,
+        action: Option<&str>,
+    ) -> serde_json::Value {
+        let mut value = serde_json::json!({
+            "kind": "elicitation",
+            "server_name": server_name,
+            "request": request,
+        });
+        if let Some(content) = content {
+            value["content"] = serde_json::to_value(content)
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+        }
+        if let Some(action) = action {
+            value["action"] = serde_json::json!(action);
+        }
+        value
+    }
+
+    async fn generate_mcp_sampling_preview(
+        &self,
+        request: &McpSamplingRequest,
+    ) -> Result<McpSamplingResult, ExtensionError> {
+        Self::generate_mcp_sampling_preview_with_runtime(&self.runtime_llm, request).await
+    }
+
+    async fn generate_mcp_sampling_preview_with_runtime(
+        runtime_llm: &Arc<RwLock<Option<Arc<dyn LlmProvider>>>>,
+        request: &McpSamplingRequest,
+    ) -> Result<McpSamplingResult, ExtensionError> {
+        let llm = runtime_llm
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ExtensionError::Other("LLM runtime not available".to_string()))?;
+
+        let messages = Self::sampling_request_to_chat_messages(request)?;
+        let mut completion = CompletionRequest::new(messages);
+        if let Some(max_tokens) = request.max_tokens {
+            completion = completion.with_max_tokens(max_tokens);
+        }
+        if let Some(temperature) = request.temperature {
+            completion = completion.with_temperature(temperature);
+        }
+        if let Some(stop_sequences) = &request.stop_sequences {
+            completion.stop_sequences = Some(stop_sequences.clone());
+        }
+        if let Some(model_preferences) = &request.model_preferences
+            && let Some(first_hint) = model_preferences.hints.first()
+        {
+            completion = completion.with_model(first_hint.name.clone());
+        }
+
+        let response = llm
+            .complete(completion)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+
+        Ok(McpSamplingResult {
+            role: "assistant".to_string(),
+            content: McpSamplingContentBlock::Text {
+                text: response.content,
+                annotations: None,
+            },
+            model: Some(llm.effective_model_name(None)),
+            stop_reason: Some(match response.finish_reason {
+                crate::llm::FinishReason::Length => "maxTokens".to_string(),
+                crate::llm::FinishReason::ToolUse => "toolUse".to_string(),
+                crate::llm::FinishReason::ContentFilter => "contentFilter".to_string(),
+                crate::llm::FinishReason::Stop | crate::llm::FinishReason::Unknown => {
+                    "endTurn".to_string()
+                }
+            }),
+        })
+    }
+
+    fn sampling_request_to_chat_messages(
+        request: &McpSamplingRequest,
+    ) -> Result<Vec<ChatMessage>, ExtensionError> {
+        let mut messages = Vec::new();
+        if let Some(system_prompt) = &request.system_prompt
+            && !system_prompt.trim().is_empty()
+        {
+            messages.push(ChatMessage::system(system_prompt.clone()));
+        }
+        for message in &request.messages {
+            messages.push(Self::sampling_message_to_chat_message(message)?);
+        }
+        Ok(messages)
+    }
+
+    fn sampling_message_to_chat_message(
+        message: &crate::tools::mcp::McpSamplingMessage,
+    ) -> Result<ChatMessage, ExtensionError> {
+        match &message.content {
+            McpSamplingContentBlock::Text { text, .. } => Ok(match message.role.as_str() {
+                "assistant" => ChatMessage::assistant(text.clone()),
+                "system" => ChatMessage::system(text.clone()),
+                _ => ChatMessage::user(text.clone()),
+            }),
+            McpSamplingContentBlock::Image {
+                data, mime_type, ..
+            } => {
+                let text = format!("[image input: {mime_type}]");
+                let parts = vec![ContentPart::ImageUrl {
+                    image_url: ImageUrl {
+                        url: format!("data:{mime_type};base64,{data}"),
+                        detail: Some("auto".to_string()),
+                    },
+                }];
+                Ok(match message.role.as_str() {
+                    "assistant" => ChatMessage {
+                        role: Role::Assistant,
+                        content: text,
+                        content_parts: parts,
+                        tool_call_id: None,
+                        name: None,
+                        tool_calls: None,
+                    },
+                    "system" => ChatMessage {
+                        role: Role::System,
+                        content: text,
+                        content_parts: parts,
+                        tool_call_id: None,
+                        name: None,
+                        tool_calls: None,
+                    },
+                    _ => ChatMessage::user_with_parts(text, parts),
+                })
+            }
+            McpSamplingContentBlock::Audio { .. } => Err(ExtensionError::ActivationFailed(
+                "Current Steward provider does not support audio sampling requests".to_string(),
+            )),
+        }
+    }
+
+    fn validate_mcp_elicitation_content(
+        request: &McpElicitationRequest,
+        content: &HashMap<String, serde_json::Value>,
+    ) -> Result<(), ExtensionError> {
+        for required in &request.requested_schema.required {
+            if !content.contains_key(required) {
+                return Err(ExtensionError::ActivationFailed(format!(
+                    "Missing required elicitation field '{}'",
+                    required
+                )));
+            }
+        }
+
+        for (name, value) in content {
+            let schema = request
+                .requested_schema
+                .properties
+                .get(name)
+                .ok_or_else(|| {
+                    ExtensionError::ActivationFailed(format!(
+                        "Unexpected elicitation field '{}'",
+                        name
+                    ))
+                })?;
+            Self::validate_primitive_schema_value(name, schema, value)?;
+        }
+
+        Ok(())
+    }
+
+    fn validate_primitive_schema_value(
+        field_name: &str,
+        schema: &McpPrimitiveSchemaDefinition,
+        value: &serde_json::Value,
+    ) -> Result<(), ExtensionError> {
+        match schema {
+            McpPrimitiveSchemaDefinition::String {
+                enum_values,
+                min_length,
+                max_length,
+                ..
+            } => {
+                let Some(text) = value.as_str() else {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be a string",
+                        field_name
+                    )));
+                };
+                if let Some(enum_values) = enum_values
+                    && !enum_values.iter().any(|candidate| candidate == text)
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be one of: {}",
+                        field_name,
+                        enum_values.join(", ")
+                    )));
+                }
+                if let Some(min_length) = min_length
+                    && text.chars().count() < *min_length as usize
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be at least {} characters",
+                        field_name, min_length
+                    )));
+                }
+                if let Some(max_length) = max_length
+                    && text.chars().count() > *max_length as usize
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be at most {} characters",
+                        field_name, max_length
+                    )));
+                }
+            }
+            McpPrimitiveSchemaDefinition::Number {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_f64() else {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be a number",
+                        field_name
+                    )));
+                };
+                if let Some(minimum) = minimum
+                    && number < *minimum
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be >= {}",
+                        field_name, minimum
+                    )));
+                }
+                if let Some(maximum) = maximum
+                    && number > *maximum
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be <= {}",
+                        field_name, maximum
+                    )));
+                }
+            }
+            McpPrimitiveSchemaDefinition::Integer {
+                minimum, maximum, ..
+            } => {
+                let Some(number) = value.as_i64() else {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be an integer",
+                        field_name
+                    )));
+                };
+                if let Some(minimum) = minimum
+                    && number < *minimum
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be >= {}",
+                        field_name, minimum
+                    )));
+                }
+                if let Some(maximum) = maximum
+                    && number > *maximum
+                {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be <= {}",
+                        field_name, maximum
+                    )));
+                }
+            }
+            McpPrimitiveSchemaDefinition::Boolean { .. } => {
+                if !value.is_boolean() {
+                    return Err(ExtensionError::ActivationFailed(format!(
+                        "Field '{}' must be a boolean",
+                        field_name
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn finish_pending_sampling(
+        &self,
+        task_id: Uuid,
+        pending: &PendingMcpSamplingRequest,
+        payload: serde_json::Value,
+        task_metadata: serde_json::Value,
+    ) -> Result<crate::task_runtime::TaskRecord, ExtensionError> {
+        self.pending_sampling_requests
+            .write()
+            .await
+            .remove(&task_id);
+        let client = self
+            .mcp_clients
+            .read()
+            .await
+            .get(&pending.server_name)
+            .cloned()
+            .ok_or_else(|| ExtensionError::ActivationFailed("MCP client not found".to_string()))?;
+        client
+            .respond_success(pending.request_id.clone(), payload)
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+
+        let task_runtime = self
+            .task_runtime
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ExtensionError::Other("Task runtime not available".to_string()))?;
+        task_runtime
+            .mark_completed_with_result(task_id, Some(task_metadata))
+            .await;
+        task_runtime
+            .get_task(task_id)
+            .await
+            .ok_or_else(|| ExtensionError::ActivationFailed("MCP task not found".to_string()))
+    }
+
+    async fn reject_pending_sampling(
+        &self,
+        task_id: Uuid,
+        pending: &PendingMcpSamplingRequest,
+        cancelled: bool,
+    ) -> Result<crate::task_runtime::TaskRecord, ExtensionError> {
+        self.pending_sampling_requests
+            .write()
+            .await
+            .remove(&task_id);
+        let client = self
+            .mcp_clients
+            .read()
+            .await
+            .get(&pending.server_name)
+            .cloned()
+            .ok_or_else(|| ExtensionError::ActivationFailed("MCP client not found".to_string()))?;
+        client
+            .respond_error(
+                pending.request_id.clone(),
+                -32800,
+                if cancelled {
+                    "User cancelled MCP sampling request"
+                } else {
+                    "User declined MCP sampling request"
+                },
+                None,
+            )
+            .await
+            .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+
+        let task_runtime = self
+            .task_runtime
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ExtensionError::Other("Task runtime not available".to_string()))?;
+        let metadata = Self::sampling_task_metadata(&pending.server_name, &pending.request, None);
+        if cancelled {
+            task_runtime
+                .mark_cancelled(task_id, "Cancelled from MCP panel")
+                .await;
+        } else {
+            task_runtime
+                .mark_rejected(task_id, "Declined from MCP panel")
+                .await;
+        }
+        task_runtime
+            .update_result_metadata(task_id, metadata)
+            .await
+            .ok_or_else(|| ExtensionError::ActivationFailed("MCP task not found".to_string()))
+    }
+
+    async fn ensure_mcp_client(
+        &self,
+        name: &str,
+        user_id: &str,
+    ) -> Result<Arc<McpClient>, ExtensionError> {
+        if let Some(client) = self.mcp_clients.read().await.get(name).cloned() {
+            match client.ping().await {
+                Ok(()) => return Ok(client),
+                Err(error) => {
+                    tracing::warn!(
+                        server = %name,
+                        %error,
+                        "Cached MCP client failed health probe; rebuilding connection"
+                    );
+                    {
+                        let mut clients = self.mcp_clients.write().await;
+                        if let Some(active_client) = clients.get(name)
+                            && Arc::ptr_eq(active_client, &client)
+                        {
+                            clients.remove(name);
+                        }
+                    }
+                    Self::unregister_mcp_tools_for_server(&self.tool_registry, name).await;
+                    Self::record_mcp_activity_with_store(
+                        self.store.as_ref(),
+                        &self.user_id,
+                        name,
+                        "connection",
+                        "Dropped stale MCP client; reconnecting on demand",
+                        Some(error.to_string()),
+                    )
+                    .await;
+                }
+            }
+        }
+
+        let server = self.get_mcp_server(name, user_id).await?;
+        let client = create_client_from_config(
+            server.clone(),
+            &self.mcp_session_manager,
+            &self.mcp_process_manager,
+            Some(Arc::clone(&self.secrets)),
+            user_id,
+        )
+        .await
+        .map_err(|e| ExtensionError::ActivationFailed(e.to_string()))?;
+        self.cache_and_attach_mcp_client(name, client).await
+    }
+
     async fn remove_mcp_server(&self, name: &str, user_id: &str) -> Result<(), ExtensionError> {
         if let Some(store) = &self.store {
             crate::tools::mcp::config::remove_mcp_server_db(store.as_ref(), user_id, name)
@@ -1614,6 +3931,39 @@ impl ExtensionManager {
             serde_json::Value::Array(a) => !a.is_empty(),
             serde_json::Value::Object(o) => !o.is_empty(),
             _ => true,
+        }
+    }
+
+    fn sanitize_snapshot_segment(value: &str) -> String {
+        let sanitized: String = value
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+            .collect();
+        let trimmed = sanitized
+            .trim_matches('-')
+            .chars()
+            .take(64)
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
+        if trimmed.is_empty() {
+            "snapshot".to_string()
+        } else {
+            trimmed
+        }
+    }
+
+    fn extension_for_mime(mime_type: Option<&str>) -> Option<&'static str> {
+        match mime_type.unwrap_or_default() {
+            "text/plain" => Some(".txt"),
+            "text/markdown" => Some(".md"),
+            "application/json" => Some(".json"),
+            "text/html" => Some(".html"),
+            "image/png" => Some(".png"),
+            "image/jpeg" => Some(".jpg"),
+            "image/webp" => Some(".webp"),
+            "application/pdf" => Some(".pdf"),
+            _ => None,
         }
     }
 
@@ -1871,3 +4221,120 @@ fn normalize_hosted_callback_url(callback_url: &str) -> String {
 
 #[allow(dead_code)]
 fn _ensure_path(_path: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fail_pending_requests_for_server_marks_matching_tasks_failed_and_clears_maps() {
+        let task_runtime = Arc::new(TaskRuntime::new());
+        let sampling_task = task_runtime
+            .create_workflow_task("mcp:sampling", "sampling", TaskMode::Ask, None)
+            .await;
+        let elicitation_task = task_runtime
+            .create_workflow_task("mcp:elicitation", "elicitation", TaskMode::Ask, None)
+            .await;
+        let other_task = task_runtime
+            .create_workflow_task("mcp:sampling", "other", TaskMode::Ask, None)
+            .await;
+
+        let task_runtime_slot = Arc::new(RwLock::new(Some(Arc::clone(&task_runtime))));
+        let pending_sampling_requests = Arc::new(RwLock::new(HashMap::from([
+            (
+                sampling_task.id,
+                PendingMcpSamplingRequest {
+                    server_name: "demo".to_string(),
+                    request_id: serde_json::json!("sampling-1"),
+                    request: McpSamplingRequest {
+                        messages: Vec::new(),
+                        system_prompt: None,
+                        model_preferences: None,
+                        max_tokens: None,
+                        temperature: None,
+                        stop_sequences: None,
+                        include_context: None,
+                        metadata: None,
+                    },
+                },
+            ),
+            (
+                other_task.id,
+                PendingMcpSamplingRequest {
+                    server_name: "other".to_string(),
+                    request_id: serde_json::json!("sampling-2"),
+                    request: McpSamplingRequest {
+                        messages: Vec::new(),
+                        system_prompt: None,
+                        model_preferences: None,
+                        max_tokens: None,
+                        temperature: None,
+                        stop_sequences: None,
+                        include_context: None,
+                        metadata: None,
+                    },
+                },
+            ),
+        ])));
+        let pending_elicitation_requests = Arc::new(RwLock::new(HashMap::from([(
+            elicitation_task.id,
+            PendingMcpElicitationRequest {
+                server_name: "demo".to_string(),
+                request_id: serde_json::json!("elicitation-1"),
+                request: McpElicitationRequest {
+                    message: "Need input".to_string(),
+                    requested_schema: crate::tools::mcp::McpElicitationSchema {
+                        schema_type: "object".to_string(),
+                        properties: HashMap::new(),
+                        required: Vec::new(),
+                    },
+                },
+            },
+        )])));
+
+        let failed = ExtensionManager::fail_pending_requests_for_server(
+            &task_runtime_slot,
+            &pending_sampling_requests,
+            &pending_elicitation_requests,
+            "demo",
+            "connection closed",
+        )
+        .await;
+
+        assert_eq!(failed, 2);
+        assert!(
+            !pending_sampling_requests
+                .read()
+                .await
+                .contains_key(&sampling_task.id)
+        );
+        assert!(
+            !pending_elicitation_requests
+                .read()
+                .await
+                .contains_key(&elicitation_task.id)
+        );
+        assert!(
+            pending_sampling_requests
+                .read()
+                .await
+                .contains_key(&other_task.id)
+        );
+
+        let sampling_status = task_runtime
+            .get_task(sampling_task.id)
+            .await
+            .unwrap()
+            .status;
+        let elicitation_status = task_runtime
+            .get_task(elicitation_task.id)
+            .await
+            .unwrap()
+            .status;
+        let other_status = task_runtime.get_task(other_task.id).await.unwrap().status;
+
+        assert_eq!(sampling_status, crate::task_runtime::TaskStatus::Failed);
+        assert_eq!(elicitation_status, crate::task_runtime::TaskStatus::Failed);
+        assert_eq!(other_status, crate::task_runtime::TaskStatus::Queued);
+    }
+}

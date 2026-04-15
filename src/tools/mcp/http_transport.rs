@@ -7,10 +7,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 
 use crate::tools::mcp::protocol::{McpRequest, McpResponse};
 use crate::tools::mcp::session::McpSessionManager;
-use crate::tools::mcp::transport::McpTransport;
+use crate::tools::mcp::transport::{
+    McpInboundMessage, McpTransport, ParsedJsonRpcMessage, parse_jsonrpc_message,
+};
 use crate::tools::tool::ToolError;
 
 /// MCP transport that communicates with a server over HTTP.
@@ -24,11 +27,13 @@ pub struct HttpMcpTransport {
     http_client: reqwest::Client,
     session_manager: Option<Arc<McpSessionManager>>,
     custom_headers: HashMap<String, String>,
+    inbound_tx: broadcast::Sender<McpInboundMessage>,
 }
 
 impl HttpMcpTransport {
     /// Create a new HTTP transport for the given server URL.
     pub fn new(server_url: impl Into<String>, server_name: impl Into<String>) -> Self {
+        let (inbound_tx, _) = broadcast::channel(64);
         Self {
             server_url: server_url.into(),
             server_name: server_name.into(),
@@ -42,6 +47,7 @@ impl HttpMcpTransport {
                 .expect("Failed to create HTTP client"), // safety: TLS init with default rustls cannot fail
             session_manager: None,
             custom_headers: HashMap::new(),
+            inbound_tx,
         }
     }
 
@@ -168,6 +174,10 @@ impl McpTransport for HttpMcpTransport {
     fn supports_http_features(&self) -> bool {
         true
     }
+
+    fn subscribe_inbound(&self) -> Option<broadcast::Receiver<McpInboundMessage>> {
+        Some(self.inbound_tx.subscribe())
+    }
 }
 
 impl HttpMcpTransport {
@@ -215,10 +225,22 @@ impl HttpMcpTransport {
                     remaining_start = i + 1;
 
                     if let Some(json_str) = line.strip_prefix("data: ")
-                        && let Ok(resp) = serde_json::from_str::<McpResponse>(json_str)
-                        && resp.id == request_id
+                        && let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str)
                     {
-                        return Ok(resp);
+                        match parse_jsonrpc_message(value) {
+                            Ok(ParsedJsonRpcMessage::Response(resp)) if resp.id == request_id => {
+                                return Ok(resp);
+                            }
+                            Ok(ParsedJsonRpcMessage::Notification(notification)) => {
+                                let _ = self
+                                    .inbound_tx
+                                    .send(McpInboundMessage::Notification(notification));
+                            }
+                            Ok(ParsedJsonRpcMessage::Request(request)) => {
+                                let _ = self.inbound_tx.send(McpInboundMessage::Request(request));
+                            }
+                            Ok(ParsedJsonRpcMessage::Response(_)) | Err(_) => {}
+                        }
                     }
                 }
             }
@@ -231,10 +253,22 @@ impl HttpMcpTransport {
 
         // Process any remaining data without a trailing newline.
         if let Some(json_str) = buffer.strip_prefix("data: ")
-            && let Ok(resp) = serde_json::from_str::<McpResponse>(json_str.trim())
-            && resp.id == request_id
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str.trim())
         {
-            return Ok(resp);
+            match parse_jsonrpc_message(value) {
+                Ok(ParsedJsonRpcMessage::Response(resp)) if resp.id == request_id => {
+                    return Ok(resp);
+                }
+                Ok(ParsedJsonRpcMessage::Notification(notification)) => {
+                    let _ = self
+                        .inbound_tx
+                        .send(McpInboundMessage::Notification(notification));
+                }
+                Ok(ParsedJsonRpcMessage::Request(request)) => {
+                    let _ = self.inbound_tx.send(McpInboundMessage::Request(request));
+                }
+                Ok(ParsedJsonRpcMessage::Response(_)) | Err(_) => {}
+            }
         }
 
         Err(ToolError::ExternalService(format!(

@@ -104,7 +104,8 @@ What replaces the old center of gravity:
 
 ### Extensibility
 
-- **MCP protocol support** for external capability providers
+- **Desktop MCP panel and runtime** for server management, auth, custom headers/env/OAuth config, tools, resources, prompts, roots, activity, sampling, and elicitation
+- **MCP protocol support** for external capability providers, including bidirectional sessions and server-originated requests
 - **Plugin/tool architecture** for new local capabilities
 - **Multiple LLM backends** through direct provider adapters or OpenAI-compatible APIs
 

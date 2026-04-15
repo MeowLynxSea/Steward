@@ -10,11 +10,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::io::BufReader;
 use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::tools::mcp::protocol::{McpRequest, McpResponse};
-use crate::tools::mcp::transport::{McpTransport, spawn_jsonrpc_reader, stream_transport_send};
+use crate::tools::mcp::transport::{
+    McpInboundMessage, McpTransport, spawn_jsonrpc_reader, stream_transport_send,
+    write_jsonrpc_value_line,
+};
 use crate::tools::tool::ToolError;
 
 /// MCP transport that communicates with a child process over stdin/stdout.
@@ -26,6 +29,7 @@ pub struct StdioMcpTransport {
     server_name: String,
     stdin: Arc<Mutex<tokio::process::ChildStdin>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<McpResponse>>>>,
+    inbound_tx: broadcast::Sender<McpInboundMessage>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
     stderr_handle: Mutex<Option<JoinHandle<()>>>,
     child: Arc<Mutex<Child>>,
@@ -85,9 +89,15 @@ impl StdioMcpTransport {
 
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<McpResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let (inbound_tx, _) = broadcast::channel(64);
 
         let reader = BufReader::new(stdout);
-        let reader_handle = spawn_jsonrpc_reader(reader, pending.clone(), server_name.clone());
+        let reader_handle = spawn_jsonrpc_reader(
+            reader,
+            pending.clone(),
+            server_name.clone(),
+            Some(inbound_tx.clone()),
+        );
 
         let stderr_name = server_name.clone();
         let stderr_handle = tokio::spawn(async move {
@@ -104,6 +114,7 @@ impl StdioMcpTransport {
             server_name,
             stdin: Arc::new(Mutex::new(stdin)),
             pending,
+            inbound_tx,
             reader_handle: Mutex::new(Some(reader_handle)),
             stderr_handle: Mutex::new(Some(stderr_handle)),
             child: Arc::new(Mutex::new(child)),
@@ -156,6 +167,19 @@ impl McpTransport for StdioMcpTransport {
 
     fn supports_http_features(&self) -> bool {
         false
+    }
+
+    fn subscribe_inbound(&self) -> Option<broadcast::Receiver<McpInboundMessage>> {
+        Some(self.inbound_tx.subscribe())
+    }
+
+    async fn send_jsonrpc_message(
+        &self,
+        message: &serde_json::Value,
+        _headers: &HashMap<String, String>,
+    ) -> Result<(), ToolError> {
+        let mut writer = self.stdin.lock().await;
+        write_jsonrpc_value_line(&mut *writer, message).await
     }
 }
 

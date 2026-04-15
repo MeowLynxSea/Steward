@@ -1,5 +1,7 @@
 //! MCP protocol types.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Flexibly deserialize a JSON-RPC id that may be a number, string, or null.
@@ -16,7 +18,7 @@ where
 }
 
 /// MCP protocol version.
-pub const PROTOCOL_VERSION: &str = "2024-11-05";
+pub const PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// An MCP tool definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,8 +124,9 @@ impl McpRequest {
             Some(serde_json::json!({
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
-                    "roots": { "listChanged": false },
-                    "sampling": {}
+                    "roots": { "listChanged": true },
+                    "sampling": {},
+                    "elicitation": {}
                 },
                 "clientInfo": {
                     "name": "steward",
@@ -149,6 +152,15 @@ impl McpRequest {
         Self::new(id, "tools/list", None)
     }
 
+    /// Create a tools/list request with pagination support.
+    pub fn list_tools_with_cursor(id: u64, cursor: Option<&str>) -> Self {
+        Self::new(
+            id,
+            "tools/list",
+            cursor.map(|cursor| serde_json::json!({ "cursor": cursor })),
+        )
+    }
+
     /// Create a tools/call request.
     pub fn call_tool(id: u64, name: &str, arguments: serde_json::Value) -> Self {
         Self::new(
@@ -158,6 +170,104 @@ impl McpRequest {
                 "name": name,
                 "arguments": arguments
             })),
+        )
+    }
+
+    /// Create a resources/list request.
+    pub fn list_resources(id: u64, cursor: Option<&str>) -> Self {
+        Self::new(
+            id,
+            "resources/list",
+            cursor.map(|cursor| serde_json::json!({ "cursor": cursor })),
+        )
+    }
+
+    /// Create a resources/read request.
+    pub fn read_resource(id: u64, uri: &str) -> Self {
+        Self::new(
+            id,
+            "resources/read",
+            Some(serde_json::json!({ "uri": uri })),
+        )
+    }
+
+    /// Create a resources/templates/list request.
+    pub fn list_resource_templates(id: u64, cursor: Option<&str>) -> Self {
+        Self::new(
+            id,
+            "resources/templates/list",
+            cursor.map(|cursor| serde_json::json!({ "cursor": cursor })),
+        )
+    }
+
+    /// Create a resources/subscribe request.
+    pub fn subscribe_resource(id: u64, uri: &str) -> Self {
+        Self::new(
+            id,
+            "resources/subscribe",
+            Some(serde_json::json!({ "uri": uri })),
+        )
+    }
+
+    /// Create a resources/unsubscribe request.
+    pub fn unsubscribe_resource(id: u64, uri: &str) -> Self {
+        Self::new(
+            id,
+            "resources/unsubscribe",
+            Some(serde_json::json!({ "uri": uri })),
+        )
+    }
+
+    /// Create a prompts/list request.
+    pub fn list_prompts(id: u64, cursor: Option<&str>) -> Self {
+        Self::new(
+            id,
+            "prompts/list",
+            cursor.map(|cursor| serde_json::json!({ "cursor": cursor })),
+        )
+    }
+
+    /// Create a prompts/get request.
+    pub fn get_prompt(id: u64, name: &str, arguments: Option<HashMap<String, String>>) -> Self {
+        let mut params = serde_json::json!({ "name": name });
+        if let Some(arguments) = arguments {
+            params["arguments"] = serde_json::to_value(arguments).unwrap_or_default();
+        }
+        Self::new(id, "prompts/get", Some(params))
+    }
+
+    /// Create a completion/complete request.
+    pub fn complete(
+        id: u64,
+        reference: CompletionReference,
+        argument_name: &str,
+        value: &str,
+        context_arguments: Option<HashMap<String, String>>,
+    ) -> Self {
+        let mut params = serde_json::json!({
+            "ref": reference,
+            "argument": {
+                "name": argument_name,
+                "value": value
+            }
+        });
+        if let Some(arguments) = context_arguments {
+            params["context"] = serde_json::json!({ "arguments": arguments });
+        }
+        Self::new(id, "completion/complete", Some(params))
+    }
+
+    /// Create a ping request.
+    pub fn ping(id: u64) -> Self {
+        Self::new(id, "ping", None)
+    }
+
+    /// Create a logging/setLevel request.
+    pub fn logging_set_level(id: u64, level: &str) -> Self {
+        Self::new(
+            id,
+            "logging/setLevel",
+            Some(serde_json::json!({ "level": level })),
         )
     }
 }
@@ -227,6 +337,10 @@ pub struct ServerCapabilities {
     /// Logging capabilities.
     #[serde(default)]
     pub logging: Option<serde_json::Value>,
+
+    /// Completion capabilities.
+    #[serde(default)]
+    pub completions: Option<serde_json::Value>,
 }
 
 /// Tool-related capabilities.
@@ -265,12 +379,18 @@ pub struct ServerInfo {
 
     /// Server version.
     pub version: Option<String>,
+
+    /// Optional human-readable title.
+    #[serde(default)]
+    pub title: Option<String>,
 }
 
 /// Result of listing tools.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListToolsResult {
     pub tools: Vec<McpTool>,
+    #[serde(rename = "nextCursor", default)]
+    pub next_cursor: Option<String>,
 }
 
 /// Result of calling a tool.
@@ -279,6 +399,8 @@ pub struct CallToolResult {
     pub content: Vec<ContentBlock>,
     #[serde(default)]
     pub is_error: bool,
+    #[serde(default)]
+    pub structured_content: Option<serde_json::Value>,
 }
 
 /// Content block in a tool result.
@@ -286,14 +408,47 @@ pub struct CallToolResult {
 #[serde(tag = "type")]
 pub enum ContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
     #[serde(rename = "image")]
-    Image { data: String, mime_type: String },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
+    #[serde(rename = "audio")]
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
     #[serde(rename = "resource")]
-    Resource {
+    EmbeddedResource {
+        resource: ResourceContents,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        name: String,
         uri: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(rename = "mimeType", default)]
         mime_type: Option<String>,
-        text: Option<String>,
+        #[serde(default)]
+        size: Option<u64>,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
     },
 }
 
@@ -301,10 +456,341 @@ impl ContentBlock {
     /// Get text content if this is a text block.
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            Self::Text { text } => Some(text),
+            Self::Text { text, .. } => Some(text),
             _ => None,
         }
     }
+}
+
+/// A resource exposed by an MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResource {
+    pub uri: String,
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
+}
+
+/// Result of listing resources.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListResourcesResult {
+    pub resources: Vec<McpResource>,
+    #[serde(rename = "nextCursor", default)]
+    pub next_cursor: Option<String>,
+}
+
+/// Resource template exposed by an MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpResourceTemplate {
+    #[serde(rename = "uriTemplate")]
+    pub uri_template: String,
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub annotations: Option<serde_json::Value>,
+}
+
+/// Result of listing resource templates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListResourceTemplatesResult {
+    #[serde(rename = "resourceTemplates")]
+    pub resource_templates: Vec<McpResourceTemplate>,
+    #[serde(rename = "nextCursor", default)]
+    pub next_cursor: Option<String>,
+}
+
+/// Text or blob resource contents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResourceContents {
+    Text(TextResourceContents),
+    Blob(BlobResourceContents),
+}
+
+/// Text resource body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextResourceContents {
+    pub uri: String,
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
+    pub text: String,
+}
+
+/// Binary resource body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobResourceContents {
+    pub uri: String,
+    #[serde(rename = "mimeType", default)]
+    pub mime_type: Option<String>,
+    pub blob: String,
+}
+
+/// Result of reading a resource.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReadResourceResult {
+    pub contents: Vec<ResourceContents>,
+}
+
+/// Prompt argument definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptArgument {
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// Prompt definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpPrompt {
+    pub name: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub arguments: Vec<PromptArgument>,
+}
+
+/// Result of listing prompts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListPromptsResult {
+    pub prompts: Vec<McpPrompt>,
+    #[serde(rename = "nextCursor", default)]
+    pub next_cursor: Option<String>,
+}
+
+/// Prompt message result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptMessage {
+    pub role: String,
+    pub content: ContentBlock,
+}
+
+/// Result of getting a prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetPromptResult {
+    #[serde(default)]
+    pub description: Option<String>,
+    pub messages: Vec<PromptMessage>,
+}
+
+/// Completion target reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum CompletionReference {
+    #[serde(rename = "ref/prompt")]
+    Prompt { name: String },
+    #[serde(rename = "ref/resource")]
+    Resource { uri: String },
+}
+
+/// Result of completion/complete.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompleteResult {
+    pub completion: CompletionValues,
+}
+
+/// Completion payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionValues {
+    pub values: Vec<String>,
+    #[serde(default)]
+    pub total: Option<u64>,
+    #[serde(rename = "hasMore", default)]
+    pub has_more: bool,
+}
+
+/// Root entry exposed to MCP servers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpRoot {
+    pub uri: String,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+/// Server-originated sampling/createMessage request payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSamplingRequest {
+    #[serde(default)]
+    pub messages: Vec<McpSamplingMessage>,
+    #[serde(default)]
+    pub system_prompt: Option<String>,
+    #[serde(default)]
+    pub model_preferences: Option<McpModelPreferences>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub stop_sequences: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_context: Option<String>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// A single message within an MCP sampling request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpSamplingMessage {
+    pub role: String,
+    pub content: McpSamplingContentBlock,
+}
+
+/// Supported sampling content blocks Steward can currently display / process.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum McpSamplingContentBlock {
+    #[serde(rename = "text")]
+    Text {
+        text: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
+    #[serde(rename = "image")]
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
+    #[serde(rename = "audio")]
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+        #[serde(default)]
+        annotations: Option<serde_json::Value>,
+    },
+}
+
+/// Model preferences sent by the MCP server when requesting sampling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpModelPreferences {
+    #[serde(default)]
+    pub hints: Vec<McpModelHint>,
+    #[serde(default)]
+    pub cost_priority: Option<f32>,
+    #[serde(default)]
+    pub speed_priority: Option<f32>,
+    #[serde(default)]
+    pub intelligence_priority: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpModelHint {
+    pub name: String,
+}
+
+/// Sampling/createMessage success result returned to the MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpSamplingResult {
+    pub role: String,
+    pub content: McpSamplingContentBlock,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub stop_reason: Option<String>,
+}
+
+/// Server-originated elicitation/create request payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpElicitationRequest {
+    pub message: String,
+    #[serde(rename = "requestedSchema")]
+    pub requested_schema: McpElicitationSchema,
+}
+
+/// Restricted object schema supported by MCP elicitation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpElicitationSchema {
+    #[serde(rename = "type")]
+    pub schema_type: String,
+    #[serde(default)]
+    pub properties: HashMap<String, McpPrimitiveSchemaDefinition>,
+    #[serde(default)]
+    pub required: Vec<String>,
+}
+
+/// Flat primitive schema subset supported by elicitation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum McpPrimitiveSchemaDefinition {
+    #[serde(rename = "string")]
+    String {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        format: Option<String>,
+        #[serde(default, rename = "enum")]
+        enum_values: Option<Vec<String>>,
+        #[serde(default, rename = "enumNames")]
+        enum_names: Option<Vec<String>>,
+        #[serde(default, rename = "minLength")]
+        min_length: Option<u64>,
+        #[serde(default, rename = "maxLength")]
+        max_length: Option<u64>,
+    },
+    #[serde(rename = "number")]
+    Number {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        minimum: Option<f64>,
+        #[serde(default)]
+        maximum: Option<f64>,
+    },
+    #[serde(rename = "integer")]
+    Integer {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        minimum: Option<i64>,
+        #[serde(default)]
+        maximum: Option<i64>,
+    },
+    #[serde(rename = "boolean")]
+    Boolean {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+    },
+}
+
+/// Successful elicitation result returned to the MCP server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpElicitationResult {
+    pub action: String,
+    #[serde(default)]
+    pub content: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[cfg(test)]
@@ -496,19 +982,24 @@ mod tests {
     fn test_content_block_as_text() {
         let text_block = ContentBlock::Text {
             text: "hello".to_string(),
+            annotations: None,
         };
         assert_eq!(text_block.as_text(), Some("hello"));
 
         let image_block = ContentBlock::Image {
             data: "base64data".to_string(),
             mime_type: "image/png".to_string(),
+            annotations: None,
         };
         assert!(image_block.as_text().is_none());
 
-        let resource_block = ContentBlock::Resource {
-            uri: "file:///tmp/a.txt".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            text: Some("content".to_string()),
+        let resource_block = ContentBlock::EmbeddedResource {
+            resource: ResourceContents::Text(TextResourceContents {
+                uri: "file:///tmp/a.txt".to_string(),
+                mime_type: Some("text/plain".to_string()),
+                text: "content".to_string(),
+            }),
+            annotations: None,
         };
         assert!(resource_block.as_text().is_none());
     }
@@ -517,6 +1008,7 @@ mod tests {
     fn test_content_block_serde_tagged_union() {
         let text_block = ContentBlock::Text {
             text: "hi".to_string(),
+            annotations: None,
         };
         let json = serde_json::to_value(&text_block).expect("serialize");
         assert_eq!(json["type"], "text");
@@ -525,19 +1017,24 @@ mod tests {
         let image_block = ContentBlock::Image {
             data: "abc".to_string(),
             mime_type: "image/jpeg".to_string(),
+            annotations: None,
         };
         let json = serde_json::to_value(&image_block).expect("serialize");
         assert_eq!(json["type"], "image");
         assert_eq!(json["data"], "abc");
-        assert_eq!(json["mime_type"], "image/jpeg");
+        assert_eq!(json["mimeType"], "image/jpeg");
 
-        let resource_block = ContentBlock::Resource {
+        let resource_block = ContentBlock::ResourceLink {
+            name: "Example".to_string(),
             uri: "file:///x".to_string(),
+            title: None,
+            description: None,
             mime_type: None,
-            text: None,
+            size: None,
+            annotations: None,
         };
         let json = serde_json::to_value(&resource_block).expect("serialize");
-        assert_eq!(json["type"], "resource");
+        assert_eq!(json["type"], "resource_link");
         assert_eq!(json["uri"], "file:///x");
     }
 

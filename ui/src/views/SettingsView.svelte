@@ -5,6 +5,7 @@
     ChevronLeft,
     Moon,
     Palette,
+    Server,
     Sparkles,
     Sun,
     Waypoints,
@@ -14,6 +15,7 @@
   import LlmConfigurationPanel from "../components/LlmConfigurationPanel.svelte";
   import MemoryGraphModal from "../components/settings/MemoryGraphModal.svelte";
   import MemorySettingsDrawers from "../components/settings/MemorySettingsDrawers.svelte";
+  import McpSettingsPanel from "../components/settings/McpSettingsPanel.svelte";
   import MemorySettingsPanel from "../components/settings/MemorySettingsPanel.svelte";
   import {
     memoryItemLabel,
@@ -32,7 +34,7 @@
     MemoryVersion
   } from "../lib/types";
 
-  type SettingsSection = "general" | "models" | "memory";
+  type SettingsSection = "general" | "models" | "memory" | "mcp";
 
   const providerLabels: Record<string, string> = {
     openai: "OpenAI",
@@ -65,7 +67,13 @@
     console.log("[memory-graph][SettingsView]", message, payload ?? {});
   }
 
-  let { onClose }: { onClose: () => void } = $props();
+  let {
+    onClose,
+    onSeedComposer
+  }: {
+    onClose: () => void;
+    onSeedComposer: (content: string) => void;
+  } = $props();
 
   let activeSection = $state<SettingsSection>("general");
   let showBackendDrawer = $state(false);
@@ -409,6 +417,16 @@
       <Sparkles size={15} strokeWidth={2} />
       <span>模型</span>
     </button>
+    <button
+      class:selected={activeSection === "mcp"}
+      class="nav-tab"
+      role="tab"
+      aria-selected={activeSection === "mcp"}
+      onclick={() => selectSection("mcp")}
+    >
+      <Server size={15} strokeWidth={2} />
+      <span>服务</span>
+    </button>
   </div>
 
   <div class="drawer-content">
@@ -416,14 +434,14 @@
       <section class="settings-section">
         <div class="section-header">
           <h4>外观</h4>
-          <p>标题栏和设置页都可以切换主题，模式会立即保存在当前设备。</p>
+          <p>切换界面风格，更改会立即生效并自动保存。</p>
         </div>
 
         <div class="settings-card">
           <div class="card-copy">
             <span class="card-kicker">Theme</span>
-            <h3>明暗模式</h3>
-            <p>保留顶部标题栏切换，同时也可以在这里直接选择浅色或深色。</p>
+            <h3>界面风格</h3>
+            <p>也可在标题栏快速切换。</p>
           </div>
 
           <div class="theme-toggle-group" role="group" aria-label="主题">
@@ -454,18 +472,20 @@
         onOpenGraph={openMemoryGraphModal}
         onOpenSearch={openMemorySearchDrawer}
       />
+    {:else if activeSection === "mcp"}
+      <McpSettingsPanel {onSeedComposer} />
     {:else}
       <section class="settings-section">
         <div class="section-header">
           <h4>模型设置</h4>
-          <p>配置多个后端，Major 和 Cheap 模型各选一个。</p>
+          <p>选择助手使用的 AI 模型。主模型用于核心对话，轻量模型用于辅助任务。</p>
         </div>
 
         <button class="settings-card settings-card-button" type="button" onclick={openBackendDrawer}>
           <div class="card-copy">
-            <span class="card-kicker">Backend 管理</span>
-            <h3>管理可用模型</h3>
-            <p>添加、编辑、删除后端配置。</p>
+            <span class="card-kicker">模型管理</span>
+            <h3>管理模型列表</h3>
+            <p>添加、编辑或删除可用的 AI 模型。</p>
           </div>
           <ChevronLeft size={18} strokeWidth={2} class="chevron-left" />
         </button>
@@ -488,7 +508,7 @@
           </label>
 
           <label class="model-select">
-            <span class="model-select-label">Cheap 模型</span>
+            <span class="model-select-label">轻量模型</span>
             <div class="cheap-toggle-row">
               <label class="checkbox-row">
                 <input
@@ -499,7 +519,7 @@
                       (event.currentTarget as HTMLInputElement).checked
                     )}
                 />
-                <span>使用主模型</span>
+                <span>与主模型相同</span>
               </label>
             </div>
             {#if !settingsStore.data.cheap_model_uses_primary}
@@ -510,7 +530,7 @@
                   updateCheapBackend((event.currentTarget as HTMLSelectElement).value)
                 }
               >
-                <option value="">选择 Cheap 模型...</option>
+                <option value="">选择轻量模型...</option>
                 {#each backendOptions as option (option.value)}
                   <option value={option.value}>{option.label}</option>
                 {/each}
@@ -522,8 +542,8 @@
         <div class="settings-card retrieval-settings">
           <div class="card-copy">
             <span class="card-kicker">Embeddings</span>
-            <h3>语义召回模型</h3>
-            <p>这套配置只用于 embedding / recall，不会替换主聊天模型或 Cheap 模型。</p>
+            <h3>语义搜索</h3>
+            <p>仅用于记忆搜索和语义匹配，不影响对话使用的模型。</p>
           </div>
 
           <label class="checkbox-row toggle-row">
@@ -535,12 +555,12 @@
                   enabled: (event.currentTarget as HTMLInputElement).checked
                 })}
             />
-            <span>启用 embeddings</span>
+            <span>启用语义搜索</span>
           </label>
 
           <div class="model-selectors embeddings-grid">
             <label class="model-select">
-              <span class="model-select-label">Provider</span>
+              <span class="model-select-label">服务商</span>
               <select
                 class="model-select-input"
                 value={settingsStore.data.embeddings.provider}
@@ -556,7 +576,7 @@
             </label>
 
             <label class="model-select">
-              <span class="model-select-label">Model ID</span>
+              <span class="model-select-label">模型名称</span>
               <input
                 class="model-text-input"
                 type="text"
@@ -576,7 +596,7 @@
             </label>
 
             <label class="model-select">
-              <span class="model-select-label">Base URL</span>
+              <span class="model-select-label">服务地址</span>
               <input
                 class="model-text-input"
                 type="text"
@@ -593,17 +613,17 @@
               />
               <p class="field-hint">
                 {#if settingsStore.data.embeddings.provider === "ollama"}
-                  填 Ollama 服务根地址，例如 `http://127.0.0.1:11434`。
+                  填写 Ollama 的地址，例如 `http://127.0.0.1:11434`。
                 {:else}
-                  填 OpenAI-compatible 服务根地址，不要带 `/v1`。程序会自动请求
-                  `/v1/embeddings`。例如应填写 `https://api.siliconflow.cn`，不要填写
+                  填写服务地址，不要带 `/v1` 后缀。系统会自动拼接完整路径。例如填写
+                  `https://api.siliconflow.cn`，不要填
                   `https://api.siliconflow.cn/v1`。
                 {/if}
               </p>
             </label>
 
             <label class="model-select">
-              <span class="model-select-label">Dimensions</span>
+              <span class="model-select-label">向量维度</span>
               <input
                 class="model-text-input"
                 type="number"
@@ -615,7 +635,7 @@
                 placeholder="留空则按模型默认值推断"
               />
               <p class="field-hint">
-                只有第三方 embedding 服务要求固定维度时才填写；多数情况下可留空，由模型默认值自动推断。
+                通常留空即可，系统会使用模型默认维度。仅在服务商要求指定时填写。
               </p>
             </label>
 
@@ -641,11 +661,10 @@
           <div class="retrieval-notes">
             <div class="note-chip">
               <BrainCircuit size={14} strokeWidth={2} />
-              <span>支持 OpenAI-compatible 第三方 embedding 服务。</span>
+              <span>支持兼容 OpenAI 接口的第三方服务。</span>
             </div>
             <p>
-              例如把 provider 设为 `OpenAI Compatible`，再填写第三方的 `Base URL`、`Model ID`
-              与 `API Key`。保存后会热更新当前运行时，并在后台回填向量。
+              例如选择「OpenAI Compatible」服务商，再填写对应的服务地址、模型名称和密钥。保存后立即生效。
             </p>
           </div>
         </div>
@@ -680,8 +699,8 @@
           <ChevronLeft size={18} strokeWidth={2} />
         </button>
         <div class="header-center">
-          <p class="header-eyebrow">Backend</p>
-          <h3>管理可用模型</h3>
+          <p class="header-eyebrow">模型管理</p>
+          <h3>管理模型列表</h3>
         </div>
         <div class="header-spacer"></div>
       </div>

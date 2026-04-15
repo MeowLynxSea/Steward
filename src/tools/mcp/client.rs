@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use tokio::sync::RwLock;
+use serde::de::DeserializeOwned;
+use tokio::sync::{RwLock, broadcast};
+use uuid::Uuid;
 
 use crate::context::JobContext;
 use crate::secrets::SecretsStore;
@@ -16,10 +18,13 @@ use crate::tools::mcp::auth::refresh_access_token;
 use crate::tools::mcp::config::McpServerConfig;
 use crate::tools::mcp::http_transport::HttpMcpTransport;
 use crate::tools::mcp::protocol::{
-    CallToolResult, InitializeResult, ListToolsResult, McpRequest, McpResponse, McpTool,
+    CallToolResult, CompleteResult, CompletionReference, GetPromptResult, InitializeResult,
+    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
+    McpPrompt, McpRequest, McpResource, McpResourceTemplate, McpResponse, McpTool,
+    ReadResourceResult,
 };
 use crate::tools::mcp::session::McpSessionManager;
-use crate::tools::mcp::transport::McpTransport;
+use crate::tools::mcp::transport::{McpInboundMessage, McpTransport};
 use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
 
 /// MCP client for communicating with MCP servers.
@@ -43,6 +48,15 @@ pub struct McpClient {
     /// Cached tools.
     tools_cache: RwLock<Option<Vec<McpTool>>>,
 
+    /// Cached resources.
+    resources_cache: RwLock<Option<Vec<McpResource>>>,
+
+    /// Cached resource templates.
+    resource_templates_cache: RwLock<Option<Vec<McpResourceTemplate>>>,
+
+    /// Cached prompts.
+    prompts_cache: RwLock<Option<Vec<McpPrompt>>>,
+
     /// Session manager (shared across clients).
     session_manager: Option<Arc<McpSessionManager>>,
 
@@ -62,6 +76,10 @@ pub struct McpClient {
     /// Uses `OnceCell` to serialize concurrent callers so only one
     /// actually sends the request; subsequent calls return immediately.
     initialized: tokio::sync::OnceCell<InitializeResult>,
+
+    /// Best-effort stack of active desktop conversation contexts currently
+    /// executing MCP tool calls through this client.
+    active_conversation_ids: RwLock<Vec<Uuid>>,
 }
 
 impl McpClient {
@@ -79,12 +97,16 @@ impl McpClient {
             server_name: name,
             next_id: AtomicU64::new(1),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager: None,
             secrets: None,
             user_id: "default".to_string(),
             server_config: None,
             custom_headers: HashMap::new(),
             initialized: tokio::sync::OnceCell::new(),
+            active_conversation_ids: RwLock::new(Vec::new()),
         }
     }
 
@@ -102,12 +124,16 @@ impl McpClient {
             server_name: name,
             next_id: AtomicU64::new(1),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager: None,
             secrets: None,
             user_id: "default".to_string(),
             server_config: None,
             custom_headers: HashMap::new(),
             initialized: tokio::sync::OnceCell::new(),
+            active_conversation_ids: RwLock::new(Vec::new()),
         }
     }
 
@@ -143,12 +169,16 @@ impl McpClient {
             server_name: config.name.clone(),
             next_id: AtomicU64::new(1),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager: None,
             secrets: None,
             user_id: "default".to_string(),
             custom_headers: config.headers.clone(),
             initialized: tokio::sync::OnceCell::new(),
             server_config: Some(config),
+            active_conversation_ids: RwLock::new(Vec::new()),
         })
     }
 
@@ -174,12 +204,16 @@ impl McpClient {
             server_name: config.name.clone(),
             next_id: AtomicU64::new(1),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager: Some(session_manager),
             secrets: Some(secrets),
             user_id: user_id.into(),
             server_config: Some(config),
             custom_headers,
             initialized: tokio::sync::OnceCell::new(),
+            active_conversation_ids: RwLock::new(Vec::new()),
         }
     }
 
@@ -210,12 +244,16 @@ impl McpClient {
             server_name: name,
             next_id: AtomicU64::new(1),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager,
             secrets,
             user_id: user_id.into(),
             server_config,
             custom_headers,
             initialized: tokio::sync::OnceCell::new(),
+            active_conversation_ids: RwLock::new(Vec::new()),
         }
     }
 
@@ -256,6 +294,29 @@ impl McpClient {
     /// Get the next request ID.
     fn next_request_id(&self) -> u64 {
         self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    async fn push_conversation_context(&self, conversation_id: Uuid) {
+        self.active_conversation_ids
+            .write()
+            .await
+            .push(conversation_id);
+    }
+
+    async fn pop_conversation_context(&self, conversation_id: Uuid) {
+        let mut contexts = self.active_conversation_ids.write().await;
+        if let Some(index) = contexts
+            .iter()
+            .rposition(|candidate| *candidate == conversation_id)
+        {
+            contexts.remove(index);
+        }
+    }
+
+    /// Best-effort current desktop conversation id for inbound, server-originated
+    /// requests that happen during an active MCP tool call.
+    pub async fn current_conversation_id(&self) -> Option<Uuid> {
+        self.active_conversation_ids.read().await.last().copied()
     }
 
     /// Get the access token for this server (if authenticated).
@@ -389,6 +450,21 @@ impl McpClient {
             );
         }
 
+        if init_result.capabilities.logging.is_some() {
+            let request = McpRequest::logging_set_level(self.next_request_id(), "info");
+            if let Err(e) = self
+                .transport
+                .send(&request, &self.build_request_headers().await?)
+                .await
+            {
+                tracing::debug!(
+                    "Failed to send logging/setLevel to '{}': {}",
+                    self.server_name,
+                    e
+                );
+            }
+        }
+
         Ok(init_result)
     }
 
@@ -461,8 +537,8 @@ impl McpClient {
                         }
                     }
                     return Err(ToolError::ExternalService(format!(
-                        "MCP server '{}' requires authentication. Run: steward mcp auth {}",
-                        self.server_name, self.server_name
+                        "MCP server '{}' requires authentication. Re-authenticate it from the desktop MCP panel.",
+                        self.server_name
                     )));
                 }
                 Err(e) => return Err(e),
@@ -482,14 +558,7 @@ impl McpClient {
     pub async fn initialize(&self) -> Result<InitializeResult, ToolError> {
         let result = self
             .initialized
-            .get_or_try_init(|| async {
-                if let Some(ref session_manager) = self.session_manager
-                    && session_manager.is_initialized(&self.server_name).await
-                {
-                    return Ok(InitializeResult::default());
-                }
-                self.reinitialize_session().await
-            })
+            .get_or_try_init(|| async { self.reinitialize_session().await })
             .await?;
 
         Ok(result.clone())
@@ -502,26 +571,26 @@ impl McpClient {
         }
         self.initialize().await?;
 
-        let request = McpRequest::list_tools(self.next_request_id());
-        let response = self.send_request(request).await?;
-
-        if let Some(error) = response.error {
-            return Err(ToolError::ExternalService(format!(
-                "MCP error: {} (code {})",
-                error.message, error.code
-            )));
+        let mut tools = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let result: ListToolsResult = self
+                .send_and_decode(McpRequest::list_tools_with_cursor(
+                    self.next_request_id(),
+                    cursor.as_deref(),
+                ))
+                .await
+                .map_err(|e| ToolError::ExternalService(format!("Invalid tools list: {}", e)))?;
+            tools.extend(result.tools);
+            if let Some(next_cursor) = result.next_cursor {
+                cursor = Some(next_cursor);
+            } else {
+                break;
+            }
         }
 
-        let result: ListToolsResult = response
-            .result
-            .ok_or_else(|| ToolError::ExternalService("No result in MCP response".to_string()))
-            .and_then(|r| {
-                serde_json::from_value(r)
-                    .map_err(|e| ToolError::ExternalService(format!("Invalid tools list: {}", e)))
-            })?;
-
-        *self.tools_cache.write().await = Some(result.tools.clone());
-        Ok(result.tools)
+        *self.tools_cache.write().await = Some(tools.clone());
+        Ok(tools)
     }
 
     /// Call a tool on the MCP server.
@@ -551,9 +620,275 @@ impl McpClient {
             })
     }
 
+    /// Call a tool while associating the request with the current desktop
+    /// conversation, so inbound MCP requests can inherit Ask/Yolo policy.
+    pub async fn call_tool_with_context(
+        &self,
+        name: &str,
+        arguments: serde_json::Value,
+        conversation_id: Option<Uuid>,
+    ) -> Result<CallToolResult, ToolError> {
+        if let Some(conversation_id) = conversation_id {
+            self.push_conversation_context(conversation_id).await;
+            let result = self.call_tool(name, arguments).await;
+            self.pop_conversation_context(conversation_id).await;
+            result
+        } else {
+            self.call_tool(name, arguments).await
+        }
+    }
+
+    /// List resources exposed by the MCP server.
+    pub async fn list_resources(&self) -> Result<Vec<McpResource>, ToolError> {
+        if let Some(resources) = self.resources_cache.read().await.as_ref() {
+            return Ok(resources.clone());
+        }
+        self.initialize().await?;
+
+        let mut resources = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let result: ListResourcesResult = self
+                .send_and_decode(McpRequest::list_resources(
+                    self.next_request_id(),
+                    cursor.as_deref(),
+                ))
+                .await
+                .map_err(|e| {
+                    ToolError::ExternalService(format!("Invalid resources list: {}", e))
+                })?;
+            resources.extend(result.resources);
+            if let Some(next_cursor) = result.next_cursor {
+                cursor = Some(next_cursor);
+            } else {
+                break;
+            }
+        }
+
+        *self.resources_cache.write().await = Some(resources.clone());
+        Ok(resources)
+    }
+
+    /// Read a specific resource from the MCP server.
+    pub async fn read_resource(&self, uri: &str) -> Result<ReadResourceResult, ToolError> {
+        self.initialize().await?;
+        self.send_and_decode(McpRequest::read_resource(self.next_request_id(), uri))
+            .await
+            .map_err(|e| ToolError::ExternalService(format!("Invalid resource body: {}", e)))
+    }
+
+    /// List resource templates exposed by the MCP server.
+    pub async fn list_resource_templates(&self) -> Result<Vec<McpResourceTemplate>, ToolError> {
+        if let Some(templates) = self.resource_templates_cache.read().await.as_ref() {
+            return Ok(templates.clone());
+        }
+        self.initialize().await?;
+
+        let mut templates = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let result: ListResourceTemplatesResult = self
+                .send_and_decode(McpRequest::list_resource_templates(
+                    self.next_request_id(),
+                    cursor.as_deref(),
+                ))
+                .await
+                .map_err(|e| {
+                    ToolError::ExternalService(format!("Invalid resource templates list: {}", e))
+                })?;
+            templates.extend(result.resource_templates);
+            if let Some(next_cursor) = result.next_cursor {
+                cursor = Some(next_cursor);
+            } else {
+                break;
+            }
+        }
+
+        *self.resource_templates_cache.write().await = Some(templates.clone());
+        Ok(templates)
+    }
+
+    /// Subscribe to updates for a resource.
+    pub async fn subscribe_resource(&self, uri: &str) -> Result<(), ToolError> {
+        self.initialize().await?;
+        let _: serde_json::Value = self
+            .send_and_decode(McpRequest::subscribe_resource(self.next_request_id(), uri))
+            .await?;
+        Ok(())
+    }
+
+    /// Unsubscribe from a resource.
+    pub async fn unsubscribe_resource(&self, uri: &str) -> Result<(), ToolError> {
+        self.initialize().await?;
+        let _: serde_json::Value = self
+            .send_and_decode(McpRequest::unsubscribe_resource(
+                self.next_request_id(),
+                uri,
+            ))
+            .await?;
+        Ok(())
+    }
+
+    /// List prompts exposed by the MCP server.
+    pub async fn list_prompts(&self) -> Result<Vec<McpPrompt>, ToolError> {
+        if let Some(prompts) = self.prompts_cache.read().await.as_ref() {
+            return Ok(prompts.clone());
+        }
+        self.initialize().await?;
+
+        let mut prompts = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let result: ListPromptsResult = self
+                .send_and_decode(McpRequest::list_prompts(
+                    self.next_request_id(),
+                    cursor.as_deref(),
+                ))
+                .await
+                .map_err(|e| ToolError::ExternalService(format!("Invalid prompts list: {}", e)))?;
+            prompts.extend(result.prompts);
+            if let Some(next_cursor) = result.next_cursor {
+                cursor = Some(next_cursor);
+            } else {
+                break;
+            }
+        }
+
+        *self.prompts_cache.write().await = Some(prompts.clone());
+        Ok(prompts)
+    }
+
+    /// Resolve a prompt with arguments.
+    pub async fn get_prompt(
+        &self,
+        name: &str,
+        arguments: Option<HashMap<String, String>>,
+    ) -> Result<GetPromptResult, ToolError> {
+        self.initialize().await?;
+        self.send_and_decode(McpRequest::get_prompt(
+            self.next_request_id(),
+            name,
+            arguments,
+        ))
+        .await
+        .map_err(|e| ToolError::ExternalService(format!("Invalid prompt body: {}", e)))
+    }
+
+    /// Ask the server for completion candidates.
+    pub async fn complete(
+        &self,
+        reference: CompletionReference,
+        argument_name: &str,
+        value: &str,
+        context_arguments: Option<HashMap<String, String>>,
+    ) -> Result<CompleteResult, ToolError> {
+        self.initialize().await?;
+        self.send_and_decode(McpRequest::complete(
+            self.next_request_id(),
+            reference,
+            argument_name,
+            value,
+            context_arguments,
+        ))
+        .await
+        .map_err(|e| ToolError::ExternalService(format!("Invalid completion result: {}", e)))
+    }
+
+    /// Ping the server to verify connectivity.
+    pub async fn ping(&self) -> Result<(), ToolError> {
+        self.initialize().await?;
+        let _: serde_json::Value = self
+            .send_and_decode(McpRequest::ping(self.next_request_id()))
+            .await?;
+        Ok(())
+    }
+
     /// Clear the tools cache.
     pub async fn clear_cache(&self) {
         *self.tools_cache.write().await = None;
+        *self.resources_cache.write().await = None;
+        *self.resource_templates_cache.write().await = None;
+        *self.prompts_cache.write().await = None;
+    }
+
+    /// Invalidate only the cached tool list.
+    pub async fn invalidate_tools_cache(&self) {
+        *self.tools_cache.write().await = None;
+    }
+
+    /// Invalidate only the cached resource lists.
+    pub async fn invalidate_resources_cache(&self) {
+        *self.resources_cache.write().await = None;
+        *self.resource_templates_cache.write().await = None;
+    }
+
+    /// Invalidate only the cached prompt list.
+    pub async fn invalidate_prompts_cache(&self) {
+        *self.prompts_cache.write().await = None;
+    }
+
+    /// Subscribe to server-originated notifications / requests, when supported.
+    pub fn subscribe_inbound(&self) -> Option<broadcast::Receiver<McpInboundMessage>> {
+        self.transport.subscribe_inbound()
+    }
+
+    /// Send an outbound JSON-RPC notification on the current transport.
+    pub async fn send_notification(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<(), ToolError> {
+        let mut notification = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": method,
+        });
+        if let Some(params) = params {
+            notification["params"] = params;
+        }
+        self.transport
+            .send_jsonrpc_message(&notification, &self.build_request_headers().await?)
+            .await
+    }
+
+    /// Send a successful JSON-RPC response to a server-originated request.
+    pub async fn respond_success(
+        &self,
+        id: serde_json::Value,
+        result: serde_json::Value,
+    ) -> Result<(), ToolError> {
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        });
+        self.transport
+            .send_jsonrpc_message(&response, &self.build_request_headers().await?)
+            .await
+    }
+
+    /// Send a JSON-RPC error response to a server-originated request.
+    pub async fn respond_error(
+        &self,
+        id: serde_json::Value,
+        code: i32,
+        message: impl Into<String>,
+        data: Option<serde_json::Value>,
+    ) -> Result<(), ToolError> {
+        let mut error = serde_json::json!({
+            "code": code,
+            "message": message.into(),
+        });
+        if let Some(data) = data {
+            error["data"] = data;
+        }
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": error,
+        });
+        self.transport
+            .send_jsonrpc_message(&response, &self.build_request_headers().await?)
+            .await
     }
 
     /// Create Tool implementations for all MCP tools.
@@ -576,8 +911,30 @@ impl McpClient {
     /// Test the connection to the MCP server.
     pub async fn test_connection(&self) -> Result<(), ToolError> {
         self.initialize().await?;
+        self.ping().await?;
         self.list_tools().await?;
         Ok(())
+    }
+
+    async fn send_and_decode<T: DeserializeOwned>(
+        &self,
+        request: McpRequest,
+    ) -> Result<T, ToolError> {
+        let response = self.send_request(request).await?;
+        if let Some(error) = response.error {
+            return Err(ToolError::ExternalService(format!(
+                "MCP error: {} (code {})",
+                error.message, error.code
+            )));
+        }
+
+        response
+            .result
+            .ok_or_else(|| ToolError::ExternalService("No result in MCP response".to_string()))
+            .and_then(|r| {
+                serde_json::from_value(r)
+                    .map_err(|e| ToolError::ExternalService(format!("Invalid MCP result: {}", e)))
+            })
     }
 }
 
@@ -594,12 +951,16 @@ impl Clone for McpClient {
             server_name: self.server_name.clone(),
             next_id: AtomicU64::new(self.next_id.load(Ordering::SeqCst)),
             tools_cache: RwLock::new(None),
+            resources_cache: RwLock::new(None),
+            resource_templates_cache: RwLock::new(None),
+            prompts_cache: RwLock::new(None),
             session_manager: self.session_manager.clone(),
             secrets: self.secrets.clone(),
             user_id: self.user_id.clone(),
             server_config: self.server_config.clone(),
             custom_headers: self.custom_headers.clone(),
             initialized: tokio::sync::OnceCell::new(),
+            active_conversation_ids: RwLock::new(Vec::new()),
         }
     }
 }
@@ -635,7 +996,7 @@ impl Tool for McpToolWrapper {
     async fn execute(
         &self,
         params: serde_json::Value,
-        _ctx: &JobContext,
+        ctx: &JobContext,
     ) -> Result<ToolOutput, ToolError> {
         let start = std::time::Instant::now();
 
@@ -644,7 +1005,10 @@ impl Tool for McpToolWrapper {
         // explicit nulls for fields that should simply be absent.
         let params = strip_top_level_nulls(params);
 
-        let result = self.client.call_tool(&self.tool.name, params).await?;
+        let result = self
+            .client
+            .call_tool_with_context(&self.tool.name, params, ctx.conversation_id)
+            .await?;
         let content: String = result
             .content
             .iter()

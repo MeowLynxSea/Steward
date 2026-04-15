@@ -18,8 +18,8 @@
 
 <section class="settings-section">
   <div class="section-header">
-    <h4>Memory Inspector</h4>
-    <p>只保留图谱查看和 Recall Search 两个入口，其他列表内容不再在设置页里展开。</p>
+    <h4>记忆管理</h4>
+    <p>查看和搜索助手积累的知识与记忆。</p>
   </div>
 
   {#if memoryError}
@@ -33,9 +33,9 @@
       </div>
       <div class="memory-row-main">
         <div class="memory-row-head">
-          <strong>Memory Graph</strong>
+          <strong>记忆图谱</strong>
         </div>
-        <p>打开接近全屏的图谱模态框，以真正的节点连线方式浏览记忆图。</p>
+        <p>以可视化图谱的方式浏览所有记忆。</p>
       </div>
       <div class="memory-row-tail">
         <ChevronRight size={14} strokeWidth={2} />
@@ -48,9 +48,9 @@
       </div>
       <div class="memory-row-main">
         <div class="memory-row-head">
-          <strong>Recall Search</strong>
+          <strong>记忆搜索</strong>
         </div>
-        <p>继续使用现有侧边栏抽屉，调试 route、keywords 和 recall 命中结果。</p>
+        <p>按关键词搜索记忆内容。</p>
       </div>
       <div class="memory-row-tail">
         <ChevronRight size={14} strokeWidth={2} />

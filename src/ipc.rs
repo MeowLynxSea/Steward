@@ -397,3 +397,199 @@ pub struct WorkbenchCapabilitiesResponse {
     pub dev_loaded_tools: Vec<String>,
     pub mcp_servers: Vec<WorkbenchMcpServerResponse>,
 }
+
+// =============================================================================
+// MCP (14 commands)
+// =============================================================================
+
+#[derive(Debug, Serialize)]
+pub struct McpServerSummaryResponse {
+    pub name: String,
+    pub transport: String,
+    pub url: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: std::collections::HashMap<String, String>,
+    pub socket_path: Option<String>,
+    pub headers: std::collections::HashMap<String, String>,
+    pub enabled: bool,
+    pub description: Option<String>,
+    pub client_id: Option<String>,
+    pub authorization_url: Option<String>,
+    pub token_url: Option<String>,
+    pub scopes: Vec<String>,
+    pub authenticated: bool,
+    pub requires_auth: bool,
+    pub active: bool,
+    pub tool_count: usize,
+    pub negotiated_protocol_version: Option<String>,
+    pub negotiated_capabilities: Option<serde_json::Value>,
+    pub last_health_check: Option<chrono::DateTime<chrono::Utc>>,
+    pub subscribed_resource_uris: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpServerListResponse {
+    pub servers: Vec<McpServerSummaryResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpServerUpsertRequest {
+    pub name: String,
+    pub transport: String,
+    pub url: Option<String>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    pub socket_path: Option<String>,
+    #[serde(default)]
+    pub headers: std::collections::HashMap<String, String>,
+    pub enabled: Option<bool>,
+    pub description: Option<String>,
+    pub client_id: Option<String>,
+    pub authorization_url: Option<String>,
+    pub token_url: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpServerUpsertResponse {
+    pub server: McpServerSummaryResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpAuthResponse {
+    pub authenticated: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpTestResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpToolListResponse {
+    pub tools: Vec<crate::tools::mcp::McpTool>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpResourceListResponse {
+    pub resources: Vec<crate::tools::mcp::McpResource>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpResourceTemplateListResponse {
+    pub templates: Vec<crate::tools::mcp::McpResourceTemplate>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpReadResourceResponse {
+    pub resource: crate::tools::mcp::ReadResourceResult,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpSaveResourceSnapshotResponse {
+    pub snapshot_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpAddResourceToThreadResponse {
+    pub session_id: Uuid,
+    pub active_thread_id: Uuid,
+    pub active_thread_task_id: Option<Uuid>,
+    pub active_thread_task: Option<crate::task_runtime::TaskRecord>,
+    pub attachment_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpPromptListResponse {
+    pub prompts: Vec<crate::tools::mcp::McpPrompt>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpPromptGetRequest {
+    #[serde(default)]
+    pub arguments: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpPromptResponse {
+    pub prompt: crate::tools::mcp::GetPromptResult,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpCompleteArgumentRequest {
+    pub reference_type: String,
+    pub reference_name: String,
+    pub argument_name: String,
+    pub value: String,
+    #[serde(default)]
+    pub context_arguments: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpCompleteArgumentResponse {
+    pub completion: crate::tools::mcp::CompleteResult,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct McpRootGrantResponse {
+    pub uri: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpRootsResponse {
+    pub roots: Vec<McpRootGrantResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpSetRootsRequest {
+    pub roots: Vec<McpRootGrantResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpActivityItemResponse {
+    pub id: String,
+    pub server_name: String,
+    pub kind: String,
+    pub title: String,
+    pub detail: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpActivityListResponse {
+    pub items: Vec<McpActivityItemResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpRespondSamplingRequest {
+    pub action: String,
+    #[serde(default)]
+    pub request: Option<crate::tools::mcp::McpSamplingRequest>,
+    #[serde(default)]
+    pub generated_text: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpRespondSamplingResponse {
+    pub task: crate::task_runtime::TaskRecord,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct McpRespondElicitationRequest {
+    pub action: String,
+    #[serde(default)]
+    pub content: Option<std::collections::HashMap<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct McpRespondElicitationResponse {
+    pub task: crate::task_runtime::TaskRecord,
+}

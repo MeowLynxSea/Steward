@@ -13,10 +13,7 @@
   import { tasksStore } from "./lib/stores/tasks.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
   import { listenForFolderDrops, pickDirectory } from "./lib/tauri";
-  import type {
-    TaskRecord,
-    WorkspaceSearchResult
-  } from "./lib/types";
+  import type { TaskRecord, WorkspaceSearchResult } from "./lib/types";
   import OnboardingView from "./views/OnboardingView.svelte";
   import SettingsView from "./views/SettingsView.svelte";
 
@@ -169,6 +166,13 @@
     composerSeed = {
       id: crypto.randomUUID(),
       content: `Use workspace context from ${result.document_path}:\n${result.content}`
+    };
+  }
+
+  function handleSeedComposer(content: string) {
+    composerSeed = {
+      id: crypto.randomUUID(),
+      content
     };
   }
 
@@ -439,7 +443,7 @@
     {/if}
 
     {#if showSettings}
-      <SettingsView onClose={closeSettings} />
+      <SettingsView onClose={closeSettings} onSeedComposer={handleSeedComposer} />
     {/if}
   </div>
 {/if}

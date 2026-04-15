@@ -80,8 +80,8 @@ src/
 │       └── wrapper.rs  # Channel trait wrapper for WASM modules
 │
 ├── cli/                # CLI subcommands (clap)
-│   ├── mod.rs          # Cli struct, Command enum (run/onboard/config/tool/registry/mcp/memory/pairing/service/doctor/status/completion)
-│   └── config.rs, tool.rs, registry.rs, mcp.rs, memory.rs, pairing.rs, service.rs, doctor.rs, status.rs, completion.rs
+│   ├── mod.rs          # Cli struct, Command enum (run/onboard/config/tool/registry/memory/pairing/service/doctor/status/completion)
+│   └── config.rs, tool.rs, registry.rs, memory.rs, pairing.rs, service.rs, doctor.rs, status.rs, completion.rs
 │
 ├── registry/           # Extension registry catalog
 │   ├── manifest.rs     # ExtensionManifest, ArtifactSpec, BundleDefinition types
@@ -236,7 +236,7 @@ RUST_LOG=steward=debug,tower_http=debug cargo run  # + HTTP request logging
 
 1. Domain-specific tools (`marketplace.rs`, `restaurant.rs`, etc.) are stubs
 2. Integration tests need testcontainers for PostgreSQL
-3. MCP: no streaming support; stdio/HTTP/Unix transports all use request-response
+3. MCP: bidirectional inbound notifications and server-originated requests now work for stdio/HTTP/Unix, but desktop UX is still the primary supported surface and the full 2025-06-18 product surface is not yet complete
 4. WIT bindgen: auto-extract tool schema from WASM is stubbed
 5. Built tools get empty capabilities; need UX for granting access
 6. No tool versioning or rollback

@@ -4,7 +4,6 @@
 //! - Running the agent (`run`)
 //! - Managing configuration (`config list`, `config get`, `config set`)
 //! - Managing WASM tools (`tool install`, `tool list`, `tool remove`)
-//! - Managing MCP servers (`mcp add`, `mcp auth`, `mcp list`, `mcp test`)
 //! - Querying workspace memory (`memory search`, `memory read`, `memory write`)
 //! - Managing routines (`routines list`, `routines create`, `routines edit`, ...)
 //! - Managing OS service (`service install`, `service start`, `service stop`)
@@ -19,7 +18,6 @@ pub mod fmt;
 mod hooks;
 #[cfg(feature = "import")]
 pub mod import;
-mod mcp;
 pub mod memory;
 mod models;
 pub mod oauth_defaults;
@@ -37,7 +35,6 @@ pub use doctor::run_doctor_command;
 pub use hooks::{HooksCommand, run_hooks_command};
 #[cfg(feature = "import")]
 pub use import::{ImportCommand, run_import_command};
-pub use mcp::{McpCommand, run_mcp_command};
 pub use memory::MemoryCommand;
 pub use memory::run_memory_command_with_db;
 pub use models::{ModelsCommand, run_models_command};
@@ -125,14 +122,6 @@ pub enum Command {
         long_about = "List, create, edit, enable/disable, delete, and view history of routines.\nExamples:\n  steward routines list\n  steward routines create --name daily-digest --schedule '0 0 9 * * *' --prompt 'Summarize today'"
     )]
     Routines(RoutinesCommand),
-
-    /// Manage MCP servers (hosted tool providers)
-    #[command(
-        subcommand,
-        about = "Manage MCP servers",
-        long_about = "Add, auth, list, or test MCP servers.\nExample: steward mcp add notion https://mcp.notion.com"
-    )]
-    Mcp(Box<McpCommand>),
 
     /// Query and manage workspace memory
     #[command(

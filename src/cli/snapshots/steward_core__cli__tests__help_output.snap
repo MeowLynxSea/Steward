@@ -13,7 +13,6 @@ Commands:
   tool        Manage WASM tools
   registry    Browse/install extensions
   routines    Manage routines
-  mcp         Manage MCP servers
   memory      Manage workspace memory
   service     Manage OS service
   skills      Manage skills

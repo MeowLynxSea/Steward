@@ -768,8 +768,7 @@ impl AppBuilder {
                                         {
                                             tracing::warn!(
                                                 "MCP server '{}' requires authentication. \
-                                                 Run: steward mcp auth {}",
-                                                server_name,
+                                                 Re-authenticate it from the desktop MCP panel.",
                                                 server_name
                                             );
                                         } else {

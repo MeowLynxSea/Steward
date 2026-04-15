@@ -482,6 +482,361 @@ export interface WorkbenchCapabilities {
   mcp_servers: WorkbenchMcpServer[];
 }
 
+export interface McpServerSummary {
+  name: string;
+  transport: string;
+  url: string | null;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  socket_path: string | null;
+  headers: Record<string, string>;
+  enabled: boolean;
+  description: string | null;
+  client_id?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  scopes: string[];
+  authenticated: boolean;
+  requires_auth: boolean;
+  active: boolean;
+  tool_count: number;
+  negotiated_protocol_version?: string | null;
+  negotiated_capabilities?: Record<string, unknown> | null;
+  last_health_check?: string | null;
+  subscribed_resource_uris: string[];
+}
+
+export interface McpServerListResponse {
+  servers: McpServerSummary[];
+}
+
+export interface McpServerUpsertRequest {
+  name: string;
+  transport: string;
+  url?: string | null;
+  command?: string | null;
+  args?: string[];
+  env?: Record<string, string>;
+  socket_path?: string | null;
+  headers?: Record<string, string>;
+  enabled?: boolean | null;
+  description?: string | null;
+  client_id?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  scopes?: string[];
+}
+
+export interface McpServerUpsertResponse {
+  server: McpServerSummary;
+}
+
+export interface McpAuthResponse {
+  authenticated: boolean;
+  message: string;
+}
+
+export interface McpTestResponse {
+  ok: boolean;
+  message: string;
+}
+
+export interface McpToolAnnotations {
+  destructive_hint?: boolean;
+  side_effects_hint?: boolean;
+  read_only_hint?: boolean;
+  execution_time_hint?: string | null;
+}
+
+export interface McpTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  annotations?: McpToolAnnotations | null;
+}
+
+export interface McpToolListResponse {
+  tools: McpTool[];
+}
+
+export interface McpResource {
+  uri: string;
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  mime_type?: string | null;
+  size?: number | null;
+  annotations?: Record<string, unknown> | null;
+}
+
+export interface McpResourceListResponse {
+  resources: McpResource[];
+}
+
+export interface McpResourceTemplate {
+  uri_template: string;
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  mime_type?: string | null;
+  annotations?: Record<string, unknown> | null;
+}
+
+export interface McpResourceTemplateListResponse {
+  templates: McpResourceTemplate[];
+}
+
+export interface TextResourceContents {
+  uri: string;
+  mime_type?: string | null;
+  text: string;
+}
+
+export interface BlobResourceContents {
+  uri: string;
+  mime_type?: string | null;
+  blob: string;
+}
+
+export interface McpReadResourceResponse {
+  resource: {
+    contents: Array<TextResourceContents | BlobResourceContents>;
+  };
+}
+
+export interface McpSaveResourceSnapshotResponse {
+  snapshot_path: string;
+}
+
+export interface McpAddResourceToThreadResponse {
+  session_id: string;
+  active_thread_id: string;
+  active_thread_task_id: string | null;
+  active_thread_task: TaskRecord | null;
+  attachment_count: number;
+}
+
+export interface McpPromptArgument {
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  required?: boolean;
+}
+
+export interface McpPrompt {
+  name: string;
+  title?: string | null;
+  description?: string | null;
+  arguments: McpPromptArgument[];
+}
+
+export interface McpPromptListResponse {
+  prompts: McpPrompt[];
+}
+
+export interface McpPromptGetRequest {
+  arguments?: Record<string, string>;
+}
+
+export interface McpContentBlockText {
+  type: "text";
+  text: string;
+}
+
+export interface McpContentBlockImage {
+  type: "image";
+  data: string;
+  mime_type: string;
+}
+
+export interface McpContentBlockAudio {
+  type: "audio";
+  data: string;
+  mime_type: string;
+}
+
+export interface McpContentBlockEmbeddedResource {
+  type: "resource";
+  resource: Record<string, unknown>;
+}
+
+export interface McpContentBlockResourceLink {
+  type: "resource_link";
+  name: string;
+  uri: string;
+  title?: string | null;
+  description?: string | null;
+  mime_type?: string | null;
+  size?: number | null;
+}
+
+export type McpContentBlock =
+  | McpContentBlockText
+  | McpContentBlockImage
+  | McpContentBlockAudio
+  | McpContentBlockEmbeddedResource
+  | McpContentBlockResourceLink;
+
+export interface McpPromptMessage {
+  role: string;
+  content: McpContentBlock;
+}
+
+export interface McpPromptResponse {
+  prompt: {
+    description?: string | null;
+    messages: McpPromptMessage[];
+  };
+}
+
+export interface McpCompleteArgumentRequest {
+  reference_type: string;
+  reference_name: string;
+  argument_name: string;
+  value: string;
+  context_arguments?: Record<string, string>;
+}
+
+export interface McpCompleteArgumentResponse {
+  completion: {
+    completion: {
+      values: string[];
+      total?: number | null;
+      has_more: boolean;
+    };
+  };
+}
+
+export interface McpRootGrant {
+  uri: string;
+  name?: string | null;
+}
+
+export interface McpRootsResponse {
+  roots: McpRootGrant[];
+}
+
+export interface McpSetRootsRequest {
+  roots: McpRootGrant[];
+}
+
+export interface McpActivityItem {
+  id: string;
+  server_name: string;
+  kind: string;
+  title: string;
+  detail?: string | null;
+  created_at: string;
+}
+
+export interface McpActivityListResponse {
+  items: McpActivityItem[];
+}
+
+export interface McpSamplingMessage {
+  role: string;
+  content: McpContentBlock;
+}
+
+export interface McpModelHint {
+  name: string;
+}
+
+export interface McpModelPreferences {
+  hints: McpModelHint[];
+  cost_priority?: number | null;
+  speed_priority?: number | null;
+  intelligence_priority?: number | null;
+}
+
+export interface McpSamplingRequest {
+  messages: McpSamplingMessage[];
+  system_prompt?: string | null;
+  model_preferences?: McpModelPreferences | null;
+  max_tokens?: number | null;
+  temperature?: number | null;
+  stop_sequences?: string[] | null;
+  include_context?: string | null;
+  metadata?: Record<string, unknown> | null;
+}
+
+export interface McpSamplingResult {
+  role: string;
+  content: McpContentBlock;
+  model?: string | null;
+  stop_reason?: string | null;
+}
+
+export interface McpPrimitiveSchemaStringDefinition {
+  type: "string";
+  title?: string | null;
+  description?: string | null;
+  format?: string | null;
+  enum?: string[] | null;
+  enumNames?: string[] | null;
+  minLength?: number | null;
+  maxLength?: number | null;
+}
+
+export interface McpPrimitiveSchemaNumberDefinition {
+  type: "number";
+  title?: string | null;
+  description?: string | null;
+  minimum?: number | null;
+  maximum?: number | null;
+}
+
+export interface McpPrimitiveSchemaIntegerDefinition {
+  type: "integer";
+  title?: string | null;
+  description?: string | null;
+  minimum?: number | null;
+  maximum?: number | null;
+}
+
+export interface McpPrimitiveSchemaBooleanDefinition {
+  type: "boolean";
+  title?: string | null;
+  description?: string | null;
+}
+
+export type McpPrimitiveSchemaDefinition =
+  | McpPrimitiveSchemaStringDefinition
+  | McpPrimitiveSchemaNumberDefinition
+  | McpPrimitiveSchemaIntegerDefinition
+  | McpPrimitiveSchemaBooleanDefinition;
+
+export interface McpElicitationSchema {
+  type: string;
+  properties: Record<string, McpPrimitiveSchemaDefinition>;
+  required: string[];
+}
+
+export interface McpElicitationRequest {
+  message: string;
+  requested_schema: McpElicitationSchema;
+}
+
+export interface McpRespondSamplingRequest {
+  action: "generate" | "approve" | "decline" | "cancel";
+  request?: McpSamplingRequest | null;
+  generated_text?: string | null;
+}
+
+export interface McpRespondSamplingResponse {
+  task: TaskRecord;
+}
+
+export interface McpRespondElicitationRequest {
+  action: "accept" | "decline" | "cancel";
+  content?: Record<string, unknown> | null;
+}
+
+export interface McpRespondElicitationResponse {
+  task: TaskRecord;
+}
+
 export interface StreamEnvelope<T = Record<string, unknown>> {
   event: string;
   thread_id: string;

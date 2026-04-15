@@ -1,5 +1,28 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  McpActivityListResponse,
+  McpAddResourceToThreadResponse,
+  McpAuthResponse,
+  McpCompleteArgumentRequest,
+  McpCompleteArgumentResponse,
+  McpPromptGetRequest,
+  McpPromptListResponse,
+  McpPromptResponse,
+  McpReadResourceResponse,
+  McpSaveResourceSnapshotResponse,
+  McpRespondElicitationRequest,
+  McpRespondElicitationResponse,
+  McpRespondSamplingRequest,
+  McpRespondSamplingResponse,
+  McpResourceListResponse,
+  McpResourceTemplateListResponse,
+  McpRootsResponse,
+  McpServerListResponse,
+  McpServerUpsertRequest,
+  McpServerUpsertResponse,
+  McpSetRootsRequest,
+  McpTestResponse,
+  McpToolListResponse,
   PatchSettingsRequest,
   MemoryNodeDetail,
   MemorySidebarSection,
@@ -119,6 +142,110 @@ export const apiClient = {
 
   getWorkbenchCapabilities() {
     return invoke<WorkbenchCapabilities>("get_workbench_capabilities");
+  },
+
+  // -- MCP --
+
+  listMcpServers() {
+    return invoke<McpServerListResponse>("list_mcp_servers");
+  },
+
+  upsertMcpServer(payload: McpServerUpsertRequest) {
+    return invoke<McpServerUpsertResponse>("upsert_mcp_server", { payload });
+  },
+
+  deleteMcpServer(name: string) {
+    return invoke<string>("delete_mcp_server", { name });
+  },
+
+  testMcpServer(name: string) {
+    return invoke<McpTestResponse>("test_mcp_server", { name });
+  },
+
+  beginMcpAuth(name: string) {
+    return invoke<McpAuthResponse>("begin_mcp_auth", { name });
+  },
+
+  finishMcpAuth(name: string) {
+    return invoke<McpAuthResponse>("finish_mcp_auth", { name });
+  },
+
+  listMcpTools(name: string) {
+    return invoke<McpToolListResponse>("list_mcp_tools", { name });
+  },
+
+  listMcpResources(name: string) {
+    return invoke<McpResourceListResponse>("list_mcp_resources", { name });
+  },
+
+  readMcpResource(name: string, uri: string) {
+    return invoke<McpReadResourceResponse>("read_mcp_resource", { name, uri });
+  },
+
+  saveMcpResourceSnapshot(name: string, uri: string) {
+    return invoke<McpSaveResourceSnapshotResponse>("save_mcp_resource_snapshot", { name, uri });
+  },
+
+  addMcpResourceToThreadContext(sessionId: string, name: string, uri: string) {
+    return invoke<McpAddResourceToThreadResponse>("add_mcp_resource_to_thread_context", {
+      session_id: sessionId,
+      name,
+      uri
+    });
+  },
+
+  listMcpResourceTemplates(name: string) {
+    return invoke<McpResourceTemplateListResponse>("list_mcp_resource_templates", { name });
+  },
+
+  subscribeMcpResource(name: string, uri: string) {
+    return invoke<void>("subscribe_mcp_resource", { name, uri });
+  },
+
+  unsubscribeMcpResource(name: string, uri: string) {
+    return invoke<void>("unsubscribe_mcp_resource", { name, uri });
+  },
+
+  listMcpPrompts(name: string) {
+    return invoke<McpPromptListResponse>("list_mcp_prompts", { name });
+  },
+
+  getMcpPrompt(name: string, promptName: string, payload: McpPromptGetRequest) {
+    return invoke<McpPromptResponse>("get_mcp_prompt", {
+      name,
+      prompt_name: promptName,
+      payload
+    });
+  },
+
+  completeMcpArgument(name: string, payload: McpCompleteArgumentRequest) {
+    return invoke<McpCompleteArgumentResponse>("complete_mcp_argument", { name, payload });
+  },
+
+  getMcpRoots(name: string) {
+    return invoke<McpRootsResponse>("get_mcp_roots", { name });
+  },
+
+  setMcpRoots(name: string, payload: McpSetRootsRequest) {
+    return invoke<McpRootsResponse>("set_mcp_roots", { name, payload });
+  },
+
+  listMcpActivity() {
+    return invoke<McpActivityListResponse>("list_mcp_activity");
+  },
+
+  respondMcpSampling(taskId: string, payload: McpRespondSamplingRequest) {
+    return invoke<McpRespondSamplingResponse>("respond_mcp_sampling", {
+      task_id: taskId,
+      payload
+    });
+  },
+
+  respondMcpElicitation(taskId: string, payload: McpRespondElicitationRequest) {
+    return invoke<McpRespondElicitationResponse>("respond_mcp_elicitation", {
+      task_id: taskId,
+      payload
+    });
   },
 
   // -- Workspace --

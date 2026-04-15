@@ -563,6 +563,7 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 - ❌ WhatsApp channel
 - ✅ Multi-provider failover (`FailoverProvider` with retryable error classification)
 - ✅ Hooks system (core lifecycle hooks + bundled/plugin/workspace hooks + outbound webhooks)
+- 🚧 Desktop MCP product surface (desktop panel, server CRUD/auth, custom headers/env/OAuth config, tools/resources/prompts/roots/activity, resource snapshots/add-to-thread, bidirectional sampling + elicitation, auto-reconnect/recovery; final parity polish still incomplete)
 
 ### P2 - Medium Priority
 
@@ -610,12 +611,13 @@ Steward intentionally differs from OpenClaw in these ways:
 
 1. **Rust vs TypeScript**: Native performance, memory safety, single binary distribution
 2. **WASM sandbox vs Docker**: Lighter weight, faster startup, capability-based security
-3. **PostgreSQL + libSQL vs SQLite**: Dual-backend (production PG + embedded libSQL for zero-dep local mode)
+3. **Desktop-first local runtime**: Tauri desktop app is the primary product surface, with the shared Rust runtime as the source of truth
 4. **NEAR AI focus**: Primary provider with session-based auth
-5. **No mobile/desktop apps**: Focus on server-side and CLI initially
+5. **libSQL-first persistence**: Embedded local storage is the baseline instead of a PostgreSQL-centered deployment model
 6. **WASM channels**: Novel extension mechanism not in OpenClaw
 7. **Tinfoil private inference**: Steward-only provider for private/encrypted inference
 8. **GitHub WASM tool**: Native GitHub integration as WASM tool
 9. **Prompt-based skills**: Different approach than OpenClaw capability bundles (filesystem-backed `~/.steward/skills`, workspace-mounted browsing, prompt injection)
+10. **Desktop-first MCP UX**: MCP servers are managed from the desktop panel rather than a long-lived CLI surface
 
 These are intentional architectural choices, not gaps to be filled.

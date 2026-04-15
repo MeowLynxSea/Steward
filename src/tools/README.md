@@ -126,6 +126,7 @@ Both are first-class in the extension system (`steward tool install` handles bot
 - Growing ecosystem of pre-built servers (GitHub, Notion, Postgres, etc.)
 - Any language (TypeScript/Python most common)
 - Can do websockets, streaming, background polling
+- Steward desktop runtime now maintains bidirectional MCP sessions, including inbound notifications plus `roots/list`, `sampling/createMessage`, and `elicitation/create` handling through the MCP settings panel, with custom headers/env/OAuth config, resource snapshots/add-to-thread, and automatic reconnect attempts after inbound stream loss
 - Cost: external process with full system access, manages own credentials, Steward can't prevent leaks
 
 **Decision guide:**

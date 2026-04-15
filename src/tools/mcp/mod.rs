@@ -46,6 +46,14 @@ pub use client::McpClient;
 pub use config::{McpServerConfig, McpServersFile, OAuthConfig};
 pub use factory::{McpFactoryError, create_client_from_config};
 pub use process::McpProcessManager;
-pub use protocol::{InitializeResult, McpRequest, McpResponse, McpTool};
+pub use protocol::{
+    BlobResourceContents, CallToolResult, CompleteResult, CompletionReference, ContentBlock,
+    GetPromptResult, InitializeResult, ListPromptsResult, ListResourceTemplatesResult,
+    ListResourcesResult, ListToolsResult, McpElicitationRequest, McpElicitationResult,
+    McpElicitationSchema, McpModelHint, McpModelPreferences, McpPrimitiveSchemaDefinition,
+    McpPrompt, McpRequest, McpResource, McpResourceTemplate, McpResponse, McpRoot,
+    McpSamplingContentBlock, McpSamplingMessage, McpSamplingRequest, McpSamplingResult, McpTool,
+    PromptMessage, ReadResourceResult, ResourceContents, TextResourceContents,
+};
 pub use session::McpSessionManager;
 pub use transport::McpTransport;

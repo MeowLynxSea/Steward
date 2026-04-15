@@ -7,6 +7,7 @@ use crate::channels::{ChannelManager, MessageStream};
 use crate::config::Config;
 use crate::conversation_recall::ConversationRecallManager;
 use crate::db::Database;
+use crate::extensions::ExtensionManager;
 use crate::hooks::bootstrap_hooks;
 use crate::llm::{
     ReloadableLlmProvider, ReloadableLlmState, ReloadableSlot, RuntimeLlmReloader,
@@ -37,6 +38,7 @@ pub struct AppState {
     pub task_runtime: Arc<TaskRuntime>,
     pub tools: Arc<crate::tools::ToolRegistry>,
     pub mcp_session_manager: Arc<McpSessionManager>,
+    pub extension_manager: Option<Arc<ExtensionManager>>,
     pub emitter: Option<TauriEventEmitterHandle>,
     /// Sender to inject messages into the agent's message stream.
     /// Used by Tauri IPC commands to trigger agent processing.
@@ -56,6 +58,7 @@ impl AppState {
         task_runtime: Arc<TaskRuntime>,
         tools: Arc<crate::tools::ToolRegistry>,
         mcp_session_manager: Arc<McpSessionManager>,
+        extension_manager: Option<Arc<ExtensionManager>>,
         emitter: Option<TauriEventEmitterHandle>,
         message_inject_tx: tokio::sync::mpsc::Sender<crate::channels::IncomingMessage>,
     ) -> Self {
@@ -71,6 +74,7 @@ impl AppState {
             task_runtime,
             tools,
             mcp_session_manager,
+            extension_manager,
             emitter,
             message_inject_tx,
         }
@@ -165,25 +169,33 @@ pub async fn start_embedded_runtime(
     ));
     let extension_manager = components.extension_manager.clone();
 
-    if let Some(extension_manager) = extension_manager.as_ref()
-        && config.channels.wasm_channels.enabled
-    {
-        let runtime = Arc::new(crate::channels::wasm::WasmChannelRuntime::new(
-            crate::channels::wasm::WasmChannelRuntimeConfig::default(),
-        )?);
+    if let Some(extension_manager) = extension_manager.as_ref() {
         extension_manager
-            .set_channel_runtime(Arc::clone(&channel_manager), Arc::clone(&runtime))
+            .bind_runtime_services(app_llm.clone(), Arc::clone(&app_state_task_runtime))
             .await;
 
-        let active_channels = extension_manager
-            .load_persisted_active_channels(&config.owner_id)
-            .await;
-        for channel_name in active_channels {
-            if let Err(error) = extension_manager
-                .activate(&channel_name, &config.owner_id)
-                .await
-            {
-                tracing::warn!(channel = %channel_name, %error, "Failed to restore wasm channel");
+        if config.channels.wasm_channels.enabled {
+            let runtime = Arc::new(crate::channels::wasm::WasmChannelRuntime::new(
+                crate::channels::wasm::WasmChannelRuntimeConfig::default(),
+            )?);
+            extension_manager
+                .set_channel_runtime(Arc::clone(&channel_manager), Arc::clone(&runtime))
+                .await;
+
+            let active_channels = extension_manager
+                .load_persisted_active_channels(&config.owner_id)
+                .await;
+            for channel_name in active_channels {
+                if let Err(error) = extension_manager
+                    .activate(&channel_name, &config.owner_id)
+                    .await
+                {
+                    tracing::warn!(
+                        channel = %channel_name,
+                        %error,
+                        "Failed to restore wasm channel"
+                    );
+                }
             }
         }
     }
@@ -263,6 +275,7 @@ pub async fn start_embedded_runtime(
         app_state_task_runtime,
         app_state_tools,
         app_state_mcp,
+        components.extension_manager,
         tauri_emitter,
         inject_tx.clone(),
     ))

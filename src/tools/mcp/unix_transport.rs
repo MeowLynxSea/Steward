@@ -11,11 +11,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use tokio::io::BufReader;
 use tokio::net::UnixStream;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{Mutex, broadcast, oneshot};
 use tokio::task::JoinHandle;
 
 use crate::tools::mcp::protocol::{McpRequest, McpResponse};
-use crate::tools::mcp::transport::{McpTransport, spawn_jsonrpc_reader, stream_transport_send};
+use crate::tools::mcp::transport::{
+    McpInboundMessage, McpTransport, spawn_jsonrpc_reader, stream_transport_send,
+    write_jsonrpc_value_line,
+};
 use crate::tools::tool::ToolError;
 
 /// MCP transport that communicates over a Unix domain socket.
@@ -28,6 +31,7 @@ pub struct UnixMcpTransport {
     server_name: String,
     writer: Arc<Mutex<tokio::io::WriteHalf<UnixStream>>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<McpResponse>>>>,
+    inbound_tx: broadcast::Sender<McpInboundMessage>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -58,15 +62,22 @@ impl UnixMcpTransport {
 
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<McpResponse>>>> =
             Arc::new(Mutex::new(HashMap::new()));
+        let (inbound_tx, _) = broadcast::channel(64);
 
         let reader = BufReader::new(read_half);
-        let reader_handle = spawn_jsonrpc_reader(reader, pending.clone(), server_name.clone());
+        let reader_handle = spawn_jsonrpc_reader(
+            reader,
+            pending.clone(),
+            server_name.clone(),
+            Some(inbound_tx.clone()),
+        );
 
         Ok(Self {
             socket_path,
             server_name,
             writer: Arc::new(Mutex::new(write_half)),
             pending,
+            inbound_tx,
             reader_handle: Mutex::new(Some(reader_handle)),
         })
     }
@@ -124,6 +135,19 @@ impl McpTransport for UnixMcpTransport {
 
     fn supports_http_features(&self) -> bool {
         false
+    }
+
+    fn subscribe_inbound(&self) -> Option<broadcast::Receiver<McpInboundMessage>> {
+        Some(self.inbound_tx.subscribe())
+    }
+
+    async fn send_jsonrpc_message(
+        &self,
+        message: &serde_json::Value,
+        _headers: &HashMap<String, String>,
+    ) -> Result<(), ToolError> {
+        let mut writer = self.writer.lock().await;
+        write_jsonrpc_value_line(&mut *writer, message).await
     }
 }
 

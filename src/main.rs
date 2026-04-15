@@ -552,6 +552,7 @@ fn main() {
             tauri_commands::list_tasks,
             tauri_commands::get_task,
             tauri_commands::delete_task,
+            tauri_commands::cancel_task,
             tauri_commands::approve_task,
             tauri_commands::reject_task,
             tauri_commands::patch_task_mode,
@@ -580,7 +581,29 @@ fn main() {
             tauri_commands::set_workspace_allowlist_baseline,
             tauri_commands::refresh_workspace_allowlist,
             tauri_commands::resolve_workspace_allowlist_conflict,
-            tauri_commands::get_workbench_capabilities
+            tauri_commands::get_workbench_capabilities,
+            tauri_commands::list_mcp_servers,
+            tauri_commands::upsert_mcp_server,
+            tauri_commands::delete_mcp_server,
+            tauri_commands::test_mcp_server,
+            tauri_commands::begin_mcp_auth,
+            tauri_commands::finish_mcp_auth,
+            tauri_commands::list_mcp_tools,
+            tauri_commands::list_mcp_resources,
+            tauri_commands::read_mcp_resource,
+            tauri_commands::save_mcp_resource_snapshot,
+            tauri_commands::add_mcp_resource_to_thread_context,
+            tauri_commands::list_mcp_resource_templates,
+            tauri_commands::subscribe_mcp_resource,
+            tauri_commands::unsubscribe_mcp_resource,
+            tauri_commands::list_mcp_prompts,
+            tauri_commands::get_mcp_prompt,
+            tauri_commands::complete_mcp_argument,
+            tauri_commands::get_mcp_roots,
+            tauri_commands::set_mcp_roots,
+            tauri_commands::respond_mcp_sampling,
+            tauri_commands::respond_mcp_elicitation,
+            tauri_commands::list_mcp_activity
         ])
         .setup(|app| {
             let tauri_emitter: Option<TauriEventEmitterHandle> = {
