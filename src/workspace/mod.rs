@@ -451,6 +451,20 @@ impl WorkspaceStorage {
         }
     }
 
+    async fn delete_workspace_checkpoint(
+        &self,
+        user_id: &str,
+        allowlist_id: Uuid,
+        checkpoint_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        match self {
+            Self::Db(db) => {
+                db.delete_workspace_checkpoint(user_id, allowlist_id, checkpoint_id)
+                    .await
+            }
+        }
+    }
+
     async fn list_workspace_allowlist_history(
         &self,
         request: &WorkspaceAllowlistHistoryRequest,
@@ -1754,6 +1768,17 @@ impl Workspace {
         self.ensure_allowlist_watch_started();
         self.storage
             .list_workspace_checkpoints(&self.user_id, allowlist_id, limit)
+            .await
+    }
+
+    pub async fn delete_checkpoint(
+        &self,
+        allowlist_id: Uuid,
+        checkpoint_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        self.ensure_allowlist_watch_started();
+        self.storage
+            .delete_workspace_checkpoint(&self.user_id, allowlist_id, checkpoint_id)
             .await
     }
 

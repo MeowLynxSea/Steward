@@ -2478,6 +2478,37 @@ impl WorkspaceStore for LibSqlBackend {
         Ok(checkpoints)
     }
 
+    async fn delete_workspace_checkpoint(
+        &self,
+        user_id: &str,
+        allowlist_id: Uuid,
+        checkpoint_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        self.fetch_allowlist_for_tracking(user_id, allowlist_id, "workspace checkpoints")
+            .await?;
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let rows_affected = conn
+            .execute(
+                "DELETE FROM workspace_allowlist_checkpoints WHERE id = ?1 AND allowlist_id = ?2",
+                libsql::params![checkpoint_id.to_string(), allowlist_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("failed to delete checkpoint: {e}"),
+            })?;
+        if rows_affected == 0 {
+            return Err(WorkspaceError::AllowlistNotFound {
+                allowlist_id: checkpoint_id.to_string(),
+            });
+        }
+        Ok(())
+    }
+
     async fn list_workspace_allowlist_history(
         &self,
         request: &WorkspaceAllowlistHistoryRequest,

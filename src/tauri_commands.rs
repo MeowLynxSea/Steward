@@ -17,7 +17,8 @@ use steward_core::extensions::ExtensionKind;
 use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceAllowlistRequest,
-    CreateWorkspaceCheckpointRequest, McpActivityItemResponse, McpActivityListResponse,
+    CreateWorkspaceCheckpointRequest, DeleteWorkspaceCheckpointRequest,
+    McpActivityItemResponse, McpActivityListResponse,
     McpAddResourceToThreadResponse, McpAuthResponse, McpCompleteArgumentRequest,
     McpCompleteArgumentResponse, McpPromptGetRequest, McpPromptListResponse, McpPromptResponse,
     McpReadResourceResponse, McpResourceListResponse, McpResourceTemplateListResponse,
@@ -3205,6 +3206,26 @@ pub async fn list_workspace_allowlist_checkpoints(
 
     workspace
         .list_allowlist_checkpoints(parse_workspace_allowlist_id(&id)?, payload.limit)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_workspace_checkpoint(
+    state: State<'_, AppState>,
+    id: String,
+    payload: DeleteWorkspaceCheckpointRequest,
+) -> Result<(), String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .delete_checkpoint(
+            parse_workspace_allowlist_id(&id)?,
+            payload.checkpoint_id,
+        )
         .await
         .map_err(|e| e.to_string())
 }

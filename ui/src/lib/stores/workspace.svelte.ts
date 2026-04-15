@@ -1,4 +1,5 @@
 import { apiClient } from "../api";
+import { showToast } from "./toast.svelte";
 import type {
   AllowlistedFileDiff,
   WorkspaceChangeGroup,
@@ -301,23 +302,34 @@ class WorkspaceState {
   }
 
   async keepAllowlist(id: string, scopePath?: string, checkpointId?: string) {
-    await this.#runBusyAction("Saving workspace changes", async () => {
+    await this.#runBusyAction("正在保留变更…", async () => {
       this.selectedAllowlist = await apiClient.keepWorkspaceAllowlist(id, scopePath, checkpointId);
       await this.#afterAllowlistMutation(id);
     });
   }
 
   async revertAllowlist(id: string, scopePath?: string, checkpointId?: string) {
-    await this.#runBusyAction("Reverting workspace changes", async () => {
+    await this.#runBusyAction("正在撤销变更…", async () => {
       this.selectedAllowlist = await apiClient.revertWorkspaceAllowlist(id, scopePath, checkpointId);
       await this.#afterAllowlistMutation(id);
     });
   }
 
   async createCheckpoint(id: string, label?: string, summary?: string) {
-    await this.#runBusyAction("Creating checkpoint", async () => {
+    await this.#runBusyAction("正在创建存档点…", async () => {
       await apiClient.createWorkspaceCheckpoint(id, label, summary);
       await this.#refreshAllowlistState(id);
+    });
+  }
+
+  async restoreCheckpoint(allowlistId: string, checkpointId: string) {
+    await this.#runBusyAction("正在恢复到存档点…", async () => {
+      this.selectedAllowlist = await apiClient.restoreWorkspaceAllowlist(
+        allowlistId,
+        checkpointId,
+        { createCheckpointBeforeRestore: true }
+      );
+      await this.#afterAllowlistMutation(allowlistId);
     });
   }
 
@@ -328,7 +340,7 @@ class WorkspaceState {
     renamedCopyPath?: string,
     mergedContent?: string
   ) {
-    await this.#runBusyAction("Resolving workspace conflict", async () => {
+    await this.#runBusyAction("正在解决冲突…", async () => {
       this.selectedAllowlist = await apiClient.resolveWorkspaceAllowlistConflict(
         id,
         path,
@@ -337,6 +349,13 @@ class WorkspaceState {
         mergedContent
       );
       await this.#afterAllowlistMutation(id);
+    });
+  }
+
+  async deleteCheckpoint(allowlistId: string, checkpointId: string) {
+    await this.#runBusyAction("正在删除存档点…", async () => {
+      await apiClient.deleteWorkspaceCheckpoint(allowlistId, checkpointId);
+      await this.#refreshAllowlistState(allowlistId);
     });
   }
 
@@ -465,8 +484,11 @@ class WorkspaceState {
     try {
       await action();
       this.status = label;
+      showToast(label.replace("正在", "已完成："), "success");
     } catch (e) {
-      this.error = errorMessage(e, "Workspace action failed");
+      const msg = errorMessage(e, "操作失败");
+      this.error = msg;
+      showToast(msg, "error");
     } finally {
       this.busyAction = null;
     }

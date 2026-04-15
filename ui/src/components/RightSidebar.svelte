@@ -1,19 +1,25 @@
 <script lang="ts">
+  import { fade, fly } from "svelte/transition";
   import {
     AlertTriangle,
     Check,
     ChevronRight,
+    Clock,
     FileText,
     Folder,
     FolderPlus,
     GitBranch,
+    RotateCcw,
     Save,
     Search,
+    Trash2,
     Undo2,
     X
   } from "lucide-svelte";
+  import { showToast } from "../lib/stores/toast.svelte";
   import type {
     AllowlistedFileDiff,
+    WorkspaceAllowlistCheckpoint,
     WorkspaceChangeGroup,
     AllowlistedFileStatus,
     WorkspaceDocumentView,
@@ -50,6 +56,8 @@
     onKeepAllowlist: (allowlistId: string, scopePath?: string, checkpointId?: string) => void;
     onRevertAllowlist: (allowlistId: string, scopePath?: string, checkpointId?: string) => void;
     onCreateCheckpoint: (allowlistId: string, label?: string, summary?: string) => void;
+    onRestoreCheckpoint: (allowlistId: string, checkpointId: string) => void;
+    onDeleteCheckpoint: (allowlistId: string, checkpointId: string) => void;
     onResolveConflict: (
       allowlistId: string,
       path: string,
@@ -84,6 +92,8 @@
     onKeepAllowlist,
     onRevertAllowlist,
     onCreateCheckpoint,
+    onRestoreCheckpoint,
+    onDeleteCheckpoint,
     onResolveConflict,
     onUseResult
   }: Props = $props();
@@ -92,6 +102,7 @@
   let activeTab = $state<WorkspaceTab>("files");
   let mergeDrafts = $state<Record<string, string>>({});
   let copyDrafts = $state<Record<string, string>>({});
+  let diffModalFile = $state<{ allowlistId: string; diff: AllowlistedFileDiff } | null>(null);
 
   const sortedChangeGroups = $derived(
     [...changeGroups]
@@ -172,7 +183,7 @@
   }
 
   function buildBreadcrumbs(path: string, allowlistName: string | null) {
-    const root = [{ label: "Workspace", path: "workspace://" }];
+    const root = [{ label: "工作区", path: "workspace://" }];
     if (path === "workspace://") {
       return root;
     }
@@ -224,6 +235,65 @@
       case "added": return "新增";
       case "modified": return "修改";
     }
+  }
+
+  function statusBadge(status: AllowlistedFileStatus): string {
+    switch (status) {
+      case "added": return "A";
+      case "modified": return "M";
+      case "deleted": return "D";
+      case "conflicted": return "C";
+      case "binary_modified": return "B";
+      default: return "U";
+    }
+  }
+
+  function statusBadgeClass(status: AllowlistedFileStatus): string {
+    switch (status) {
+      case "added": return "badge-added";
+      case "modified": return "badge-modified";
+      case "deleted": return "badge-deleted";
+      case "conflicted": return "badge-conflict";
+      default: return "badge-other";
+    }
+  }
+
+  function fileName(path: string): string {
+    return path.split("/").pop() ?? path;
+  }
+
+  function dirName(path: string): string {
+    const parts = path.split("/");
+    return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
+  }
+
+  function diffStats(diffText: string | null): { added: number; removed: number } {
+    if (!diffText) return { added: 0, removed: 0 };
+    let added = 0;
+    let removed = 0;
+    for (const line of diffText.split("\n")) {
+      if (line.startsWith("+") && !line.startsWith("+++")) added++;
+      else if (line.startsWith("-") && !line.startsWith("---")) removed++;
+    }
+    return { added, removed };
+  }
+
+  function parseDiffLines(diffText: string | null): Array<{ type: "add" | "remove" | "context" | "header"; content: string }> {
+    if (!diffText) return [];
+    return diffText.split("\n").map((line) => {
+      if (line.startsWith("@@")) return { type: "header" as const, content: line };
+      if (line.startsWith("+") && !line.startsWith("+++")) return { type: "add" as const, content: line.slice(1) };
+      if (line.startsWith("-") && !line.startsWith("---")) return { type: "remove" as const, content: line.slice(1) };
+      return { type: "context" as const, content: line.startsWith(" ") ? line.slice(1) : line };
+    }).filter((l) => !l.content.startsWith("+++") && !l.content.startsWith("---"));
+  }
+
+  function openDiffModal(allowlistId: string, diff: AllowlistedFileDiff) {
+    diffModalFile = { allowlistId, diff };
+  }
+
+  function closeDiffModal() {
+    diffModalFile = null;
   }
 
   function entryLabel(entry: WorkspaceEntry) {
@@ -282,21 +352,37 @@
           ? "这是一个二进制文件，当前预览不可用。"
           : "只读预览来自当前授权目录文件。";
       case "modified":
-        return "请切换到 Changes 标签页查看 diff，并决定保留或撤销。";
+        return "请切换到「变更」标签页查看改动详情，并决定保留或撤销。";
       case "added":
-        return "这个文件还没有提交到磁盘基线，请在 Changes 标签页完成处理。";
+        return "这个文件还没有提交到磁盘基线，请在「变更」标签页完成处理。";
       case "deleted":
         return "这个文件已被标记为删除，正文预览已停用。";
       case "conflicted":
-        return "这个文件同时发生了磁盘变更和工作区变更，请到 Changes 标签页解决冲突。";
+        return "这个文件同时发生了磁盘变更和工作区变更，请到「变更」标签页解决冲突。";
       case "binary_modified":
-        return "这是一个二进制改动，正文预览不可用，请在 Changes 标签页决定保留或撤销。";
+        return "这是一个二进制改动，正文预览不可用，请在「变更」标签页决定保留或撤销。";
     }
   }
 
   function diffKey(allowlistId: string, path: string) {
     return `${allowlistId}:${path}`;
   }
+
+  function formatCheckpointTime(iso: string): string {
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    if (diff < 60_000) return "刚刚";
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    return `${month}/${day} ${hh}:${mm}`;
+  }
+
+  let expandedCheckpoints = $state<Record<string, boolean>>({});
 </script>
 
 <aside class="right-sidebar {collapsed ? 'collapsed' : ''}">
@@ -309,9 +395,6 @@
         <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={activateChangesTab}>
           变更
         </button>
-        {#if busyAction}
-          <span class="workspace-status">{busyAction}</span>
-        {/if}
       </div>
       <button class="icon-btn" onclick={onRequestAllowlist} aria-label="授权目录">
         <FolderPlus size={15} strokeWidth={2} />
@@ -409,160 +492,133 @@
           <div class="diff-list">
             {#each sortedChangeGroups as group}
               <section class="allowlist-group">
-                <div class="allowlist-info">
-                  <div>
-                    <div class="allowlist-heading">
-                      <strong>{group.allowlist.summary.allowlist.display_name}</strong>
-                      <div class="allowlist-meta">
-                        <span class="allowlist-id">{group.allowlist.summary.allowlist.id}</span>
-                      </div>
-                    </div>
-                    <div class="allowlist-stats">
-                      <span>{group.allowlist.summary.dirty_count} 变更</span>
-                      <span>{group.allowlist.summary.conflict_count} 冲突</span>
-                      <span>{group.allowlist.summary.pending_delete_count} 删除</span>
-                    </div>
-                  </div>
-                  <div class="allowlist-actions">
+                <div class="allowlist-header">
+                  <strong class="allowlist-name">{group.allowlist.summary.allowlist.display_name}</strong>
+                  <div class="allowlist-header-actions">
                     <button
-                      class="action-btn"
-                      onclick={() => onCreateCheckpoint(
-                        group.allowlist.summary.allowlist.id,
-                        "Manual checkpoint",
-                        "Created from workspace rail"
-                      )}
-                      aria-label="创建 checkpoint"
+                      class="header-icon-btn"
+                      onclick={() => {
+                        onCreateCheckpoint(
+                          group.allowlist.summary.allowlist.id,
+                          "手动存档",
+                          "在侧栏手动创建"
+                        );
+                        showToast("正在创建存档点…");
+                      }}
+                      title="创建存档点"
+                      aria-label="创建存档点"
                     >
-                      <GitBranch size={13} strokeWidth={2} />
+                      <GitBranch size={14} strokeWidth={2} />
                     </button>
-                    <button class="action-btn primary" onclick={() => onKeepAllowlist(group.allowlist.summary.allowlist.id)}>
-                      <Check size={12} strokeWidth={2} />
-                      保留全部
+                    <button
+                      class="header-icon-btn accent"
+                      onclick={() => {
+                        onKeepAllowlist(group.allowlist.summary.allowlist.id);
+                        showToast("已保留全部变更", "success");
+                      }}
+                      title="全部保留"
+                      aria-label="全部保留"
+                    >
+                      <Check size={14} strokeWidth={2.5} />
                     </button>
-                    <button class="action-btn" onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id)}>
-                      <Undo2 size={12} strokeWidth={2} />
-                      撤销全部
+                    <button
+                      class="header-icon-btn"
+                      onclick={() => {
+                        onRevertAllowlist(group.allowlist.summary.allowlist.id);
+                        showToast("已撤销全部变更");
+                      }}
+                      title="全部撤销"
+                      aria-label="全部撤销"
+                    >
+                      <Undo2 size={14} strokeWidth={2} />
                     </button>
                   </div>
                 </div>
 
+                <div class="file-change-list">
+                  {#each group.entries as diff}
+                    {@const stats = diffStats(diff.diff_text)}
+                    <button
+                      class="file-change-row"
+                      type="button"
+                      onclick={() => openDiffModal(group.allowlist.summary.allowlist.id, diff)}
+                    >
+                      <span class="file-status-badge {statusBadgeClass(diff.status)}">{statusBadge(diff.status)}</span>
+                      <span class="file-name-col">
+                        <span class="file-name">{fileName(diff.path)}</span>
+                        {#if dirName(diff.path)}
+                          <span class="file-dir">{dirName(diff.path)}</span>
+                        {/if}
+                      </span>
+                      <span class="file-stats">
+                        {#if stats.added > 0}<span class="stat-add">+{stats.added}</span>{/if}
+                        {#if stats.removed > 0}<span class="stat-del">-{stats.removed}</span>{/if}
+                      </span>
+                    </button>
+                  {/each}
+                </div>
+
                 {#if group.allowlist.checkpoints.length > 0}
-                  <div class="checkpoint-row">
-                    {#each group.allowlist.checkpoints.slice(0, 4) as checkpoint}
-                      <button
-                        class="checkpoint-pill {checkpoint.is_auto ? 'auto' : 'manual'}"
-                        onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id, undefined, checkpoint.id)}
-                      >
-                        <span>{checkpoint.label ?? (checkpoint.is_auto ? "Auto" : "Checkpoint")}</span>
-                        <small>{checkpoint.changed_files.length} files</small>
-                      </button>
-                    {/each}
+                  {@const aid = group.allowlist.summary.allowlist.id}
+                  {@const isExpanded = expandedCheckpoints[aid] ?? false}
+                  <div class="checkpoint-section">
+                    <button
+                      class="checkpoint-toggle"
+                      type="button"
+                      onclick={() => expandedCheckpoints[aid] = !isExpanded}
+                    >
+                      <Clock size={12} strokeWidth={2} />
+                      <span>存档点 ({group.allowlist.checkpoints.length})</span>
+                      <ChevronRight size={12} strokeWidth={2} class="toggle-chevron {isExpanded ? 'expanded' : ''}" />
+                    </button>
+                    {#if isExpanded}
+                      <div class="checkpoint-list" transition:fly={{ y: -8, duration: 180 }}>
+                        {#each group.allowlist.checkpoints as cp}
+                          <div class="checkpoint-item">
+                            <div class="checkpoint-info">
+                              <span class="checkpoint-label">
+                                {#if cp.is_auto}
+                                  <span class="checkpoint-auto-tag">自动</span>
+                                {/if}
+                                {cp.label ?? "未命名存档"}
+                              </span>
+                              <span class="checkpoint-meta">
+                                <span class="checkpoint-time">{formatCheckpointTime(cp.created_at)}</span>
+                                {#if cp.changed_files.length > 0}
+                                  <span class="checkpoint-dot">·</span>
+                                  <span class="checkpoint-files-count">{cp.changed_files.length} 个文件</span>
+                                {/if}
+                              </span>
+                            </div>
+                            <div class="checkpoint-actions">
+                              <button
+                                class="checkpoint-action-btn"
+                                type="button"
+                                title="恢复到此存档点"
+                                onclick={() => {
+                                  onRestoreCheckpoint(aid, cp.id);
+                                  showToast("正在恢复到存档点…");
+                                }}
+                              >
+                                <RotateCcw size={12} strokeWidth={2} />
+                              </button>
+                              <button
+                                class="checkpoint-action-btn danger"
+                                type="button"
+                                title="删除此存档点"
+                                onclick={() => {
+                                  onDeleteCheckpoint(aid, cp.id);
+                                }}
+                              >
+                                <Trash2 size={12} strokeWidth={2} />
+                              </button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
                 {/if}
-
-                {#each group.entries as diff}
-                  {@const key = diffKey(group.allowlist.summary.allowlist.id, diff.path)}
-                  <article class="diff-card {diff.status === 'conflicted' ? 'conflicted' : ''}">
-                    <div class="diff-card-head">
-                      <div class="diff-card-meta">
-                        <strong>{diff.path}</strong>
-                        <p class="diff-status">{statusLabel(diff.status)}</p>
-                      </div>
-                      {#if diff.status === "conflicted"}
-                        <span class="conflict-chip">
-                          <AlertTriangle size={12} strokeWidth={2} />
-                          需要处理
-                        </span>
-                      {/if}
-                    </div>
-
-                    {#if diff.conflict_reason}
-                      <div class="notice danger">{diff.conflict_reason}</div>
-                    {/if}
-
-                    {#if diff.status === "conflicted"}
-                      <div class="conflict-actions">
-                        <button class="action-btn" onclick={() => onResolveConflict(group.allowlist.summary.allowlist.id, diff.path, "keep_disk")}>
-                          保留磁盘版本
-                        </button>
-                        <button class="action-btn" onclick={() => onResolveConflict(group.allowlist.summary.allowlist.id, diff.path, "keep_workspace")}>
-                          保留工作区版本
-                        </button>
-                      </div>
-
-                      {#if diff.is_binary}
-                        <div class="binary-notice">二进制冲突无法自动 merge</div>
-                      {:else}
-                        <div class="conflict-columns">
-                          <section>
-                            <span>Base</span>
-                            <pre>{diff.base_content ?? "(empty)"}</pre>
-                          </section>
-                          <section>
-                            <span>Disk</span>
-                            <pre>{diff.remote_content ?? "(empty)"}</pre>
-                          </section>
-                          <section>
-                            <span>Workspace</span>
-                            <pre>{diff.working_content ?? "(empty)"}</pre>
-                          </section>
-                        </div>
-
-                        <div class="manual-merge">
-                          <div class="merge-head">
-                            <strong>手工合并</strong>
-                            <button class="action-btn" onclick={() => (mergeDrafts[key] = createMergeDraft(diff))}>
-                              重置草稿
-                            </button>
-                          </div>
-                          <textarea bind:value={mergeDrafts[key]} rows="10"></textarea>
-                          <button
-                            class="action-btn primary"
-                            onclick={() => onResolveConflict(
-                              group.allowlist.summary.allowlist.id,
-                              diff.path,
-                              "manual_merge",
-                              undefined,
-                              mergeDrafts[key]
-                            )}
-                          >
-                            <Save size={13} strokeWidth={2} />
-                            保存合并结果
-                          </button>
-                        </div>
-                      {/if}
-
-                      <div class="copy-row">
-                        <input type="text" bind:value={copyDrafts[key]} placeholder="冲突副本路径..." />
-                        <button class="action-btn" onclick={() => onResolveConflict(
-                          group.allowlist.summary.allowlist.id,
-                          diff.path,
-                          "write_copy",
-                          copyDrafts[key]
-                        )}>
-                          写为副本
-                        </button>
-                      </div>
-                    {:else}
-                      {#if diff.diff_text}
-                        <pre>{diff.diff_text}</pre>
-                      {:else if diff.working_content}
-                        <pre>{diff.working_content}</pre>
-                      {:else}
-                        <div class="binary-notice">二进制或删除变更</div>
-                      {/if}
-
-                      <div class="diff-item-actions">
-                        <button class="action-btn primary" onclick={() => onKeepAllowlist(group.allowlist.summary.allowlist.id, diff.path)}>
-                          保留文件
-                        </button>
-                        <button class="action-btn" onclick={() => onRevertAllowlist(group.allowlist.summary.allowlist.id, diff.path)}>
-                          撤销文件
-                        </button>
-                      </div>
-                    {/if}
-                  </article>
-                {/each}
               </section>
             {/each}
           </div>
@@ -621,13 +677,122 @@
                 <p>{previewBody(selectedFile)}</p>
                 {#if selectedFile.status !== "clean"}
                   <button class="jump-button" onclick={jumpToChanges}>
-                    跳到 Changes
+                    跳到变更
                   </button>
                 {/if}
               </div>
             {/if}
           {/if}
         </div>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if diffModalFile}
+  {@const dm = diffModalFile}
+  {@const diff = dm.diff}
+  {@const lines = parseDiffLines(diff.diff_text)}
+  {@const stats = diffStats(diff.diff_text)}
+  {@const key = diffKey(dm.allowlistId, diff.path)}
+  <div
+    class="diff-modal-backdrop"
+    role="presentation"
+    onclick={closeDiffModal}
+    onkeydown={(e) => e.key === "Escape" && closeDiffModal()}
+    transition:fade={{ duration: 150 }}
+  >
+    <div
+      class="diff-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="文件差异对比"
+      onclick={(e) => e.stopPropagation()}
+      in:fly={{ y: 40, duration: 260 }}
+      out:fly={{ y: 40, duration: 200 }}
+    >
+      <div class="diff-modal-head">
+        <div class="diff-modal-title">
+          <strong>{diff.path}</strong>
+          <span class="diff-modal-meta">
+            <span class="file-status-badge {statusBadgeClass(diff.status)}">{statusBadge(diff.status)}</span>
+            {statusLabel(diff.status)}
+            {#if stats.added > 0}<span class="stat-add">+{stats.added}</span>{/if}
+            {#if stats.removed > 0}<span class="stat-del">-{stats.removed}</span>{/if}
+          </span>
+        </div>
+        <div class="diff-modal-actions">
+          {#if diff.status === "conflicted"}
+            <button class="action-btn" onclick={() => { onResolveConflict(dm.allowlistId, diff.path, "keep_disk"); closeDiffModal(); showToast("已保留磁盘版本"); }}>
+              保留磁盘版本
+            </button>
+            <button class="action-btn" onclick={() => { onResolveConflict(dm.allowlistId, diff.path, "keep_workspace"); closeDiffModal(); showToast("已保留工作区版本"); }}>
+              保留工作区版本
+            </button>
+          {:else}
+            <button class="action-btn compact-primary" onclick={() => { onKeepAllowlist(dm.allowlistId, diff.path); closeDiffModal(); showToast("已保留此文件", "success"); }}>
+              <Check size={11} strokeWidth={2.5} />
+              保留
+            </button>
+            <button class="action-btn" onclick={() => { onRevertAllowlist(dm.allowlistId, diff.path); closeDiffModal(); showToast("已撤销此文件"); }}>
+              <Undo2 size={11} strokeWidth={2} />
+              撤销
+            </button>
+          {/if}
+          <button class="action-btn icon-only" onclick={closeDiffModal} aria-label="关闭">
+            <X size={14} strokeWidth={2} />
+          </button>
+        </div>
+      </div>
+
+      <div class="diff-modal-body">
+        {#if diff.is_binary}
+          <div class="diff-empty-hint">二进制文件，无法显示差异对比</div>
+        {:else if diff.status === "conflicted"}
+          <div class="conflict-side-by-side">
+            <div class="conflict-pane">
+              <div class="pane-label">磁盘版本</div>
+              <pre class="pane-content">{diff.remote_content ?? "(空)"}</pre>
+            </div>
+            <div class="conflict-pane">
+              <div class="pane-label">工作区版本</div>
+              <pre class="pane-content">{diff.working_content ?? "(空)"}</pre>
+            </div>
+          </div>
+
+          {#if diff.conflict_reason}
+            <div class="conflict-reason">{diff.conflict_reason}</div>
+          {/if}
+
+          <div class="merge-section">
+            <div class="merge-section-head">
+              <strong>手工合并</strong>
+              <button class="action-btn" onclick={() => (mergeDrafts[key] = createMergeDraft(diff))}>重置</button>
+            </div>
+            <textarea class="merge-textarea" bind:value={mergeDrafts[key]} rows="8"></textarea>
+            <div class="merge-section-foot">
+              <button class="action-btn compact-primary" onclick={() => { onResolveConflict(dm.allowlistId, diff.path, "manual_merge", undefined, mergeDrafts[key]); closeDiffModal(); showToast("合并结果已保存", "success"); }}>
+                <Save size={12} strokeWidth={2} />
+                保存合并结果
+              </button>
+            </div>
+          </div>
+        {:else if lines.length > 0}
+          <div class="diff-lines">
+            {#each lines as line}
+              <div class="diff-line diff-{line.type}">
+                <span class="diff-line-marker">
+                  {#if line.type === "add"}+{:else if line.type === "remove"}-{:else if line.type === "header"}@@{:else}&nbsp;{/if}
+                </span>
+                <span class="diff-line-content">{line.content || " "}</span>
+              </div>
+            {/each}
+          </div>
+        {:else if diff.working_content}
+          <pre class="diff-full-content">{diff.working_content}</pre>
+        {:else}
+          <div class="diff-empty-hint">暂无差异内容</div>
+        {/if}
       </div>
     </div>
   </div>
@@ -757,20 +922,35 @@
     color: var(--text-tertiary);
   }
 
-  .search-box input,
-  .copy-row input,
-  .manual-merge textarea {
+  .search-box input {
     flex: 1;
     background: transparent;
     border: none;
     color: var(--text-primary);
     font: inherit;
     outline: none;
-  }
-
-  .search-box input {
     font-size: 12px;
     line-height: 1.3;
+  }
+
+  .copy-row input,
+  .manual-merge textarea {
+    flex: 1;
+    background: var(--bg-input);
+    border: 1px solid var(--border-input);
+    border-radius: 8px;
+    padding: 6px 10px;
+    color: var(--text-primary);
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  .copy-row input:focus,
+  .manual-merge textarea:focus {
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-gold) 14%, transparent);
   }
 
   .breadcrumb-row {
@@ -949,6 +1129,9 @@
     font-size: 12px;
     line-height: 1.55;
     color: var(--text-primary);
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--bg-input);
   }
 
   .preview-summary,
@@ -959,21 +1142,24 @@
   .jump-button,
   .action-btn,
   .checkpoint-pill {
-    border-radius: 9px;
-    padding: 7px 9px;
-    background: var(--bg-hover);
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: var(--bg-input);
     color: var(--text-primary);
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 6px;
     font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--border-input);
   }
 
   .action-btn.primary,
   .jump-button {
-    background: var(--accent-primary);
-    color: var(--text-on-dark);
+    background: var(--accent-gold);
+    color: #fff;
+    border-color: transparent;
   }
 
   .allowlist-info,
@@ -1045,7 +1231,7 @@
   }
 
   .diff-card.conflicted {
-    border-color: var(--accent-danger);
+    border-color: color-mix(in srgb, var(--accent-danger-text) 28%, var(--border-default));
   }
 
   .conflict-chip {
@@ -1054,8 +1240,8 @@
     gap: 6px;
     padding: 4px 8px;
     border-radius: 999px;
-    background: rgba(220, 38, 38, 0.12);
-    color: var(--accent-danger);
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
     font-size: 11px;
     font-weight: 700;
   }
@@ -1068,8 +1254,8 @@
   }
 
   .notice.danger {
-    border-color: rgba(220, 38, 38, 0.25);
-    background: rgba(220, 38, 38, 0.08);
+    border-color: color-mix(in srgb, var(--accent-danger-text) 20%, transparent);
+    background: var(--accent-danger);
   }
 
   .conflict-columns {
@@ -1118,7 +1304,7 @@
     align-items: center;
     justify-content: center;
     padding: 28px;
-    background: rgba(9, 12, 20, 0.44);
+    background: rgba(0, 0, 0, 0.15);
     backdrop-filter: blur(10px);
   }
 
@@ -1175,22 +1361,568 @@
     overflow: auto;
   }
 
+  /* ── Compact file change list ── */
+  .allowlist-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 0;
+  }
+
+  .allowlist-name {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .allowlist-header-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .header-icon-btn {
+    width: 30px;
+    height: 28px;
+    border-radius: 8px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .header-icon-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+
+  .header-icon-btn.accent {
+    background: var(--accent-gold);
+    color: #fff;
+    border-color: transparent;
+  }
+
+  .header-icon-btn.accent:hover {
+    opacity: 0.88;
+  }
+
+  .file-change-list {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .file-change-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    cursor: pointer;
+    font-family: inherit;
+    width: 100%;
+    text-align: left;
+    transition: background 0.12s;
+  }
+
+  .file-change-row:hover {
+    background: var(--bg-hover);
+  }
+
+  .file-status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 800;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .badge-added {
+    background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+    color: var(--accent-green);
+  }
+
+  .badge-modified {
+    background: color-mix(in srgb, var(--accent-gold) 18%, transparent);
+    color: var(--accent-gold);
+  }
+
+  .badge-deleted {
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
+  }
+
+  .badge-conflict {
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
+  }
+
+  .badge-other {
+    background: var(--bg-hover);
+    color: var(--text-tertiary);
+  }
+
+  .file-name-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .file-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .file-dir {
+    font-size: 10px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  .file-stats {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  .stat-add {
+    color: var(--accent-green);
+  }
+
+  .stat-del {
+    color: var(--accent-danger-text);
+  }
+
+  /* ── Checkpoint section ── */
+  .checkpoint-section {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border-default);
+  }
+
+  .checkpoint-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    width: 100%;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    transition: all 0.12s ease;
+  }
+
+  .checkpoint-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text-secondary);
+  }
+
+  .checkpoint-toggle :global(.toggle-chevron) {
+    margin-left: auto;
+    transition: transform 0.18s ease;
+  }
+
+  .checkpoint-toggle :global(.toggle-chevron.expanded) {
+    transform: rotate(90deg);
+  }
+
+  .checkpoint-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 2px 0 4px;
+  }
+
+  .checkpoint-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px 5px 26px;
+    border-radius: 6px;
+    transition: background 0.1s ease;
+  }
+
+  .checkpoint-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .checkpoint-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .checkpoint-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .checkpoint-auto-tag {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-tertiary);
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .checkpoint-meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .checkpoint-time {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .checkpoint-dot {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+
+  .checkpoint-files-count {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+  }
+
+  .checkpoint-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .checkpoint-item:hover .checkpoint-actions {
+    opacity: 1;
+  }
+
+  .checkpoint-action-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .checkpoint-action-btn:hover {
+    background: var(--accent-gold);
+    color: #fff;
+    border-color: transparent;
+  }
+
+  .checkpoint-action-btn.danger:hover {
+    background: var(--accent-danger);
+    color: var(--accent-danger-text);
+    border-color: transparent;
+  }
+
+  /* ── Diff modal ── */
+  .diff-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 28px;
+    background: rgba(0, 0, 0, 0.15);
+    backdrop-filter: blur(10px);
+  }
+
+  .diff-modal {
+    width: min(900px, calc(100vw - 56px));
+    max-height: min(82vh, 900px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 18px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-dropdown);
+    overflow: hidden;
+  }
+
+  .diff-modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .diff-modal-title {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .diff-modal-title strong {
+    font-size: 14px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .diff-modal-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .diff-modal-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .diff-modal-body {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+  }
+
+  .diff-empty-hint {
+    padding: 40px 20px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+  }
+
+  /* ── Unified diff lines ── */
+  .diff-lines {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .diff-line {
+    display: flex;
+    padding: 0 14px;
+    min-height: 22px;
+  }
+
+  .diff-line-marker {
+    width: 20px;
+    flex-shrink: 0;
+    text-align: center;
+    user-select: none;
+    color: var(--text-muted);
+  }
+
+  .diff-line-content {
+    flex: 1;
+    white-space: pre-wrap;
+    word-break: break-all;
+    min-width: 0;
+  }
+
+  .diff-add {
+    background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  }
+
+  .diff-add .diff-line-marker {
+    color: var(--accent-green);
+  }
+
+  .diff-remove {
+    background: color-mix(in srgb, var(--accent-danger-text) 10%, transparent);
+  }
+
+  .diff-remove .diff-line-marker {
+    color: var(--accent-danger-text);
+  }
+
+  .diff-header {
+    background: var(--bg-hover);
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 4px 14px;
+  }
+
+  .diff-context {
+    color: var(--text-secondary);
+  }
+
+  .diff-full-content {
+    margin: 0;
+    padding: 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+  }
+
+  /* ── Conflict side-by-side ── */
+  .conflict-side-by-side {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    min-height: 0;
+  }
+
+  .conflict-pane {
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border-default);
+    min-height: 0;
+  }
+
+  .conflict-pane:last-child {
+    border-right: none;
+  }
+
+  .pane-label {
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    background: var(--bg-hover);
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .pane-content {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text-primary);
+    overflow: auto;
+    flex: 1;
+  }
+
+  .conflict-reason {
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--accent-danger-text);
+    background: var(--accent-danger);
+    border-top: 1px solid var(--border-default);
+  }
+
+  .merge-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    border-top: 1px solid var(--border-default);
+  }
+
+  .merge-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .merge-section-head strong {
+    font-size: 12px;
+    color: var(--text-primary);
+  }
+
+  .merge-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-input);
+    border-radius: 10px;
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    line-height: 1.5;
+    resize: vertical;
+  }
+
+  .merge-textarea:focus {
+    outline: none;
+    border-color: var(--accent-gold);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-gold) 14%, transparent);
+  }
+
+  .merge-section-foot {
+    display: flex;
+    justify-content: flex-end;
+  }
+
   @media (max-width: 1100px) {
     .right-sidebar {
       width: 320px;
     }
 
-    .conflict-columns {
+    .conflict-side-by-side {
       grid-template-columns: 1fr;
     }
 
-    .preview-modal {
+    .preview-modal,
+    .diff-modal {
       width: calc(100vw - 24px);
       height: calc(100vh - 24px);
       border-radius: 18px;
     }
 
-    .preview-modal-backdrop {
+    .preview-modal-backdrop,
+    .diff-modal-backdrop {
       padding: 12px;
     }
   }

@@ -374,6 +374,15 @@ export const apiClient = {
     });
   },
 
+  deleteWorkspaceCheckpoint(allowlistId: string, checkpointId: string) {
+    return invoke<void>("delete_workspace_checkpoint", {
+      id: allowlistId,
+      payload: {
+        checkpoint_id: checkpointId
+      }
+    });
+  },
+
   getWorkspaceAllowlistHistory(
     id: string,
     options?: {

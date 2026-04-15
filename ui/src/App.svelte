@@ -16,6 +16,7 @@
   import type { TaskRecord, WorkspaceSearchResult } from "./lib/types";
   import OnboardingView from "./views/OnboardingView.svelte";
   import SettingsView from "./views/SettingsView.svelte";
+  import ToastContainer from "./components/ToastContainer.svelte";
 
   const providerLabels: Record<string, string> = {
     openai: "OpenAI",
@@ -371,6 +372,10 @@
         onKeepAllowlist={(allowlistId, scopePath, checkpointId) => void workspaceStore.keepAllowlist(allowlistId, scopePath, checkpointId)}
         onRevertAllowlist={(allowlistId, scopePath, checkpointId) => void workspaceStore.revertAllowlist(allowlistId, scopePath, checkpointId)}
         onCreateCheckpoint={(allowlistId, label, summary) => void workspaceStore.createCheckpoint(allowlistId, label, summary)}
+        onRestoreCheckpoint={(allowlistId, checkpointId) => void workspaceStore.restoreCheckpoint(allowlistId, checkpointId)}
+        onDeleteCheckpoint={(allowlistId, checkpointId) =>
+          void workspaceStore.deleteCheckpoint(allowlistId, checkpointId)
+        }
         onResolveConflict={(allowlistId, path, resolution, renamedCopyPath, mergedContent) =>
           void workspaceStore.resolveConflict(allowlistId, path, resolution, renamedCopyPath, mergedContent)}
         onUseResult={handleUseWorkspaceResult}
@@ -445,6 +450,8 @@
     {#if showSettings}
       <SettingsView onClose={closeSettings} onSeedComposer={handleSeedComposer} />
     {/if}
+
+    <ToastContainer />
   </div>
 {/if}
 

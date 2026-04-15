@@ -338,6 +338,11 @@ pub struct WorkspaceCheckpointListQuery {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteWorkspaceCheckpointRequest {
+    pub checkpoint_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct WorkspaceHistoryQuery {
     pub scope_path: Option<String>,
     pub limit: Option<usize>,

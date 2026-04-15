@@ -928,6 +928,17 @@ pub trait WorkspaceStore: Send + Sync {
         })
     }
 
+    async fn delete_workspace_checkpoint(
+        &self,
+        _user_id: &str,
+        _allowlist_id: Uuid,
+        _checkpoint_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "delete_workspace_checkpoint".to_string(),
+        })
+    }
+
     async fn list_workspace_allowlist_history(
         &self,
         _request: &WorkspaceAllowlistHistoryRequest,
