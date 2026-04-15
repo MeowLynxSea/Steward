@@ -376,6 +376,7 @@
         onDeleteCheckpoint={(allowlistId, checkpointId) =>
           void workspaceStore.deleteCheckpoint(allowlistId, checkpointId)
         }
+        onWriteFile={(path, content) => void workspaceStore.writeFile(path, content)}
         onResolveConflict={(allowlistId, path, resolution, renamedCopyPath, mergedContent) =>
           void workspaceStore.resolveConflict(allowlistId, path, resolution, renamedCopyPath, mergedContent)}
         onUseResult={handleUseWorkspaceResult}

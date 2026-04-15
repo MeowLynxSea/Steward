@@ -383,6 +383,12 @@ export const apiClient = {
     });
   },
 
+  writeWorkspaceFile(path: string, content: string) {
+    return invoke<void>("write_workspace_file", {
+      payload: { path, content }
+    });
+  },
+
   getWorkspaceAllowlistHistory(
     id: string,
     options?: {

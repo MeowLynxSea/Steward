@@ -30,7 +30,7 @@ use steward_core::ipc::{
     PatchTaskModeRequest, RejectTaskRequest, ResolveWorkspaceConflictRequest,
     SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceBaselineSetRequest,
     WorkspaceCheckpointListQuery, WorkspaceDiffQuery, WorkspaceHistoryQuery,
-    WorkspaceRestoreRequest, WorkspaceSearchRequest,
+    WorkspaceRestoreRequest, WorkspaceSearchRequest, WriteWorkspaceFileRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -3251,6 +3251,24 @@ pub async fn get_workspace_allowlist_history(
         )
         .await
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn write_workspace_file(
+    state: State<'_, AppState>,
+    payload: WriteWorkspaceFileRequest,
+) -> Result<(), String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .write(&payload.path, &payload.content)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
 }
 
 #[tauri::command]

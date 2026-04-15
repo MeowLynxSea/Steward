@@ -359,6 +359,14 @@ class WorkspaceState {
     });
   }
 
+  async writeFile(path: string, content: string) {
+    await this.#runBusyAction("正在保存文件…", async () => {
+      await apiClient.writeWorkspaceFile(path, content);
+      // Re-fetch the current path to reflect the change
+      await this.fetch(this.currentPath);
+    });
+  }
+
   dispose() {}
 
   async #afterAllowlistMutation(id: string) {
