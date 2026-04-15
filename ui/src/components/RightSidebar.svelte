@@ -2,6 +2,8 @@
   import { fade, fly } from "svelte/transition";
   import {
     AlertTriangle,
+    ArrowDown,
+    ArrowUp,
     Check,
     ChevronRight,
     Clock,
@@ -16,6 +18,7 @@
     Undo2,
     X
   } from "lucide-svelte";
+  import hljs from "highlight.js/lib/core";
   import { showToast } from "../lib/stores/toast.svelte";
   import type {
     AllowlistedFileDiff,
@@ -103,6 +106,17 @@
   let mergeDrafts = $state<Record<string, string>>({});
   let copyDrafts = $state<Record<string, string>>({});
   let diffModalFile = $state<{ allowlistId: string; diff: AllowlistedFileDiff } | null>(null);
+
+  // Preview modal code viewer state
+  let findBarOpen = $state(false);
+  let findQuery = $state("");
+  let findMatches = $state<{ line: number; col: number }[]>([]);
+  let findIndex = $state(0);
+  let gotoLineOpen = $state(false);
+  let gotoLineValue = $state("");
+  let codeViewerRef = $state<HTMLElement | null>(null);
+  let findInputRef = $state<HTMLInputElement | null>(null);
+  let gotoInputRef = $state<HTMLInputElement | null>(null);
 
   const sortedChangeGroups = $derived(
     [...changeGroups]
@@ -366,6 +380,175 @@
 
   function canPreviewTextContent(file: WorkspaceAllowlistFileView) {
     return !file.is_binary && file.status !== "deleted" && file.content !== null;
+  }
+
+  // ── Code viewer helpers ──
+
+  const extToLang: Record<string, string> = {
+    js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
+    ts: "typescript", tsx: "typescript", mts: "typescript",
+    py: "python", pyw: "python",
+    rs: "rust",
+    sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
+    json: "json", jsonc: "json", json5: "json",
+    css: "css", scss: "css", less: "css",
+    html: "html", htm: "html", svelte: "html", vue: "html",
+    xml: "xml", svg: "xml",
+    sql: "sql",
+    yaml: "yaml", yml: "yaml", toml: "yaml",
+    md: "markdown", mdx: "markdown",
+    diff: "diff", patch: "diff",
+    go: "go",
+    java: "java",
+    cpp: "cpp", c: "cpp", cc: "cpp", cxx: "cpp", h: "cpp", hpp: "cpp",
+  };
+
+  function detectLanguage(path: string | undefined): string | null {
+    if (!path) return null;
+    const ext = path.split(".").pop()?.toLowerCase();
+    if (!ext) return null;
+    return extToLang[ext] ?? null;
+  }
+
+  function highlightCode(code: string, lang: string | null): string {
+    if (lang && hljs.getLanguage(lang)) {
+      return hljs.highlight(code, { language: lang }).value;
+    }
+    return code
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function getPreviewContent(): string | null {
+    if (selectedDocument?.content) return selectedDocument.content;
+    if (selectedFile && canPreviewTextContent(selectedFile)) return selectedFile.content;
+    return null;
+  }
+
+  function getPreviewPath(): string | undefined {
+    return selectedDocument?.path ?? selectedFile?.path;
+  }
+
+  const previewLines = $derived.by(() => {
+    const content = getPreviewContent();
+    if (!content) return null;
+    return content.split("\n");
+  });
+
+  const highlightedLines = $derived.by(() => {
+    if (!previewLines) return null;
+    const lang = detectLanguage(getPreviewPath());
+    const full = highlightCode(previewLines.join("\n"), lang);
+    return full.split("\n");
+  });
+
+  const lineNumberWidth = $derived(
+    previewLines ? String(previewLines.length).length : 1
+  );
+
+  function openFindBar() {
+    findBarOpen = true;
+    gotoLineOpen = false;
+    requestAnimationFrame(() => findInputRef?.focus());
+  }
+
+  function closeFindBar() {
+    findBarOpen = false;
+    findQuery = "";
+    findMatches = [];
+    findIndex = 0;
+  }
+
+  function openGotoLine() {
+    gotoLineOpen = true;
+    findBarOpen = false;
+    gotoLineValue = "";
+    requestAnimationFrame(() => gotoInputRef?.focus());
+  }
+
+  function closeGotoLine() {
+    gotoLineOpen = false;
+    gotoLineValue = "";
+  }
+
+  function performFind() {
+    if (!findQuery || !previewLines) {
+      findMatches = [];
+      findIndex = 0;
+      return;
+    }
+    const q = findQuery.toLowerCase();
+    const matches: { line: number; col: number }[] = [];
+    for (let i = 0; i < previewLines.length; i++) {
+      const line = previewLines[i].toLowerCase();
+      let pos = 0;
+      while ((pos = line.indexOf(q, pos)) !== -1) {
+        matches.push({ line: i, col: pos });
+        pos += q.length;
+      }
+    }
+    findMatches = matches;
+    findIndex = matches.length > 0 ? 0 : -1;
+    if (matches.length > 0) scrollToMatch(0);
+  }
+
+  function findNext() {
+    if (findMatches.length === 0) return;
+    findIndex = (findIndex + 1) % findMatches.length;
+    scrollToMatch(findIndex);
+  }
+
+  function findPrev() {
+    if (findMatches.length === 0) return;
+    findIndex = (findIndex - 1 + findMatches.length) % findMatches.length;
+    scrollToMatch(findIndex);
+  }
+
+  function scrollToMatch(idx: number) {
+    const m = findMatches[idx];
+    if (!m || !codeViewerRef) return;
+    const lineEl = codeViewerRef.querySelector(`[data-line="${m.line}"]`);
+    lineEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function scrollToLine(lineNum: number) {
+    if (!codeViewerRef || !previewLines) return;
+    const clamped = Math.max(0, Math.min(lineNum - 1, previewLines.length - 1));
+    const lineEl = codeViewerRef.querySelector(`[data-line="${clamped}"]`);
+    lineEl?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function handleGotoSubmit() {
+    const num = parseInt(gotoLineValue, 10);
+    if (!isNaN(num) && num > 0) {
+      scrollToLine(num);
+      closeGotoLine();
+    }
+  }
+
+  function handlePreviewKeydown(event: KeyboardEvent) {
+    const mod = event.metaKey || event.ctrlKey;
+    if (mod && event.key === "f") {
+      event.preventDefault();
+      openFindBar();
+    } else if (mod && event.key === "g") {
+      event.preventDefault();
+      openGotoLine();
+    } else if (event.key === "Escape") {
+      if (findBarOpen) closeFindBar();
+      else if (gotoLineOpen) closeGotoLine();
+      else closePreview();
+    }
+  }
+
+  function isMatchLine(lineIdx: number): boolean {
+    return findMatches.some((m) => m.line === lineIdx);
+  }
+
+  function isCurrentMatchLine(lineIdx: number): boolean {
+    if (findIndex < 0 || findIndex >= findMatches.length) return false;
+    return findMatches[findIndex].line === lineIdx;
   }
 
   function entryBadgeCounts(entry: WorkspaceEntry) {
@@ -678,11 +861,14 @@
       aria-modal="true"
       aria-label="文件预览"
       tabindex="-1"
+      onkeydown={handlePreviewKeydown}
     >
-      <div class="preview-modal-inner" role="presentation" onclick={(event) => event.stopPropagation()}>
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="preview-modal-inner" onclick={(event) => event.stopPropagation()}>
+        <!-- Title bar -->
         <div class="preview-modal-head">
           <div class="preview-modal-title">
-            <strong>{selectedDocument?.path ?? selectedFile?.path ?? "文件预览"}</strong>
+            <strong>{getPreviewPath() ?? "文件预览"}</strong>
             <span>
               {#if selectedDocument}
                 工作区文件
@@ -691,35 +877,126 @@
               {:else}
                 正在加载
               {/if}
+              {#if previewLines}
+                · {previewLines.length} 行
+              {/if}
             </span>
           </div>
-          <button class="icon-btn" onclick={closePreview} aria-label="关闭预览">
-            <X size={16} strokeWidth={2} />
-          </button>
+          <div class="preview-head-actions">
+            {#if previewLines}
+              <button class="preview-tool-btn" title="查找 (⌘F)" onclick={openFindBar}>
+                <Search size={14} strokeWidth={2} />
+              </button>
+            {/if}
+            <button class="icon-btn" onclick={closePreview} aria-label="关闭预览">
+              <X size={16} strokeWidth={2} />
+            </button>
+          </div>
         </div>
 
+        <!-- Find bar -->
+        {#if findBarOpen}
+          <div class="code-find-bar" transition:fly={{ y: -10, duration: 150 }}>
+            <Search size={13} strokeWidth={2} class="find-icon" />
+            <input
+              bind:this={findInputRef}
+              type="text"
+              class="find-input"
+              placeholder="查找…"
+              bind:value={findQuery}
+              oninput={performFind}
+              onkeydown={(e) => {
+                if (e.key === "Enter" && e.shiftKey) findPrev();
+                else if (e.key === "Enter") findNext();
+                else if (e.key === "Escape") closeFindBar();
+              }}
+            />
+            <span class="find-count">
+              {#if findQuery}
+                {findMatches.length > 0 ? `${findIndex + 1}/${findMatches.length}` : "无结果"}
+              {/if}
+            </span>
+            <button class="find-nav-btn" title="上一个 (Shift+Enter)" onclick={findPrev} disabled={findMatches.length === 0}>
+              <ArrowUp size={13} strokeWidth={2} />
+            </button>
+            <button class="find-nav-btn" title="下一个 (Enter)" onclick={findNext} disabled={findMatches.length === 0}>
+              <ArrowDown size={13} strokeWidth={2} />
+            </button>
+            <button class="find-nav-btn" title="关闭 (Esc)" onclick={closeFindBar}>
+              <X size={13} strokeWidth={2} />
+            </button>
+          </div>
+        {/if}
+
+        <!-- Go-to-line bar -->
+        {#if gotoLineOpen}
+          <div class="code-find-bar" transition:fly={{ y: -10, duration: 150 }}>
+            <span class="goto-label">跳转到行：</span>
+            <input
+              bind:this={gotoInputRef}
+              type="number"
+              class="find-input goto-input"
+              min="1"
+              max={previewLines?.length ?? 1}
+              placeholder={`1–${previewLines?.length ?? "?"}`}
+              bind:value={gotoLineValue}
+              onkeydown={(e) => {
+                if (e.key === "Enter") handleGotoSubmit();
+                else if (e.key === "Escape") closeGotoLine();
+              }}
+            />
+            <button class="find-nav-btn" title="跳转" onclick={handleGotoSubmit}>
+              <Check size={13} strokeWidth={2} />
+            </button>
+            <button class="find-nav-btn" title="关闭 (Esc)" onclick={closeGotoLine}>
+              <X size={13} strokeWidth={2} />
+            </button>
+          </div>
+        {/if}
+
+        <!-- Code body -->
         <div class="preview-modal-body">
           {#if fileLoading}
-            <div class="preview-empty">正在加载文件预览...</div>
-          {:else if selectedDocument}
-            <p class="preview-meta">只读预览当前工作区文档内容。</p>
-            <pre>{selectedDocument.content || "(empty file)"}</pre>
+            <div class="preview-empty">正在加载文件预览…</div>
+          {:else if highlightedLines}
+            <div class="code-viewer" bind:this={codeViewerRef}>
+              <table class="code-table">
+                <tbody>
+                  {#each highlightedLines as line, i}
+                    <tr
+                      class="code-line {isCurrentMatchLine(i) ? 'match-current' : isMatchLine(i) ? 'match-highlight' : ''}"
+                      data-line={i}
+                    >
+                      <td class="line-number" style:--lnw="{lineNumberWidth}ch">{i + 1}</td>
+                      <td class="line-content hljs">{@html line || " "}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           {:else if selectedFile}
-            {#if canPreviewTextContent(selectedFile)}
-              <pre>{selectedFile.content || "(empty file)"}</pre>
-            {:else}
-              <p class="preview-meta">{previewHeadline(selectedFile)}</p>
-              <div class="preview-summary">
-                <p>{previewBody(selectedFile)}</p>
-                {#if selectedFile.status !== "clean"}
-                  <button class="jump-button" onclick={jumpToChanges}>
-                    跳到变更
-                  </button>
-                {/if}
-              </div>
-            {/if}
+            <p class="preview-meta">{previewHeadline(selectedFile)}</p>
+            <div class="preview-summary">
+              <p>{previewBody(selectedFile)}</p>
+              {#if selectedFile.status !== "clean"}
+                <button class="jump-button" onclick={jumpToChanges}>
+                  跳到变更
+                </button>
+              {/if}
+            </div>
+          {:else}
+            <div class="preview-empty">暂无可预览的内容</div>
           {/if}
         </div>
+
+        <!-- Status bar -->
+        {#if previewLines}
+          <div class="preview-status-bar">
+            <span>{detectLanguage(getPreviewPath())?.toUpperCase() ?? "纯文本"}</span>
+            <span>{previewLines.length} 行</span>
+            <span class="status-shortcut">⌘F 查找 · ⌘G 跳行 · Esc 关闭</span>
+          </div>
+        {/if}
       </div>
     </div>
   </div>
@@ -1155,7 +1432,6 @@
     gap: 10px;
   }
 
-  .preview-modal-body pre,
   .diff-card pre,
   .conflict-columns pre {
     margin: 0;
@@ -1168,11 +1444,6 @@
     padding: 8px 10px;
     border-radius: 8px;
     background: var(--bg-input);
-  }
-
-  .preview-summary,
-  .preview-empty {
-    padding: 12px;
   }
 
   .jump-button,
@@ -1347,7 +1618,7 @@
   .preview-modal {
     width: min(1100px, calc(100vw - 56px));
     height: min(82vh, 900px);
-    border-radius: 24px;
+    border-radius: 18px;
     border: 1px solid var(--border-default);
     background: var(--bg-surface);
     box-shadow: var(--shadow-dropdown);
@@ -1366,35 +1637,228 @@
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 18px 20px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--border-default);
+    background: var(--bg-input);
   }
 
   .preview-modal-title {
     display: flex;
     min-width: 0;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
   }
 
   .preview-modal-title strong {
     color: var(--text-primary);
-    font-size: 15px;
+    font-size: 13px;
+    font-weight: 600;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .preview-modal-title span {
-    color: var(--text-muted);
-    font-size: 12px;
+    color: var(--text-tertiary);
+    font-size: 11px;
   }
 
+  .preview-head-actions {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .preview-tool-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border-input);
+    background: transparent;
+    color: var(--text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .preview-tool-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  /* ── Find / Goto bar ── */
+  .code-find-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border-default);
+    background: var(--bg-input);
+  }
+
+  .code-find-bar :global(.find-icon) {
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .find-input {
+    flex: 1;
+    min-width: 80px;
+    max-width: 260px;
+    padding: 4px 8px;
+    border: 1px solid var(--border-input);
+    border-radius: 6px;
+    background: var(--bg-surface);
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text-primary);
+    outline: none;
+  }
+
+  .find-input:focus {
+    border-color: var(--accent-gold);
+  }
+
+  .goto-input {
+    max-width: 100px;
+  }
+
+  .goto-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+  }
+
+  .find-count {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    white-space: nowrap;
+    min-width: 48px;
+    text-align: center;
+  }
+
+  .find-nav-btn {
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-tertiary);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.1s;
+  }
+
+  .find-nav-btn:hover:not(:disabled) {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+  }
+
+  .find-nav-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  /* ── Code viewer ── */
   .preview-modal-body {
     display: flex;
     flex: 1;
     min-height: 0;
     flex-direction: column;
-    gap: 12px;
-    padding: 18px 20px 20px;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .code-viewer {
+    flex: 1;
     overflow: auto;
+    background: var(--bg-surface);
+    min-height: 0;
+  }
+
+  .code-table {
+    border-collapse: collapse;
+    width: 100%;
+    min-height: 100%;
+    font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    tab-size: 4;
+  }
+
+  .code-line {
+    transition: background 0.08s;
+  }
+
+  .code-line:hover {
+    background: color-mix(in srgb, var(--accent-gold) 5%, transparent);
+  }
+
+  .code-line.match-highlight {
+    background: color-mix(in srgb, var(--accent-gold) 12%, transparent);
+  }
+
+  .code-line.match-current {
+    background: color-mix(in srgb, var(--accent-gold) 22%, transparent);
+  }
+
+  .line-number {
+    position: sticky;
+    left: 0;
+    width: calc(var(--lnw, 3ch) + 32px);
+    min-width: 48px;
+    padding: 0 12px 0 16px;
+    text-align: right;
+    color: var(--text-tertiary);
+    background: var(--bg-input);
+    user-select: none;
+    font-size: 11.5px;
+    border-right: 1px solid var(--border-default);
+    vertical-align: top;
+  }
+
+  .code-line:last-child .line-number,
+  .code-line:last-child .line-content {
+    height: 100%;
+  }
+
+  .line-content {
+    padding: 0 16px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    min-height: 1.55em;
+  }
+
+  /* ── Status bar ── */
+  .preview-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 4px 16px;
+    border-top: 1px solid var(--border-default);
+    background: var(--bg-input);
+    font-size: 11px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+  }
+
+  .status-shortcut {
+    margin-left: auto;
+    opacity: 0.7;
+  }
+
+  .preview-summary,
+  .preview-empty {
+    padding: 28px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 13px;
   }
 
   /* ── Compact file change list ── */
