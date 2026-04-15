@@ -352,9 +352,9 @@
           ? "这是一个二进制文件，当前预览不可用。"
           : "只读预览来自当前授权目录文件。";
       case "modified":
-        return "请切换到「变更」标签页查看改动详情，并决定保留或撤销。";
+        return "请切换到「变更」标签页查看差异，并决定保留或撤销。";
       case "added":
-        return "这个文件还没有提交到磁盘基线，请在「变更」标签页完成处理。";
+        return "这个文件尚未纳入工作区基线，请在「变更」标签页决定保留或撤销。";
       case "deleted":
         return "这个文件已被标记为删除，正文预览已停用。";
       case "conflicted":
@@ -362,6 +362,42 @@
       case "binary_modified":
         return "这是一个二进制改动，正文预览不可用，请在「变更」标签页决定保留或撤销。";
     }
+  }
+
+  function canPreviewTextContent(file: WorkspaceAllowlistFileView) {
+    return !file.is_binary && file.status !== "deleted" && file.content !== null;
+  }
+
+  function entryBadgeCounts(entry: WorkspaceEntry) {
+    const conflictCount = entry.conflict_count ?? 0;
+    const pendingDeleteCount = entry.pending_delete_count ?? 0;
+    const dirtyCount = entry.dirty_count ?? 0;
+
+    if (entry.is_directory) {
+      return {
+        conflictCount,
+        dirtyCount,
+        pendingDeleteCount
+      };
+    }
+
+    if (entry.status === "conflicted") {
+      return { conflictCount: 1, dirtyCount: 0, pendingDeleteCount: 0 };
+    }
+
+    if (entry.status === "deleted") {
+      return { conflictCount: 0, dirtyCount: 0, pendingDeleteCount: 1 };
+    }
+
+    if (entry.status && entry.status !== "clean") {
+      return { conflictCount: 0, dirtyCount: 1, pendingDeleteCount: 0 };
+    }
+
+    return {
+      conflictCount,
+      dirtyCount,
+      pendingDeleteCount
+    };
   }
 
   function diffKey(allowlistId: string, path: string) {
@@ -451,6 +487,7 @@
           {:else}
             {#each sortedEntries as entry}
               {@const Icon = treeIcon(entry)}
+              {@const badges = entryBadgeCounts(entry)}
               <button
                 class="tree-item {isEntryActive(entry) ? 'active' : ''}"
                 onclick={() => onOpenEntry(entry)}
@@ -466,16 +503,16 @@
                     {/if}
                   </span>
                 </span>
-                {#if entry.conflict_count || entry.dirty_count || entry.pending_delete_count}
+                {#if badges.conflictCount || badges.dirtyCount || badges.pendingDeleteCount}
                   <span class="tree-item-badges">
-                    {#if entry.conflict_count}
-                      <span class="badge danger">{entry.conflict_count}</span>
+                    {#if badges.conflictCount}
+                      <span class="badge danger">{badges.conflictCount}</span>
                     {/if}
-                    {#if entry.dirty_count}
-                      <span class="badge">{entry.dirty_count}</span>
+                    {#if badges.dirtyCount}
+                      <span class="badge">{badges.dirtyCount}</span>
                     {/if}
-                    {#if entry.pending_delete_count}
-                      <span class="badge muted">{entry.pending_delete_count}</span>
+                    {#if badges.pendingDeleteCount}
+                      <span class="badge muted">{badges.pendingDeleteCount}</span>
                     {/if}
                   </span>
                 {/if}
@@ -668,11 +705,10 @@
             <p class="preview-meta">只读预览当前工作区文档内容。</p>
             <pre>{selectedDocument.content || "(empty file)"}</pre>
           {:else if selectedFile}
-            <p class="preview-meta">{previewHeadline(selectedFile)}</p>
-
-            {#if selectedFile.status === "clean" && !selectedFile.is_binary}
-              <pre>{selectedFile.content ?? "(empty file)"}</pre>
+            {#if canPreviewTextContent(selectedFile)}
+              <pre>{selectedFile.content || "(empty file)"}</pre>
             {:else}
+              <p class="preview-meta">{previewHeadline(selectedFile)}</p>
               <div class="preview-summary">
                 <p>{previewBody(selectedFile)}</p>
                 {#if selectedFile.status !== "clean"}
