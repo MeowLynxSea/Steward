@@ -131,6 +131,8 @@ class WorkspaceState {
     if (selectedDocumentPath && !allowlistIdFromUri(this.currentPath)) {
       await this.#reloadSelectedDocument(selectedDocumentPath);
     }
+
+    await this.#refreshAllAllowlistChangesInBackground();
   }
 
   async search(query: string) {

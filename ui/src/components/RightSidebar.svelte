@@ -189,6 +189,10 @@
     })
   );
 
+  const totalChangeCount = $derived(
+    changeGroups.reduce((sum, group) => sum + group.entries.length, 0)
+  );
+
   const breadcrumbs = $derived(buildBreadcrumbs(currentPath, selectedAllowlist?.summary.allowlist.display_name ?? null));
   const previewOpen = $derived(fileLoading || Boolean(selectedDocument) || Boolean(selectedFile));
 
@@ -806,7 +810,7 @@
           文件
         </button>
         <button class="tab {activeTab === 'changes' ? 'active' : ''}" onclick={activateChangesTab}>
-          变更
+          变更{#if totalChangeCount > 0}<span class="tab-badge">{totalChangeCount}</span>{/if}
         </button>
       </div>
       <button class="icon-btn" onclick={onRequestAllowlist} aria-label="授权目录">
@@ -1563,6 +1567,22 @@
   .tab.active {
     color: var(--text-primary);
     border-bottom-color: var(--accent-primary);
+  }
+
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    margin-left: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    color: #fff;
+    background: var(--accent-gold);
+    border-radius: 8px;
   }
 
   .search-box {
