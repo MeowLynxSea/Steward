@@ -2359,18 +2359,27 @@ impl WorkspaceStore for LibSqlBackend {
             })?;
         if allowlist_supports_tracking(&allowlist) {
             let tracker = self.ensure_allowlist_tracker(user_id, allowlist_id).await?;
-            self.sync_allowlist_from_tracker(
-                user_id,
-                allowlist_id,
-                Some(&normalized),
-                Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
-                WorkspaceAllowlistRevisionKind::ToolDelete,
-                WorkspaceAllowlistRevisionSource::WorkspaceTool,
-                Some(normalized.clone()),
-                Some(format!("deleted {}", normalized)),
-                "workspace_delete",
-            )
-            .await?;
+            if let Err(e) = self
+                .sync_allowlist_from_tracker(
+                    user_id,
+                    allowlist_id,
+                    Some(&normalized),
+                    Some(vec![tracker.repo_path_for_allowlist_path(&normalized)]),
+                    WorkspaceAllowlistRevisionKind::ToolDelete,
+                    WorkspaceAllowlistRevisionSource::WorkspaceTool,
+                    Some(normalized.clone()),
+                    Some(format!("deleted {}", normalized)),
+                    "workspace_delete",
+                )
+                .await
+            {
+                // Tracker sync can fail for gitignored or untracked files;
+                // the disk file is already removed, so log and continue.
+                tracing::debug!(
+                    "tracker sync after delete of {} failed (non-fatal): {e}",
+                    normalized
+                );
+            }
         }
         let record = if allowlist_supports_tracking(&allowlist) {
             self.load_allowlist_file_record(allowlist_id, &normalized)

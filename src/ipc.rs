@@ -349,6 +349,11 @@ pub struct WriteWorkspaceFileRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct DeleteWorkspaceFileRequest {
+    pub path: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct WorkspaceHistoryQuery {
     pub scope_path: Option<String>,
     pub limit: Option<usize>,

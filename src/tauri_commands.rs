@@ -31,6 +31,7 @@ use steward_core::ipc::{
     SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceBaselineSetRequest,
     WorkspaceCheckpointListQuery, WorkspaceDiffQuery, WorkspaceHistoryQuery,
     WorkspaceRestoreRequest, WorkspaceSearchRequest, WriteWorkspaceFileRequest,
+    DeleteWorkspaceFileRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -3265,6 +3266,24 @@ pub async fn write_workspace_file(
 
     workspace
         .write(&payload.path, &payload.content)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_workspace_file(
+    state: State<'_, AppState>,
+    payload: DeleteWorkspaceFileRequest,
+) -> Result<(), String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .delete(&payload.path)
         .await
         .map_err(|e| e.to_string())?;
 

@@ -389,6 +389,12 @@ export const apiClient = {
     });
   },
 
+  deleteWorkspaceFile(path: string) {
+    return invoke<void>("delete_workspace_file", {
+      payload: { path }
+    });
+  },
+
   getWorkspaceAllowlistHistory(
     id: string,
     options?: {

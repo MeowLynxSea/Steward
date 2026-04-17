@@ -34,6 +34,29 @@
   } from "../lib/types";
 
   type ConflictResolution = "keep_disk" | "keep_workspace" | "write_copy" | "manual_merge";
+
+  const SEED_PATHS = new Set(["README.md", "SOUL.md", "AGENTS.md", "HEARTBEAT.md", "TOOLS.md", "BOOTSTRAP.md"]);
+
+  function isProtectedEntry(entry: WorkspaceEntry): boolean {
+    const uri = entry.uri ?? entry.path;
+    // Skills directory root cannot be unmounted
+    if (entry.mount_kind === "skills" && entry.is_directory && entry.kind === "allowlist") {
+      return true;
+    }
+    // Files inside allowlists are never seed-protected
+    if (entry.kind === "allowlisted_file" || entry.kind === "allowlist") {
+      return false;
+    }
+    // Seed workspace documents: workspace root-level memory docs only
+    if (!entry.is_directory && SEED_PATHS.has(entry.path)) {
+      return true;
+    }
+    return false;
+  }
+
+  function isSkillsAllowlist(group: WorkspaceChangeGroup): boolean {
+    return group.allowlist.summary.allowlist.mount_kind === "skills";
+  }
   type WorkspaceTab = "files" | "changes";
 
   interface Props {
@@ -62,7 +85,8 @@
     onCreateCheckpoint: (allowlistId: string, label?: string, summary?: string) => void;
     onRestoreCheckpoint: (allowlistId: string, checkpointId: string) => void;
     onDeleteCheckpoint: (allowlistId: string, checkpointId: string) => void;
-    onWriteFile: (path: string, content: string) => void;
+    onWriteFile: (path: string, content: string) => Promise<void>;
+    onDeleteFile: (path: string, allowlistId?: string) => Promise<void>;
     onResolveConflict: (
       allowlistId: string,
       path: string,
@@ -100,6 +124,7 @@
     onRestoreCheckpoint,
     onDeleteCheckpoint,
     onWriteFile,
+    onDeleteFile,
     onResolveConflict,
     onUseResult
   }: Props = $props();
@@ -110,7 +135,7 @@
   let copyDrafts = $state<Record<string, string>>({});
   let diffModalFile = $state<{ allowlistId: string; diff: AllowlistedFileDiff } | null>(null);
 
-  // Preview modal code viewer state
+  // Code editor state
   let findBarOpen = $state(false);
   let findQuery = $state("");
   let findMatches = $state<{ line: number; col: number }[]>([]);
@@ -118,17 +143,21 @@
   let gotoLineOpen = $state(false);
   let gotoLineValue = $state("");
   let codeViewerRef = $state<HTMLElement | null>(null);
+  let gutterRef = $state<HTMLElement | null>(null);
   let findInputRef = $state<HTMLInputElement | null>(null);
   let gotoInputRef = $state<HTMLInputElement | null>(null);
+  let editorTextareaRef = $state<HTMLTextAreaElement | null>(null);
 
-  // Edit mode state
-  let editMode = $state(false);
-  let editContent = $state("");
-  let editDirty = $state(false);
-  let editSaving = $state(false);
-  let editTextareaRef = $state<HTMLTextAreaElement | null>(null);
+  // Editor content
+  let editorContent = $state("");
+  let editorDirty = $state(false);
+  let editorSaving = $state(false);
 
-  // Find-and-replace state
+  // Delete confirmation
+  let deleteConfirmUri = $state<string | null>(null);
+  let deleteConfirmTimer: ReturnType<typeof setTimeout> | undefined;
+
+  // Find-and-replace
   let replaceBarOpen = $state(false);
   let replaceQuery = $state("");
   let replaceInputRef = $state<HTMLInputElement | null>(null);
@@ -178,13 +207,73 @@
     }
   });
 
+  // Track which file is loaded to avoid overwriting edits on prop updates
+  let loadedFilePath = $state<string | undefined>(undefined);
+
+  // Load editor content only when a different file opens
+  $effect(() => {
+    const path = getPreviewPath();
+    if (path !== loadedFilePath) {
+      loadedFilePath = path;
+      const content = getPreviewContent();
+      if (content != null) {
+        editorContent = content;
+        editorDirty = false;
+      }
+    }
+  });
+
   function handleSearch() {
     onSearch(localQuery);
   }
 
+  // Unsaved changes confirmation
+  let showUnsavedDialog = $state(false);
+
+  function requestClosePreview() {
+    if (editorDirty) {
+      showUnsavedDialog = true;
+    } else {
+      closePreview();
+    }
+  }
+
   function closePreview() {
-    exitEditMode();
+    showUnsavedDialog = false;
+    editorContent = "";
+    editorDirty = false;
+    loadedFilePath = undefined;
+    findBarOpen = false;
+    replaceBarOpen = false;
+    gotoLineOpen = false;
+    findQuery = "";
+    findMatches = [];
+    findIndex = 0;
+    replaceQuery = "";
     onClearPreview();
+  }
+
+  async function saveAndClose() {
+    const path = getPreviewPath();
+    if (path && editorDirty) {
+      editorSaving = true;
+      try {
+        await onWriteFile(path, editorContent);
+        editorDirty = false;
+      } catch {
+        // toast shown by workspace store
+        editorSaving = false;
+        return; // don't close on save failure
+      } finally {
+        editorSaving = false;
+      }
+    }
+    closePreview();
+  }
+
+  function discardAndClose() {
+    editorDirty = false;
+    closePreview();
   }
 
   function jumpToChanges() {
@@ -443,25 +532,32 @@
   }
 
   function getPreviewPath(): string | undefined {
+    return selectedDocument?.path ?? selectedFile?.uri;
+  }
+
+  function getPreviewDisplayPath(): string | undefined {
     return selectedDocument?.path ?? selectedFile?.path;
   }
 
-  const previewLines = $derived.by(() => {
-    const content = getPreviewContent();
-    if (!content) return null;
-    return content.split("\n");
+  // Editor lines are derived from editorContent (the live buffer)
+  const editorLines = $derived.by(() => {
+    if (!editorContent) return null;
+    return editorContent.split("\n");
   });
 
   const highlightedLines = $derived.by(() => {
-    if (!previewLines) return null;
-    const lang = detectLanguage(getPreviewPath());
-    const full = highlightCode(previewLines.join("\n"), lang);
+    if (!editorLines) return null;
+    const lang = detectLanguage(getPreviewDisplayPath());
+    const full = highlightCode(editorLines.join("\n"), lang);
     return full.split("\n");
   });
 
   const lineNumberWidth = $derived(
-    previewLines ? String(previewLines.length).length : 1
+    editorLines ? String(editorLines.length).length : 1
   );
+
+  // Whether file content is editable text
+  const isEditable = $derived(Boolean(getPreviewContent()));
 
   function openFindBar() {
     findBarOpen = true;
@@ -489,7 +585,7 @@
   }
 
   function performFind() {
-    const lines = editMode ? editContent.split("\n") : previewLines;
+    const lines = editorLines;
     if (!findQuery || !lines) {
       findMatches = [];
       findIndex = 0;
@@ -507,7 +603,7 @@
     }
     findMatches = matches;
     findIndex = matches.length > 0 ? 0 : -1;
-    if (matches.length > 0 && !editMode) scrollToMatch(0);
+    if (matches.length > 0) scrollToMatch(0);
   }
 
   function findNext() {
@@ -530,8 +626,8 @@
   }
 
   function scrollToLine(lineNum: number) {
-    if (!codeViewerRef || !previewLines) return;
-    const clamped = Math.max(0, Math.min(lineNum - 1, previewLines.length - 1));
+    if (!codeViewerRef || !editorLines) return;
+    const clamped = Math.max(0, Math.min(lineNum - 1, editorLines.length - 1));
     const lineEl = codeViewerRef.querySelector(`[data-line="${clamped}"]`);
     lineEl?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
@@ -546,18 +642,13 @@
 
   function handlePreviewKeydown(event: KeyboardEvent) {
     const mod = event.metaKey || event.ctrlKey;
-    if (editMode) {
-      // In edit mode, let textarea handle most keys
-      if (mod && event.key === "s") {
-        event.preventDefault();
-        saveEditContent();
-      } else if (mod && event.key === "h") {
-        event.preventDefault();
-        openReplaceBar();
-      }
-      return;
-    }
-    if (mod && event.key === "f") {
+    if (mod && event.key === "s") {
+      event.preventDefault();
+      saveEditorContent();
+    } else if (mod && event.key === "h") {
+      event.preventDefault();
+      openReplaceBar();
+    } else if (mod && event.key === "f") {
       event.preventDefault();
       openFindBar();
     } else if (mod && event.key === "g") {
@@ -565,8 +656,9 @@
       openGotoLine();
     } else if (event.key === "Escape") {
       if (findBarOpen) closeFindBar();
+      else if (replaceBarOpen) closeReplaceBar();
       else if (gotoLineOpen) closeGotoLine();
-      else closePreview();
+      else requestClosePreview();
     }
   }
 
@@ -579,50 +671,50 @@
     return findMatches[findIndex].line === lineIdx;
   }
 
-  // Edit mode functions
-  function canEdit(): boolean {
+  // Save
+  async function saveEditorContent() {
     const path = getPreviewPath();
-    return Boolean(path && previewLines);
-  }
-
-  function enterEditMode() {
-    const content = getPreviewContent();
-    if (!content) return;
-    editMode = true;
-    editContent = content;
-    editDirty = false;
-    closeFindBar();
-    closeGotoLine();
-    requestAnimationFrame(() => editTextareaRef?.focus());
-  }
-
-  function exitEditMode() {
-    editMode = false;
-    editContent = "";
-    editDirty = false;
-    replaceBarOpen = false;
-    replaceQuery = "";
-  }
-
-  async function saveEditContent() {
-    const path = getPreviewPath();
-    if (!path || editSaving) return;
-    editSaving = true;
+    if (!path || editorSaving || !editorDirty) return;
+    editorSaving = true;
     try {
-      onWriteFile(path, editContent);
-      editDirty = false;
-      showToast("文件已保存", "success");
-      exitEditMode();
+      await onWriteFile(path, editorContent);
+      editorDirty = false;
+    } catch {
+      // toast is shown by workspace store's #runBusyAction
     } finally {
-      editSaving = false;
+      editorSaving = false;
     }
   }
 
-  function handleEditInput() {
-    editDirty = true;
+  function handleEditorInput() {
+    editorDirty = true;
   }
 
-  // Find-and-replace functions (edit mode)
+  // Textarea scroll sync: keep highlighted layer in sync
+  function handleEditorScroll(event: Event) {
+    const container = event.target as HTMLElement;
+    if (gutterRef) {
+      gutterRef.scrollTop = container.scrollTop;
+    }
+  }
+
+  // Handle Tab key in textarea (insert tab instead of switching focus)
+  function handleEditorKeydown(event: KeyboardEvent) {
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const ta = editorTextareaRef;
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      editorContent = editorContent.substring(0, start) + "  " + editorContent.substring(end);
+      editorDirty = true;
+      requestAnimationFrame(() => {
+        ta.selectionStart = ta.selectionEnd = start + 2;
+      });
+    }
+  }
+
+  // Find-and-replace
   function openReplaceBar() {
     replaceBarOpen = true;
     findBarOpen = true;
@@ -637,37 +729,20 @@
 
   function replaceCurrentMatch() {
     if (!findQuery || findMatches.length === 0 || findIndex < 0) return;
-    const lines = editContent.split("\n");
+    const lines = editorContent.split("\n");
     const match = findMatches[findIndex];
     const line = lines[match.line];
     lines[match.line] = line.substring(0, match.col) + replaceQuery + line.substring(match.col + findQuery.length);
-    editContent = lines.join("\n");
-    editDirty = true;
+    editorContent = lines.join("\n");
+    editorDirty = true;
     performFind();
   }
 
   function replaceAllMatches() {
     if (!findQuery || findMatches.length === 0) return;
-    editContent = editContent.replaceAll(findQuery, replaceQuery);
-    editDirty = true;
+    editorContent = editorContent.replaceAll(findQuery, replaceQuery);
+    editorDirty = true;
     performFind();
-  }
-
-  function handleEditKeydown(event: KeyboardEvent) {
-    const mod = event.metaKey || event.ctrlKey;
-    if (mod && event.key === "s") {
-      event.preventDefault();
-      saveEditContent();
-    } else if (mod && event.key === "h") {
-      event.preventDefault();
-      openReplaceBar();
-    } else if (mod && event.key === "f") {
-      event.preventDefault();
-      openFindBar();
-    } else if (event.key === "Escape") {
-      if (findBarOpen) closeFindBar();
-      else if (replaceBarOpen) closeReplaceBar();
-    }
   }
 
   function entryBadgeCounts(entry: WorkspaceEntry) {
@@ -790,35 +865,83 @@
             {#each sortedEntries as entry}
               {@const Icon = treeIcon(entry)}
               {@const badges = entryBadgeCounts(entry)}
-              <button
-                class="tree-item {isEntryActive(entry) ? 'active' : ''}"
-                onclick={() => onOpenEntry(entry)}
-              >
-                <span class="tree-item-icon {entry.is_directory ? 'folder' : ''}">
-                  <Icon size={14} strokeWidth={2} />
-                </span>
-                <span class="tree-item-copy">
-                  <span class="tree-item-name">{entryLabel(entry)}</span>
-                  <span class="tree-item-meta">
-                    {#if entryAllowlistId(entry)}
-                      <span class="tree-item-subtle">{entryAllowlistId(entry)}</span>
-                    {/if}
+              {@const canDelete = !isProtectedEntry(entry)}
+              {@const deleteUri = entry.uri ?? entry.path}
+              <div class="tree-item-row">
+                <button
+                  class="tree-item {isEntryActive(entry) ? 'active' : ''}"
+                  onclick={() => onOpenEntry(entry)}
+                >
+                  <span class="tree-item-icon {entry.is_directory ? 'folder' : ''}">
+                    <Icon size={14} strokeWidth={2} />
                   </span>
-                </span>
-                {#if badges.conflictCount || badges.dirtyCount || badges.pendingDeleteCount}
-                  <span class="tree-item-badges">
-                    {#if badges.conflictCount}
-                      <span class="badge danger">{badges.conflictCount}</span>
-                    {/if}
-                    {#if badges.dirtyCount}
-                      <span class="badge">{badges.dirtyCount}</span>
-                    {/if}
-                    {#if badges.pendingDeleteCount}
-                      <span class="badge muted">{badges.pendingDeleteCount}</span>
-                    {/if}
+                  <span class="tree-item-copy">
+                    <span class="tree-item-name">{entryLabel(entry)}</span>
+                    <span class="tree-item-meta">
+                      {#if entryAllowlistId(entry)}
+                        <span class="tree-item-subtle">{entryAllowlistId(entry)}</span>
+                      {/if}
+                    </span>
                   </span>
+                  {#if badges.conflictCount || badges.dirtyCount || badges.pendingDeleteCount}
+                    <span class="tree-item-badges">
+                      {#if badges.conflictCount}
+                        <span class="badge danger">{badges.conflictCount}</span>
+                      {/if}
+                      {#if badges.dirtyCount}
+                        <span class="badge">{badges.dirtyCount}</span>
+                      {/if}
+                      {#if badges.pendingDeleteCount}
+                        <span class="badge muted">{badges.pendingDeleteCount}</span>
+                      {/if}
+                    </span>
+                  {/if}
+                </button>
+                {#if canDelete}
+                  {#if deleteConfirmUri === deleteUri}
+                    <button
+                      class="tree-confirm-delete-btn"
+                      type="button"
+                      title="确认删除"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        clearTimeout(deleteConfirmTimer);
+                        deleteConfirmUri = null;
+                        onDeleteFile(deleteUri, entryAllowlistId(entry) ?? undefined)
+                          .catch((err: unknown) => console.error('[delete-error]', err));
+                      }}
+                    >
+                      <Check size={13} strokeWidth={2.5} />
+                    </button>
+                    <button
+                      class="tree-cancel-delete-btn"
+                      type="button"
+                      title="取消"
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        clearTimeout(deleteConfirmTimer);
+                        deleteConfirmUri = null;
+                      }}
+                    >
+                      <X size={13} strokeWidth={2} />
+                    </button>
+                  {:else}
+                    <button
+                      class="tree-delete-btn"
+                      type="button"
+                      title={entry.is_directory ? "删除此目录" : "删除此文件"}
+                      onclick={(e) => {
+                        e.stopPropagation();
+                        deleteConfirmUri = deleteUri;
+                        clearTimeout(deleteConfirmTimer);
+                        deleteConfirmTimer = setTimeout(() => { deleteConfirmUri = null; }, 3000);
+                      }}
+                    >
+                      <Trash2 size={13} strokeWidth={2} />
+                    </button>
+                  {/if}
                 {/if}
-              </button>
+              </div>
             {/each}
           {/if}
         </div>
@@ -860,6 +983,7 @@
                     >
                       <Check size={14} strokeWidth={2.5} />
                     </button>
+                    {#if !isSkillsAllowlist(group)}
                     <button
                       class="header-icon-btn"
                       onclick={() => {
@@ -871,6 +995,7 @@
                     >
                       <Undo2 size={14} strokeWidth={2} />
                     </button>
+                    {/if}
                   </div>
                 </div>
 
@@ -971,14 +1096,14 @@
   <div
     class="preview-modal-backdrop"
     role="presentation"
-    onclick={closePreview}
-    onkeydown={(event) => event.key === "Escape" && closePreview()}
+    onclick={requestClosePreview}
+    onkeydown={(event) => event.key === "Escape" && requestClosePreview()}
   >
     <div
       class="preview-modal"
       role="dialog"
       aria-modal="true"
-      aria-label="文件预览"
+      aria-label="代码编辑器"
       tabindex="-1"
       onkeydown={handlePreviewKeydown}
     >
@@ -987,65 +1112,40 @@
         <!-- Title bar -->
         <div class="preview-modal-head">
           <div class="preview-modal-title">
-            <strong>{getPreviewPath() ?? "文件预览"}</strong>
+            <strong>{getPreviewDisplayPath() ?? "文件"}</strong>
             <span>
-              {#if editMode}
-                编辑中{#if editDirty} · 未保存{/if}
-              {:else if selectedDocument}
-                工作区文件
-              {:else if selectedFile}
-                {statusLabel(selectedFile.status)}
-              {:else}
-                正在加载
+              {#if editorDirty}
+                · 未保存
               {/if}
-              {#if previewLines && !editMode}
-                · {previewLines.length} 行
+              {#if editorLines}
+                · {editorLines.length} 行
               {/if}
             </span>
           </div>
           <div class="preview-head-actions">
-            {#if editMode}
-              <button
-                class="preview-tool-btn"
-                title="查找替换 (⌘H)"
-                onclick={openReplaceBar}
-              >
+            {#if isEditable}
+              <button class="preview-tool-btn" title="查找 (⌘F)" onclick={openFindBar}>
                 <Search size={14} strokeWidth={2} />
+              </button>
+              <button class="preview-tool-btn" title="查找替换 (⌘H)" onclick={openReplaceBar}>
+                <Pencil size={14} strokeWidth={2} />
               </button>
               <button
                 class="preview-tool-btn save-btn"
                 title="保存 (⌘S)"
-                onclick={saveEditContent}
-                disabled={editSaving || !editDirty}
+                onclick={saveEditorContent}
+                disabled={editorSaving || !editorDirty}
               >
                 <Save size={14} strokeWidth={2} />
               </button>
-              <button
-                class="preview-tool-btn"
-                title="退出编辑"
-                onclick={exitEditMode}
-              >
-                <X size={14} strokeWidth={2} />
-              </button>
-            {:else}
-              {#if canEdit()}
-                <button class="preview-tool-btn" title="编辑" onclick={enterEditMode}>
-                  <Pencil size={14} strokeWidth={2} />
-                </button>
-              {/if}
-              {#if previewLines}
-                <button class="preview-tool-btn" title="查找 (⌘F)" onclick={openFindBar}>
-                  <Search size={14} strokeWidth={2} />
-                </button>
-              {/if}
-              <button class="icon-btn" onclick={closePreview} aria-label="关闭预览">
-                <X size={16} strokeWidth={2} />
-              </button>
             {/if}
+            <button class="icon-btn" onclick={requestClosePreview} aria-label="关闭">
+              <X size={16} strokeWidth={2} />
+            </button>
           </div>
         </div>
 
-        <!-- Find bar (view mode) / Find-and-replace bar (edit mode) -->
+        <!-- Find bar -->
         {#if findBarOpen}
           <div class="code-find-bar" transition:fly={{ y: -10, duration: 150 }}>
             <Search size={13} strokeWidth={2} class="find-icon" />
@@ -1079,8 +1179,8 @@
           </div>
         {/if}
 
-        <!-- Replace row (edit mode only) -->
-        {#if replaceBarOpen && editMode}
+        <!-- Replace row -->
+        {#if replaceBarOpen}
           <div class="code-find-bar replace-bar" transition:fly={{ y: -10, duration: 150 }}>
             <span class="replace-label">替换：</span>
             <input
@@ -1116,8 +1216,8 @@
           </div>
         {/if}
 
-        <!-- Go-to-line bar (view mode only) -->
-        {#if gotoLineOpen && !editMode}
+        <!-- Go-to-line bar -->
+        {#if gotoLineOpen}
           <div class="code-find-bar" transition:fly={{ y: -10, duration: 150 }}>
             <span class="goto-label">跳转到行：</span>
             <input
@@ -1125,8 +1225,8 @@
               type="number"
               class="find-input goto-input"
               min="1"
-              max={previewLines?.length ?? 1}
-              placeholder={`1–${previewLines?.length ?? "?"}`}
+              max={editorLines?.length ?? 1}
+              placeholder={`1–${editorLines?.length ?? "?"}`}
               bind:value={gotoLineValue}
               onkeydown={(e) => {
                 if (e.key === "Enter") handleGotoSubmit();
@@ -1142,34 +1242,46 @@
           </div>
         {/if}
 
-        <!-- Code body -->
+        <!-- Editor body -->
         <div class="preview-modal-body">
           {#if fileLoading}
-            <div class="preview-empty">正在加载文件预览…</div>
-          {:else if editMode}
-            <textarea
-              bind:this={editTextareaRef}
-              class="edit-textarea"
-              bind:value={editContent}
-              oninput={handleEditInput}
-              onkeydown={handleEditKeydown}
-              spellcheck="false"
-            ></textarea>
+            <div class="preview-empty">正在加载…</div>
           {:else if highlightedLines}
-            <div class="code-viewer" bind:this={codeViewerRef}>
-              <table class="code-table">
-                <tbody>
+            <div class="editor-wrapper">
+              <!-- Line numbers gutter -->
+              <div class="line-gutter" bind:this={gutterRef}>
+                {#each highlightedLines as _, i}
+                  <div
+                    class="gutter-line {isCurrentMatchLine(i) ? 'match-current' : isMatchLine(i) ? 'match-highlight' : ''}"
+                    data-line={i}
+                  >
+                    {i + 1}
+                  </div>
+                {/each}
+              </div>
+              <!-- Grid-stacked editor: highlight layer and textarea share same cell -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="editor-layers" bind:this={codeViewerRef} onscroll={handleEditorScroll}>
+                <div class="highlight-layer hljs">
                   {#each highlightedLines as line, i}
-                    <tr
-                      class="code-line {isCurrentMatchLine(i) ? 'match-current' : isMatchLine(i) ? 'match-highlight' : ''}"
+                    <div
+                      class="hl-line {isCurrentMatchLine(i) ? 'match-current' : isMatchLine(i) ? 'match-highlight' : ''}"
                       data-line={i}
-                    >
-                      <td class="line-number" style:--lnw="{lineNumberWidth}ch">{i + 1}</td>
-                      <td class="line-content hljs">{@html line || " "}</td>
-                    </tr>
+                    >{@html line || " "}</div>
                   {/each}
-                </tbody>
-              </table>
+                </div>
+                <textarea
+                  bind:this={editorTextareaRef}
+                  class="editor-textarea"
+                  bind:value={editorContent}
+                  oninput={handleEditorInput}
+                  onkeydown={handleEditorKeydown}
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocorrect="off"
+                  autocapitalize="off"
+                ></textarea>
+              </div>
             </div>
           {:else if selectedFile}
             <p class="preview-meta">{previewHeadline(selectedFile)}</p>
@@ -1187,19 +1299,41 @@
         </div>
 
         <!-- Status bar -->
-        {#if editMode}
+        {#if editorLines}
           <div class="preview-status-bar">
-            <span>{detectLanguage(getPreviewPath())?.toUpperCase() ?? "纯文本"}</span>
-            <span>{editContent.split("\n").length} 行</span>
-            <span class="status-shortcut">⌘S 保存 · ⌘H 替换 · ⌘F 查找</span>
-          </div>
-        {:else if previewLines}
-          <div class="preview-status-bar">
-            <span>{detectLanguage(getPreviewPath())?.toUpperCase() ?? "纯文本"}</span>
-            <span>{previewLines.length} 行</span>
-            <span class="status-shortcut">⌘F 查找 · ⌘G 跳行 · Esc 关闭</span>
+            <span>{detectLanguage(getPreviewDisplayPath())?.toUpperCase() ?? "纯文本"}</span>
+            <span>{editorLines.length} 行</span>
+            <span class="status-shortcut">⌘S 保存 · ⌘F 查找 · ⌘H 替换 · ⌘G 跳行</span>
           </div>
         {/if}
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Unsaved changes confirmation dialog -->
+{#if showUnsavedDialog}
+  <div
+    class="unsaved-dialog-backdrop"
+    role="presentation"
+    onclick={() => showUnsavedDialog = false}
+    onkeydown={(e) => e.key === "Escape" && (showUnsavedDialog = false)}
+    transition:fade={{ duration: 120 }}
+  >
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="unsaved-dialog" onclick={(e) => e.stopPropagation()} onkeydown={() => {}} transition:fly={{ y: 20, duration: 200 }}>
+      <p class="unsaved-dialog-title">文件有未保存的修改</p>
+      <p class="unsaved-dialog-desc">关闭前是否保存？</p>
+      <div class="unsaved-dialog-actions">
+        <button class="unsaved-btn cancel" onclick={() => showUnsavedDialog = false}>
+          取消
+        </button>
+        <button class="unsaved-btn discard" onclick={discardAndClose}>
+          不保存
+        </button>
+        <button class="unsaved-btn save" onclick={saveAndClose}>
+          保存
+        </button>
       </div>
     </div>
   </div>
@@ -1507,6 +1641,76 @@
 
   .tree-item.active {
     background: var(--bg-active);
+  }
+
+  .tree-item-row {
+    display: flex;
+    align-items: center;
+    border-radius: 6px;
+    position: relative;
+  }
+
+  .tree-item-row:hover {
+    background: var(--bg-hover);
+  }
+
+  .tree-item-row .tree-item {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .tree-delete-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-right: 4px;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .tree-item-row:hover .tree-delete-btn {
+    display: flex;
+  }
+
+  .tree-delete-btn:hover {
+    color: #c44;
+    background: rgba(204, 68, 68, 0.1);
+  }
+
+  .tree-confirm-delete-btn,
+  .tree-cancel-delete-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .tree-confirm-delete-btn {
+    color: #c44;
+  }
+  .tree-confirm-delete-btn:hover {
+    background: rgba(204, 68, 68, 0.15);
+  }
+
+  .tree-cancel-delete-btn {
+    color: var(--text-muted);
+  }
+  .tree-cancel-delete-btn:hover {
+    background: var(--bg-hover);
   }
 
   .tree-item-icon {
@@ -1920,64 +2124,102 @@
     padding: 0;
   }
 
-  .code-viewer {
+  /* ── Overlay code editor ── */
+  .editor-wrapper {
+    display: flex;
     flex: 1;
-    overflow: auto;
-    background: var(--bg-surface);
     min-height: 0;
-  }
-
-  .code-table {
-    border-collapse: collapse;
-    width: 100%;
-    min-height: 100%;
-    font-family: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+    overflow: hidden;
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", "Fira Code", Menlo, Monaco, Consolas, monospace;
     font-size: 12.5px;
-    line-height: 1.55;
-    tab-size: 4;
+    line-height: 1.6;
+    tab-size: 2;
   }
 
-  .code-line {
-    transition: background 0.08s;
+  .line-gutter {
+    flex-shrink: 0;
+    width: 52px;
+    padding: 0;
+    background: var(--bg-input);
+    border-right: 1px solid var(--border-default);
+    user-select: none;
+    overflow: hidden;
+    text-align: right;
   }
 
-  .code-line:hover {
-    background: color-mix(in srgb, var(--accent-gold) 5%, transparent);
+  .gutter-line {
+    padding: 0 12px 0 8px;
+    color: var(--text-tertiary);
+    font-size: 11.5px;
+    line-height: 1.6;
+    height: calc(1.6 * 12.5px);
   }
 
-  .code-line.match-highlight {
+  .gutter-line.match-highlight {
     background: color-mix(in srgb, var(--accent-gold) 12%, transparent);
   }
 
-  .code-line.match-current {
+  .gutter-line.match-current {
+    background: color-mix(in srgb, var(--accent-gold) 22%, transparent);
+    color: var(--text-primary);
+  }
+
+  .editor-layers {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    display: grid;
+    grid-template: 1fr / 1fr;
+  }
+
+  .highlight-layer {
+    grid-area: 1 / 1;
+    pointer-events: none;
+    padding: 0 16px;
+    white-space: pre;
+    word-break: break-all;
+    min-height: 100%;
+    background: transparent;
+  }
+
+  .hl-line {
+    height: calc(1.6 * 12.5px);
+    line-height: 1.6;
+  }
+
+  .hl-line.match-highlight {
+    background: color-mix(in srgb, var(--accent-gold) 12%, transparent);
+  }
+
+  .hl-line.match-current {
     background: color-mix(in srgb, var(--accent-gold) 22%, transparent);
   }
 
-  .line-number {
-    position: sticky;
-    left: 0;
-    width: calc(var(--lnw, 3ch) + 32px);
-    min-width: 48px;
-    padding: 0 12px 0 16px;
-    text-align: right;
-    color: var(--text-tertiary);
-    background: var(--bg-input);
-    user-select: none;
-    font-size: 11.5px;
-    border-right: 1px solid var(--border-default);
-    vertical-align: top;
-  }
-
-  .code-line:last-child .line-number,
-  .code-line:last-child .line-content {
-    height: 100%;
-  }
-
-  .line-content {
+  .editor-textarea {
+    grid-area: 1 / 1;
     padding: 0 16px;
-    white-space: pre-wrap;
-    word-break: break-all;
-    min-height: 1.55em;
+    margin: 0;
+    border: none;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: var(--text-primary);
+    font: inherit;
+    line-height: 1.6;
+    tab-size: 2;
+    white-space: pre;
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  .editor-textarea::selection {
+    background: color-mix(in srgb, var(--accent-gold) 25%, transparent);
+    color: transparent;
+  }
+
+  .editor-textarea:focus {
+    outline: none;
   }
 
   /* ── Status bar ── */
@@ -2006,30 +2248,6 @@
     font-size: 13px;
   }
 
-  /* ── Edit mode ── */
-  .edit-textarea {
-    width: 100%;
-    height: 100%;
-    min-height: 100%;
-    padding: 12px 16px;
-    margin: 0;
-    border: none;
-    outline: none;
-    resize: none;
-    background: var(--bg-surface);
-    color: var(--text-primary);
-    font-family: "SF Mono", "Cascadia Code", "Fira Code", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
-    font-size: 12.5px;
-    line-height: 1.6;
-    tab-size: 2;
-    white-space: pre;
-    overflow: auto;
-  }
-
-  .edit-textarea:focus {
-    outline: none;
-  }
-
   .save-btn:not(:disabled) {
     color: var(--accent-gold);
   }
@@ -2050,6 +2268,85 @@
     padding: 2px 8px;
     width: auto;
     border-radius: 4px;
+  }
+
+  /* ── Unsaved changes dialog ── */
+  .unsaved-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(4px);
+  }
+
+  .unsaved-dialog {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    border-radius: 14px;
+    padding: 24px 28px 20px;
+    width: min(360px, calc(100vw - 48px));
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+  }
+
+  .unsaved-dialog-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin: 0 0 6px;
+  }
+
+  .unsaved-dialog-desc {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 20px;
+  }
+
+  .unsaved-dialog-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .unsaved-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    border: 1px solid var(--border-default);
+    transition: background 0.12s, border-color 0.12s;
+  }
+
+  .unsaved-btn.cancel {
+    background: var(--bg-input);
+    color: var(--text-secondary);
+  }
+
+  .unsaved-btn.cancel:hover {
+    background: var(--bg-elevated);
+  }
+
+  .unsaved-btn.discard {
+    background: var(--bg-input);
+    color: var(--accent-danger-text, #c53030);
+    border-color: color-mix(in srgb, var(--accent-danger-text, #c53030) 20%, var(--border-default));
+  }
+
+  .unsaved-btn.discard:hover {
+    background: var(--accent-danger, #fff5f5);
+  }
+
+  .unsaved-btn.save {
+    background: var(--accent-gold);
+    color: #fff;
+    border-color: var(--accent-gold);
+  }
+
+  .unsaved-btn.save:hover {
+    filter: brightness(1.06);
   }
 
   /* ── Compact file change list ── */

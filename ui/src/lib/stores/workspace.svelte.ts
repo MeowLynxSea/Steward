@@ -362,8 +362,18 @@ class WorkspaceState {
   async writeFile(path: string, content: string) {
     await this.#runBusyAction("正在保存文件…", async () => {
       await apiClient.writeWorkspaceFile(path, content);
-      // Re-fetch the current path to reflect the change
       await this.fetch(this.currentPath);
+    });
+  }
+
+  async deleteFile(path: string, allowlistId?: string) {
+    await this.#runBusyAction("正在删除文件…", async () => {
+      await apiClient.deleteWorkspaceFile(path);
+      if (allowlistId) {
+        await this.#afterAllowlistMutation(allowlistId);
+      } else {
+        await this.fetch(this.currentPath);
+      }
     });
   }
 

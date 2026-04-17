@@ -672,8 +672,25 @@ impl LibSqlBackend {
 
         let mut add_args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
         add_args.extend(pathspecs);
-        self.run_tracker_git_text(tracker, Some(&index_path), &add_args)
-            .await?;
+        if let Err(e) = self
+            .run_tracker_git_text(tracker, Some(&index_path), &add_args)
+            .await
+        {
+            // Specific pathspecs can fail when files were deleted but never
+            // tracked (e.g. macOS .DS_Store, or files created after the last
+            // anchor).  Fall back to staging the entire allowlist scope.
+            tracing::debug!(
+                "git add with specific paths failed, falling back to root scope: {e}"
+            );
+            let fallback_args = vec![
+                "add".to_string(),
+                "-A".to_string(),
+                "--".to_string(),
+                tracker.root_pathspec(),
+            ];
+            self.run_tracker_git_text(tracker, Some(&index_path), &fallback_args)
+                .await?;
+        }
 
         let tree = self
             .run_tracker_git_text(tracker, Some(&index_path), &["write-tree".to_string()])
