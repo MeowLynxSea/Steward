@@ -798,7 +798,6 @@ mod tests {
             repair_check_interval: std::time::Duration::from_secs(3600),
             max_repair_attempts: 0,
             use_planning: false,
-            session_idle_timeout: std::time::Duration::from_secs(3600),
             allow_local_tools: true,
             max_cost_per_day_cents: None,
             max_actions_per_hour: None,

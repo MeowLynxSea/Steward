@@ -17,13 +17,12 @@ use steward_core::extensions::ExtensionKind;
 use steward_core::history::ConversationMessage;
 use steward_core::ipc::{
     ApproveTaskRequest, CreateSessionRequest, CreateWorkspaceAllowlistRequest,
-    CreateWorkspaceCheckpointRequest, DeleteWorkspaceCheckpointRequest,
-    McpActivityItemResponse, McpActivityListResponse,
-    McpAddResourceToThreadResponse, McpAuthResponse, McpCompleteArgumentRequest,
-    McpCompleteArgumentResponse, McpPromptGetRequest, McpPromptListResponse, McpPromptResponse,
-    McpReadResourceResponse, McpResourceListResponse, McpResourceTemplateListResponse,
-    McpRespondElicitationRequest, McpRespondElicitationResponse, McpRespondSamplingRequest,
-    McpRespondSamplingResponse, McpRootGrantResponse, McpRootsResponse,
+    CreateWorkspaceCheckpointRequest, DeleteWorkspaceCheckpointRequest, DeleteWorkspaceFileRequest,
+    McpActivityItemResponse, McpActivityListResponse, McpAddResourceToThreadResponse,
+    McpAuthResponse, McpCompleteArgumentRequest, McpCompleteArgumentResponse, McpPromptGetRequest,
+    McpPromptListResponse, McpPromptResponse, McpReadResourceResponse, McpResourceListResponse,
+    McpResourceTemplateListResponse, McpRespondElicitationRequest, McpRespondElicitationResponse,
+    McpRespondSamplingRequest, McpRespondSamplingResponse, McpRootGrantResponse, McpRootsResponse,
     McpSaveResourceSnapshotResponse, McpServerListResponse, McpServerSummaryResponse,
     McpServerUpsertRequest, McpServerUpsertResponse, McpSetRootsRequest, McpTestResponse,
     McpToolListResponse, MemoryGraphSearchRequest, MemoryReviewActionRequest, PatchSettingsRequest,
@@ -31,7 +30,6 @@ use steward_core::ipc::{
     SendSessionMessageRequest, WorkspaceActionRequest, WorkspaceBaselineSetRequest,
     WorkspaceCheckpointListQuery, WorkspaceDiffQuery, WorkspaceHistoryQuery,
     WorkspaceRestoreRequest, WorkspaceSearchRequest, WriteWorkspaceFileRequest,
-    DeleteWorkspaceFileRequest,
 };
 use steward_core::llm::{ChatMessage, CompletionRequest};
 use steward_core::settings::Settings;
@@ -1967,6 +1965,14 @@ pub async fn list_sessions(
         });
     }
 
+    summaries.sort_by(|left, right| {
+        right
+            .last_activity
+            .cmp(&left.last_activity)
+            .then_with(|| right.started_at.cmp(&left.started_at))
+            .then_with(|| right.id.as_bytes().cmp(left.id.as_bytes()))
+    });
+
     Ok(steward_core::ipc::SessionListResponse {
         sessions: summaries,
     })
@@ -3223,10 +3229,7 @@ pub async fn delete_workspace_checkpoint(
         .ok_or_else(|| "Workspace not available".to_string())?;
 
     workspace
-        .delete_checkpoint(
-            parse_workspace_allowlist_id(&id)?,
-            payload.checkpoint_id,
-        )
+        .delete_checkpoint(parse_workspace_allowlist_id(&id)?, payload.checkpoint_id)
         .await
         .map_err(|e| e.to_string())
 }

@@ -1294,18 +1294,6 @@ impl Agent {
             }
         });
 
-        // Spawn session pruning task
-        let session_mgr = self.session_manager.clone();
-        let session_idle_timeout = self.config.session_idle_timeout;
-        let pruning_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(600)); // Every 10 min
-            interval.tick().await; // Skip immediate first tick
-            loop {
-                interval.tick().await;
-                session_mgr.prune_stale_sessions(session_idle_timeout).await;
-            }
-        });
-
         // Spawn heartbeat if enabled
         let heartbeat_handle = if let Some(ref hb_config) = self.heartbeat_config {
             if hb_config.enabled {
@@ -1767,7 +1755,6 @@ impl Agent {
         // Cleanup
         tracing::debug!("Agent shutting down...");
         repair_handle.abort();
-        pruning_handle.abort();
         if let Some(handle) = heartbeat_handle {
             handle.abort();
         }
@@ -2682,7 +2669,6 @@ mod tests {
                 repair_check_interval: Duration::from_secs(30),
                 max_repair_attempts: 1,
                 use_planning: false,
-                session_idle_timeout: Duration::from_secs(300),
                 allow_local_tools: false,
                 max_cost_per_day_cents: None,
                 max_actions_per_hour: None,

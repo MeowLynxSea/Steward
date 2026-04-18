@@ -268,8 +268,6 @@ pub struct AgentSettings {
     pub repair_check_interval_secs: u64,
     #[serde(default = "default_max_repair_attempts")]
     pub max_repair_attempts: u32,
-    #[serde(default = "default_session_idle_timeout")]
-    pub session_idle_timeout_secs: u64,
     #[serde(default = "default_max_tool_iterations")]
     pub max_tool_iterations: usize,
     #[serde(default)]
@@ -304,10 +302,6 @@ fn default_repair_interval() -> u64 {
     60
 }
 
-fn default_session_idle_timeout() -> u64 {
-    7 * 24 * 3600
-}
-
 fn default_max_repair_attempts() -> u32 {
     3
 }
@@ -330,7 +324,6 @@ impl Default for AgentSettings {
             use_planning: true,
             repair_check_interval_secs: default_repair_interval(),
             max_repair_attempts: default_max_repair_attempts(),
-            session_idle_timeout_secs: default_session_idle_timeout(),
             max_tool_iterations: default_max_tool_iterations(),
             auto_approve_tools: false,
             default_timezone: default_timezone(),

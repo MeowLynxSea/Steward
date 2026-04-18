@@ -15,8 +15,6 @@ pub struct AgentConfig {
     pub max_repair_attempts: u32,
     /// Whether to use planning before tool execution.
     pub use_planning: bool,
-    /// Session idle timeout. Sessions inactive longer than this are pruned.
-    pub session_idle_timeout: Duration,
     /// Allow chat to use filesystem/shell tools directly in the host runtime.
     pub allow_local_tools: bool,
     /// Maximum daily LLM spend in cents (e.g. 10000 = $100). None = unlimited.
@@ -56,7 +54,6 @@ impl AgentConfig {
             repair_check_interval: Duration::from_secs(3600),
             max_repair_attempts: 0,
             use_planning: false,
-            session_idle_timeout: Duration::from_secs(3600),
             allow_local_tools: true,
             max_cost_per_day_cents: None,
             max_actions_per_hour: None,
@@ -96,10 +93,6 @@ impl AgentConfig {
                 settings.agent.max_repair_attempts,
             )?,
             use_planning: parse_bool_env("AGENT_USE_PLANNING", settings.agent.use_planning)?,
-            session_idle_timeout: Duration::from_secs(parse_optional_env(
-                "SESSION_IDLE_TIMEOUT_SECS",
-                settings.agent.session_idle_timeout_secs,
-            )?),
             allow_local_tools: parse_bool_env("ALLOW_LOCAL_TOOLS", false)?,
             max_cost_per_day_cents: parse_option_env("MAX_COST_PER_DAY_CENTS")?,
             max_actions_per_hour: parse_option_env("MAX_ACTIONS_PER_HOUR")?,

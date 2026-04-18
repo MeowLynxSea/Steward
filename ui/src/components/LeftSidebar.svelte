@@ -66,7 +66,7 @@
     </div>
 
     <div class="session-list">
-      <div class="section-title">最近7天</div>
+      <div class="section-title">所有会话</div>
       {#each sessions as session}
         <div class="session-row">
           <button

@@ -679,9 +679,7 @@ impl LibSqlBackend {
             // Specific pathspecs can fail when files were deleted but never
             // tracked (e.g. macOS .DS_Store, or files created after the last
             // anchor).  Fall back to staging the entire allowlist scope.
-            tracing::debug!(
-                "git add with specific paths failed, falling back to root scope: {e}"
-            );
+            tracing::debug!("git add with specific paths failed, falling back to root scope: {e}");
             let fallback_args = vec![
                 "add".to_string(),
                 "-A".to_string(),

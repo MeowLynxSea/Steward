@@ -11,7 +11,7 @@ Core agent logic. This is the most complex subsystem — read this before workin
 | `thread_ops.rs` | Thread/session operations: `process_user_input`, undo/redo, approval, auth-mode interception, DB hydration, compaction. |
 | `commands.rs` | System command handlers (`/help`, `/model`, `/status`, `/skills`, etc.) and job intent handlers. |
 | `session.rs` | Data model: `Session` → `Thread` → `Turn`. State machines for threads and turns. |
-| `session_manager.rs` | Lifecycle: create/lookup sessions, map external thread IDs to internal UUIDs, prune stale sessions, manage undo managers. |
+| `session_manager.rs` | Lifecycle: create/lookup sessions, map external thread IDs to internal UUIDs, manage undo managers. |
 | `router.rs` | Routes explicit `/commands` to `MessageIntent`. Natural language bypasses the router entirely. |
 | `scheduler.rs` | Parallel job scheduling. Maintains `jobs` map (full LLM-driven) and `subtasks` map (tool-exec/background). |
 | *(moved to `src/worker/job.rs`)* | Per-job execution now lives in `src/worker/job.rs` as `JobDelegate`, using the shared `run_agentic_loop()` engine. |
@@ -48,7 +48,7 @@ Session (per user)
 - Automatic cross-conversation recall follows the same privacy boundary: group/channel chats do not auto-inject user-scoped historical turns unless explicitly enabled in `CONVERSATION_RECALL_ALLOW_GROUP_AUTO_RECALL`.
 - **Auth mode**: if a thread has `pending_auth` set (e.g. from `tool_auth` returning `awaiting_token`), the next user message is intercepted before any turn creation, logging, or safety validation and sent directly to the credential store. Any control submission (undo, interrupt, etc.) cancels auth mode.
 - `ThreadState` values: `Idle`, `Processing`, `AwaitingApproval`, `Completed`, `Interrupted`.
-- `SessionManager` maps `(user_id, channel, external_thread_id)` → internal UUID. Prunes idle sessions every 10 minutes (warns at 1000 sessions).
+- `SessionManager` maps `(user_id, channel, external_thread_id)` → internal UUID. Desktop runtime keeps sessions until explicit deletion.
 
 ## Agentic Loop (dispatcher.rs)
 

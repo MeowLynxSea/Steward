@@ -609,33 +609,6 @@ impl SessionManager {
             false
         }
     }
-
-    pub async fn prune_stale_sessions(&self, max_idle: std::time::Duration) -> usize {
-        let cutoff = chrono::Utc::now() - chrono::TimeDelta::seconds(max_idle.as_secs() as i64);
-        let mut pruned = 0;
-
-        let mut sessions = self.sessions.write().await;
-        for (owner_id, user_sessions) in sessions.iter_mut() {
-            let stale_ids: Vec<Uuid> = user_sessions
-                .iter()
-                .filter(|(_, session)| {
-                    session
-                        .try_lock()
-                        .map(|s| s.last_active_at < cutoff)
-                        .unwrap_or(false)
-                })
-                .map(|(id, _)| *id)
-                .collect();
-
-            for id in stale_ids {
-                if user_sessions.remove(&id).is_some() {
-                    self.delete_session_from_db(owner_id, id).await;
-                    pruned += 1;
-                }
-            }
-        }
-        pruned
-    }
 }
 
 impl Default for SessionManager {

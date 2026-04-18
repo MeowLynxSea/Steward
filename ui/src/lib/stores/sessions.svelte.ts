@@ -106,6 +106,27 @@ function isSessionTitleUpdatePayload(payload: unknown): payload is SessionTitleU
   );
 }
 
+function sessionTimestamp(value: string): number {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function sortSessionsByLastActivity(sessions: SessionSummary[]): SessionSummary[] {
+  return [...sessions].sort((left, right) => {
+    const activityDiff = sessionTimestamp(right.last_activity) - sessionTimestamp(left.last_activity);
+    if (activityDiff !== 0) {
+      return activityDiff;
+    }
+
+    const startedDiff = sessionTimestamp(right.started_at) - sessionTimestamp(left.started_at);
+    if (startedDiff !== 0) {
+      return startedDiff;
+    }
+
+    return right.id.localeCompare(left.id);
+  });
+}
+
 function reflectionAssistantMessageId(
   payload: unknown
 ): string | null {
@@ -167,7 +188,7 @@ class SessionsState {
     this.error = null;
     try {
       const response = await apiClient.listSessions();
-      this.list = response.sessions;
+      this.list = sortSessionsByLastActivity(response.sessions);
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to load sessions";
     } finally {
@@ -250,10 +271,16 @@ class SessionsState {
     this.#liveTurnNumber = optimistic.turn_number;
     this.#streamingAssistantId = null;
     this.#streamingThinkingId = null;
+    const lastActivity = optimistic.created_at;
     this.active = {
       ...this.active,
+      session: {
+        ...this.active.session,
+        last_activity: lastActivity
+      },
       thread_messages: [...this.active.thread_messages, optimistic]
     };
+    this.#applySessionSummaryPatch(this.activeId, { last_activity: lastActivity });
     this.#applySessionTitleUpdate({
       session_id: this.activeId,
       title: this.active.session.title,
@@ -1085,25 +1112,34 @@ class SessionsState {
     }
   }
 
-  #applySessionTitleUpdate(update: SessionTitleUpdatePayload) {
+  #applySessionSummaryPatch(
+    sessionId: string,
+    patch: Partial<Pick<SessionSummary, "title" | "title_emoji" | "title_pending" | "last_activity">>
+  ) {
     const apply = (session: SessionSummary): SessionSummary =>
-      session.id === update.session_id
+      session.id === sessionId
         ? {
             ...session,
-            title: update.title,
-            title_emoji: update.emoji,
-            title_pending: update.pending
+            ...patch
           }
         : session;
 
-    this.list = this.list.map(apply);
+    this.list = sortSessionsByLastActivity(this.list.map(apply));
 
-    if (this.active?.session.id === update.session_id) {
+    if (this.active?.session.id === sessionId) {
       this.active = {
         ...this.active,
         session: apply(this.active.session)
       };
     }
+  }
+
+  #applySessionTitleUpdate(update: SessionTitleUpdatePayload) {
+    this.#applySessionSummaryPatch(update.session_id, {
+      title: update.title,
+      title_emoji: update.emoji,
+      title_pending: update.pending
+    });
   }
 }
 

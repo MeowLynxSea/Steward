@@ -3184,7 +3184,6 @@ mod tests {
                 repair_check_interval: Duration::from_secs(30),
                 max_repair_attempts: 1,
                 use_planning: false,
-                session_idle_timeout: Duration::from_secs(300),
                 allow_local_tools: false,
                 max_cost_per_day_cents: None,
                 max_actions_per_hour: None,
