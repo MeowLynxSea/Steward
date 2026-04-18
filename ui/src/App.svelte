@@ -141,6 +141,33 @@
   });
 
   const noBackend = $derived(settingsStore.data.backends.length === 0);
+  const prefersEmptySessionLayout = $derived.by(() => {
+    const activeSession = sessionsStore.active;
+    const streaming = sessionsStore.streaming;
+    const hasLiveSessionSignal = Boolean(
+      streaming.isStreaming ||
+      streaming.thinking ||
+      streaming.streamingContent.trim() ||
+      streaming.toolCalls.length > 0 ||
+      streaming.reasoning ||
+      streaming.images.length > 0
+    );
+
+    return !sessionsStore.loading && (!activeSession || (activeSession.thread_messages.length === 0 && !hasLiveSessionSignal));
+  });
+  let lastPrefersEmptySessionLayout = $state<boolean | null>(null);
+
+  $effect(() => {
+    if (prefersEmptySessionLayout && lastPrefersEmptySessionLayout !== true) {
+      leftSidebarCollapsed = false;
+      rightSidebarCollapsed = true;
+    }
+    if (!prefersEmptySessionLayout && lastPrefersEmptySessionLayout === true) {
+      rightSidebarCollapsed = false;
+    }
+
+    lastPrefersEmptySessionLayout = prefersEmptySessionLayout;
+  });
 
   function handleApproveTask(task: TaskRecord) {
     void (async () => {
@@ -338,6 +365,7 @@
           task={sessionsStore.active?.active_thread_task ?? null}
           streaming={sessionsStore.streaming}
           loading={sessionsStore.loading}
+          emptyLayout={prefersEmptySessionLayout}
           noBackend={noBackend}
           {composerSeed}
           onSendMessage={handleSendMessage}

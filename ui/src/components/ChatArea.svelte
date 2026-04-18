@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { fade, fly } from "svelte/transition";
   import {
     ChevronRight,
     Loader,
@@ -30,6 +31,7 @@
     task: TaskRecord | null;
     streaming: StreamingState;
     loading: boolean;
+    emptyLayout?: boolean;
     noBackend?: boolean;
     composerSeed?: { id: string; content: string } | null;
     onSendMessage: (content: string) => void;
@@ -74,6 +76,7 @@
     task,
     streaming,
     loading,
+    emptyLayout = false,
     composerSeed = null,
     onSendMessage,
     onSuggestionClick,
@@ -106,10 +109,10 @@
   const auxiliarySummaryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const reflectionPollTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  const hasMessages = $derived(session && session.thread_messages.length > 0);
   const hasStreamingContent = $derived(
     streaming.images.length > 0
   );
+  const showEmptyLayout = $derived(!loading && emptyLayout);
   const normalizedStreamingThinking = $derived.by(() => normalizeThinkingTranscript(streaming.thinkingMessage));
   const hasLiveStreamingSignal = $derived.by(() => {
     return Boolean(
@@ -917,24 +920,27 @@
   });
 </script>
 
-<div class="chat-area">
+<div class="chat-area" class:empty-mode={showEmptyLayout}>
   <!-- Messages Area -->
   {#if loading}
     <div class="loading-state">
       <div class="loading-spinner"></div>
       <p>加载中...</p>
     </div>
-  {:else if !session || (!hasMessages && !hasStreamingContent)}
-    <div class="empty-chat">
-      <div class="empty-chat-inner">
-        <div class="empty-icon">
-          <Sparkles size={32} strokeWidth={1.5} />
-        </div>
-        <p class="empty-hint">开始新的对话</p>
-      </div>
-    </div>
+  {:else if showEmptyLayout}
+    <div
+      class="empty-chat"
+      aria-hidden="true"
+      in:fade={{ duration: 180 }}
+      out:fade={{ duration: 160 }}
+    ></div>
   {:else}
-    <div class="message-list" bind:this={messageListRef}>
+    <div
+      class="message-list"
+      bind:this={messageListRef}
+      in:fade={{ duration: 220 }}
+      out:fade={{ duration: 140 }}
+    >
       {#each displayEntries as entry, idx (entry.kind === "message" ? entry.message.id : entry.id)}
         <div
           class="message {(entry.kind === 'auxiliary_group') ? 'assistant' : (entry.message.role ?? entry.message.kind)} fade-in"
@@ -1213,8 +1219,18 @@
   {/if}
 
   <!-- Input Area -->
-  <div class="input-container">
-    <div class="input-box">
+  <div class="input-container" class:empty-mode={showEmptyLayout}>
+    {#if showEmptyLayout}
+      <div
+        class="empty-composer-copy"
+        in:fly={{ y: 18, duration: 260 }}
+        out:fade={{ duration: 160 }}
+      >
+        <h2 class="empty-composer-title">今天想要做什么？</h2>
+      </div>
+    {/if}
+
+    <div class="input-box" class:empty-mode={showEmptyLayout}>
       {#if noBackend}
         <div class="input-no-backend-hint">
           请先在设置中配置模型
@@ -1409,6 +1425,10 @@
     height: 100%;
   }
 
+  .chat-area.empty-mode {
+    justify-content: center;
+  }
+
   /* Loading */
   .loading-state {
     flex: 1;
@@ -1436,27 +1456,12 @@
   /* Empty state */
   .empty-chat {
     flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    min-height: 0;
+    pointer-events: none;
   }
 
-  .empty-chat-inner {
-    text-align: center;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .empty-icon {
-    color: var(--text-muted);
-    opacity: 0.5;
-  }
-
-  .empty-hint {
-    color: var(--text-muted);
-    font-size: 15px;
+  .chat-area.empty-mode .empty-chat {
+    display: none;
   }
 
   /* Messages */
@@ -2386,9 +2391,40 @@
 
   /* Input */
   .input-container {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
     padding: 16px 24px 24px;
     background: var(--bg-primary);
     flex-shrink: 0;
+    transition:
+      padding 0.28s ease,
+      transform 0.32s cubic-bezier(0.22, 1, 0.36, 1),
+      gap 0.24s ease;
+  }
+
+  .input-container.empty-mode {
+    width: min(100%, 840px);
+    align-self: center;
+    gap: 18px;
+    margin-block: auto;
+    padding: 0 24px;
+    transform: none;
+  }
+
+  .empty-composer-copy {
+    display: flex;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .empty-composer-title {
+    margin: 0;
+    font-size: clamp(28px, 4vw, 42px);
+    line-height: 1.08;
+    letter-spacing: -0.04em;
+    font-weight: 700;
+    color: var(--text-primary);
   }
 
   .input-box {
@@ -2396,6 +2432,15 @@
     border-radius: 20px;
     padding: 16px;
     box-shadow: var(--shadow-card);
+    transition:
+      border-radius 0.28s ease,
+      box-shadow 0.28s ease,
+      transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .input-box.empty-mode {
+    border-radius: 24px;
+    transform: translateY(0);
   }
 
   .input-no-backend-hint {
@@ -2557,6 +2602,18 @@
 
   .tool-inline-error {
     color: var(--accent-danger-text);
+  }
+
+  @media (max-width: 720px) {
+    .input-container.empty-mode {
+      width: 100%;
+      padding: 0 16px;
+      margin-block: auto;
+    }
+
+    .empty-composer-title {
+      font-size: 28px;
+    }
   }
 
   .pending-request-message {

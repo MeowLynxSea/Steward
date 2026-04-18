@@ -229,8 +229,10 @@ class SessionsState {
       const created = await apiClient.createSession(title);
       await this.fetchList();
       await this.select(created.id);
+      return created.id;
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to create session";
+      return null;
     }
   }
 
@@ -253,7 +255,14 @@ class SessionsState {
   }
 
   async sendMessage(content: string) {
-    if (!content.trim() || !this.activeId || !this.active) return;
+    const trimmedContent = content.trim();
+    if (!trimmedContent) return;
+
+    if (!this.activeId || !this.active) {
+      await this.create("新会话");
+    }
+
+    if (!this.activeId || !this.active) return;
 
     // Clear any previous error when sending a new message
     this.error = null;
@@ -262,7 +271,7 @@ class SessionsState {
       id: crypto.randomUUID(),
       kind: "message" as const,
       role: "user",
-      content: content.trim(),
+      content: trimmedContent,
       created_at: new Date().toISOString(),
       turn_number: this.#nextTurnNumber(),
       turn_cost: null,
@@ -297,7 +306,7 @@ class SessionsState {
     try {
       const response = await apiClient.sendSessionMessage(
         this.activeId,
-        content.trim(),
+        trimmedContent,
         this.messageMode
       );
       this.active = {
