@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::agent::SessionManager as AgentSessionManager;
 use crate::agent::routine::{NotifyConfig, RoutineGuardrails, next_cron_fire};
 use crate::agent::{Routine, RoutineAction, Trigger};
+use crate::bootstrap::steward_base_dir;
 use crate::config::Config;
 use crate::context::ContextManager;
 use crate::conversation_recall::ConversationRecallManager;
@@ -1097,6 +1098,29 @@ impl AppBuilder {
                 Err(e) => {
                     tracing::warn!("Failed to seed workspace: {}", e);
                 }
+            }
+
+            let default_root = steward_base_dir().join("default");
+            if let Err(error) = tokio::fs::create_dir_all(&default_root).await {
+                tracing::warn!(
+                    "Failed to create default workspace root {}: {}",
+                    default_root.display(),
+                    error
+                );
+            } else if let Err(error) = ws
+                .ensure_system_allowlist(
+                    crate::workspace::WorkspaceMountKind::Default,
+                    "Default",
+                    default_root.display().to_string(),
+                    false,
+                )
+                .await
+            {
+                tracing::warn!(
+                    "Failed to register Default workspace mount ({}): {}",
+                    default_root.display(),
+                    error
+                );
             }
 
             if self.config.skills.enabled {

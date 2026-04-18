@@ -205,7 +205,7 @@ export interface WorkspaceEntry {
   updated_at: string | null;
   content_preview: string | null;
   kind?: string;
-  mount_kind?: "user" | "skills" | null;
+  mount_kind?: "user" | "default" | "skills" | null;
   status?: string | null;
   bypass_write?: boolean | null;
   dirty_count?: number;
@@ -363,7 +363,7 @@ export interface WorkspaceAllowlist {
   id: string;
   user_id: string;
   display_name: string;
-  mount_kind: "user" | "skills";
+  mount_kind: "user" | "default" | "skills";
   source_root?: string;
   bypass_read: boolean;
   bypass_write: boolean;

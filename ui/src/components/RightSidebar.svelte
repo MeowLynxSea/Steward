@@ -38,9 +38,8 @@
   const SEED_PATHS = new Set(["README.md", "SOUL.md", "AGENTS.md", "HEARTBEAT.md", "TOOLS.md", "BOOTSTRAP.md"]);
 
   function isProtectedEntry(entry: WorkspaceEntry): boolean {
-    const uri = entry.uri ?? entry.path;
-    // Skills directory root cannot be unmounted
-    if (entry.mount_kind === "skills" && entry.is_directory && entry.kind === "allowlist") {
+    // System-managed allowlist roots cannot be unmounted
+    if (entry.mount_kind !== "user" && entry.is_directory && entry.kind === "allowlist") {
       return true;
     }
     // Files inside allowlists are never seed-protected

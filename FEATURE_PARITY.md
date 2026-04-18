@@ -166,7 +166,7 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 | `agents` | ✅ | ❌ | P3 | Multi-agent management |
 | `sessions` | ✅ | ❌ | P3 | Session listing (shows subagent models) |
 | `memory` | ✅ | ✅ | - | Memory search CLI |
-| `skills` | ✅ | ✅ | - | CLI subcommands (list, search, info) + agent tools + web API endpoints, with a unified `~/.steward/skills` root |
+| `skills` | ✅ | ✅ | - | CLI subcommands (list, search, info) + agent tools + web API endpoints, with a unified `~/.steward/skills` root; Workspace also auto-mounts `~/.steward/default` as `workspace://default` |
 | `pairing` | ✅ | ✅ | - | list/approve, account selector |
 | `nodes` | ✅ | ❌ | P3 | Device management, remove/clear flows |
 | `plugins` | ✅ | ❌ | P3 | Plugin management |
@@ -535,6 +535,7 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 - ✅ DM pairing (steward pairing list/approve, host APIs)
 - ✅ WASM tool sandbox
 - ✅ Workspace/memory with hybrid search + embeddings batching
+- ✅ System workspace mounts for `workspace://default` and `workspace://skills`
 - ✅ Prompt injection defense
 - ✅ Heartbeat system
 - ✅ Session management
@@ -617,7 +618,7 @@ Steward intentionally differs from OpenClaw in these ways:
 6. **WASM channels**: Novel extension mechanism not in OpenClaw
 7. **Tinfoil private inference**: Steward-only provider for private/encrypted inference
 8. **GitHub WASM tool**: Native GitHub integration as WASM tool
-9. **Prompt-based skills**: Different approach than OpenClaw capability bundles (filesystem-backed `~/.steward/skills`, workspace-mounted browsing, prompt injection)
+9. **Prompt-based skills**: Different approach than OpenClaw capability bundles (filesystem-backed `~/.steward/skills`, workspace-mounted browsing, prompt injection; plus a shared `workspace://default` system mount)
 10. **Desktop-first MCP UX**: MCP servers are managed from the desktop panel rather than a long-lived CLI surface
 
 These are intentional architectural choices, not gaps to be filled.

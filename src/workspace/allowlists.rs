@@ -7,15 +7,24 @@ use uuid::Uuid;
 
 use crate::error::WorkspaceError;
 
+pub const DEFAULT_ALLOWLIST_PUBLIC_ID: &str = "default";
 pub const SKILLS_ALLOWLIST_PUBLIC_ID: &str = "skills";
 
+const DEFAULT_ALLOWLIST_UUID: Uuid = uuid::uuid!("8c0b8b9e-5b1d-4ef6-8a11-00000000a112");
 const SKILLS_ALLOWLIST_UUID: Uuid = uuid::uuid!("8c0b8b9e-5b1d-4ef6-8a11-00000000a111");
+
+pub fn default_allowlist_uuid() -> Uuid {
+    DEFAULT_ALLOWLIST_UUID
+}
 
 pub fn skills_allowlist_uuid() -> Uuid {
     SKILLS_ALLOWLIST_UUID
 }
 
 pub fn encode_allowlist_id(id: Uuid) -> String {
+    if id == DEFAULT_ALLOWLIST_UUID {
+        return DEFAULT_ALLOWLIST_PUBLIC_ID.to_string();
+    }
     if id == SKILLS_ALLOWLIST_UUID {
         return SKILLS_ALLOWLIST_PUBLIC_ID.to_string();
     }
@@ -23,6 +32,9 @@ pub fn encode_allowlist_id(id: Uuid) -> String {
 }
 
 pub fn parse_allowlist_id(input: &str) -> Result<Uuid, WorkspaceError> {
+    if input == DEFAULT_ALLOWLIST_PUBLIC_ID {
+        return Ok(DEFAULT_ALLOWLIST_UUID);
+    }
     if input == SKILLS_ALLOWLIST_PUBLIC_ID {
         return Ok(SKILLS_ALLOWLIST_UUID);
     }
@@ -45,10 +57,10 @@ pub fn parse_allowlist_id(input: &str) -> Result<Uuid, WorkspaceError> {
 }
 
 pub fn public_allowlist_id(id: Uuid, mount_kind: WorkspaceMountKind) -> String {
-    if mount_kind == WorkspaceMountKind::Skills {
-        SKILLS_ALLOWLIST_PUBLIC_ID.to_string()
-    } else {
-        encode_allowlist_id(id)
+    match mount_kind {
+        WorkspaceMountKind::User => encode_allowlist_id(id),
+        WorkspaceMountKind::Default => DEFAULT_ALLOWLIST_PUBLIC_ID.to_string(),
+        WorkspaceMountKind::Skills => SKILLS_ALLOWLIST_PUBLIC_ID.to_string(),
     }
 }
 
@@ -87,6 +99,7 @@ pub enum WorkspaceTreeEntryKind {
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceMountKind {
     User,
+    Default,
     Skills,
 }
 
@@ -500,6 +513,24 @@ mod tests {
 
     #[test]
     fn skills_public_id_roundtrips() {
+        assert_eq!(encode_allowlist_id(default_allowlist_uuid()), "default");
+        assert_eq!(
+            parse_allowlist_id("default").unwrap(),
+            default_allowlist_uuid()
+        );
+        assert_eq!(
+            public_allowlist_id(default_allowlist_uuid(), WorkspaceMountKind::Default),
+            "default"
+        );
+        assert_eq!(
+            WorkspaceUri::allowlist_uri_with_mount_kind(
+                default_allowlist_uuid(),
+                WorkspaceMountKind::Default,
+                Some("templates/README.md"),
+            ),
+            "workspace://default/templates/README.md"
+        );
+
         assert_eq!(encode_allowlist_id(skills_allowlist_uuid()), "skills");
         assert_eq!(
             parse_allowlist_id("skills").unwrap(),

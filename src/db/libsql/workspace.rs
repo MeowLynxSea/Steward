@@ -132,6 +132,7 @@ fn revision_source_from_str(value: &str) -> WorkspaceAllowlistRevisionSource {
 
 fn mount_kind_from_str(value: &str) -> WorkspaceMountKind {
     match value {
+        "default" => WorkspaceMountKind::Default,
         "skills" => WorkspaceMountKind::Skills,
         _ => WorkspaceMountKind::User,
     }
@@ -140,7 +141,32 @@ fn mount_kind_from_str(value: &str) -> WorkspaceMountKind {
 fn mount_kind_to_str(value: WorkspaceMountKind) -> &'static str {
     match value {
         WorkspaceMountKind::User => "user",
+        WorkspaceMountKind::Default => "default",
         WorkspaceMountKind::Skills => "skills",
+    }
+}
+
+fn mount_kind_label(value: WorkspaceMountKind) -> &'static str {
+    match value {
+        WorkspaceMountKind::User => "User",
+        WorkspaceMountKind::Default => "Default",
+        WorkspaceMountKind::Skills => "Skills",
+    }
+}
+
+fn fixed_allowlist_id_for_mount_kind(mount_kind: WorkspaceMountKind) -> Option<Uuid> {
+    match mount_kind {
+        WorkspaceMountKind::User => None,
+        WorkspaceMountKind::Default => Some(crate::workspace::default_allowlist_uuid()),
+        WorkspaceMountKind::Skills => Some(crate::workspace::skills_allowlist_uuid()),
+    }
+}
+
+fn fixed_mount_kind_for_allowlist_id(allowlist_id: Uuid) -> Option<WorkspaceMountKind> {
+    match allowlist_id {
+        id if id == crate::workspace::default_allowlist_uuid() => Some(WorkspaceMountKind::Default),
+        id if id == crate::workspace::skills_allowlist_uuid() => Some(WorkspaceMountKind::Skills),
+        _ => None,
     }
 }
 
@@ -208,7 +234,10 @@ impl LibSqlBackend {
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         if !allowlist_supports_tracking(&allowlist) {
             return Err(WorkspaceError::Unsupported {
-                operation: format!("{operation} is not available for Skills mounts"),
+                operation: format!(
+                    "{operation} is not available for {} mounts",
+                    mount_kind_label(allowlist.mount_kind)
+                ),
             });
         }
         Ok(allowlist)
@@ -654,10 +683,10 @@ impl LibSqlBackend {
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
-        let query = if allowlist_id == crate::workspace::skills_allowlist_uuid() {
+        let query = if fixed_mount_kind_for_allowlist_id(allowlist_id).is_some() {
             "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
              FROM workspace_allowlists
-             WHERE user_id = ?1 AND (id = ?2 OR mount_kind = 'skills')
+             WHERE user_id = ?1 AND (id = ?2 OR mount_kind = ?3)
              ORDER BY CASE WHEN id = ?2 THEN 0 ELSE 1 END
              LIMIT 1"
         } else {
@@ -665,12 +694,23 @@ impl LibSqlBackend {
              FROM workspace_allowlists
              WHERE user_id = ?1 AND id = ?2"
         };
-        let mut rows = conn
-            .query(query, params![user_id, allowlist_id.to_string()])
+        let mut rows = if let Some(mount_kind) = fixed_mount_kind_for_allowlist_id(allowlist_id) {
+            conn.query(
+                query,
+                params![
+                    user_id,
+                    allowlist_id.to_string(),
+                    mount_kind_to_str(mount_kind)
+                ],
+            )
             .await
-            .map_err(|e| WorkspaceError::SearchFailed {
-                reason: format!("allowlist query failed: {e}"),
-            })?;
+        } else {
+            conn.query(query, params![user_id, allowlist_id.to_string()])
+                .await
+        }
+        .map_err(|e| WorkspaceError::SearchFailed {
+            reason: format!("allowlist query failed: {e}"),
+        })?;
         let Some(row) = rows
             .next()
             .await
@@ -2082,11 +2122,8 @@ impl WorkspaceStore for LibSqlBackend {
                 reason: "allowlist source must be a directory".to_string(),
             });
         }
-        let requested_allowlist_id = if request.mount_kind == WorkspaceMountKind::Skills {
-            crate::workspace::skills_allowlist_uuid()
-        } else {
-            Uuid::new_v4()
-        };
+        let requested_allowlist_id =
+            fixed_allowlist_id_for_mount_kind(request.mount_kind).unwrap_or_else(Uuid::new_v4);
         let now = fmt_ts(&Utc::now());
         let conn = self
             .connect()
@@ -2117,7 +2154,7 @@ impl WorkspaceStore for LibSqlBackend {
                     reason: format!("invalid allowlist id: {e}"),
                 })?;
             drop(existing_rows);
-            let allowlist_id = if request.mount_kind == WorkspaceMountKind::Skills
+            let allowlist_id = if fixed_allowlist_id_for_mount_kind(request.mount_kind).is_some()
                 && existing_id != requested_allowlist_id
             {
                 let tx = conn
@@ -2252,10 +2289,12 @@ impl WorkspaceStore for LibSqlBackend {
         allowlist_id: Uuid,
     ) -> Result<(), WorkspaceError> {
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
-        if allowlist.mount_kind == WorkspaceMountKind::Skills {
+        if allowlist.mount_kind != WorkspaceMountKind::User {
             return Err(WorkspaceError::Unsupported {
-                operation: "delete_workspace_allowlist is not available for Skills mounts"
-                    .to_string(),
+                operation: format!(
+                    "delete_workspace_allowlist is not available for {} mounts",
+                    mount_kind_label(allowlist.mount_kind)
+                ),
             });
         }
 
@@ -3560,17 +3599,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_workspace_root_uses_fixed_public_skills_id() {
+    async fn test_workspace_root_uses_fixed_public_system_mount_ids() {
         let (backend, dir) = setup_backend().await;
-        let allowlist_root = dir.path().join("skills-fixed-id-root");
-        std::fs::create_dir_all(&allowlist_root).expect("create skills root");
+        let default_root = dir.path().join("default-fixed-id-root");
+        std::fs::create_dir_all(&default_root).expect("create default root");
+        let skills_root = dir.path().join("skills-fixed-id-root");
+        std::fs::create_dir_all(&skills_root).expect("create skills root");
 
-        let allowlist = backend
+        let default_allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Default".to_string(),
+                mount_kind: WorkspaceMountKind::Default,
+                source_root: default_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create default allowlist");
+
+        let skills_allowlist = backend
             .create_workspace_allowlist(&CreateAllowlistRequest {
                 user_id: "default".to_string(),
                 display_name: "Skills".to_string(),
                 mount_kind: WorkspaceMountKind::Skills,
-                source_root: allowlist_root.display().to_string(),
+                source_root: skills_root.display().to_string(),
                 bypass_write: false,
             })
             .await
@@ -3582,10 +3634,17 @@ mod tests {
             .expect("list workspace root");
         assert!(entries.iter().any(|entry| {
             entry.kind == WorkspaceTreeEntryKind::Allowlist
+                && entry.path == "default"
+                && entry.uri == "workspace://default"
+                && entry.mount_kind == Some(WorkspaceMountKind::Default)
+                && entry.name == default_allowlist.allowlist.display_name
+        }));
+        assert!(entries.iter().any(|entry| {
+            entry.kind == WorkspaceTreeEntryKind::Allowlist
                 && entry.path == "skills"
                 && entry.uri == "workspace://skills"
                 && entry.mount_kind == Some(WorkspaceMountKind::Skills)
-                && entry.name == allowlist.allowlist.display_name
+                && entry.name == skills_allowlist.allowlist.display_name
         }));
     }
 
@@ -3869,6 +3928,56 @@ mod tests {
             .await
             .expect_err("skills allowlist should not expose history");
         assert!(history_err.to_string().contains("Skills mounts"));
+    }
+
+    #[tokio::test]
+    async fn test_default_allowlist_supports_tracking_state() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("default-tracked-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create default root");
+
+        let allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Default".to_string(),
+                mount_kind: WorkspaceMountKind::Default,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create default allowlist");
+
+        backend
+            .write_workspace_allowlist_file(
+                "default",
+                allowlist.allowlist.id,
+                "notes/welcome.md",
+                b"# hello\n",
+            )
+            .await
+            .expect("write default file");
+
+        let detail = backend
+            .get_workspace_allowlist("default", allowlist.allowlist.id)
+            .await
+            .expect("get default allowlist detail");
+        assert_eq!(
+            detail.summary.allowlist.mount_kind,
+            WorkspaceMountKind::Default
+        );
+        assert!(detail.baseline_revision_id.is_some());
+        assert!(detail.head_revision_id.is_some());
+
+        let diff = backend
+            .diff_workspace_allowlist("default", allowlist.allowlist.id, None)
+            .await
+            .expect("diff default allowlist");
+        assert!(
+            diff.entries
+                .iter()
+                .any(|entry| entry.path == "notes/welcome.md"),
+            "default allowlist should expose tracked changes"
+        );
     }
 
     #[tokio::test]

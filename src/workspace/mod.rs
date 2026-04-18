@@ -52,8 +52,8 @@ pub use allowlists::{
     WorkspaceAllowlistHistoryRequest, WorkspaceAllowlistRestoreRequest, WorkspaceAllowlistRevision,
     WorkspaceAllowlistRevisionKind, WorkspaceAllowlistRevisionSource, WorkspaceAllowlistSummary,
     WorkspaceMountKind, WorkspaceTreeEntry, WorkspaceTreeEntryKind, WorkspaceUri,
-    encode_allowlist_id, normalize_allowlist_path, parse_allowlist_id, public_allowlist_id,
-    skills_allowlist_uuid,
+    default_allowlist_uuid, encode_allowlist_id, normalize_allowlist_path, parse_allowlist_id,
+    public_allowlist_id, skills_allowlist_uuid,
 };
 pub use chunker::{ChunkConfig, chunk_document};
 pub use document::{

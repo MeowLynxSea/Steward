@@ -14,11 +14,11 @@ Legacy file-based memory is no longer part of the active workspace architecture.
 
 1. **Workspace means allowlisted files** - `workspace://...` points at real allowlisted project content
    Public workspace ids are compact reversible short ids in URIs and tool/UI payloads; legacy UUID input is still accepted for compatibility
-   System-managed mounts use the same mechanism as user allowlists; for example the shared `~/.steward/skills` root is exposed as the `Skills` mount in the desktop UI
-   The Skills mount always uses the fixed public id `skills`, so agents can reliably address it via `workspace://skills/...`
-   Skills mounts are browse/preview surfaces only in Workspace: they do not participate in diff/history/checkpoint workflows
+   System-managed mounts use the same mechanism as user allowlists; for example `~/.steward/default` is exposed as the `Default` mount and the shared `~/.steward/skills` root is exposed as the `Skills` mount in the desktop UI
+   System mounts always use fixed public ids, so agents can reliably address them via `workspace://default/...` and `workspace://skills/...`
+   The Skills mount intentionally skips diff/history/checkpoint workflows; the Default mount behaves like a normal tracked allowlist
 2. **Real filesystem is the working tree** - allowlisted reads, writes, moves, deletes, and shell commands operate on host files directly
-3. **Git-backed trackers are the workspace truth for tracked mounts** - user allowlists are backed by a Git tracker that owns dirty-path detection, anchors, diff, history, and restore; Skills mounts intentionally skip tracker-backed history
+3. **Git-backed trackers are the workspace truth for tracked mounts** - user allowlists and the Default mount are backed by a Git tracker that owns dirty-path detection, anchors, diff, history, and restore; the Skills mount intentionally skips tracker-backed history
 4. **Background allowlist watch is tracker-driven** - the watcher collects dirty paths and asks the tracker to advance product revisions without manifest rescans
 5. **Agent memory is separate** - long-term memory lives in `src/memory/`, not here
 6. **Hybrid search is discovery** - workspace search helps find allowlisted file context
