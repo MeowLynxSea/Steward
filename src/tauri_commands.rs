@@ -1519,12 +1519,12 @@ fn build_db_reflection_turns(db_messages: &[ConversationMessage]) -> Vec<DbRefle
                 });
             }
             "assistant" => {
-                if let Some(turn) = current_turn.as_mut()
-                    && turn.assistant_message_id.is_none()
-                {
+                if let Some(turn) = current_turn.as_mut() {
                     turn.assistant_message_id = Some(message.id);
                     turn.assistant_content = Some(message.content.clone());
                     turn.assistant_created_at = Some(message.created_at);
+                    turn.reflection_messages.clear();
+                    turn.tool_call_messages.clear();
                 }
             }
             "reflection" => {
@@ -1897,14 +1897,16 @@ fn build_thread_messages(
                     tool_call: None,
                 });
             }
+
+            let mut auxiliary = Vec::new();
             for tool_call in &turn.tool_calls {
                 let result_preview = tool_call.result.as_ref().map(format_tool_result_preview);
-                msgs.push(steward_core::ipc::ThreadMessageResponse {
+                auxiliary.push(steward_core::ipc::ThreadMessageResponse {
                     id: Uuid::new_v4(),
                     kind: "tool_call".to_string(),
                     role: None,
                     content: None,
-                    created_at: turn.completed_at.unwrap_or(turn.started_at),
+                    created_at: tool_call.started_at,
                     turn_number: turn.turn_number,
                     turn_cost: None,
                     tool_call: Some(steward_core::ipc::ThreadToolCallResponse {
@@ -1919,9 +1921,32 @@ fn build_thread_messages(
                     }),
                 });
             }
-            if let Some(response) = &turn.response {
+
+            for segment in &turn.assistant_segments {
+                auxiliary.push(steward_core::ipc::ThreadMessageResponse {
+                    id: segment.conversation_message_id.unwrap_or_else(Uuid::new_v4),
+                    kind: "message".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: Some(segment.content.clone()),
+                    created_at: segment.created_at,
+                    turn_number: turn.turn_number,
+                    turn_cost: None,
+                    tool_call: None,
+                });
+            }
+
+            auxiliary.sort_by(|left, right| {
+                left.created_at
+                    .cmp(&right.created_at)
+                    .then_with(|| left.id.cmp(&right.id))
+            });
+            msgs.extend(auxiliary);
+
+            if turn.assistant_segments.is_empty()
+                && let Some(response) = &turn.response
+            {
                 msgs.push(steward_core::ipc::ThreadMessageResponse {
-                    id: Uuid::new_v4(),
+                    id: turn.assistant_message_id.unwrap_or_else(Uuid::new_v4),
                     kind: "message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(response.clone()),
@@ -1930,6 +1955,13 @@ fn build_thread_messages(
                     turn_cost: turn.turn_cost.as_ref().map(turn_cost_response),
                     tool_call: None,
                 });
+            } else if let Some(last_assistant_id) = turn.assistant_message_id {
+                for message in msgs.iter_mut().rev() {
+                    if message.id == last_assistant_id {
+                        message.turn_cost = turn.turn_cost.as_ref().map(turn_cost_response);
+                        break;
+                    }
+                }
             }
             msgs
         })
@@ -2601,6 +2633,32 @@ mod db_message_tests {
         assert_eq!(messages[0].role.as_deref(), Some("user"));
         assert_eq!(messages[1].role.as_deref(), Some("assistant"));
         assert_eq!(messages[1].content.as_deref(), Some("partial answer"));
+    }
+
+    #[test]
+    fn build_thread_messages_preserves_multiple_assistant_segments_with_tool_boundaries() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let turn = thread.start_turn("hello");
+        turn.append_response_chunk("先查一下");
+        turn.record_tool_call_with_reasoning(
+            "search",
+            serde_json::json!({ "query": "hello" }),
+            None,
+            Some("call_1".to_string()),
+        );
+        turn.record_tool_result_for("call_1", serde_json::json!("found docs"));
+        turn.append_response_chunk("查完了");
+        thread.complete_turn("先查一下查完了");
+
+        let messages = build_thread_messages(&thread);
+
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role.as_deref(), Some("user"));
+        assert_eq!(messages[1].role.as_deref(), Some("assistant"));
+        assert_eq!(messages[1].content.as_deref(), Some("先查一下"));
+        assert_eq!(messages[2].kind, "tool_call");
+        assert_eq!(messages[3].role.as_deref(), Some("assistant"));
+        assert_eq!(messages[3].content.as_deref(), Some("查完了"));
     }
 
     #[test]

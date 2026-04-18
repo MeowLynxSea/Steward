@@ -640,12 +640,12 @@ impl Thread {
                     }
                 }
 
-                // Check if next is the final assistant response for this turn
-                let is_final_assistant = iter.peek().is_some_and(|n| {
-                    n.role == crate::llm::Role::Assistant && n.tool_calls.is_none()
-                });
-                if is_final_assistant && let Some(response) = iter.next() {
-                    turn.complete(&response.content);
+                while iter.peek().is_some_and(|next| {
+                    next.role == crate::llm::Role::Assistant && next.tool_calls.is_none()
+                }) {
+                    if let Some(response) = iter.next() {
+                        turn.restore_assistant_segment(response.content, Utc::now(), None);
+                    }
                 }
 
                 self.turns.push(turn);
@@ -814,12 +814,13 @@ impl Thread {
                         idx += 1;
                     }
                     "assistant" => {
-                        turn.response = Some(next.content.clone());
-                        turn.state = TurnState::Completed;
-                        turn.completed_at = Some(next.created_at);
+                        turn.restore_assistant_segment(
+                            next.content.clone(),
+                            next.created_at,
+                            Some(next.id),
+                        );
                         pending_thinking_segments.clear();
                         idx += 1;
-                        break;
                     }
                     "user" => break,
                     _ => {
@@ -847,6 +848,14 @@ pub enum TurnState {
     Failed,
     /// Turn was interrupted.
     Interrupted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TurnAssistantSegment {
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip)]
+    pub conversation_message_id: Option<Uuid>,
 }
 
 /// A single turn (request/response pair) in a thread.
@@ -881,6 +890,12 @@ pub struct Turn {
     /// Persisted conversation row backing the assistant response in history.
     #[serde(skip)]
     pub assistant_message_id: Option<Uuid>,
+    /// Individual assistant-visible message segments emitted during this turn.
+    ///
+    /// A single logical turn can contain multiple assistant text segments when
+    /// the model streams text, calls tools, then resumes speaking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assistant_segments: Vec<TurnAssistantSegment>,
     /// Cumulative usage snapshot captured at turn start to compute per-turn deltas.
     #[serde(skip)]
     pub cost_baseline: Option<crate::agent::cost_guard::ModelTokens>,
@@ -892,6 +907,9 @@ pub struct Turn {
     /// The text description in `user_input` persists for compaction/context.
     #[serde(skip)]
     pub image_content_parts: Vec<crate::llm::ContentPart>,
+    /// The currently open assistant segment receiving streamed text.
+    #[serde(skip)]
+    pub live_assistant_segment_index: Option<usize>,
 }
 
 impl Turn {
@@ -919,9 +937,11 @@ impl Turn {
             turn_cost: None,
             user_message_id: None,
             assistant_message_id: None,
+            assistant_segments: Vec::new(),
             cost_baseline: None,
             user_message_segments: Vec::new(),
             image_content_parts: Vec::new(),
+            live_assistant_segment_index: None,
         }
     }
 
@@ -934,13 +954,45 @@ impl Turn {
             Some(existing) => existing.push_str(chunk),
             None => self.response = Some(chunk.to_string()),
         }
+
+        let segment_index = match self.live_assistant_segment_index {
+            Some(idx) if idx < self.assistant_segments.len() => idx,
+            _ => {
+                let created_at = self.completed_at.unwrap_or_else(Utc::now);
+                self.assistant_segments.push(TurnAssistantSegment {
+                    content: String::new(),
+                    created_at,
+                    conversation_message_id: None,
+                });
+                let idx = self.assistant_segments.len() - 1;
+                self.live_assistant_segment_index = Some(idx);
+                idx
+            }
+        };
+
+        if let Some(segment) = self.assistant_segments.get_mut(segment_index) {
+            segment.content.push_str(chunk);
+        }
     }
 
     /// Complete this turn.
     pub fn complete(&mut self, response: impl Into<String>) {
-        self.response = Some(response.into());
+        let response = response.into();
+        self.response = Some(response.clone());
+        if self.assistant_segments.is_empty() && !response.is_empty() {
+            self.assistant_segments.push(TurnAssistantSegment {
+                content: response,
+                created_at: Utc::now(),
+                conversation_message_id: self.assistant_message_id,
+            });
+        }
         self.state = TurnState::Completed;
         self.completed_at = Some(Utc::now());
+        self.live_assistant_segment_index = None;
+        self.assistant_message_id = self
+            .assistant_segments
+            .last()
+            .and_then(|segment| segment.conversation_message_id);
         // Free image data — only needed for the initial LLM call, not subsequent turns
         self.image_content_parts.clear();
     }
@@ -950,6 +1002,7 @@ impl Turn {
         self.error = Some(error.into());
         self.state = TurnState::Failed;
         self.completed_at = Some(Utc::now());
+        self.live_assistant_segment_index = None;
         self.image_content_parts.clear();
     }
 
@@ -957,11 +1010,61 @@ impl Turn {
     pub fn interrupt(&mut self) {
         self.state = TurnState::Interrupted;
         self.completed_at = Some(Utc::now());
+        self.live_assistant_segment_index = None;
         self.image_content_parts.clear();
+    }
+
+    pub fn seal_response_segment(&mut self) {
+        self.live_assistant_segment_index = None;
+    }
+
+    pub fn current_assistant_segment_snapshot(&self) -> Option<(usize, Option<Uuid>, String)> {
+        let idx = self.live_assistant_segment_index?;
+        let segment = self.assistant_segments.get(idx)?;
+        Some((
+            idx,
+            segment.conversation_message_id,
+            segment.content.clone(),
+        ))
+    }
+
+    pub fn restore_assistant_segment(
+        &mut self,
+        content: impl Into<String>,
+        created_at: DateTime<Utc>,
+        message_id: Option<Uuid>,
+    ) {
+        let content = content.into();
+        if content.is_empty() {
+            return;
+        }
+
+        match self.response.as_mut() {
+            Some(existing) => existing.push_str(&content),
+            None => self.response = Some(content.clone()),
+        }
+
+        self.assistant_segments.push(TurnAssistantSegment {
+            content,
+            created_at,
+            conversation_message_id: message_id,
+        });
+        self.assistant_message_id = message_id;
+        self.state = TurnState::Completed;
+        self.completed_at = Some(created_at);
+        self.live_assistant_segment_index = None;
+    }
+
+    pub fn set_assistant_segment_message_id(&mut self, index: usize, message_id: Uuid) {
+        if let Some(segment) = self.assistant_segments.get_mut(index) {
+            segment.conversation_message_id = Some(message_id);
+            self.assistant_message_id = Some(message_id);
+        }
     }
 
     /// Record a tool call.
     pub fn record_tool_call(&mut self, name: impl Into<String>, params: serde_json::Value) {
+        self.seal_response_segment();
         self.tool_calls.push(TurnToolCall {
             name: name.into(),
             started_at: Utc::now(),
@@ -983,6 +1086,7 @@ impl Turn {
         rationale: Option<String>,
         tool_call_id: Option<String>,
     ) {
+        self.seal_response_segment();
         self.tool_calls.push(TurnToolCall {
             name: name.into(),
             started_at: Utc::now(),
@@ -1281,6 +1385,24 @@ mod tests {
     }
 
     #[test]
+    fn streamed_chunks_split_into_assistant_segments_across_tool_boundaries() {
+        let mut turn = Turn::new(0, "Test input");
+        turn.append_response_chunk("先查一下");
+        turn.record_tool_call_with_reasoning(
+            "search",
+            serde_json::json!({ "q": "test" }),
+            None,
+            Some("call_1".to_string()),
+        );
+        turn.append_response_chunk("查到了");
+
+        assert_eq!(turn.response.as_deref(), Some("先查一下查到了"));
+        assert_eq!(turn.assistant_segments.len(), 2);
+        assert_eq!(turn.assistant_segments[0].content, "先查一下");
+        assert_eq!(turn.assistant_segments[1].content, "查到了");
+    }
+
+    #[test]
     fn test_restore_from_messages() {
         let mut thread = Thread::new(Uuid::new_v4());
 
@@ -1345,6 +1467,77 @@ mod tests {
                 .contains("sent_at_local=\"2026-04-13T15:08:09+08:00\"")
         );
         assert!(messages[0].content.ends_with("帮我看一下今天的安排"));
+    }
+
+    #[test]
+    fn test_restore_from_conversation_messages_preserves_multiple_assistant_segments() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let user_message_id = Uuid::new_v4();
+        let first_assistant_id = Uuid::new_v4();
+        let tool_call_id = Uuid::new_v4();
+        let second_assistant_id = Uuid::new_v4();
+
+        let db_messages = vec![
+            crate::history::ConversationMessage {
+                id: user_message_id,
+                role: "user".to_string(),
+                content: "帮我看看".to_string(),
+                metadata: serde_json::json!({}),
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:09Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+            crate::history::ConversationMessage {
+                id: first_assistant_id,
+                role: "assistant".to_string(),
+                content: "我先查一下。".to_string(),
+                metadata: serde_json::json!({}),
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:10Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+            crate::history::ConversationMessage {
+                id: tool_call_id,
+                role: "tool_call".to_string(),
+                content: serde_json::json!({
+                    "call_id": "call_1",
+                    "name": "search",
+                    "parameters": { "q": "安排" },
+                    "result_preview": "done"
+                })
+                .to_string(),
+                metadata: serde_json::json!({}),
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:11Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+            crate::history::ConversationMessage {
+                id: second_assistant_id,
+                role: "assistant".to_string(),
+                content: "查到了两个事项。".to_string(),
+                metadata: serde_json::json!({}),
+                created_at: chrono::DateTime::parse_from_rfc3339("2026-04-13T07:08:12Z")
+                    .unwrap()
+                    .with_timezone(&Utc),
+            },
+        ];
+
+        thread.restore_from_conversation_messages(&db_messages);
+
+        assert_eq!(thread.turns.len(), 1);
+        assert_eq!(thread.turns[0].assistant_segments.len(), 2);
+        assert_eq!(
+            thread.turns[0].assistant_segments[0].content,
+            "我先查一下。"
+        );
+        assert_eq!(
+            thread.turns[0].assistant_segments[1].content,
+            "查到了两个事项。"
+        );
+        assert_eq!(
+            thread.turns[0].assistant_message_id,
+            Some(second_assistant_id)
+        );
     }
 
     #[test]

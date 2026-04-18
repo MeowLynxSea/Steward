@@ -288,21 +288,19 @@ impl Agent {
                                 .ensure_conversation(thread_id, &channel, &user_id, None)
                                 .await
                         {
-                            let (message_id, response) = {
+                            let segment_snapshot = {
                                 let sess = stream_session.lock().await;
                                 match sess
                                     .threads
                                     .get(&thread_id)
                                     .and_then(|thread| thread.last_turn())
                                 {
-                                    Some(turn) => {
-                                        (turn.assistant_message_id, turn.response.clone())
-                                    }
-                                    None => (None, None),
+                                    Some(turn) => turn.current_assistant_segment_snapshot(),
+                                    None => None,
                                 }
                             };
 
-                            if let Some(response) = response {
+                            if let Some((segment_index, message_id, response)) = segment_snapshot {
                                 if let Some(message_id) = message_id {
                                     if let Err(error) = store
                                         .update_conversation_message_content(message_id, &response)
@@ -321,9 +319,11 @@ impl Agent {
                                     let mut sess = stream_session.lock().await;
                                     if let Some(thread) = sess.threads.get_mut(&thread_id)
                                         && let Some(turn) = thread.last_turn_mut()
-                                        && turn.assistant_message_id.is_none()
                                     {
-                                        turn.assistant_message_id = Some(message_id);
+                                        turn.set_assistant_segment_message_id(
+                                            segment_index,
+                                            message_id,
+                                        );
                                     }
                                 } else {
                                     tracing::warn!(

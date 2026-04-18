@@ -185,7 +185,10 @@
       const entries: ReflectionTimelineEntry[] = [];
       for (let cursor = index + 1; cursor < messages.length; cursor += 1) {
         const candidate = messages[cursor];
-        if (candidate.kind === "message" && candidate.role === "user") {
+        if (
+          candidate.kind === "message" &&
+          (candidate.role === "user" || candidate.role === "assistant")
+        ) {
           break;
         }
         if (candidate.kind === "thinking" && (candidate.content ?? "").trim()) {

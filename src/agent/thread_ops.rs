@@ -1028,39 +1028,72 @@ impl Agent {
             return;
         }
 
-        let existing_message_id = {
+        let assistant_segments = {
             let sess = session.lock().await;
             sess.threads
                 .get(&thread_id)
                 .and_then(|thread| thread.last_turn())
-                .and_then(|turn| turn.assistant_message_id)
+                .map(|turn| turn.assistant_segments.clone())
+                .unwrap_or_default()
         };
 
-        if let Some(message_id) = existing_message_id {
-            if let Err(error) = store
-                .update_conversation_message_content(message_id, response)
+        if assistant_segments.is_empty() {
+            match store
+                .add_conversation_message(thread_id, "assistant", response)
                 .await
             {
-                tracing::warn!("Failed to update assistant message: {}", error);
+                Ok(message_id) => {
+                    let mut sess = session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&thread_id)
+                        && let Some(turn) = thread.last_turn_mut()
+                    {
+                        if turn.assistant_segments.is_empty() {
+                            turn.assistant_segments.push(
+                                crate::agent::session::TurnAssistantSegment {
+                                    content: response.to_string(),
+                                    created_at: turn.completed_at.unwrap_or_else(Utc::now),
+                                    conversation_message_id: Some(message_id),
+                                },
+                            );
+                            turn.assistant_message_id = Some(message_id);
+                        } else if turn.assistant_message_id.is_none() {
+                            turn.assistant_message_id = Some(message_id);
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("Failed to persist assistant message: {}", error);
+                }
             }
             return;
         }
 
-        match store
-            .add_conversation_message(thread_id, "assistant", response)
-            .await
-        {
-            Ok(message_id) => {
-                let mut sess = session.lock().await;
-                if let Some(thread) = sess.threads.get_mut(&thread_id)
-                    && let Some(turn) = thread.last_turn_mut()
-                    && turn.assistant_message_id.is_none()
+        for (index, segment) in assistant_segments.iter().enumerate() {
+            if let Some(message_id) = segment.conversation_message_id {
+                if let Err(error) = store
+                    .update_conversation_message_content(message_id, &segment.content)
+                    .await
                 {
-                    turn.assistant_message_id = Some(message_id);
+                    tracing::warn!("Failed to update assistant message: {}", error);
                 }
+                continue;
             }
-            Err(error) => {
-                tracing::warn!("Failed to persist assistant message: {}", error);
+
+            match store
+                .add_conversation_message(thread_id, "assistant", &segment.content)
+                .await
+            {
+                Ok(message_id) => {
+                    let mut sess = session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&thread_id)
+                        && let Some(turn) = thread.last_turn_mut()
+                    {
+                        turn.set_assistant_segment_message_id(index, message_id);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("Failed to persist assistant message: {}", error);
+                }
             }
         }
     }
