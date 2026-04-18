@@ -578,6 +578,207 @@ fn command_needs_allowlist_refresh(cmd: &str) -> bool {
         .any(|hint| matches_command_pattern(&lower, hint))
 }
 
+fn is_shell_operator(ch: char) -> bool {
+    matches!(ch, '|' | '&' | ';' | '<' | '>' | '(' | ')')
+}
+
+fn shell_quote_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '_' | '-' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ','
+                )
+        })
+    {
+        return arg.to_string();
+    }
+
+    let mut quoted = String::from("'");
+    for ch in arg.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\"'\"'");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+fn is_workspace_id_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')
+}
+
+fn next_char_at(s: &str, index: usize) -> Option<char> {
+    s.get(index..)?.chars().next()
+}
+
+fn rewrite_literal_workspace_uris(
+    literal: &str,
+    workspace_roots: &[(String, String)],
+) -> Result<Option<String>, ToolError> {
+    if !literal.contains("workspace://") {
+        return Ok(None);
+    }
+
+    let mut rewritten = String::with_capacity(literal.len());
+    let mut cursor = 0;
+
+    while let Some(relative_start) = literal[cursor..].find("workspace://") {
+        let start = cursor + relative_start;
+        rewritten.push_str(&literal[cursor..start]);
+
+        let replacement = workspace_roots.iter().find(|(workspace_root, _)| {
+            if !literal[start..].starts_with(workspace_root) {
+                return false;
+            }
+
+            match next_char_at(literal, start + workspace_root.len()) {
+                None => true,
+                Some(next) => !is_workspace_id_char(next),
+            }
+        });
+
+        let Some((workspace_root, disk_root)) = replacement else {
+            return Err(ToolError::ExecutionFailed(format!(
+                "Unknown workspace:// path in shell command: {}",
+                truncate_for_error(&literal[start..])
+            )));
+        };
+
+        rewritten.push_str(disk_root);
+        cursor = start + workspace_root.len();
+    }
+
+    rewritten.push_str(&literal[cursor..]);
+    Ok(Some(rewritten))
+}
+
+fn parse_shell_word(cmd: &str, start: usize) -> Option<(usize, Option<String>)> {
+    let mut index = start;
+    let mut literal = String::new();
+    let mut has_expansion = false;
+
+    while index < cmd.len() {
+        let mut chars = cmd[index..].char_indices();
+        let (_, ch) = chars.next()?;
+        let next_index = match chars.next() {
+            Some((offset, _)) => index + offset,
+            None => cmd.len(),
+        };
+
+        if ch.is_whitespace() || is_shell_operator(ch) {
+            break;
+        }
+
+        match ch {
+            '\'' => {
+                index = next_index;
+                let mut closed = false;
+                while index < cmd.len() {
+                    let mut chars = cmd[index..].char_indices();
+                    let (_, inner) = chars.next()?;
+                    let inner_next = match chars.next() {
+                        Some((offset, _)) => index + offset,
+                        None => cmd.len(),
+                    };
+                    index = inner_next;
+                    if inner == '\'' {
+                        closed = true;
+                        break;
+                    }
+                    if !has_expansion {
+                        literal.push(inner);
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            '"' => {
+                index = next_index;
+                let mut closed = false;
+                while index < cmd.len() {
+                    let mut chars = cmd[index..].char_indices();
+                    let (_, inner) = chars.next()?;
+                    let inner_next = match chars.next() {
+                        Some((offset, _)) => index + offset,
+                        None => cmd.len(),
+                    };
+                    match inner {
+                        '"' => {
+                            index = inner_next;
+                            closed = true;
+                            break;
+                        }
+                        '\\' => {
+                            index = inner_next;
+                            if index < cmd.len() {
+                                let mut escaped_chars = cmd[index..].char_indices();
+                                let (_, escaped) = escaped_chars.next()?;
+                                let escaped_next = match escaped_chars.next() {
+                                    Some((offset, _)) => index + offset,
+                                    None => cmd.len(),
+                                };
+                                if !has_expansion {
+                                    literal.push(escaped);
+                                }
+                                index = escaped_next;
+                            } else if !has_expansion {
+                                literal.push('\\');
+                            }
+                        }
+                        '$' | '`' => {
+                            has_expansion = true;
+                            index = inner_next;
+                        }
+                        _ => {
+                            if !has_expansion {
+                                literal.push(inner);
+                            }
+                            index = inner_next;
+                        }
+                    }
+                }
+                if !closed {
+                    return None;
+                }
+            }
+            '\\' => {
+                index = next_index;
+                if index < cmd.len() {
+                    let mut escaped_chars = cmd[index..].char_indices();
+                    let (_, escaped) = escaped_chars.next()?;
+                    let escaped_next = match escaped_chars.next() {
+                        Some((offset, _)) => index + offset,
+                        None => cmd.len(),
+                    };
+                    if !has_expansion {
+                        literal.push(escaped);
+                    }
+                    index = escaped_next;
+                } else if !has_expansion {
+                    literal.push('\\');
+                }
+            }
+            '$' | '`' => {
+                has_expansion = true;
+                index = next_index;
+            }
+            _ => {
+                if !has_expansion {
+                    literal.push(ch);
+                }
+                index = next_index;
+            }
+        }
+    }
+
+    Some((index, (!has_expansion).then_some(literal)))
+}
+
 /// Shell command execution tool.
 pub struct ShellTool {
     /// Working directory for commands (if None, uses job's working dir or cwd).
@@ -786,36 +987,140 @@ impl ShellTool {
         if !workdir.starts_with("workspace://") {
             return Ok(PathBuf::from(workdir));
         }
+        self.resolve_workspace_path(user_id, workdir).await
+    }
+
+    async fn resolve_workspace_path(
+        &self,
+        user_id: &str,
+        workspace_uri: &str,
+    ) -> Result<PathBuf, ToolError> {
         let resolver = self.workspace_resolver.as_ref().ok_or_else(|| {
             ToolError::ExecutionFailed(
-                "workspace:// workdir is unavailable because no workspace resolver is configured"
+                "workspace:// paths are unavailable because no workspace resolver is configured"
                     .to_string(),
             )
         })?;
         let workspace = resolver.resolve(user_id).await;
-        let parsed = WorkspaceUri::parse(workdir)
-            .map_err(|e| ToolError::ExecutionFailed(format!("Invalid workspace workdir: {e}")))?
-            .ok_or_else(|| {
-                ToolError::ExecutionFailed("Invalid workspace:// workdir".to_string())
-            })?;
+        let parsed = WorkspaceUri::parse(workspace_uri)
+            .map_err(|e| ToolError::ExecutionFailed(format!("Invalid workspace path: {e}")))?
+            .ok_or_else(|| ToolError::ExecutionFailed("Invalid workspace:// path".to_string()))?;
         match parsed {
             WorkspaceUri::Root => Err(ToolError::InvalidParameters(
-                "shell workdir must target a specific allowlisted workspace, not workspace:// root"
+                "shell paths must target a specific allowlisted workspace, not workspace:// root"
                     .to_string(),
             )),
             WorkspaceUri::AllowlistRoot(allowlist_id) => {
                 let detail = workspace.get_allowlist(allowlist_id).await.map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}"))
+                    ToolError::ExecutionFailed(format!("Workspace path resolve failed: {e}"))
                 })?;
                 Ok(PathBuf::from(detail.summary.allowlist.source_root))
             }
             WorkspaceUri::AllowlistPath(allowlist_id, allowlist_path) => {
                 let detail = workspace.get_allowlist(allowlist_id).await.map_err(|e| {
-                    ToolError::ExecutionFailed(format!("Workdir resolve failed: {e}"))
+                    ToolError::ExecutionFailed(format!("Workspace path resolve failed: {e}"))
                 })?;
                 Ok(PathBuf::from(detail.summary.allowlist.source_root).join(allowlist_path))
             }
         }
+    }
+
+    async fn rewrite_workspace_uris_in_command(
+        &self,
+        user_id: &str,
+        cmd: &str,
+    ) -> Result<String, ToolError> {
+        if !cmd.contains("workspace://") {
+            return Ok(cmd.to_string());
+        }
+
+        let mut rewritten = String::with_capacity(cmd.len());
+        let mut index = 0;
+        let workspace_roots = self.workspace_root_replacements(user_id).await?;
+
+        while index < cmd.len() {
+            let mut chars = cmd[index..].char_indices();
+            let (_, ch) = chars.next().ok_or_else(|| {
+                ToolError::ExecutionFailed("failed to parse shell command".to_string())
+            })?;
+            let next_index = match chars.next() {
+                Some((offset, _)) => index + offset,
+                None => cmd.len(),
+            };
+
+            if ch.is_whitespace() || is_shell_operator(ch) {
+                rewritten.push(ch);
+                index = next_index;
+                continue;
+            }
+
+            let start = index;
+            let Some((end, literal)) = parse_shell_word(cmd, index) else {
+                return Ok(cmd.to_string());
+            };
+
+            if let Some(literal) = literal {
+                if let Some(rewritten_literal) =
+                    rewrite_literal_workspace_uris(&literal, &workspace_roots)?
+                {
+                    rewritten.push_str(&shell_quote_arg(&rewritten_literal));
+                } else {
+                    rewritten.push_str(&cmd[start..end]);
+                }
+            } else {
+                rewritten.push_str(&cmd[start..end]);
+            }
+            index = end;
+        }
+
+        Ok(rewritten)
+    }
+
+    async fn workspace_root_replacements(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<(String, String)>, ToolError> {
+        let resolver = self.workspace_resolver.as_ref().ok_or_else(|| {
+            ToolError::ExecutionFailed(
+                "workspace:// paths are unavailable because no workspace resolver is configured"
+                    .to_string(),
+            )
+        })?;
+        let workspace = resolver.resolve(user_id).await;
+        let allowlists = workspace.list_allowlists().await.map_err(|e| {
+            ToolError::ExecutionFailed(format!("Workspace root listing failed: {e}"))
+        })?;
+
+        let mut replacements = Vec::with_capacity(allowlists.len() * 4);
+        for summary in allowlists {
+            let disk_root = summary.allowlist.source_root;
+            let public_root = WorkspaceUri::allowlist_uri_with_mount_kind(
+                summary.allowlist.id,
+                summary.allowlist.mount_kind,
+                None,
+            );
+            replacements.push((public_root.clone(), disk_root.clone()));
+            replacements.push((
+                format!(
+                    "workspace://allowlists/{}",
+                    public_root.trim_start_matches("workspace://")
+                ),
+                disk_root.clone(),
+            ));
+            replacements.push((
+                format!("workspace://{}", summary.allowlist.id),
+                disk_root.clone(),
+            ));
+            replacements.push((
+                format!("workspace://allowlists/{}", summary.allowlist.id),
+                disk_root,
+            ));
+        }
+
+        replacements.sort_by(|(left, _), (right, _)| right.len().cmp(&left.len()));
+        let mut seen = HashSet::new();
+        replacements.retain(|(workspace_root, _)| seen.insert(workspace_root.clone()));
+        Ok(replacements)
     }
 
     async fn execute_command(
@@ -856,9 +1161,10 @@ impl ShellTool {
 
         // Determine timeout
         let timeout_duration = timeout.map(Duration::from_secs).unwrap_or(self.timeout);
+        let rewritten_cmd = self.rewrite_workspace_uris_in_command(user_id, cmd).await?;
 
         let (output, code) = self
-            .execute_direct(cmd, &cwd, timeout_duration, extra_env)
+            .execute_direct(&rewritten_cmd, &cwd, timeout_duration, extra_env)
             .await?;
         let workspace_path = if let Some(resolver) = self.workspace_resolver.as_ref() {
             let workspace = resolver.resolve(user_id).await;
@@ -916,11 +1222,11 @@ impl Tool for ShellTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The shell command to execute"
+                    "description": "The shell command to execute. Standalone `workspace://<allowlist-id>/...` arguments and common `--flag=workspace://<allowlist-id>/...` forms are translated to real host paths before execution."
                 },
                 "workdir": {
                     "type": "string",
-                    "description": "Working directory for the command (optional)"
+                    "description": "Working directory for the command (optional). Supports real disk paths and `workspace://<allowlist-id>` URIs."
                 },
                 "timeout": {
                     "type": "integer",
@@ -1102,6 +1408,174 @@ mod tests {
             .expect("allowlist diff");
         assert_eq!(diff.entries.len(), 1);
         assert_eq!(diff.entries[0].path, "shell.txt");
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_workspace_uri_argument_is_resolved_to_host_path() {
+        let _guard = WORKSPACE_SHELL_TEST_GUARD
+            .lock()
+            .expect("workspace shell test lock");
+        let (workspace, _db_dir, allowlist_dir, allowlist_id) = allowlisted_workspace().await;
+        let tool = ShellTool::from_workspace(Arc::clone(&workspace));
+        let ctx = JobContext::with_user("shell-user", "test", "test");
+        let file_name = "己组-第二次翻转课堂-全.pptx";
+        std::fs::write(allowlist_dir.path().join(file_name), "ppt-outline")
+            .expect("seed allowlisted file");
+        let workspace_uri =
+            crate::workspace::WorkspaceUri::allowlist_uri(allowlist_id, Some(file_name));
+
+        let result = tool
+            .execute(
+                serde_json::json!({
+                    "command": format!("cat \"{workspace_uri}\"")
+                }),
+                &ctx,
+            )
+            .await
+            .expect("shell execute");
+
+        let output = result
+            .result
+            .get("output")
+            .and_then(|value| value.as_str())
+            .expect("output");
+        assert!(
+            output.contains("ppt-outline"),
+            "unexpected output: {output}"
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_workspace_uri_assignment_argument_is_resolved_to_host_path() {
+        let _guard = WORKSPACE_SHELL_TEST_GUARD
+            .lock()
+            .expect("workspace shell test lock");
+        let (workspace, _db_dir, allowlist_dir, allowlist_id) = allowlisted_workspace().await;
+        let tool = ShellTool::from_workspace(Arc::clone(&workspace));
+        let file_name = "己组-第二次翻转课堂-全.pptx";
+        std::fs::write(allowlist_dir.path().join(file_name), "ppt-outline")
+            .expect("seed allowlisted file");
+        let workspace_uri =
+            crate::workspace::WorkspaceUri::allowlist_uri(allowlist_id, Some(file_name));
+
+        let rewritten = tool
+            .rewrite_workspace_uris_in_command(
+                "shell-user",
+                &format!("officecli view --input={workspace_uri} outline"),
+            )
+            .await
+            .expect("rewrite command");
+
+        assert!(
+            !rewritten.contains("workspace://"),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("--input="),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(file_name),
+            "unexpected command: {rewritten}"
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_workspace_uri_list_in_single_argument_is_resolved_to_host_paths() {
+        let _guard = WORKSPACE_SHELL_TEST_GUARD
+            .lock()
+            .expect("workspace shell test lock");
+        let (workspace, _db_dir, allowlist_dir, allowlist_id) = allowlisted_workspace().await;
+        let second_allowlist_dir = tempfile::tempdir().expect("second allowlist tempdir");
+        let second_allowlist = workspace
+            .create_allowlist(
+                "project-2",
+                second_allowlist_dir.path().display().to_string(),
+                true,
+            )
+            .await
+            .expect("create second allowlist");
+        let tool = ShellTool::from_workspace(Arc::clone(&workspace));
+
+        let rewritten = tool
+            .rewrite_workspace_uris_in_command(
+                "shell-user",
+                &format!(
+                    "officecli view --inputs=workspace://{}/deck-a.pptx,workspace://{}/deck-b.pptx,/tmp/aaaa outline",
+                    crate::workspace::encode_allowlist_id(allowlist_id),
+                    crate::workspace::encode_allowlist_id(second_allowlist.allowlist.id),
+                ),
+            )
+            .await
+            .expect("rewrite command");
+
+        assert!(
+            !rewritten.contains("workspace://"),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(&allowlist_dir.path().display().to_string()),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(&second_allowlist_dir.path().display().to_string()),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("/tmp/aaaa"),
+            "unexpected command: {rewritten}"
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_workspace_uri_boundaries_support_mixed_separators() {
+        let _guard = WORKSPACE_SHELL_TEST_GUARD
+            .lock()
+            .expect("workspace shell test lock");
+        let (workspace, _db_dir, allowlist_dir_a, allowlist_id_a) = allowlisted_workspace().await;
+        let allowlist_dir_b = tempfile::tempdir().expect("second allowlist tempdir");
+        let allowlist_b = workspace
+            .create_allowlist(
+                "project-2",
+                allowlist_dir_b.path().display().to_string(),
+                true,
+            )
+            .await
+            .expect("create second allowlist");
+        let tool = ShellTool::from_workspace(Arc::clone(&workspace));
+
+        let rewritten = tool
+            .rewrite_workspace_uris_in_command(
+                "shell-user",
+                &format!(
+                    "officecli view \"--spec=workspace://{}/deck-a.pptx+workspace://{}/deck-b.pptx|/tmp/out=ok\"",
+                    crate::workspace::encode_allowlist_id(allowlist_id_a),
+                    crate::workspace::encode_allowlist_id(allowlist_b.allowlist.id),
+                ),
+            )
+            .await
+            .expect("rewrite command");
+
+        assert!(
+            !rewritten.contains("workspace://"),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(&allowlist_dir_a.path().display().to_string()),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains(&allowlist_dir_b.path().display().to_string()),
+            "unexpected command: {rewritten}"
+        );
+        assert!(
+            rewritten.contains("|/tmp/out=ok"),
+            "unexpected command: {rewritten}"
+        );
     }
 
     #[test]
