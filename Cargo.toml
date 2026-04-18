@@ -51,7 +51,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Database - libSQL/Turso (default embedded database)
-libsql = { version = "0.6", default-features = false, features = ["core", "replication", "remote", "tls"] }
+libsql = { version = "0.9.30", default-features = false, features = ["core", "replication", "remote", "tls"] }
 
 # Error handling
 thiserror = "2"

@@ -65,7 +65,7 @@ Primary desktop development flow:
 
 ```bash
 npm --prefix ui run build -- --watch
-cargo tauri dev --config src-tauri/tauri.conf.json
+cargo tauri dev --config tauri.conf.json
 ```
 
 Common validation:

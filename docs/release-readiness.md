@@ -48,13 +48,13 @@ Build commands by host OS:
 
 ```bash
 # macOS
-cargo tauri build --config src-tauri/tauri.conf.json --bundles app,dmg
+cargo tauri build --config tauri.conf.json --bundles app,dmg
 
 # Linux
-cargo tauri build --config src-tauri/tauri.conf.json --bundles appimage,deb
+cargo tauri build --config tauri.conf.json --bundles appimage,deb
 
 # Windows
-cargo tauri build --config src-tauri/tauri.conf.json --bundles msi,nsis
+cargo tauri build --config tauri.conf.json --bundles msi,nsis
 ```
 
 ## Release Checklist

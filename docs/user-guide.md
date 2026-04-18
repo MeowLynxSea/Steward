@@ -26,7 +26,7 @@ Local development flow:
 ```bash
 npm --prefix ui run build -- --watch
 cargo run -- api serve --port 8765
-cargo tauri dev --config src-tauri/tauri.conf.json
+cargo tauri dev --config tauri.conf.json
 ```
 
 Packaged desktop builds are described in [release-readiness.md](./release-readiness.md).

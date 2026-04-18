@@ -30,7 +30,7 @@ pub async fn run_desktop_command() -> anyhow::Result<()> {
             "tauri",
             "dev",
             "--config",
-            "src-tauri/tauri.conf.json",
+            "tauri.conf.json",
             "--no-dev-server-wait",
         ])
         .current_dir(&repo_root)

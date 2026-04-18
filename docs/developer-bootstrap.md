@@ -59,7 +59,7 @@ npm --prefix ui run build -- --watch
 2. Launch the Tauri shell:
 
 ```bash
-cargo tauri dev --config src-tauri/tauri.conf.json
+cargo tauri dev --config tauri.conf.json
 ```
 
 ## Recommended validation
