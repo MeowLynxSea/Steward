@@ -549,6 +549,31 @@ fn is_link_local_ip(ip: &std::net::IpAddr) -> bool {
     }
 }
 
+const MAX_SKILL_FETCH_REDIRECTS: usize = 5;
+
+fn resolve_skill_redirect_url(
+    current_url: &reqwest::Url,
+    location: &str,
+) -> Result<reqwest::Url, ToolError> {
+    let next_url = if location.starts_with("http://") || location.starts_with("https://") {
+        reqwest::Url::parse(location).map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Invalid redirect target '{}' from {}: {}",
+                location, current_url, e
+            ))
+        })?
+    } else {
+        current_url.join(location).map_err(|e| {
+            ToolError::ExecutionFailed(format!(
+                "Invalid relative redirect '{}' from {}: {}",
+                location, current_url, e
+            ))
+        })?
+    };
+
+    validate_fetch_url(next_url.as_str())
+}
+
 /// Fetch SKILL.md content from a URL with SSRF protection.
 ///
 /// The ClawHub registry returns skill downloads as ZIP archives containing
@@ -556,18 +581,53 @@ fn is_link_local_ip(ip: &std::net::IpAddr) -> bool {
 /// `PK\x03\x04` magic bytes) and extracts `SKILL.md` automatically. Plain
 /// text responses are returned as-is.
 pub async fn fetch_skill_content(url: &str) -> Result<String, ToolError> {
-    let parsed = validate_fetch_url(url)?;
-    let client = build_safe_fetch_client(&parsed).await?;
+    let mut current_url = validate_fetch_url(url)?;
+    let response = {
+        let mut redirects_remaining = MAX_SKILL_FETCH_REDIRECTS;
 
-    let response = client.get(parsed.clone()).send().await.map_err(|e| {
-        ToolError::ExecutionFailed(format!("Failed to fetch skill from {}: {}", url, e))
-    })?;
+        loop {
+            let client = build_safe_fetch_client(&current_url).await?;
+            let response = client.get(current_url.clone()).send().await.map_err(|e| {
+                ToolError::ExecutionFailed(format!(
+                    "Failed to fetch skill from {}: {}",
+                    current_url, e
+                ))
+            })?;
+
+            if response.status().is_redirection() {
+                if redirects_remaining == 0 {
+                    return Err(ToolError::ExecutionFailed(format!(
+                        "Skill fetch exceeded redirect limit (max {}) starting from {}",
+                        MAX_SKILL_FETCH_REDIRECTS, url
+                    )));
+                }
+
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| {
+                        ToolError::ExecutionFailed(format!(
+                            "Skill fetch redirect (HTTP {}) from {} has no Location header",
+                            response.status(),
+                            current_url
+                        ))
+                    })?;
+
+                current_url = resolve_skill_redirect_url(&current_url, location)?;
+                redirects_remaining -= 1;
+                continue;
+            }
+
+            break response;
+        }
+    };
 
     if !response.status().is_success() {
         return Err(ToolError::ExecutionFailed(format!(
             "Skill fetch returned HTTP {}: {}",
             response.status(),
-            url
+            current_url
         )));
     }
 
@@ -1017,6 +1077,32 @@ mod tests {
     #[test]
     fn test_validate_fetch_url_rejects_ipv6_loopback() {
         let err = super::validate_fetch_url("https://[::1]/skill.md").unwrap_err();
+        assert!(err.to_string().contains("private") || err.to_string().contains("loopback"));
+    }
+
+    #[test]
+    fn test_resolve_skill_redirect_url_allows_relative_https_redirects() {
+        let current = reqwest::Url::parse("https://officecli.ai/skills/foo").unwrap();
+        let redirected = super::resolve_skill_redirect_url(&current, "/SKILL.md").unwrap();
+
+        assert_eq!(redirected.as_str(), "https://officecli.ai/SKILL.md");
+    }
+
+    #[test]
+    fn test_resolve_skill_redirect_url_rejects_http_redirects() {
+        let current = reqwest::Url::parse("https://officecli.ai/skills/foo").unwrap();
+        let err = super::resolve_skill_redirect_url(&current, "http://officecli.ai/SKILL.md")
+            .unwrap_err();
+
+        assert!(err.to_string().contains("Only HTTPS"));
+    }
+
+    #[test]
+    fn test_resolve_skill_redirect_url_rejects_private_redirect_targets() {
+        let current = reqwest::Url::parse("https://officecli.ai/skills/foo").unwrap();
+        let err =
+            super::resolve_skill_redirect_url(&current, "https://127.0.0.1/SKILL.md").unwrap_err();
+
         assert!(err.to_string().contains("private") || err.to_string().contains("loopback"));
     }
 
