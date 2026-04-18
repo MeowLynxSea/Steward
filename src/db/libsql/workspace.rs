@@ -2246,6 +2246,56 @@ impl WorkspaceStore for LibSqlBackend {
             .await
     }
 
+    async fn delete_workspace_allowlist(
+        &self,
+        user_id: &str,
+        allowlist_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
+        if allowlist.mount_kind == WorkspaceMountKind::Skills {
+            return Err(WorkspaceError::Unsupported {
+                operation: "delete_workspace_allowlist is not available for Skills mounts"
+                    .to_string(),
+            });
+        }
+
+        let conn = self
+            .connect()
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: e.to_string(),
+            })?;
+        let rows_affected = conn
+            .execute(
+                "DELETE FROM workspace_allowlists WHERE user_id = ?1 AND id = ?2",
+                params![user_id, allowlist_id.to_string()],
+            )
+            .await
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("failed to delete allowlist: {e}"),
+            })?;
+        if rows_affected == 0 {
+            return Err(WorkspaceError::AllowlistNotFound {
+                allowlist_id: allowlist_id.to_string(),
+            });
+        }
+
+        let tracker_root = crate::bootstrap::steward_base_dir()
+            .join("workspace-trackers")
+            .join(allowlist_id.to_string());
+        if let Err(error) = tokio::fs::remove_dir_all(&tracker_root).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::debug!(
+                    "failed to remove tracker data for allowlist {}: {}",
+                    allowlist_id,
+                    error
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     async fn read_workspace_allowlist_file(
         &self,
         user_id: &str,
@@ -3537,6 +3587,76 @@ mod tests {
                 && entry.mount_kind == Some(WorkspaceMountKind::Skills)
                 && entry.name == allowlist.allowlist.display_name
         }));
+    }
+
+    #[tokio::test]
+    async fn test_delete_workspace_allowlist_unmounts_without_deleting_disk_tree() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("unmount-project");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
+        std::fs::write(allowlist_root.join("README.md"), "hello").expect("seed allowlist file");
+
+        let allowlist = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "unmount-project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create allowlist");
+
+        backend
+            .get_workspace_allowlist("default", allowlist.allowlist.id)
+            .await
+            .expect("initialize allowlist state");
+        backend
+            .delete_workspace_allowlist("default", allowlist.allowlist.id)
+            .await
+            .expect("delete allowlist");
+
+        assert!(
+            allowlist_root.exists(),
+            "deleting an allowlist should not remove its source directory"
+        );
+        assert!(
+            allowlist_root.join("README.md").exists(),
+            "deleting an allowlist should not remove disk files"
+        );
+
+        let summaries = backend
+            .list_workspace_allowlists("default")
+            .await
+            .expect("list allowlists after delete");
+        assert!(
+            summaries
+                .iter()
+                .all(|summary| summary.allowlist.id != allowlist.allowlist.id),
+            "deleted allowlist should disappear from summaries"
+        );
+
+        let entries = backend
+            .list_workspace_tree("default", None, "workspace://")
+            .await
+            .expect("list workspace root");
+        assert!(
+            entries.iter().all(|entry| {
+                entry.uri
+                    != WorkspaceUri::allowlist_uri_with_mount_kind(
+                        allowlist.allowlist.id,
+                        allowlist.allowlist.mount_kind,
+                        None,
+                    )
+            }),
+            "deleted allowlist should disappear from the workspace tree"
+        );
+
+        let err = backend
+            .get_workspace_allowlist("default", allowlist.allowlist.id)
+            .await
+            .expect_err("deleted allowlist should no longer be addressable");
+        assert!(matches!(err, WorkspaceError::AllowlistNotFound { .. }));
     }
 
     #[tokio::test]

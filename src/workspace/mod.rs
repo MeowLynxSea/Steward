@@ -362,6 +362,16 @@ impl WorkspaceStorage {
         }
     }
 
+    async fn delete_workspace_allowlist(
+        &self,
+        user_id: &str,
+        allowlist_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        match self {
+            Self::Db(db) => db.delete_workspace_allowlist(user_id, allowlist_id).await,
+        }
+    }
+
     async fn read_workspace_allowlist_file(
         &self,
         user_id: &str,
@@ -1636,6 +1646,13 @@ impl Workspace {
         self.ensure_allowlist_watch_started();
         self.storage
             .get_workspace_allowlist(&self.user_id, allowlist_id)
+            .await
+    }
+
+    pub async fn delete_allowlist(&self, allowlist_id: Uuid) -> Result<(), WorkspaceError> {
+        self.ensure_allowlist_watch_started();
+        self.storage
+            .delete_workspace_allowlist(&self.user_id, allowlist_id)
             .await
     }
 

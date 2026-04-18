@@ -3235,6 +3235,22 @@ pub async fn delete_workspace_checkpoint(
 }
 
 #[tauri::command]
+pub async fn delete_workspace_allowlist(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+
+    workspace
+        .delete_allowlist(parse_workspace_allowlist_id(&id)?)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_workspace_allowlist_history(
     state: State<'_, AppState>,
     id: String,

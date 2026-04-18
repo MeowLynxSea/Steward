@@ -574,6 +574,7 @@ fn main() {
             tauri_commands::get_workspace_allowlist_diff,
             tauri_commands::create_workspace_checkpoint,
             tauri_commands::delete_workspace_checkpoint,
+            tauri_commands::delete_workspace_allowlist,
             tauri_commands::list_workspace_allowlist_checkpoints,
             tauri_commands::get_workspace_allowlist_history,
             tauri_commands::write_workspace_file,

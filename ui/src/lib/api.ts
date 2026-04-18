@@ -321,6 +321,10 @@ export const apiClient = {
     return invoke<WorkspaceAllowlistDetail>("get_workspace_allowlist", { id });
   },
 
+  deleteWorkspaceAllowlist(id: string) {
+    return invoke<void>("delete_workspace_allowlist", { id });
+  },
+
   getWorkspaceAllowlistFile(id: string, path: string) {
     return invoke<WorkspaceAllowlistFileView>("get_workspace_allowlist_file", { id, path });
   },

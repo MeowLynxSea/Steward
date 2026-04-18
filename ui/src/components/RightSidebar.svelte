@@ -871,6 +871,11 @@
               {@const badges = entryBadgeCounts(entry)}
               {@const canDelete = !isProtectedEntry(entry)}
               {@const deleteUri = entry.uri ?? entry.path}
+              {@const deleteTitle = entry.kind === "allowlist"
+                ? "取消此授权"
+                : entry.is_directory
+                  ? "删除此目录"
+                  : "删除此文件"}
               <div class="tree-item-row">
                 <button
                   class="tree-item {isEntryActive(entry) ? 'active' : ''}"
@@ -933,7 +938,7 @@
                     <button
                       class="tree-delete-btn"
                       type="button"
-                      title={entry.is_directory ? "删除此目录" : "删除此文件"}
+                      title={deleteTitle}
                       onclick={(e) => {
                         e.stopPropagation();
                         deleteConfirmUri = deleteUri;

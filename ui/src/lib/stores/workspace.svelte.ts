@@ -24,6 +24,10 @@ function allowlistIdFromUri(uri: string): string | null {
   return allowlistId || null;
 }
 
+function isAllowlistRootUri(uri: string, allowlistId?: string): boolean {
+  return Boolean(allowlistId) && uri === `workspace://${allowlistId}`;
+}
+
 function allowlistDisplayNameFromPath(path: string): string {
   const segments = path.split(/[\\/]/).filter(Boolean);
   return segments.at(-1) ?? path;
@@ -369,7 +373,30 @@ class WorkspaceState {
   }
 
   async deleteFile(path: string, allowlistId?: string) {
-    await this.#runBusyAction("正在删除文件…", async () => {
+    const deletingAllowlist = isAllowlistRootUri(path, allowlistId);
+    await this.#runBusyAction(deletingAllowlist ? "正在取消授权…" : "正在删除文件…", async () => {
+      if (deletingAllowlist && allowlistId) {
+        const fallbackPath =
+          this.currentPath === path || this.currentPath.startsWith(`${path}/`)
+            ? "workspace://"
+            : this.currentPath;
+
+        if (this.selectedAllowlist?.summary.allowlist.id === allowlistId) {
+          this.selectedAllowlist = null;
+        }
+        if (this.selectedFile?.allowlist_id === allowlistId) {
+          this.selectedFile = null;
+        }
+
+        await apiClient.deleteWorkspaceAllowlist(allowlistId);
+        await Promise.all([
+          this.fetch(fallbackPath),
+          this.#refreshAllAllowlistChangesInBackground()
+        ]);
+        this.status = "已取消工作区授权";
+        return;
+      }
+
       await apiClient.deleteWorkspaceFile(path);
       if (allowlistId) {
         await this.#afterAllowlistMutation(allowlistId);

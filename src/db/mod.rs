@@ -854,6 +854,16 @@ pub trait WorkspaceStore: Send + Sync {
         })
     }
 
+    async fn delete_workspace_allowlist(
+        &self,
+        _user_id: &str,
+        _allowlist_id: Uuid,
+    ) -> Result<(), WorkspaceError> {
+        Err(WorkspaceError::Unsupported {
+            operation: "delete_workspace_allowlist".to_string(),
+        })
+    }
+
     async fn read_workspace_allowlist_file(
         &self,
         _user_id: &str,
