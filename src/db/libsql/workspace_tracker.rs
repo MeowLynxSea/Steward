@@ -60,6 +60,13 @@ pub(crate) struct TrackerChange {
     pub after_content: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedNameStatusEntry {
+    status: String,
+    old_repo_path: Option<String>,
+    repo_path: String,
+}
+
 #[derive(Debug, Clone)]
 struct ExternalGitDiscovery {
     repo_root: String,
@@ -179,6 +186,44 @@ fn parse_porcelain_status_z_paths(output: &[u8]) -> Vec<String> {
     }
 
     paths.into_iter().collect()
+}
+
+fn parse_name_status_z_entries(output: &[u8]) -> Vec<ParsedNameStatusEntry> {
+    let mut parsed = Vec::new();
+    let mut entries = output
+        .split(|byte| *byte == b'\0')
+        .filter(|entry| !entry.is_empty());
+
+    while let Some(status_entry) = entries.next() {
+        let status = String::from_utf8_lossy(status_entry).into_owned();
+        if status.is_empty() {
+            continue;
+        }
+
+        let is_rename_or_copy = status.starts_with('R') || status.starts_with('C');
+        let old_repo_path = if is_rename_or_copy {
+            entries
+                .next()
+                .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        } else {
+            None
+        };
+        let Some(repo_path_entry) = entries.next() else {
+            break;
+        };
+        let repo_path = String::from_utf8_lossy(repo_path_entry).into_owned();
+        if repo_path.is_empty() {
+            continue;
+        }
+
+        parsed.push(ParsedNameStatusEntry {
+            status,
+            old_repo_path,
+            repo_path,
+        });
+    }
+
+    parsed
 }
 
 fn quote_revspec_path(path: &str) -> String {
@@ -841,6 +886,7 @@ impl LibSqlBackend {
         let mut args = vec![
             "diff".to_string(),
             "--name-status".to_string(),
+            "-z".to_string(),
             "-M".to_string(),
             "--no-ext-diff".to_string(),
             from_anchor.unwrap_or(EMPTY_TREE).to_string(),
@@ -848,27 +894,26 @@ impl LibSqlBackend {
             "--".to_string(),
             diff_scope.unwrap_or_else(|| tracker.root_pathspec()),
         ];
-        let diff_output = self.run_tracker_git_text(tracker, None, &args).await?;
+        let diff_output = self.run_tracker_git_bytes(tracker, None, &args).await?;
         args.clear();
 
         let mut changes = Vec::new();
-        for line in diff_output.lines() {
-            let mut parts = line.split('\t');
-            let status = parts.next().unwrap_or_default();
+        for entry in parse_name_status_z_entries(&diff_output) {
+            let status = entry.status.as_str();
             if status.is_empty() {
                 continue;
             }
 
             let (old_repo_path, repo_path, change_kind) = if status.starts_with('R') {
                 (
-                    parts.next().map(ToString::to_string),
-                    parts.next().unwrap_or_default().to_string(),
+                    entry.old_repo_path.clone(),
+                    entry.repo_path.clone(),
                     WorkspaceAllowlistChangeKind::Moved,
                 )
             } else {
                 (
                     None,
-                    parts.next().unwrap_or_default().to_string(),
+                    entry.repo_path.clone(),
                     match status.chars().next().unwrap_or('M') {
                         'A' => WorkspaceAllowlistChangeKind::Added,
                         'D' => WorkspaceAllowlistChangeKind::Deleted,
@@ -1627,7 +1672,9 @@ impl LibSqlBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_porcelain_status_z_paths;
+    use super::{
+        ParsedNameStatusEntry, parse_name_status_z_entries, parse_porcelain_status_z_paths,
+    };
 
     #[test]
     fn parses_unicode_paths_from_porcelain_z_status() {
@@ -1651,6 +1698,38 @@ mod tests {
                 "old name.txt".to_string(),
                 "renamed file.txt".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn parses_unicode_paths_from_name_status_z_output() {
+        let output = "M\0翻转课堂讲稿.docx\0".as_bytes();
+
+        let entries = parse_name_status_z_entries(output);
+
+        assert_eq!(
+            entries,
+            vec![ParsedNameStatusEntry {
+                status: "M".to_string(),
+                old_repo_path: None,
+                repo_path: "翻转课堂讲稿.docx".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_rename_entries_from_name_status_z_output() {
+        let output = "R100\0旧名字.pptx\0新名字.pptx\0".as_bytes();
+
+        let entries = parse_name_status_z_entries(output);
+
+        assert_eq!(
+            entries,
+            vec![ParsedNameStatusEntry {
+                status: "R100".to_string(),
+                old_repo_path: Some("旧名字.pptx".to_string()),
+                repo_path: "新名字.pptx".to_string(),
+            }]
         );
     }
 }
