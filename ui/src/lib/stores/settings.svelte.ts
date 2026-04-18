@@ -3,6 +3,7 @@ import type {
   BackendInstance,
   EmbeddingsSettings,
   PatchSettingsRequest,
+  SkillsSettingsResponse,
   SettingsResponse
 } from "../types";
 
@@ -19,6 +20,10 @@ const DEFAULT_SETTINGS: SettingsResponse = {
     model: "text-embedding-3-small",
     dimension: null
   },
+  skills: {
+    disabled: [],
+    installed: []
+  },
   llm_ready: false,
   llm_onboarding_required: true,
   llm_readiness_error: null
@@ -32,6 +37,12 @@ function normalizeSettingsResponse(value: Partial<SettingsResponse> | null | und
     embeddings: {
       ...structuredClone(DEFAULT_SETTINGS.embeddings),
       ...value?.embeddings
+    },
+    skills: {
+      ...structuredClone(DEFAULT_SETTINGS.skills),
+      ...value?.skills,
+      disabled: Array.isArray(value?.skills?.disabled) ? value!.skills.disabled : [],
+      installed: Array.isArray(value?.skills?.installed) ? value!.skills.installed : []
     }
   };
 }
@@ -93,6 +104,29 @@ class SettingsState {
     };
   }
 
+  setSkills(value: SkillsSettingsResponse) {
+    this.data = { ...this.data, skills: value };
+  }
+
+  setSkillEnabled(name: string, enabled: boolean) {
+    const disabled = new Set(this.data.skills.disabled);
+    if (enabled) {
+      disabled.delete(name);
+    } else {
+      disabled.add(name);
+    }
+
+    this.data = {
+      ...this.data,
+      skills: {
+        disabled: [...disabled].sort(),
+        installed: this.data.skills.installed.map((skill) =>
+          skill.name === name ? { ...skill, enabled } : skill
+        )
+      }
+    };
+  }
+
   async save() {
     this.error = null;
     this.status = "";
@@ -101,7 +135,10 @@ class SettingsState {
       major_backend_id: this.data.major_backend_id,
       cheap_backend_id: this.data.cheap_backend_id,
       cheap_model_uses_primary: this.data.cheap_model_uses_primary,
-      embeddings: this.data.embeddings
+      embeddings: this.data.embeddings,
+      skills: {
+        disabled: this.data.skills.disabled
+      }
     };
 
     try {

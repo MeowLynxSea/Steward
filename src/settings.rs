@@ -79,6 +79,9 @@ pub struct Settings {
     pub embeddings: EmbeddingsSettings,
 
     #[serde(default)]
+    pub skills: SkillsSettings,
+
+    #[serde(default)]
     pub tunnel: TunnelSettings,
 
     #[serde(default)]
@@ -165,6 +168,20 @@ impl Default for EmbeddingsSettings {
             base_url: None,
             model: default_embeddings_model(),
             dimension: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillsSettings {
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
+impl Default for SkillsSettings {
+    fn default() -> Self {
+        Self {
+            disabled: Vec::new(),
         }
     }
 }
@@ -804,6 +821,12 @@ mod tests {
         assert_eq!(settings.embeddings.provider, "openai");
         assert_eq!(settings.embeddings.model, "text-embedding-3-small");
         assert_eq!(settings.embeddings.dimension, None);
+    }
+
+    #[test]
+    fn skills_default_to_empty_disabled_list() {
+        let settings = Settings::default();
+        assert!(settings.skills.disabled.is_empty());
     }
 
     #[test]

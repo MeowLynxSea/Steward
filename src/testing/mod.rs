@@ -524,7 +524,7 @@ impl TestHarnessBuilder {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
-            skills_config: SkillsConfig::default(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
             hooks,
             cost_guard,
             sse_tx: None,

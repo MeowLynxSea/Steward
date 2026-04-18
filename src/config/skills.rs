@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use crate::bootstrap::steward_base_dir;
 use crate::config::helpers::{optional_env, parse_bool_env, parse_optional_env};
 use crate::error::ConfigError;
+use crate::settings::Settings;
 
 /// Skills system configuration.
 #[derive(Debug, Clone)]
@@ -18,6 +20,8 @@ pub struct SkillsConfig {
     /// Maximum recursion depth when scanning skill directories for bundle layouts.
     /// Subdirectories without `SKILL.md` are recursed into up to this depth.
     pub max_scan_depth: usize,
+    /// Names of skills explicitly disabled via user settings.
+    pub disabled_skills: BTreeSet<String>,
 }
 
 impl Default for SkillsConfig {
@@ -28,6 +32,7 @@ impl Default for SkillsConfig {
             max_active_skills: 3,
             max_context_tokens: 4000,
             max_scan_depth: 3,
+            disabled_skills: BTreeSet::new(),
         }
     }
 }
@@ -38,7 +43,7 @@ fn default_skills_dir() -> PathBuf {
 }
 
 impl SkillsConfig {
-    pub(crate) fn resolve() -> Result<Self, ConfigError> {
+    pub fn resolve(settings: &Settings) -> Result<Self, ConfigError> {
         Ok(Self {
             enabled: parse_bool_env("SKILLS_ENABLED", true)?,
             root_dir: optional_env("SKILLS_DIR")?
@@ -47,6 +52,35 @@ impl SkillsConfig {
             max_active_skills: parse_optional_env("SKILLS_MAX_ACTIVE", 3)?,
             max_context_tokens: parse_optional_env("SKILLS_MAX_CONTEXT_TOKENS", 4000)?,
             max_scan_depth: parse_optional_env("SKILLS_MAX_SCAN_DEPTH", 3)?,
+            disabled_skills: settings
+                .skills
+                .disabled
+                .iter()
+                .map(|name| name.trim())
+                .filter(|name| !name.is_empty())
+                .map(|name| name.to_string())
+                .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_uses_settings_values_when_env_is_missing() {
+        let mut settings = Settings::default();
+        settings.skills.disabled = vec!["officecli".to_string(), "find-skills".to_string()];
+
+        let config = SkillsConfig::resolve(&settings).expect("resolve");
+
+        assert!(config.enabled);
+        assert_eq!(config.root_dir, steward_base_dir().join("skills"));
+        assert_eq!(config.max_active_skills, 3);
+        assert_eq!(config.max_context_tokens, 4000);
+        assert_eq!(config.max_scan_depth, 3);
+        assert!(config.disabled_skills.contains("officecli"));
+        assert!(config.disabled_skills.contains("find-skills"));
     }
 }

@@ -355,7 +355,7 @@ pub struct AgentDeps {
     pub extension_manager: Option<Arc<ExtensionManager>>,
     pub skill_registry: Option<Arc<std::sync::RwLock<SkillRegistry>>>,
     pub skill_catalog: Option<Arc<crate::skills::catalog::SkillCatalog>>,
-    pub skills_config: SkillsConfig,
+    pub skills_config: Arc<tokio::sync::RwLock<SkillsConfig>>,
     pub hooks: Arc<HookRegistry>,
     /// Cost enforcement guardrails (daily budget, hourly rate limits).
     pub cost_guard: Arc<crate::agent::cost_guard::CostGuard>,
@@ -1097,11 +1097,16 @@ impl Agent {
         }
     }
 
-    /// Select active skills for a message using deterministic prefiltering.
-    pub(super) fn select_active_skills(
+    /// Select all enabled skills for the current message.
+    pub(super) async fn select_active_skills(
         &self,
-        message_content: &str,
+        _message_content: &str,
     ) -> Vec<crate::skills::LoadedSkill> {
+        let skills_cfg = self.deps.skills_config.read().await.clone();
+        if !skills_cfg.enabled {
+            return vec![];
+        }
+
         if let Some(registry) = self.skill_registry() {
             let guard = match registry.read() {
                 Ok(g) => g,
@@ -1110,14 +1115,12 @@ impl Agent {
                     return vec![];
                 }
             };
-            let available = guard.skills();
-            let skills_cfg = &self.deps.skills_config;
-            let selected = crate::skills::prefilter_skills(
-                message_content,
-                available,
-                skills_cfg.max_active_skills,
-                skills_cfg.max_context_tokens,
-            );
+            let selected = guard
+                .skills()
+                .iter()
+                .filter(|skill| !skills_cfg.disabled_skills.contains(skill.name()))
+                .cloned()
+                .collect::<Vec<_>>();
 
             if !selected.is_empty() {
                 tracing::debug!(
@@ -1131,7 +1134,7 @@ impl Agent {
                 );
             }
 
-            selected.into_iter().cloned().collect()
+            selected
         } else {
             vec![]
         }
@@ -2643,7 +2646,7 @@ mod tests {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
-            skills_config: SkillsConfig::default(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
                 crate::agent::cost_guard::CostGuardConfig::default(),

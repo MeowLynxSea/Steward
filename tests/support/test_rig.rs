@@ -772,7 +772,7 @@ impl TestRigBuilder {
             extension_manager: components.extension_manager,
             skill_registry: components.skill_registry,
             skill_catalog: components.skill_catalog,
-            skills_config: components.config.skills.clone(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(components.config.skills.clone())),
             hooks: components.hooks,
             cost_guard: components.cost_guard,
             sse_tx: None,

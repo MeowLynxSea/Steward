@@ -32,6 +32,8 @@ pub struct AppState {
     pub workspace: Option<Arc<Workspace>>,
     pub memory: Option<Arc<MemoryManager>>,
     pub conversation_recall: Option<Arc<ConversationRecallManager>>,
+    pub skill_registry: Option<Arc<std::sync::RwLock<crate::skills::SkillRegistry>>>,
+    pub skills_config: Arc<tokio::sync::RwLock<crate::config::SkillsConfig>>,
     pub llm_reloader: Arc<RuntimeLlmReloader>,
     pub agent_session_manager: Arc<AgentSessionManager>,
     pub title_llm: Arc<dyn crate::llm::LlmProvider>,
@@ -52,6 +54,8 @@ impl AppState {
         workspace: Option<Arc<Workspace>>,
         memory: Option<Arc<MemoryManager>>,
         conversation_recall: Option<Arc<ConversationRecallManager>>,
+        skill_registry: Option<Arc<std::sync::RwLock<crate::skills::SkillRegistry>>>,
+        skills_config: Arc<tokio::sync::RwLock<crate::config::SkillsConfig>>,
         llm_reloader: Arc<RuntimeLlmReloader>,
         agent_session_manager: Arc<AgentSessionManager>,
         title_llm: Arc<dyn crate::llm::LlmProvider>,
@@ -68,6 +72,8 @@ impl AppState {
             workspace,
             memory,
             conversation_recall,
+            skill_registry,
+            skills_config,
             llm_reloader,
             agent_session_manager,
             title_llm,
@@ -156,6 +162,8 @@ pub async fn start_embedded_runtime(
     let app_state_workspace = components.workspace.clone();
     let app_state_memory = components.memory.clone();
     let app_state_conversation_recall = components.conversation_recall.clone();
+    let app_state_skill_registry = components.skill_registry.clone();
+    let shared_skills_config = Arc::new(tokio::sync::RwLock::new(config.skills.clone()));
     let app_state_tools = Arc::clone(&components.tools);
     let app_state_mcp = Arc::clone(&components.mcp_session_manager);
     let app_state_session_manager = Arc::clone(&session_manager);
@@ -213,7 +221,7 @@ pub async fn start_embedded_runtime(
         extension_manager,
         skill_registry: components.skill_registry,
         skill_catalog: components.skill_catalog,
-        skills_config: config.skills.clone(),
+        skills_config: Arc::clone(&shared_skills_config),
         hooks: components.hooks,
         cost_guard: components.cost_guard,
         sse_tx: Some(sse_manager),
@@ -269,6 +277,8 @@ pub async fn start_embedded_runtime(
         app_state_workspace,
         app_state_memory,
         app_state_conversation_recall,
+        app_state_skill_registry,
+        shared_skills_config,
         app_state_llm_reloader,
         app_state_session_manager,
         app_llm.clone(),

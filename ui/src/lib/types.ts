@@ -26,12 +26,29 @@ export interface EmbeddingsSettings {
   dimension: number | null;
 }
 
+export interface SkillSettingsEntry {
+  name: string;
+  version: string;
+  description: string;
+  enabled: boolean;
+}
+
+export interface SkillsSettingsResponse {
+  disabled: string[];
+  installed: SkillSettingsEntry[];
+}
+
+export interface SkillsSettingsPatch {
+  disabled: string[];
+}
+
 export interface SettingsResponse {
   backends: BackendInstance[];
   major_backend_id: string | null;
   cheap_backend_id: string | null;
   cheap_model_uses_primary: boolean;
   embeddings: EmbeddingsSettings;
+  skills: SkillsSettingsResponse;
   llm_ready: boolean;
   llm_onboarding_required: boolean;
   llm_readiness_error: string | null;
@@ -43,6 +60,7 @@ export interface PatchSettingsRequest {
   cheap_backend_id?: string | null;
   cheap_model_uses_primary?: boolean;
   embeddings?: EmbeddingsSettings;
+  skills?: SkillsSettingsPatch;
 }
 
 export interface SessionSummary {

@@ -208,7 +208,7 @@ impl Agent {
 
         // Select and prepare active skills (if skills system is enabled)
         self.maybe_refresh_skills().await;
-        let active_skills = self.select_active_skills(&message.content);
+        let active_skills = self.select_active_skills(&message.content).await;
 
         // Build skill context block
         let skill_context = if !active_skills.is_empty() {
@@ -1947,7 +1947,7 @@ mod tests {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
-            skills_config: SkillsConfig::default(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
             sse_tx: None,
@@ -2833,7 +2833,7 @@ mod tests {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
-            skills_config: SkillsConfig::default(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
             sse_tx: None,
@@ -2965,7 +2965,7 @@ mod tests {
                 extension_manager: None,
                 skill_registry: None,
                 skill_catalog: None,
-                skills_config: SkillsConfig::default(),
+                skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
                 hooks: Arc::new(HookRegistry::new()),
                 cost_guard: Arc::new(CostGuard::new(CostGuardConfig::default())),
                 sse_tx: None,

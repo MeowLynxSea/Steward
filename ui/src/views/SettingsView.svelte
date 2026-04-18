@@ -34,7 +34,7 @@
     MemoryVersion
   } from "../lib/types";
 
-  type SettingsSection = "general" | "models" | "memory" | "mcp";
+  type SettingsSection = "general" | "models" | "skills" | "memory" | "mcp";
 
   const providerLabels: Record<string, string> = {
     openai: "OpenAI",
@@ -91,7 +91,7 @@
   let memorySearchLoading = $state(false);
   let memorySearchHasSearched = $state(false);
   let memorySearchError = $state<string | null>(null);
-  let modelSaveTimer: ReturnType<typeof setTimeout> | null = $state(null);
+  let settingsSaveTimer: ReturnType<typeof setTimeout> | null = $state(null);
 
   const backendOptions = $derived(
     settingsStore.data.backends.map((backend) => ({
@@ -270,7 +270,7 @@
       options[0]?.value ??
       settingsStore.data.embeddings.model;
     settingsStore.setEmbeddings({ provider, model: nextModel });
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
   }
 
   function updateEmbeddingDimension(rawValue: string) {
@@ -279,47 +279,52 @@
     settingsStore.setEmbeddings({
       dimension: value === "" || !Number.isSafeInteger(parsed) || parsed <= 0 ? null : parsed
     });
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
   }
 
-  async function saveModelSettings() {
-    if (modelSaveTimer !== null) {
-      clearTimeout(modelSaveTimer);
-      modelSaveTimer = null;
+  async function saveSettings() {
+    if (settingsSaveTimer !== null) {
+      clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = null;
     }
     await settingsStore.save();
   }
 
-  function scheduleModelSettingsSave(delay = 360) {
-    if (modelSaveTimer !== null) {
-      clearTimeout(modelSaveTimer);
+  function scheduleSettingsSave(delay = 360) {
+    if (settingsSaveTimer !== null) {
+      clearTimeout(settingsSaveTimer);
     }
     settingsStore.error = null;
     settingsStore.status = "正在保存...";
-    modelSaveTimer = setTimeout(() => {
-      modelSaveTimer = null;
-      void saveModelSettings();
+    settingsSaveTimer = setTimeout(() => {
+      settingsSaveTimer = null;
+      void saveSettings();
     }, delay);
   }
 
   function updateEmbeddings(patch: Partial<typeof settingsStore.data.embeddings>) {
     settingsStore.setEmbeddings(patch);
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
   }
 
   function updateMajorBackend(value: string) {
     settingsStore.setMajorBackend(value || null);
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
   }
 
   function updateCheapBackend(value: string) {
     settingsStore.setCheapBackend(value || null);
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
   }
 
   function updateCheapModelUsesPrimary(checked: boolean) {
     settingsStore.setCheapModelUsesPrimary(checked);
-    scheduleModelSettingsSave();
+    scheduleSettingsSave();
+  }
+
+  function updateSkillToggle(name: string, enabled: boolean) {
+    settingsStore.setSkillEnabled(name, enabled);
+    scheduleSettingsSave();
   }
 
   function selectSection(section: SettingsSection) {
@@ -347,9 +352,9 @@
   );
 
   onDestroy(() => {
-    if (modelSaveTimer !== null) {
-      clearTimeout(modelSaveTimer);
-      modelSaveTimer = null;
+    if (settingsSaveTimer !== null) {
+      clearTimeout(settingsSaveTimer);
+      settingsSaveTimer = null;
       void settingsStore.save();
     }
   });
@@ -418,6 +423,16 @@
       <span>模型</span>
     </button>
     <button
+      class:selected={activeSection === "skills"}
+      class="nav-tab"
+      role="tab"
+      aria-selected={activeSection === "skills"}
+      onclick={() => selectSection("skills")}
+    >
+      <BrainCircuit size={15} strokeWidth={2} />
+      <span>技能</span>
+    </button>
+    <button
       class:selected={activeSection === "mcp"}
       class="nav-tab"
       role="tab"
@@ -472,6 +487,53 @@
         onOpenGraph={openMemoryGraphModal}
         onOpenSearch={openMemorySearchDrawer}
       />
+    {:else if activeSection === "skills"}
+      <section class="settings-section">
+        <div class="section-header">
+          <h4>Skills 设置</h4>
+          <p>已安装的 skills 默认启用。</p>
+        </div>
+
+        <div class="settings-list">
+          {#if settingsStore.data.skills.installed.length === 0}
+            <div class="settings-list-empty">
+              <strong>还没有已安装技能</strong>
+              <p>把 `SKILL.md` 放进 `~/.steward/skills` 后，这里会显示可切换的技能列表。</p>
+            </div>
+          {:else}
+            {#each settingsStore.data.skills.installed as skill (skill.name)}
+              <div class="settings-list-row">
+                <div class="row-copy">
+                  <strong>{skill.name}</strong>
+                  <p>{skill.description || "这个 skill 没有提供额外描述。"}</p>
+                  <small>v{skill.version}</small>
+                </div>
+                <label class="checkbox-row toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={skill.enabled}
+                    onchange={(event) =>
+                      updateSkillToggle(
+                        skill.name,
+                        (event.currentTarget as HTMLInputElement).checked
+                      )}
+                  />
+                  <span>{skill.enabled ? "已启用" : "已禁用"}</span>
+                </label>
+              </div>
+            {/each}
+          {/if}
+        </div>
+
+        <div class="settings-actions">
+          {#if settingsStore.status}
+            <p class="settings-status">{settingsStore.status}</p>
+          {/if}
+          {#if settingsStore.error}
+            <p class="settings-status error">{settingsStore.error}</p>
+          {/if}
+        </div>
+      </section>
     {:else if activeSection === "mcp"}
       <McpSettingsPanel {onSeedComposer} />
     {:else}
@@ -739,10 +801,18 @@
 />
 
 <style>
+  :global(:root) {
+    --settings-z-backdrop: 90;
+    --settings-z-drawer: 91;
+    --settings-z-nested-backdrop: 92;
+    --settings-z-nested-drawer: 93;
+    --settings-z-modal: 94;
+  }
+
   .drawer-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 40;
+    z-index: var(--settings-z-backdrop);
     background: rgba(0, 0, 0, 0.2);
     backdrop-filter: blur(12px);
   }
@@ -752,7 +822,7 @@
     top: 0;
     left: 0;
     bottom: 0;
-    z-index: 41;
+    z-index: var(--settings-z-drawer);
     width: min(420px, 100vw);
     display: flex;
     flex-direction: column;
@@ -813,13 +883,18 @@
 
   .nav-tabs {
     display: flex;
+    flex-wrap: nowrap;
     gap: 8px;
     padding: 12px 16px;
     border-bottom: 1px solid var(--border-default);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
   }
 
   .nav-tab {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     gap: 6px;
     padding: 8px 14px;
@@ -830,6 +905,7 @@
     font: inherit;
     font-size: 13px;
     font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
     transition: all 0.15s ease;
   }
@@ -1052,6 +1128,13 @@
       color-mix(in srgb, var(--accent-primary) 20%, transparent);
   }
 
+  .field-hint {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-tertiary);
+  }
+
   .cheap-toggle-row {
     margin-bottom: 4px;
   }
@@ -1097,6 +1180,89 @@
     color: var(--text-secondary);
   }
 
+  .settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .settings-list-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border-subtle, var(--border-default));
+  }
+
+  .settings-list-row:first-child {
+    padding-top: 0;
+  }
+
+  .settings-list-row:last-child {
+    padding-bottom: 0;
+    border-bottom: none;
+  }
+
+  .row-copy {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .row-copy strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+
+  .row-copy p {
+    margin: 4px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .row-copy small {
+    display: inline-block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-tertiary);
+  }
+
+  .settings-list-empty {
+    padding: 4px 0;
+  }
+
+  .settings-list-empty strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 650;
+    color: var(--text-primary);
+  }
+
+  .settings-list-empty p {
+    margin: 6px 0 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .skills-note {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0 0;
+    border-top: 1px solid var(--border-subtle, var(--border-default));
+  }
+
+  .skills-note p {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
   .note-chip {
     display: inline-flex;
     align-items: center;
@@ -1126,7 +1292,7 @@
   .nested-backdrop {
     position: absolute;
     inset: 0;
-    z-index: 42;
+    z-index: var(--settings-z-nested-backdrop);
     background: rgba(0, 0, 0, 0.15);
     backdrop-filter: blur(8px);
   }
@@ -1134,7 +1300,7 @@
   .backend-drawer {
     position: absolute;
     inset: 0;
-    z-index: 43;
+    z-index: var(--settings-z-nested-drawer);
     display: flex;
     flex-direction: column;
     background: var(--bg-surface);

@@ -269,7 +269,7 @@
   .nested-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 42;
+    z-index: var(--settings-z-nested-backdrop, 92);
     background: rgba(0, 0, 0, 0.15);
     backdrop-filter: blur(8px);
   }
@@ -279,7 +279,7 @@
     top: 0;
     bottom: 0;
     left: 0;
-    z-index: 43;
+    z-index: var(--settings-z-nested-drawer, 93);
     width: var(--settings-sidebar-width);
     display: flex;
     flex-direction: column;

@@ -202,8 +202,8 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 | Post-compaction read audit | ✅ | ❌ | Layer 3: workspace rules appended to summaries |
 | Post-compaction context injection | ✅ | ❌ | Workspace context as system event |
 | Custom system prompts | ✅ | ✅ | Template variables, safety guardrails |
-| Skills (modular capabilities) | ✅ | ✅ | Prompt-based skills with activation criteria, catalog, selector, unified root discovery, workspace mount exposure, and trusted desktop loading |
-| Skill routing blocks | ✅ | 🚧 | ActivationCriteria (keywords, patterns, tags) but no "Use when / Don't use when" blocks |
+| Skills (modular capabilities) | ✅ | ✅ | Prompt-based skills with unified root discovery, workspace mount exposure, trusted desktop loading, and per-skill desktop enable/disable controls |
+| Skill routing blocks | ✅ | 🚧 | OpenClaw-style routing blocks still not mirrored; Steward desktop currently injects all installed skills unless disabled in Settings |
 | Skill path compaction | ✅ | ❌ | ~ prefix to reduce prompt tokens |
 | Thinking modes (off/minimal/low/medium/high/xhigh/adaptive) | ✅ | 🚧 | thinkingConfig for Gemini models (thinkingBudget/thinkingLevel); no per-level control yet |
 | Per-model thinkingDefault override | ✅ | ❌ | Override thinking level per model; Anthropic Claude 4.6 defaults to adaptive |

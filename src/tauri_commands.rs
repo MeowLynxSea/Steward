@@ -101,6 +101,7 @@ fn plan_desktop_message_dispatch(
 
 fn build_settings_response(
     settings: &Settings,
+    installed_skills: Vec<steward_core::ipc::SkillSettingsEntry>,
     llm_readiness_error: Option<String>,
 ) -> steward_core::ipc::SettingsResponse {
     let llm_ready = settings.major_backend().is_some() && llm_readiness_error.is_none();
@@ -110,9 +111,86 @@ fn build_settings_response(
         cheap_backend_id: settings.cheap_backend_id.clone(),
         cheap_model_uses_primary: settings.cheap_model_uses_primary,
         embeddings: settings.embeddings.clone(),
+        skills: steward_core::ipc::SkillsSettingsResponse {
+            disabled: settings.skills.disabled.clone(),
+            installed: installed_skills,
+        },
         llm_ready,
         llm_onboarding_required: !llm_ready,
         llm_readiness_error,
+    }
+}
+
+async fn refresh_skill_registry_for_settings(state: &AppState) -> Result<(), String> {
+    let Some(registry) = state.skill_registry.as_ref() else {
+        return Ok(());
+    };
+
+    let (root_dir, max_scan_depth, previous_fingerprint) = match registry.read() {
+        Ok(guard) => (
+            guard.root_dir().to_path_buf(),
+            guard.max_scan_depth(),
+            guard.scan_fingerprint().map(str::to_string),
+        ),
+        Err(error) => {
+            return Err(format!("skill registry lock poisoned: {error}"));
+        }
+    };
+
+    let snapshot =
+        steward_core::skills::registry::SkillRegistry::load_snapshot(&root_dir, max_scan_depth)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    if previous_fingerprint.as_deref() == Some(snapshot.fingerprint.as_str()) {
+        return Ok(());
+    }
+
+    match registry.write() {
+        Ok(mut guard) => {
+            if guard.scan_fingerprint() == previous_fingerprint.as_deref() {
+                guard.apply_snapshot(snapshot);
+            }
+            Ok(())
+        }
+        Err(error) => Err(format!("skill registry lock poisoned: {error}")),
+    }
+}
+
+fn collect_installed_skill_entries(
+    state: &AppState,
+    settings: &Settings,
+) -> Vec<steward_core::ipc::SkillSettingsEntry> {
+    let Some(registry) = state.skill_registry.as_ref() else {
+        return Vec::new();
+    };
+
+    let disabled: std::collections::HashSet<&str> = settings
+        .skills
+        .disabled
+        .iter()
+        .map(String::as_str)
+        .collect();
+
+    match registry.read() {
+        Ok(guard) => {
+            let mut items = guard
+                .skills()
+                .iter()
+                .map(|skill| steward_core::ipc::SkillSettingsEntry {
+                    name: skill.name().to_string(),
+                    version: skill.version().to_string(),
+                    description: skill.manifest.description.clone(),
+                    enabled: !disabled.contains(skill.name()),
+                })
+                .collect::<Vec<_>>();
+            items.sort_by(|a, b| a.name.cmp(&b.name));
+            items
+        }
+        Err(error) => {
+            tracing::error!("Skill registry lock poisoned: {}", error);
+            Vec::new()
+        }
     }
 }
 
@@ -456,6 +534,8 @@ async fn sync_llm_settings_to_store(
     let cheap_model_uses_primary = serde_json::json!(settings.cheap_model_uses_primary);
     let embeddings = serde_json::to_value(&settings.embeddings)
         .map_err(|e| format!("serialize embeddings: {e}"))?;
+    let skills =
+        serde_json::to_value(&settings.skills).map_err(|e| format!("serialize skills: {e}"))?;
     let onboard_completed = serde_json::json!(settings.onboard_completed);
 
     store
@@ -480,6 +560,10 @@ async fn sync_llm_settings_to_store(
         .map_err(|e| e.to_string())?;
     store
         .set_setting(owner_id, "embeddings", &embeddings)
+        .await
+        .map_err(|e| e.to_string())?;
+    store
+        .set_setting(owner_id, "skills", &skills)
         .await
         .map_err(|e| e.to_string())?;
     store
@@ -572,14 +656,71 @@ async fn reload_embedding_runtime(state: &AppState, settings: &Settings) -> Resu
     Ok(())
 }
 
+async fn reload_skills_runtime(state: &AppState, settings: &Settings) -> Result<(), String> {
+    use steward_core::config::SkillsConfig;
+    use steward_core::skills::registry::SkillRegistrySnapshot;
+
+    let config = SkillsConfig::resolve(settings).map_err(|e| e.to_string())?;
+
+    if config.enabled {
+        tokio::fs::create_dir_all(&config.root_dir)
+            .await
+            .map_err(|e| format!("create skills root {}: {e}", config.root_dir.display()))?;
+
+        if let Some(workspace) = state.workspace.as_ref() {
+            workspace
+                .ensure_system_allowlist(
+                    steward_core::workspace::WorkspaceMountKind::Skills,
+                    "Skills",
+                    config.root_dir.display().to_string(),
+                    false,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    *state.skills_config.write().await = config.clone();
+
+    if let Some(registry) = state.skill_registry.as_ref() {
+        let snapshot = if config.enabled {
+            steward_core::skills::registry::SkillRegistry::load_snapshot(
+                &config.root_dir,
+                config.max_scan_depth,
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        } else {
+            SkillRegistrySnapshot {
+                loaded_names: Vec::new(),
+                skills: Vec::new(),
+                fingerprint: "disabled".to_string(),
+            }
+        };
+
+        match registry.write() {
+            Ok(mut guard) => {
+                guard.apply_snapshot(snapshot);
+            }
+            Err(error) => {
+                return Err(format!("skill registry lock poisoned: {error}"));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn get_settings(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> Result<steward_core::ipc::SettingsResponse, String> {
+    refresh_skill_registry_for_settings(&state).await?;
     let settings = Settings::load_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    Ok(build_settings_response(&settings, None))
+    let installed_skills = collect_installed_skill_entries(&state, &settings);
+    Ok(build_settings_response(&settings, installed_skills, None))
 }
 
 #[tauri::command]
@@ -605,6 +746,16 @@ pub async fn patch_settings(
     }
     if let Some(embeddings) = payload.embeddings {
         settings.embeddings = embeddings;
+    }
+    if let Some(skills) = payload.skills {
+        settings.skills.disabled = skills
+            .disabled
+            .into_iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+        settings.skills.disabled.sort();
+        settings.skills.disabled.dedup();
     }
 
     settings
@@ -638,10 +789,16 @@ pub async fn patch_settings(
         .save_toml(&Settings::default_toml_path())
         .map_err(|e| e.to_string())?;
 
+    reload_skills_runtime(&state, &settings).await?;
     reload_embedding_runtime(&state, &settings).await?;
     let llm_readiness_error = reload_llm_runtime(&state, &settings).await?;
+    let installed_skills = collect_installed_skill_entries(&state, &settings);
 
-    Ok(build_settings_response(&settings, llm_readiness_error))
+    Ok(build_settings_response(
+        &settings,
+        installed_skills,
+        llm_readiness_error,
+    ))
 }
 
 // =============================================================================
@@ -4327,6 +4484,9 @@ mod tests {
             major_backend_id: Some("primary".to_string()),
             cheap_backend_id: None,
             cheap_model_uses_primary: true,
+            skills: steward_core::settings::SkillsSettings {
+                disabled: vec!["officecli".to_string()],
+            },
             ..Default::default()
         };
 
@@ -4354,6 +4514,13 @@ mod tests {
         assert_eq!(
             stored.get("onboard_completed"),
             Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            stored
+                .get("skills")
+                .and_then(serde_json::Value::as_object)
+                .and_then(|value| value.get("disabled")),
+            Some(&serde_json::json!(["officecli"]))
         );
         assert_eq!(
             stored
@@ -4396,6 +4563,10 @@ mod tests {
             None,
             None,
             None,
+            None,
+            Arc::new(tokio::sync::RwLock::new(
+                steward_core::config::SkillsConfig::default(),
+            )),
             llm_reloader,
             Arc::new(SessionManager::new()),
             Arc::clone(&primary_llm),
@@ -4475,6 +4646,10 @@ mod tests {
             Some(workspace),
             None,
             None,
+            None,
+            Arc::new(tokio::sync::RwLock::new(
+                steward_core::config::SkillsConfig::default(),
+            )),
             llm_reloader,
             Arc::new(SessionManager::new()),
             Arc::clone(&primary_llm),

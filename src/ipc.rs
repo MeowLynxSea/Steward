@@ -13,12 +13,33 @@ pub use crate::desktop_runtime::AppState;
 // =============================================================================
 
 #[derive(Debug, Serialize)]
+pub struct SkillSettingsEntry {
+    pub name: String,
+    pub version: String,
+    pub description: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkillsSettingsResponse {
+    pub disabled: Vec<String>,
+    pub installed: Vec<SkillSettingsEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SkillsSettingsPatch {
+    #[serde(default)]
+    pub disabled: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SettingsResponse {
     pub backends: Vec<crate::settings::BackendInstance>,
     pub major_backend_id: Option<String>,
     pub cheap_backend_id: Option<String>,
     pub cheap_model_uses_primary: bool,
     pub embeddings: crate::settings::EmbeddingsSettings,
+    pub skills: SkillsSettingsResponse,
     pub llm_ready: bool,
     pub llm_onboarding_required: bool,
     pub llm_readiness_error: Option<String>,
@@ -31,6 +52,7 @@ pub struct PatchSettingsRequest {
     pub cheap_backend_id: Option<String>,
     pub cheap_model_uses_primary: Option<bool>,
     pub embeddings: Option<crate::settings::EmbeddingsSettings>,
+    pub skills: Option<SkillsSettingsPatch>,
 }
 
 // =============================================================================

@@ -1065,7 +1065,7 @@
   .graph-modal-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 44;
+    z-index: var(--settings-z-modal, 94);
     display: flex;
     align-items: center;
     justify-content: center;

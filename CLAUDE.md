@@ -206,7 +206,7 @@ SKILL.md files extend the agent's prompt with domain-specific instructions. See 
 
 - **Storage model**: skills live in the single shared root `~/.steward/skills/`, which is also mounted into Workspace as the `Skills` system mount
 - **Desktop trust model**: currently all discovered filesystem-backed skills are treated as trusted in the desktop runtime
-- **Selection pipeline**: gating (check bin/env/config requirements) -> scoring (keywords/patterns/tags) -> budget (fit within `SKILLS_MAX_TOKENS`) -> attenuation (kept structurally, but desktop discovery currently yields trusted skills)
+- **Desktop injection model**: passing gating/discovery puts a skill in the shared registry; desktop chat turns inject every installed skill unless the user has explicitly disabled it in Settings
 - **Skill tools**: `skill_list`, `skill_search`, `skill_install`, `skill_remove`
 
 ## Configuration

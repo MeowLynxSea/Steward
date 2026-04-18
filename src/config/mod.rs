@@ -352,7 +352,7 @@ impl Config {
             hygiene: HygieneConfig::resolve()?,
             routines: RoutineConfig::resolve()?,
             claude_code: ClaudeCodeConfig::resolve(settings)?,
-            skills: SkillsConfig::resolve()?,
+            skills: SkillsConfig::resolve(settings)?,
             transcription: TranscriptionConfig::resolve(settings)?,
             search: WorkspaceSearchConfig::resolve()?,
             memory_recall: MemoryRecallConfig::resolve()?,

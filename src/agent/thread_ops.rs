@@ -3191,7 +3191,7 @@ mod tests {
             extension_manager: None,
             skill_registry: None,
             skill_catalog: None,
-            skills_config: SkillsConfig::default(),
+            skills_config: Arc::new(tokio::sync::RwLock::new(SkillsConfig::default())),
             hooks: Arc::new(HookRegistry::new()),
             cost_guard: Arc::new(crate::agent::cost_guard::CostGuard::new(
                 crate::agent::cost_guard::CostGuardConfig::default(),
