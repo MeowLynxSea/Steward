@@ -1,10 +1,34 @@
 <script lang="ts">
+  import { fade, fly } from "svelte/transition";
   import StatusBadge from "../components/StatusBadge.svelte";
   import TaskApprovalCard from "../components/TaskApprovalCard.svelte";
   import { formatDateTime, timelineTitle } from "../lib/presentation";
   import { tasksStore } from "../lib/stores/tasks.svelte";
+  import type { TaskRecord } from "../lib/types";
 
   let rejectReason = $state("Rejected by user");
+  let yoloCandidate = $state<TaskRecord | null>(null);
+
+  function handleToggleMode(task: TaskRecord) {
+    if (task.mode === "yolo") {
+      void tasksStore.toggleMode(task);
+      return;
+    }
+
+    yoloCandidate = task;
+  }
+
+  function closeYoloModal() {
+    yoloCandidate = null;
+  }
+
+  function confirmYoloMode() {
+    if (!yoloCandidate) {
+      return;
+    }
+    void tasksStore.toggleMode(yoloCandidate);
+    yoloCandidate = null;
+  }
 </script>
 
 <section class="view-grid split-grid">
@@ -70,7 +94,7 @@
       </div>
 
       <div class="toolbar">
-        <button class="button button-ghost" onclick={() => void tasksStore.toggleMode(tasksStore.detail!.task)}>
+        <button class="button button-ghost" onclick={() => handleToggleMode(tasksStore.detail!.task)}>
           {tasksStore.detail.task.mode === "yolo" ? "Switch To Ask" : "Switch To Yolo"}
         </button>
         {#if !["completed", "failed", "rejected", "cancelled"].includes(tasksStore.detail.task.status)}
@@ -159,3 +183,119 @@
     {/if}
   </section>
 </section>
+
+{#if yoloCandidate}
+  <div
+    class="tasks-mode-modal-backdrop"
+    role="presentation"
+    tabindex="-1"
+    transition:fade={{ duration: 140 }}
+    onclick={closeYoloModal}
+    onkeydown={(event) => {
+      if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        closeYoloModal();
+      }
+    }}
+  >
+    <div
+      class="tasks-mode-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-label="切换到全自动模式"
+      tabindex="-1"
+      transition:fly={{ y: 18, duration: 180 }}
+      onclick={(event) => event.stopPropagation()}
+      onkeydown={(event) => {
+        event.stopPropagation();
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeYoloModal();
+        }
+      }}
+    >
+      <div class="tasks-mode-modal-head">
+        <div>
+          <p class="eyebrow">Yolo Mode</p>
+          <h3>切换到全自动模式</h3>
+        </div>
+      </div>
+      <div class="tasks-mode-modal-body">
+        <p>
+          这会自动批准该任务后续所有原本需要 Ask 的动作；如果它当前正停在审批点，会立即继续执行。
+        </p>
+      </div>
+      <div class="tasks-mode-modal-actions">
+        <button class="button button-ghost tasks-mode-action-btn" type="button" onclick={closeYoloModal}>
+          继续 Ask
+        </button>
+        <button class="button button-primary tasks-mode-action-btn" type="button" onclick={confirmYoloMode}>
+          继续开启
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .tasks-mode-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 95;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(12, 17, 26, 0.22);
+    backdrop-filter: blur(10px);
+  }
+
+  .tasks-mode-modal {
+    width: min(100%, 480px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 18px;
+    overflow: hidden;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-default);
+    box-shadow: var(--shadow-dropdown);
+  }
+
+  .tasks-mode-modal-head {
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .tasks-mode-modal h3 {
+    margin: 6px 0 0;
+    font-size: 18px;
+  }
+
+  .tasks-mode-modal-body {
+    padding: 16px 18px;
+  }
+
+  .tasks-mode-modal-body p {
+    margin: 0;
+    color: var(--text-secondary);
+    line-height: 1.6;
+  }
+
+  .tasks-mode-modal-actions {
+    padding: 14px 18px 16px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--border-default);
+    background: color-mix(in srgb, var(--bg-primary) 44%, transparent);
+  }
+
+  .tasks-mode-action-btn {
+    min-width: 92px;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+</style>

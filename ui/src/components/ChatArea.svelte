@@ -18,6 +18,7 @@
     SessionDetail,
     ThreadMessage,
     StreamingState,
+    TaskMode,
     TaskRecord,
     TimelineToolCall
   } from "../lib/types";
@@ -29,12 +30,14 @@
   interface Props {
     session: SessionDetail | null;
     task: TaskRecord | null;
+    messageMode: TaskMode;
     streaming: StreamingState;
     loading: boolean;
     emptyLayout?: boolean;
     noBackend?: boolean;
     composerSeed?: { id: string; content: string } | null;
     onSendMessage: (content: string) => void;
+    onChangeMessageMode: (mode: TaskMode) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
     onApproveTaskAlways: (task: TaskRecord) => void;
@@ -74,11 +77,13 @@
   let {
     session,
     task,
+    messageMode,
     streaming,
     loading,
     emptyLayout = false,
     composerSeed = null,
     onSendMessage,
+    onChangeMessageMode,
     onSuggestionClick,
     onApproveTask,
     onApproveTaskAlways,
@@ -94,6 +99,7 @@
   let activeReflectionAssistantId = $state<string | null>(null);
   let reflectionPanels = $state<Record<string, ReflectionPanelState>>({});
   let imagesExpanded = $state(false);
+  let showYoloRiskModal = $state(false);
   let animatedAssistantId = $state<string | null>(null);
   let animatedAssistantText = $state("");
   let typingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -113,6 +119,7 @@
     streaming.images.length > 0
   );
   const showEmptyLayout = $derived(!loading && emptyLayout);
+  const isYoloMode = $derived(messageMode === "yolo");
   const normalizedStreamingThinking = $derived.by(() => normalizeThinkingTranscript(streaming.thinkingMessage));
   const hasLiveStreamingSignal = $derived.by(() => {
     return Boolean(
@@ -558,6 +565,25 @@
       textareaRef.style.height = "auto";
       textareaRef.style.height = `${Math.min(textareaRef.scrollHeight, 200)}px`;
     }
+  }
+
+  function handleModeToggle() {
+    if (isYoloMode) {
+      onChangeMessageMode("ask");
+      showYoloRiskModal = false;
+      return;
+    }
+
+    showYoloRiskModal = true;
+  }
+
+  function confirmYoloMode() {
+    showYoloRiskModal = false;
+    onChangeMessageMode("yolo");
+  }
+
+  function closeYoloRiskModal() {
+    showYoloRiskModal = false;
   }
 
   function normalizeThinkingTranscript(value: string) {
@@ -1254,9 +1280,14 @@
             <button class="input-chip icon-only" aria-label="添加">
               <Plus size={15} strokeWidth={2} />
             </button>
-            <button class="input-chip">
+            <button
+              class={`input-chip mode-chip ${isYoloMode ? "active" : ""}`}
+              type="button"
+              aria-pressed={isYoloMode}
+              onclick={handleModeToggle}
+            >
               <Shield size={15} strokeWidth={2} />
-              <span>权限 · 全自动</span>
+              <span>{isYoloMode ? "权限 · 全自动" : "权限 · 需确认"}</span>
             </button>
           </div>
 
@@ -1269,6 +1300,72 @@
       {/if}
     </div>
   </div>
+
+  {#if showYoloRiskModal}
+    <div
+      class="mode-modal-backdrop"
+      role="presentation"
+      tabindex="-1"
+      transition:fade={{ duration: 140 }}
+      onclick={closeYoloRiskModal}
+      onkeydown={(event) => {
+        if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          closeYoloRiskModal();
+        }
+      }}
+    >
+      <div
+        class="mode-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="全自动模式风险提示"
+        tabindex="-1"
+        transition:fly={{ y: 18, duration: 180 }}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeYoloRiskModal();
+          }
+        }}
+      >
+        <div class="mode-modal-head">
+          <div>
+            <p class="eyebrow">Yolo Mode</p>
+            <h3>切换到全自动模式</h3>
+          </div>
+          <button
+            class="mode-modal-close"
+            type="button"
+            aria-label="关闭风险提示"
+            onclick={closeYoloRiskModal}
+          >
+            <X size={16} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        <div class="mode-modal-body">
+          <p>
+            全自动模式会自动批准当前线程里所有原本需要 Ask 确认的操作，包括文件写入、命令执行、网络请求以及后续新的高风险步骤。
+          </p>
+          <p>
+            只有在你信任当前上下文、工作区和模型输出时才应启用。如果当前任务正卡在审批点，切换后会立即自动继续执行。
+          </p>
+        </div>
+
+        <div class="mode-modal-actions">
+          <button class="button button-ghost mode-action-btn" type="button" onclick={closeYoloRiskModal}>
+            继续 Ask
+          </button>
+          <button class="button button-primary mode-action-btn" type="button" onclick={confirmYoloMode}>
+            继续开启
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   {#if activeReflectionMessage}
     {@const activeReflectionPanel = reflectionPanelForMessage(activeReflectionMessage)}
@@ -2516,6 +2613,109 @@
     background: var(--bg-elevated);
   }
 
+  .mode-chip {
+    border: 1px solid transparent;
+  }
+
+  .mode-chip.active {
+    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-input));
+    color: var(--text-primary);
+    border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
+  }
+
+  .mode-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 95;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(12, 17, 26, 0.22);
+    backdrop-filter: blur(10px);
+  }
+
+  .mode-modal {
+    width: min(100%, 520px);
+    display: flex;
+    flex-direction: column;
+    border-radius: 18px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface);
+    box-shadow: var(--shadow-dropdown);
+    overflow: hidden;
+  }
+
+  .mode-modal-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    padding: 16px 18px 14px;
+    border-bottom: 1px solid var(--border-default);
+  }
+
+  .mode-modal-head h3 {
+    margin: 6px 0 0;
+    font-size: 18px;
+    color: var(--text-primary);
+  }
+
+  .mode-modal-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    border: 1px solid var(--border-default);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+  }
+
+  .mode-modal-close:hover {
+    color: var(--text-primary);
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+  }
+
+  .mode-modal-body {
+    display: grid;
+    gap: 12px;
+    padding: 16px 18px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+
+  .mode-modal-body p {
+    margin: 0;
+  }
+
+  .mode-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+    padding: 14px 18px 16px;
+    border-top: 1px solid var(--border-default);
+    background: color-mix(in srgb, var(--bg-primary) 44%, transparent);
+  }
+
+  .mode-action-btn {
+    min-width: 92px;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    transform: none;
+  }
+
+  .mode-action-btn:hover {
+    transform: translateY(-1px);
+  }
+
   .send-btn {
     width: 36px;
     height: 36px;
@@ -2534,6 +2734,25 @@
   .send-btn:hover,
   .send-btn.active {
     background: var(--accent-primary);
+  }
+
+  @media (max-width: 720px) {
+    .mode-modal-backdrop {
+      padding: 16px;
+    }
+
+    .mode-modal {
+      border-radius: 16px;
+    }
+
+    .mode-modal-actions {
+      justify-content: stretch;
+    }
+
+    .mode-modal-actions button {
+      flex: 1 1 0;
+      justify-content: center;
+    }
   }
   .aux-group-card {
     display: flex;

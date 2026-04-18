@@ -114,6 +114,8 @@ Use it when the task may:
 
 `yolo` mode keeps going automatically under the same safety boundary, but without pausing for every risky step.
 
+The desktop composer has a dedicated mode toggle. Switching into `yolo` opens a risk warning first, and if the current thread is already waiting at an approval checkpoint the runtime resumes it automatically after the switch.
+
 ### Workspace
 
 Workspace indexing imports text-like files into the local retrieval store so the agent can search and cite relevant context.

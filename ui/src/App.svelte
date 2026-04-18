@@ -13,7 +13,7 @@
   import { tasksStore } from "./lib/stores/tasks.svelte";
   import { workspaceStore } from "./lib/stores/workspace.svelte";
   import { listenForFolderDrops, pickDirectory } from "./lib/tauri";
-  import type { TaskRecord, WorkspaceSearchResult } from "./lib/types";
+  import type { TaskMode, TaskRecord, WorkspaceSearchResult } from "./lib/types";
   import OnboardingView from "./views/OnboardingView.svelte";
   import SettingsView from "./views/SettingsView.svelte";
   import ToastContainer from "./components/ToastContainer.svelte";
@@ -108,6 +108,10 @@
 
   function handleSuggestionClick(suggestion: string) {
     void sessionsStore.sendMessage(suggestion);
+  }
+
+  function handleMessageModeChange(mode: TaskMode) {
+    void sessionsStore.setMessageMode(mode);
   }
 
   function handleSelectModel(backendId: string) {
@@ -363,12 +367,14 @@
         <ChatArea
           session={sessionsStore.active}
           task={sessionsStore.active?.active_thread_task ?? null}
+          messageMode={sessionsStore.messageMode}
           streaming={sessionsStore.streaming}
           loading={sessionsStore.loading}
           emptyLayout={prefersEmptySessionLayout}
           noBackend={noBackend}
           {composerSeed}
           onSendMessage={handleSendMessage}
+          onChangeMessageMode={handleMessageModeChange}
           onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}
           onApproveTaskAlways={handleApproveTaskAlways}

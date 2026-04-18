@@ -498,7 +498,7 @@
           {#if settingsStore.data.skills.installed.length === 0}
             <div class="settings-list-empty">
               <strong>还没有已安装技能</strong>
-              <p>把 `SKILL.md` 放进 `~/.steward/skills` 后，这里会显示可切换的技能列表。</p>
+              <p>把 `SKILL.md` 放进 `~/.steward/skills` ，或让 Steward 自动安装</p>
             </div>
           {:else}
             {#each settingsStore.data.skills.installed as skill (skill.name)}

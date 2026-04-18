@@ -11,6 +11,7 @@ import type {
   StreamEnvelope,
   StreamingState,
   TaskDetail,
+  TaskMode,
   TaskRecord,
   TurnCostInfo,
   ToolDecision
@@ -210,6 +211,7 @@ class SessionsState {
     this.#seenEventKeys.clear();
     try {
       this.active = await apiClient.getSession(id);
+      this.#syncMessageModeFromTask(this.active.active_thread_task);
       await this.refreshActiveTaskDetail();
       this.#restoreStreamingAnchors();
       this.#streamHandle = createEventStream(
@@ -314,6 +316,7 @@ class SessionsState {
         active_thread_id: response.active_thread_id,
         active_thread_task: response.active_thread_task ?? this.active.active_thread_task
       };
+      this.#syncMessageModeFromTask(this.active.active_thread_task);
       await this.refreshActiveTaskDetail();
       this.status = response.active_thread_task_id
         ? `Message queued in ${this.messageMode} mode`
@@ -385,6 +388,32 @@ class SessionsState {
     }
   }
 
+  async setMessageMode(mode: TaskMode) {
+    const activeTask = this.active?.active_thread_task ?? null;
+    if (this.messageMode === mode && (!activeTask || activeTask.mode === mode)) {
+      return;
+    }
+
+    this.error = null;
+    this.messageMode = mode;
+
+    if (!activeTask || activeTask.mode === mode) {
+      return;
+    }
+
+    try {
+      this.status = `Switching to ${mode} mode`;
+      const updatedTask = await apiClient.patchTaskMode(activeTask.id, mode);
+      this.#applyActiveTaskUpdate(updatedTask);
+      await this.refreshActiveTaskDetail();
+    } catch (e) {
+      this.messageMode = activeTask.mode;
+      this.error = e instanceof Error ? e.message : "Failed to switch execution mode";
+    } finally {
+      this.status = "";
+    }
+  }
+
   #startPollFallback() {
     this.#stopPollFallback();
     const sessionId = this.activeId;
@@ -452,6 +481,7 @@ class SessionsState {
         ...this.active,
         active_thread_task: detail.task
       };
+      this.#syncMessageModeFromTask(detail.task);
       const persistedTurnCost = turnCostFromResultMetadata(detail.task.result_metadata);
       if (persistedTurnCost) {
         this.#attachTurnCostToLatestAssistant(persistedTurnCost);
@@ -484,6 +514,7 @@ class SessionsState {
       ...this.active,
       active_thread_task: task
     };
+    this.#syncMessageModeFromTask(task);
 
     if (this.activeTaskDetail?.task.id === task.id) {
       this.activeTaskDetail = {
@@ -784,6 +815,13 @@ class SessionsState {
       return false;
     }
     return event.thread_id === activeThreadId;
+  }
+
+  #syncMessageModeFromTask(task: TaskRecord | null | undefined) {
+    if (!task) {
+      return;
+    }
+    this.messageMode = task.mode;
   }
 
   #nextTurnNumber() {

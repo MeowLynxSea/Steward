@@ -1348,9 +1348,17 @@ async fn recover_missing_approval_task(
     thread_id: Uuid,
     pending: &steward_core::agent::session::PendingApproval,
 ) -> Option<steward_core::ipc::TaskRecord> {
-    let message = IncomingMessage::new("desktop", state.owner_id.clone(), pending.description.clone())
-        .with_thread(thread_id.to_string())
-        .with_metadata(desktop_message_metadata(session_id, thread_id, &state.owner_id));
+    let message = IncomingMessage::new(
+        "desktop",
+        state.owner_id.clone(),
+        pending.description.clone(),
+    )
+    .with_thread(thread_id.to_string())
+    .with_metadata(desktop_message_metadata(
+        session_id,
+        thread_id,
+        &state.owner_id,
+    ));
 
     state
         .task_runtime
@@ -1412,10 +1420,13 @@ async fn reconcile_desktop_thread_state(
     session_id: Uuid,
     session: &Arc<tokio::sync::Mutex<Session>>,
     thread_id: Uuid,
-) -> Result<(
-    steward_core::agent::session::Thread,
-    Option<steward_core::ipc::TaskRecord>,
-), String> {
+) -> Result<
+    (
+        steward_core::agent::session::Thread,
+        Option<steward_core::ipc::TaskRecord>,
+    ),
+    String,
+> {
     let initial_thread = {
         let sess = session.lock().await;
         sess.threads
@@ -1664,6 +1675,17 @@ async fn wait_for_task_approval_transition(
     }
 
     latest
+}
+
+fn approval_to_resume_on_yolo_transition(
+    task: &steward_core::ipc::TaskRecord,
+    mode: TaskMode,
+) -> Option<Uuid> {
+    if mode != TaskMode::Yolo || task.status != TaskStatus::WaitingApproval {
+        return None;
+    }
+
+    task.pending_approval.as_ref().map(|pending| pending.id)
 }
 
 fn format_tool_parameters(parameters: &serde_json::Value) -> Option<String> {
@@ -3191,8 +3213,6 @@ pub async fn patch_task_mode(
     id: Uuid,
     payload: PatchTaskModeRequest,
 ) -> Result<steward_core::ipc::TaskRecord, String> {
-    use steward_core::task_runtime::TaskMode;
-
     let mode = match payload.mode.to_lowercase().as_str() {
         "yolo" => TaskMode::Yolo,
         "ask" => TaskMode::Ask,
@@ -3204,11 +3224,33 @@ pub async fn patch_task_mode(
         }
     };
 
+    let existing_task = state
+        .task_runtime
+        .get_task(id)
+        .await
+        .ok_or_else(|| "Task not found".to_string())?;
+    let pending_approval_id = approval_to_resume_on_yolo_transition(&existing_task, mode);
+
     let task = state
         .task_runtime
         .toggle_mode(id, mode)
         .await
         .ok_or_else(|| "Task not found".to_string())?;
+
+    if let Some(approval_id) = pending_approval_id {
+        inject_task_approval_submission(&state, &task, approval_id, true, false).await?;
+
+        let task = match wait_for_task_approval_transition(&state, id, Some(approval_id)).await {
+            Some(task) => task,
+            None => state
+                .task_runtime
+                .get_task(id)
+                .await
+                .ok_or_else(|| "Task not found after switching to yolo".to_string())?,
+        };
+
+        return Ok(task);
+    }
 
     Ok(task)
 }
@@ -4306,9 +4348,10 @@ mod tests {
     use chrono::Utc;
 
     use super::{
-        build_db_reflection_turns, build_mcp_context_attachments,
-        build_thread_messages_from_db_messages, get_workspace_allowlist_file_impl,
-        parse_reflection_summary_parts, reload_llm_runtime, requested_task_mode,
+        approval_to_resume_on_yolo_transition, build_db_reflection_turns,
+        build_mcp_context_attachments, build_thread_messages_from_db_messages,
+        get_workspace_allowlist_file_impl, parse_reflection_summary_parts,
+        recover_missing_approval_task, reload_llm_runtime, requested_task_mode,
         select_reflection_run, sync_llm_settings_to_store,
     };
     use steward_core::agent::SessionManager;
@@ -4322,6 +4365,7 @@ mod tests {
     use steward_core::tools::ToolRegistry;
     use steward_core::tools::mcp::McpSessionManager;
     use steward_core::workspace::Workspace;
+    use uuid::Uuid;
 
     #[test]
     fn build_thread_messages_from_db_messages_keeps_persisted_turn_cost() {
@@ -4462,7 +4506,10 @@ mod tests {
             .expect("task should be recovered");
 
         assert_eq!(task.id, thread_id);
-        assert_eq!(task.status, steward_core::task_runtime::TaskStatus::WaitingApproval);
+        assert_eq!(
+            task.status,
+            steward_core::task_runtime::TaskStatus::WaitingApproval
+        );
         assert_eq!(
             task.pending_approval.as_ref().map(|approval| approval.id),
             Some(pending.request_id)
@@ -4633,6 +4680,59 @@ mod tests {
             Some(steward_core::task_runtime::TaskMode::Yolo)
         );
         assert_eq!(requested_task_mode(None), None);
+    }
+
+    #[test]
+    fn yolo_transition_only_auto_resumes_pending_approvals() {
+        let waiting_task = steward_core::task_runtime::TaskRecord {
+            id: Uuid::new_v4(),
+            correlation_id: Uuid::new_v4().to_string(),
+            template_id: "legacy:session-thread".to_string(),
+            mode: steward_core::task_runtime::TaskMode::Ask,
+            status: steward_core::task_runtime::TaskStatus::WaitingApproval,
+            title: "Write file".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            current_step: None,
+            pending_approval: Some(steward_core::task_runtime::TaskPendingApproval {
+                id: Uuid::new_v4(),
+                risk: "filesystem_write".to_string(),
+                summary: "Write file".to_string(),
+                operations: Vec::new(),
+                allow_always: true,
+            }),
+            route: steward_core::task_runtime::TaskRoute::default(),
+            last_error: None,
+            result_metadata: None,
+        };
+
+        assert_eq!(
+            approval_to_resume_on_yolo_transition(
+                &waiting_task,
+                steward_core::task_runtime::TaskMode::Yolo
+            ),
+            waiting_task
+                .pending_approval
+                .as_ref()
+                .map(|pending| pending.id)
+        );
+        assert_eq!(
+            approval_to_resume_on_yolo_transition(
+                &waiting_task,
+                steward_core::task_runtime::TaskMode::Ask
+            ),
+            None
+        );
+
+        let mut running_task = waiting_task.clone();
+        running_task.status = steward_core::task_runtime::TaskStatus::Running;
+        assert_eq!(
+            approval_to_resume_on_yolo_transition(
+                &running_task,
+                steward_core::task_runtime::TaskMode::Yolo
+            ),
+            None
+        );
     }
 
     #[test]
