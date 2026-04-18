@@ -151,6 +151,36 @@ fn summarize_change_count(changes: usize) -> Option<String> {
     }
 }
 
+fn parse_porcelain_status_z_paths(output: &[u8]) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    let mut entries = output
+        .split(|byte| *byte == b'\0')
+        .filter(|entry| !entry.is_empty());
+
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+
+        let status = &entry[..2];
+        let path = String::from_utf8_lossy(&entry[3..]).into_owned();
+        if !path.is_empty() {
+            paths.insert(path);
+        }
+
+        let is_rename_or_copy = status.contains(&b'R') || status.contains(&b'C');
+        if is_rename_or_copy {
+            if let Some(original_path) = entries.next() {
+                if !original_path.is_empty() {
+                    paths.insert(String::from_utf8_lossy(original_path).into_owned());
+                }
+            }
+        }
+    }
+
+    paths.into_iter().collect()
+}
+
 fn quote_revspec_path(path: &str) -> String {
     if path.contains(':') {
         path.replace(':', "\\:")
@@ -441,6 +471,18 @@ impl LibSqlBackend {
         index_path: Option<&Path>,
         args: &[String],
     ) -> Result<String, WorkspaceError> {
+        let output = self
+            .run_tracker_git_bytes(tracker, index_path, args)
+            .await?;
+        Ok(String::from_utf8_lossy(&output).trim().to_string())
+    }
+
+    async fn run_tracker_git_bytes(
+        &self,
+        tracker: &AllowlistTrackerRecord,
+        index_path: Option<&Path>,
+        args: &[String],
+    ) -> Result<Vec<u8>, WorkspaceError> {
         let mut cmd = self.tracker_git_command(tracker, index_path).await;
         cmd.args(args);
         let output = cmd.output().await.map_err(|e| WorkspaceError::IoError {
@@ -455,7 +497,7 @@ impl LibSqlBackend {
                 ),
             });
         }
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(output.stdout)
     }
 
     async fn detect_external_git_tracker(
@@ -746,6 +788,7 @@ impl LibSqlBackend {
         let mut args = vec![
             "status".to_string(),
             "--porcelain=v1".to_string(),
+            "-z".to_string(),
             "--untracked-files=all".to_string(),
             "--ignored=no".to_string(),
             "--".to_string(),
@@ -756,24 +799,11 @@ impl LibSqlBackend {
                 .unwrap_or_else(|| tracker.root_pathspec()),
         );
         let output = self
-            .run_tracker_git_text(tracker, Some(&index_path), &args)
+            .run_tracker_git_bytes(tracker, Some(&index_path), &args)
             .await?;
         let _ = std::fs::remove_file(&index_path);
 
-        let mut result = BTreeSet::new();
-        for line in output.lines() {
-            let body = line.get(3..).unwrap_or("").trim();
-            if body.is_empty() {
-                continue;
-            }
-            if let Some((left, right)) = body.split_once(" -> ") {
-                result.insert(left.to_string());
-                result.insert(right.to_string());
-            } else {
-                result.insert(body.to_string());
-            }
-        }
-        Ok(result.into_iter().collect())
+        Ok(parse_porcelain_status_z_paths(&output))
     }
 
     async fn read_anchor_file_bytes(
@@ -1592,5 +1622,35 @@ impl LibSqlBackend {
             dirty_paths.insert(tracker.repo_path_for_allowlist_path(&change.path));
         }
         Ok(dirty_paths.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_porcelain_status_z_paths;
+
+    #[test]
+    fn parses_unicode_paths_from_porcelain_z_status() {
+        let output = "?? 已组-第二次翻转课堂-全.pptx\0".as_bytes();
+
+        let paths = parse_porcelain_status_z_paths(output);
+
+        assert_eq!(paths, vec!["已组-第二次翻转课堂-全.pptx".to_string()]);
+    }
+
+    #[test]
+    fn parses_rename_entries_and_preserves_leading_spaces() {
+        let output = b"R  renamed file.txt\0old name.txt\0??  leading space.txt\0";
+
+        let paths = parse_porcelain_status_z_paths(output);
+
+        assert_eq!(
+            paths,
+            vec![
+                " leading space.txt".to_string(),
+                "old name.txt".to_string(),
+                "renamed file.txt".to_string(),
+            ]
+        );
     }
 }
