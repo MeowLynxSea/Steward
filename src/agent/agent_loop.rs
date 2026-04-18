@@ -2333,6 +2333,10 @@ impl Agent {
             }
         };
 
+        self.session_manager
+            .persist_session_snapshot(&message.user_id, &session_for_empty_exit)
+            .await;
+
         // Convert SubmissionResult to response string
         match result? {
             SubmissionResult::Response { content } => {

@@ -455,6 +455,7 @@ impl Thread {
             turn.interrupt();
         }
         self.pending_messages.clear();
+        self.pending_approval = None;
         self.state = ThreadState::Interrupted;
         self.updated_at = Utc::now();
     }

@@ -402,6 +402,15 @@ impl TaskRuntime {
         task_id: Uuid,
         pending: &PendingApproval,
     ) {
+        if self.get_task(task_id).await.is_none() {
+            tracing::warn!(
+                task_id = %task_id,
+                approval_id = %pending.request_id,
+                "approval task missing; creating placeholder task before marking waiting approval"
+            );
+            let _ = self.ensure_task(message, task_id).await;
+        }
+
         self.apply_update(
             task_id,
             Some(message),
@@ -857,6 +866,38 @@ mod tests {
                 .expect("pending approval")
                 .risk,
             "network_request"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_waiting_approval_creates_missing_task() {
+        let runtime = TaskRuntime::new();
+        let task_id = Uuid::new_v4();
+        let message = IncomingMessage::new("desktop", "user-1", "resume approval")
+            .with_thread(task_id.to_string());
+
+        let pending = PendingApproval {
+            request_id: Uuid::new_v4(),
+            tool_name: "shell".to_string(),
+            parameters: json!({"command": "echo hello"}),
+            display_parameters: json!({"command": "echo hello"}),
+            description: "Execute shell command".to_string(),
+            tool_call_id: "call_1".to_string(),
+            context_messages: Vec::new(),
+            deferred_tool_calls: Vec::new(),
+            user_timezone: Some("UTC".to_string()),
+            allow_always: true,
+        };
+
+        runtime
+            .mark_waiting_approval(&message, task_id, &pending)
+            .await;
+
+        let task = runtime.get_task(task_id).await.expect("task should exist");
+        assert_eq!(task.status, TaskStatus::WaitingApproval);
+        assert_eq!(
+            task.pending_approval.as_ref().map(|approval| approval.id),
+            Some(pending.request_id)
         );
     }
 }

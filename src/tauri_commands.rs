@@ -1342,6 +1342,149 @@ async fn find_session_id_for_thread(state: &AppState, thread_id: Uuid) -> Option
     None
 }
 
+async fn recover_missing_approval_task(
+    state: &AppState,
+    session_id: Uuid,
+    thread_id: Uuid,
+    pending: &steward_core::agent::session::PendingApproval,
+) -> Option<steward_core::ipc::TaskRecord> {
+    let message = IncomingMessage::new("desktop", state.owner_id.clone(), pending.description.clone())
+        .with_thread(thread_id.to_string())
+        .with_metadata(desktop_message_metadata(session_id, thread_id, &state.owner_id));
+
+    state
+        .task_runtime
+        .mark_waiting_approval(&message, thread_id, pending)
+        .await;
+    state.task_runtime.get_task(thread_id).await
+}
+
+enum DesktopApprovalRepair {
+    None,
+    RecoverTask(steward_core::agent::session::PendingApproval),
+    ClearStale,
+    InterruptStale,
+}
+
+fn classify_desktop_approval_repair(
+    thread: &steward_core::agent::session::Thread,
+    task: Option<&steward_core::ipc::TaskRecord>,
+) -> DesktopApprovalRepair {
+    use steward_core::agent::session::{ThreadState, TurnState};
+
+    if thread.state != ThreadState::AwaitingApproval {
+        return DesktopApprovalRepair::None;
+    }
+
+    let turn_still_in_flight = thread
+        .last_turn()
+        .map(|turn| turn.state == TurnState::Processing)
+        .unwrap_or(false);
+    if !turn_still_in_flight {
+        return DesktopApprovalRepair::ClearStale;
+    }
+
+    match task {
+        Some(task) => match task.status {
+            TaskStatus::WaitingApproval => {
+                if thread.pending_approval.is_some() {
+                    DesktopApprovalRepair::None
+                } else {
+                    DesktopApprovalRepair::InterruptStale
+                }
+            }
+            TaskStatus::Running => DesktopApprovalRepair::InterruptStale,
+            TaskStatus::Queued
+            | TaskStatus::Completed
+            | TaskStatus::Failed
+            | TaskStatus::Cancelled
+            | TaskStatus::Rejected => DesktopApprovalRepair::ClearStale,
+        },
+        None => match thread.pending_approval.clone() {
+            Some(pending) => DesktopApprovalRepair::RecoverTask(pending),
+            None => DesktopApprovalRepair::ClearStale,
+        },
+    }
+}
+
+async fn reconcile_desktop_thread_state(
+    state: &AppState,
+    session_id: Uuid,
+    session: &Arc<tokio::sync::Mutex<Session>>,
+    thread_id: Uuid,
+) -> Result<(
+    steward_core::agent::session::Thread,
+    Option<steward_core::ipc::TaskRecord>,
+), String> {
+    let initial_thread = {
+        let sess = session.lock().await;
+        sess.threads
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| "Thread not found".to_string())?
+    };
+
+    let mut active_thread_task = state.task_runtime.get_task(thread_id).await;
+
+    match classify_desktop_approval_repair(&initial_thread, active_thread_task.as_ref()) {
+        DesktopApprovalRepair::None => {}
+        DesktopApprovalRepair::RecoverTask(pending) => {
+            active_thread_task =
+                recover_missing_approval_task(state, session_id, thread_id, &pending).await;
+        }
+        DesktopApprovalRepair::ClearStale => {
+            tracing::warn!(
+                session_id = %session_id,
+                thread_id = %thread_id,
+                task_status = ?active_thread_task.as_ref().map(|task| task.status),
+                "Clearing stale awaiting-approval thread state"
+            );
+            {
+                let mut sess = session.lock().await;
+                let thread = sess
+                    .threads
+                    .get_mut(&thread_id)
+                    .ok_or_else(|| "Thread not found".to_string())?;
+                thread.clear_pending_approval();
+            }
+            state
+                .agent_session_manager
+                .persist_session_snapshot(&state.owner_id, session)
+                .await;
+        }
+        DesktopApprovalRepair::InterruptStale => {
+            tracing::warn!(
+                session_id = %session_id,
+                thread_id = %thread_id,
+                task_status = ?active_thread_task.as_ref().map(|task| task.status),
+                "Interrupting stale awaiting-approval thread state"
+            );
+            {
+                let mut sess = session.lock().await;
+                let thread = sess
+                    .threads
+                    .get_mut(&thread_id)
+                    .ok_or_else(|| "Thread not found".to_string())?;
+                thread.interrupt();
+            }
+            state
+                .agent_session_manager
+                .persist_session_snapshot(&state.owner_id, session)
+                .await;
+        }
+    }
+
+    let final_thread = {
+        let sess = session.lock().await;
+        sess.threads
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| "Thread not found".to_string())?
+    };
+
+    Ok((final_thread, active_thread_task))
+}
+
 fn requested_task_mode(mode: Option<&str>) -> Option<TaskMode> {
     mode.map(TaskMode::from_str)
 }
@@ -2228,7 +2371,7 @@ pub async fn get_session(
             .await;
     }
 
-    let (summary, thread) = {
+    let (summary, _) = {
         let sess = session.lock().await;
         let thread = sess
             .threads
@@ -2250,6 +2393,9 @@ pub async fn get_session(
         (summary, thread)
     };
 
+    let (thread, active_thread_task) =
+        reconcile_desktop_thread_state(&state, id, &session, thread_id).await?;
+
     let thread_messages = if let Some(db) = state.db.as_ref() {
         match db.list_conversation_messages(thread_id).await {
             Ok(db_messages) if !db_messages.is_empty() => {
@@ -2267,8 +2413,6 @@ pub async fn get_session(
             .count() as i64,
         ..summary
     };
-
-    let active_thread_task = state.task_runtime.get_task(thread_id).await;
 
     Ok(steward_core::ipc::SessionDetailResponse {
         session: summary,
@@ -2442,6 +2586,8 @@ pub async fn send_session_message(
             .persist_session_snapshot(&state.owner_id, &session)
             .await;
     }
+
+    let _ = reconcile_desktop_thread_state(&state, id, &session, thread_id).await?;
 
     let sess_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
     if sess_result.is_err() {
@@ -4253,6 +4399,74 @@ mod tests {
             Some("Stored style preference.")
         );
         assert_eq!(reflection.turn_number, 0);
+    }
+
+    #[tokio::test]
+    async fn recover_missing_approval_task_rebuilds_waiting_approval_task() {
+        use steward_core::agent::session::PendingApproval;
+
+        let session =
+            create_session_manager(steward_core::config::LlmConfig::for_testing().session).await;
+        let disabled: Arc<dyn LlmProvider> = Arc::new(DisabledLlmProvider::new());
+        let reloadable_state = Arc::new(ReloadableLlmState::new(disabled.clone(), disabled));
+        let primary_llm: Arc<dyn LlmProvider> = Arc::new(ReloadableLlmProvider::new(
+            Arc::clone(&reloadable_state),
+            ReloadableSlot::Primary,
+        ));
+        let llm_reloader = Arc::new(RuntimeLlmReloader::new(
+            Arc::clone(&reloadable_state),
+            session,
+            "test-user".to_string(),
+            None,
+        ));
+        let (message_inject_tx, _message_inject_rx) = tokio::sync::mpsc::channel(1);
+        let task_runtime = Arc::new(TaskRuntime::new());
+        let state = AppState::new(
+            "test-user".to_string(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Arc::new(tokio::sync::RwLock::new(
+                steward_core::config::SkillsConfig::default(),
+            )),
+            llm_reloader,
+            Arc::new(SessionManager::new()),
+            Arc::clone(&primary_llm),
+            Arc::clone(&task_runtime),
+            Arc::new(ToolRegistry::new()),
+            Arc::new(McpSessionManager::new()),
+            None,
+            None,
+            message_inject_tx,
+        );
+
+        let session_id = Uuid::new_v4();
+        let thread_id = Uuid::new_v4();
+        let pending = PendingApproval {
+            request_id: Uuid::new_v4(),
+            tool_name: "shell".to_string(),
+            parameters: serde_json::json!({"command": "echo hello"}),
+            display_parameters: serde_json::json!({"command": "echo hello"}),
+            description: "Execute shell command".to_string(),
+            tool_call_id: "call_1".to_string(),
+            context_messages: Vec::new(),
+            deferred_tool_calls: Vec::new(),
+            user_timezone: Some("UTC".to_string()),
+            allow_always: true,
+        };
+
+        let task = recover_missing_approval_task(&state, session_id, thread_id, &pending)
+            .await
+            .expect("task should be recovered");
+
+        assert_eq!(task.id, thread_id);
+        assert_eq!(task.status, steward_core::task_runtime::TaskStatus::WaitingApproval);
+        assert_eq!(
+            task.pending_approval.as_ref().map(|approval| approval.id),
+            Some(pending.request_id)
+        );
     }
 
     #[test]
