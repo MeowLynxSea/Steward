@@ -1248,21 +1248,6 @@
     color: var(--text-secondary);
   }
 
-  .skills-note {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px 0 0;
-    border-top: 1px solid var(--border-subtle, var(--border-default));
-  }
-
-  .skills-note p {
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--text-secondary);
-  }
-
   .note-chip {
     display: inline-flex;
     align-items: center;
