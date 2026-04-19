@@ -102,8 +102,8 @@
     router.navigate("sessions");
   }
 
-  function handleSendMessage(content: string) {
-    void sessionsStore.sendMessage(content);
+  function handleSendMessage(content: string, files: File[]) {
+    return sessionsStore.sendMessage(content, files);
   }
 
   function handleSuggestionClick(suggestion: string) {

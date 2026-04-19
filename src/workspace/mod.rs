@@ -1720,6 +1720,18 @@ impl Workspace {
             .await
     }
 
+    pub async fn write_allowlist_bytes(
+        &self,
+        allowlist_id: Uuid,
+        path: &str,
+        content: &[u8],
+    ) -> Result<WorkspaceAllowlistFileView, WorkspaceError> {
+        self.ensure_allowlist_watch_started();
+        self.storage
+            .write_workspace_allowlist_file(&self.user_id, allowlist_id, path, content)
+            .await
+    }
+
     pub async fn diff_allowlist(
         &self,
         allowlist_id: Uuid,

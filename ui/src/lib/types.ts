@@ -74,11 +74,25 @@ export interface SessionSummary {
   active_thread_id: string | null;
 }
 
+export type ThreadAttachmentKind = "audio" | "image" | "document";
+
+export interface ThreadMessageAttachment {
+  id: string;
+  kind: ThreadAttachmentKind;
+  mime_type: string;
+  filename: string | null;
+  size_bytes: number | null;
+  workspace_uri: string | null;
+  extracted_text: string | null;
+  duration_secs: number | null;
+}
+
 export interface ThreadMessage {
   id: string;
   kind: "message" | "tool_call" | "thinking" | "reflection";
   role: string | null;
   content: string | null;
+  attachments: ThreadMessageAttachment[];
   created_at: string;
   turn_number: number;
   turn_cost: TurnCostInfo | null;
@@ -869,6 +883,16 @@ export interface SendSessionMessageResponse {
   active_thread_id: string;
   active_thread_task_id: string | null;
   active_thread_task: TaskRecord | null;
+}
+
+export interface SendSessionMessageAttachmentRequest {
+  filename: string;
+  mime_type: string | null;
+  data_base64: string;
+}
+
+export interface DroppedAttachmentFileResponse extends SendSessionMessageAttachmentRequest {
+  size_bytes: number;
 }
 
 // --- Streaming state types ---

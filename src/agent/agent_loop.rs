@@ -1778,7 +1778,7 @@ impl Agent {
         };
 
         for attachment in &message.attachments {
-            if attachment.kind != crate::channels::AttachmentKind::Document {
+            if !should_store_extracted_document(attachment) {
                 continue;
             }
             let text = match &attachment.extracted_text {
@@ -2595,16 +2595,30 @@ fn status_update_to_app_event(
     }
 }
 
+fn should_store_extracted_document(attachment: &crate::channels::IncomingAttachment) -> bool {
+    if attachment.kind != crate::channels::AttachmentKind::Document {
+        return false;
+    }
+
+    // Desktop chat uploads already keep the original file in workspace://default/attachments/.
+    // Skipping the derived documents/ write avoids creating a second user-visible copy.
+    !attachment
+        .storage_key
+        .as_deref()
+        .is_some_and(|uri| uri.starts_with("workspace://default/attachments/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         chat_tool_execution_metadata, desktop_app_event_for_outgoing_response,
         is_single_message_console, resolve_routine_notification_user,
-        should_fallback_routine_notification, split_into_stream_chunks, truncate_for_preview,
+        should_fallback_routine_notification, should_store_extracted_document,
+        split_into_stream_chunks, truncate_for_preview,
     };
     #[cfg(feature = "libsql")]
     use crate::agent::{Agent, AgentDeps};
-    use crate::channels::{IncomingMessage, OutgoingResponse};
+    use crate::channels::{AttachmentKind, IncomingAttachment, IncomingMessage, OutgoingResponse};
     #[cfg(feature = "libsql")]
     use crate::config::{AgentConfig, SafetyConfig, SkillsConfig};
     use crate::error::ChannelError;
@@ -2968,6 +2982,26 @@ mod tests {
 
         assert!(chunks.len() > 1);
         assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn extracted_desktop_workspace_attachments_do_not_create_documents_copies() {
+        let attachment = IncomingAttachment {
+            id: "attachment-1".to_string(),
+            kind: AttachmentKind::Document,
+            mime_type: "text/plain".to_string(),
+            filename: Some("notes.txt".to_string()),
+            size_bytes: Some(12),
+            source_url: None,
+            storage_key: Some(
+                "workspace://default/attachments/2026/04/19/uuid-notes.txt".to_string(),
+            ),
+            extracted_text: Some("hello".to_string()),
+            data: Vec::new(),
+            duration_secs: None,
+        };
+
+        assert!(!should_store_extracted_document(&attachment));
     }
 
     #[cfg(feature = "libsql")]

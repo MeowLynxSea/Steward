@@ -2,14 +2,16 @@
   import { fade, fly } from "svelte/transition";
   import {
     ChevronRight,
+    FileText,
     Loader,
-    Plus,
     Shield,
     Wrench,
     Zap,
     Image,
     Brain,
     Sparkles,
+    Music4,
+    Paperclip,
     X
   } from "lucide-svelte";
   import type {
@@ -17,6 +19,7 @@
     ReflectionStatus,
     SessionDetail,
     ThreadMessage,
+    ThreadMessageAttachment,
     StreamingState,
     TaskMode,
     TaskRecord,
@@ -24,8 +27,9 @@
   } from "../lib/types";
   import { apiClient } from "../lib/api";
   import { renderMarkdown } from "../lib/markdown";
+  import { listenForFileDrops } from "../lib/tauri";
   import TaskApprovalCard from "./TaskApprovalCard.svelte";
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
 
   interface Props {
     session: SessionDetail | null;
@@ -36,7 +40,7 @@
     emptyLayout?: boolean;
     noBackend?: boolean;
     composerSeed?: { id: string; content: string } | null;
-    onSendMessage: (content: string) => void;
+    onSendMessage: (content: string, files: File[]) => Promise<boolean>;
     onChangeMessageMode: (mode: TaskMode) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
@@ -74,6 +78,11 @@
         content: string;
       };
 
+  type ComposerAttachment = {
+    id: string;
+    file: File;
+  };
+
   let {
     session,
     task,
@@ -93,8 +102,14 @@
 
   let draftMessage = $state("");
   let rejectReason = $state("Rejected by user");
+  let inputBoxRef: HTMLDivElement | null = $state(null);
   let textareaRef: HTMLTextAreaElement | null = $state(null);
+  let fileInputRef: HTMLInputElement | null = $state(null);
   let messageListRef: HTMLDivElement | null = $state(null);
+  let composerAttachments = $state<ComposerAttachment[]>([]);
+  let dragOverComposer = $state(false);
+  let nativeFileDropBridgeActive = $state(false);
+  let nativeDragInsideComposer = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
   let activeReflectionAssistantId = $state<string | null>(null);
   let reflectionPanels = $state<Record<string, ReflectionPanelState>>({});
@@ -120,6 +135,7 @@
   );
   const showEmptyLayout = $derived(!loading && emptyLayout);
   const isYoloMode = $derived(messageMode === "yolo");
+  const canSubmit = $derived(draftMessage.trim().length > 0 || composerAttachments.length > 0);
   const normalizedStreamingThinking = $derived.by(() => normalizeThinkingTranscript(streaming.thinkingMessage));
   const hasLiveStreamingSignal = $derived.by(() => {
     return Boolean(
@@ -542,11 +558,175 @@
     return `${(duration / 1000).toFixed(1)}s`;
   }
 
-  function handleSubmit() {
-    const content = draftMessage.trim();
-    if (!content) return;
-    onSendMessage(content);
+  function appendComposerFiles(files: FileList | File[]) {
+    const next = Array.from(files)
+      .filter((file) => file.size > 0)
+      .map((file) => ({
+        id: crypto.randomUUID(),
+        file
+      }));
+
+    if (next.length === 0) {
+      return;
+    }
+
+    composerAttachments = [...composerAttachments, ...next];
+  }
+
+  async function appendDroppedPaths(paths: string[]) {
+    console.debug("[composer-dnd-tauri-read]", {
+      pathCount: paths.length,
+      paths
+    });
+
+    const results = await Promise.allSettled(
+      paths.map(async (path) => {
+        const dropped = await apiClient.readDroppedAttachmentFile(path);
+        const dataBase64 =
+          dropped.data_base64 ||
+          (dropped as unknown as { dataBase64?: string }).dataBase64 ||
+          "";
+        const mimeType =
+          dropped.mime_type ||
+          (dropped as unknown as { mimeType?: string }).mimeType ||
+          "application/octet-stream";
+
+        if (!dataBase64) {
+          throw new Error("Dropped attachment payload missing data_base64");
+        }
+
+        return new File([base64ToUint8Array(dataBase64)], dropped.filename, {
+          type: mimeType
+        });
+      })
+    );
+
+    const files = results
+      .filter((result): result is PromiseFulfilledResult<File> => result.status === "fulfilled")
+      .map((result) => result.value);
+
+    const failures = results.filter((result) => result.status === "rejected");
+    if (failures.length > 0) {
+      console.error("[composer-dnd-tauri-read-failed]", {
+        failedCount: failures.length,
+        errors: failures.map((result) => String(result.reason))
+      });
+    }
+
+    appendComposerFiles(files);
+  }
+
+  function handleFileSelection(event: Event) {
+    const input = event.currentTarget as HTMLInputElement | null;
+    if (!input?.files?.length) {
+      return;
+    }
+    appendComposerFiles(input.files);
+    input.value = "";
+  }
+
+  function removeComposerAttachment(id: string) {
+    composerAttachments = composerAttachments.filter((attachment) => attachment.id !== id);
+  }
+
+  function openFilePicker() {
+    fileInputRef?.click();
+  }
+
+  function logComposerDragEvent(eventName: string, event: DragEvent) {
+    const types = event.dataTransfer?.types ? Array.from(event.dataTransfer.types) : [];
+    const fileNames = event.dataTransfer?.files
+      ? Array.from(event.dataTransfer.files).map((file) => file.name)
+      : [];
+
+    console.debug("[composer-dnd]", {
+      event: eventName,
+      types,
+      fileCount: event.dataTransfer?.files?.length ?? 0,
+      fileNames
+    });
+  }
+
+  function handleComposerDragEnter(event: DragEvent) {
+    logComposerDragEvent("dragenter", event);
+    if (!event.dataTransfer?.types?.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    dragOverComposer = true;
+  }
+
+  function handleComposerDragOver(event: DragEvent) {
+    logComposerDragEvent("dragover", event);
+    if (!event.dataTransfer?.types?.includes("Files")) {
+      return;
+    }
+    event.preventDefault();
+    dragOverComposer = true;
+  }
+
+  function handleComposerDragLeave(event: DragEvent) {
+    logComposerDragEvent("dragleave", event);
+    const relatedTarget = event.relatedTarget as Node | null;
+    if (relatedTarget && (event.currentTarget as HTMLElement | null)?.contains(relatedTarget)) {
+      return;
+    }
+    dragOverComposer = false;
+  }
+
+  function handleComposerDrop(event: DragEvent) {
+    logComposerDragEvent("drop", event);
+    if (nativeFileDropBridgeActive) {
+      event.preventDefault();
+      dragOverComposer = false;
+      console.debug("[composer-dnd] DOM drop ignored because native Tauri bridge is active");
+      return;
+    }
+    if (!event.dataTransfer?.files?.length) {
+      console.debug("[composer-dnd] drop ignored because dataTransfer.files is empty");
+      return;
+    }
+    event.preventDefault();
+    dragOverComposer = false;
+    appendComposerFiles(event.dataTransfer.files);
+  }
+
+  function pointInsideComposer(x: number, y: number) {
+    if (!inputBoxRef) {
+      return false;
+    }
+
+    const scale = window.devicePixelRatio || 1;
+    const candidates: Array<[number, number]> = [
+      [x, y],
+      [x / scale, y / scale]
+    ];
+    const rect = inputBoxRef.getBoundingClientRect();
+
+    return candidates.some(([candidateX, candidateY]) => {
+      const withinRect =
+        candidateX >= rect.left &&
+        candidateX <= rect.right &&
+        candidateY >= rect.top &&
+        candidateY <= rect.bottom;
+      if (withinRect) {
+        return true;
+      }
+      const hit = document.elementFromPoint(candidateX, candidateY);
+      return !!hit && (hit === inputBoxRef || inputBoxRef.contains(hit));
+    });
+  }
+
+  async function handleSubmit() {
+    if (!canSubmit) return;
+    const files = composerAttachments.map((attachment) => attachment.file);
+    const sent = await onSendMessage(draftMessage, files);
+    if (!sent) {
+      return;
+    }
+
     draftMessage = "";
+    composerAttachments = [];
 
     if (textareaRef) {
       textareaRef.style.height = "auto";
@@ -556,7 +736,7 @@
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      handleSubmit();
+      void handleSubmit();
     }
   }
 
@@ -769,6 +949,98 @@
         return "未知";
     }
   }
+
+  function formatAttachmentSize(sizeBytes: number | null | undefined) {
+    if (!sizeBytes || sizeBytes <= 0) {
+      return "";
+    }
+    if (sizeBytes < 1024) {
+      return `${sizeBytes} B`;
+    }
+    if (sizeBytes < 1024 * 1024) {
+      return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
+    }
+    return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function attachmentDisplayName(attachment: ThreadMessageAttachment) {
+    return attachment.filename || attachment.workspace_uri || "附件";
+  }
+
+  function base64ToUint8Array(value: string) {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    return bytes;
+  }
+
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    void (async () => {
+      unlisten = await listenForFileDrops(async (event) => {
+        nativeFileDropBridgeActive = true;
+        console.debug("[composer-dnd-tauri]", event);
+        const previousNativeDragInside = nativeDragInsideComposer;
+
+        if (event.type === "leave") {
+          dragOverComposer = false;
+          nativeDragInsideComposer = false;
+          return;
+        }
+
+        const hitInside = event.position
+          ? pointInsideComposer(event.position.x, event.position.y)
+          : false;
+        const inside =
+          event.type === "drop"
+            ? hitInside || previousNativeDragInside || dragOverComposer
+            : hitInside;
+
+        console.debug("[composer-dnd-tauri-hit]", {
+          type: event.type,
+          inside,
+          hitInside,
+          fallbackInside: previousNativeDragInside,
+          position: event.position,
+          paths: event.paths
+        });
+
+        if (event.type === "enter" || event.type === "over") {
+          dragOverComposer = inside;
+          nativeDragInsideComposer = inside;
+          return;
+        }
+
+        if (event.type === "drop") {
+          dragOverComposer = false;
+          nativeDragInsideComposer = false;
+          if (!inside || event.paths.length === 0) {
+            console.debug("[composer-dnd-tauri-drop-ignored]", {
+              inside,
+              hitInside,
+              fallbackInside: previousNativeDragInside,
+              pathCount: event.paths.length
+            });
+            return;
+          }
+          await appendDroppedPaths(event.paths);
+        }
+      });
+
+      if (disposed) {
+        unlisten?.();
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  });
 
   function reflectionStatusDescription(panel: ReflectionPanelState | null) {
     if (panel?.loading && !panel.detail) {
@@ -1083,8 +1355,38 @@
               </div>
             </div>
           {:else if entry.message.role === "user"}
-            <div class="user-bubble">
-              {entry.message.content ?? ""}
+            <div class="user-message-stack">
+              {#if entry.message.content}
+                <div class="user-bubble">
+                  {entry.message.content}
+                </div>
+              {/if}
+              {#if entry.message.attachments.length > 0}
+                <div class="user-attachments">
+                  {#each entry.message.attachments as attachment}
+                    <div class="attachment-chip message-attachment-chip">
+                      <div class="attachment-chip-icon">
+                        {#if attachment.kind === "image"}
+                          <Image size={14} strokeWidth={2} />
+                        {:else if attachment.kind === "audio"}
+                          <Music4 size={14} strokeWidth={2} />
+                        {:else}
+                          <FileText size={14} strokeWidth={2} />
+                        {/if}
+                      </div>
+                      <div class="attachment-chip-copy">
+                        <span class="attachment-chip-name">{attachmentDisplayName(attachment)}</span>
+                        <span class="attachment-chip-meta">
+                          {attachment.kind}
+                          {#if attachment.size_bytes}
+                            <span>· {formatAttachmentSize(attachment.size_bytes)}</span>
+                          {/if}
+                        </span>
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="assistant-text">
@@ -1259,12 +1561,30 @@
       </div>
     {/if}
 
-    <div class="input-box" class:empty-mode={showEmptyLayout}>
+    <div
+      class="input-box"
+      bind:this={inputBoxRef}
+      class:empty-mode={showEmptyLayout}
+      class:drag-active={dragOverComposer}
+      role="group"
+      aria-label="消息输入框"
+      ondragenter={handleComposerDragEnter}
+      ondragover={handleComposerDragOver}
+      ondragleave={handleComposerDragLeave}
+      ondrop={handleComposerDrop}
+    >
       {#if noBackend}
         <div class="input-no-backend-hint">
           请先在设置中配置模型
         </div>
       {:else}
+        <input
+          bind:this={fileInputRef}
+          type="file"
+          class="composer-file-input"
+          multiple
+          onchange={handleFileSelection}
+        />
         <textarea
           bind:this={textareaRef}
           bind:value={draftMessage}
@@ -1275,10 +1595,41 @@
           rows="1"
         ></textarea>
 
+        {#if composerAttachments.length > 0}
+          <div class="composer-attachments">
+            {#each composerAttachments as attachment}
+              <button
+                class="attachment-chip composer-attachment-chip"
+                type="button"
+                onclick={() => removeComposerAttachment(attachment.id)}
+                aria-label={`移除附件 ${attachment.file.name}`}
+              >
+                <div class="attachment-chip-icon">
+                  {#if attachment.file.type.startsWith("image/")}
+                    <Image size={14} strokeWidth={2} />
+                  {:else if attachment.file.type.startsWith("audio/")}
+                    <Music4 size={14} strokeWidth={2} />
+                  {:else}
+                    <FileText size={14} strokeWidth={2} />
+                  {/if}
+                </div>
+                <div class="attachment-chip-copy">
+                  <span class="attachment-chip-name">{attachment.file.name}</span>
+                  <span class="attachment-chip-meta">{formatAttachmentSize(attachment.file.size)}</span>
+                </div>
+                <span class="attachment-chip-remove">
+                  <X size={13} strokeWidth={2.2} />
+                </span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
         <div class="input-toolbar">
           <div class="input-actions-left">
-            <button class="input-chip icon-only" aria-label="添加">
-              <Plus size={15} strokeWidth={2} />
+            <button class="input-chip" type="button" aria-label="选择文件" onclick={openFilePicker}>
+              <Paperclip size={15} strokeWidth={2} />
+              <span>选择文件</span>
             </button>
             <button
               class={`input-chip mode-chip ${isYoloMode ? "active" : ""}`}
@@ -1292,7 +1643,7 @@
           </div>
 
           <div class="input-actions-right">
-            <button class="send-btn {draftMessage.trim() ? 'active' : ''}" onclick={handleSubmit}>
+            <button class="send-btn {canSubmit ? 'active' : ''}" onclick={handleSubmit}>
               ↑
             </button>
           </div>
@@ -1614,6 +1965,72 @@
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .user-message-stack {
+    width: min(70%, 520px);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .user-attachments {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .attachment-chip {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-radius: 16px;
+    border: 1px solid var(--border-default);
+    background: color-mix(in srgb, var(--bg-surface) 84%, white 16%);
+    color: var(--text-primary);
+    text-align: left;
+  }
+
+  .attachment-chip-icon {
+    width: 30px;
+    height: 30px;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+    flex-shrink: 0;
+  }
+
+  .attachment-chip-copy {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+  }
+
+  .attachment-chip-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .attachment-chip-meta {
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .message-attachment-chip {
+    padding: 10px 12px;
+    box-shadow: var(--shadow-card);
   }
 
   .assistant-text {
@@ -2531,8 +2948,11 @@
     background: var(--bg-surface);
     border-radius: 20px;
     padding: 16px;
+    border: 1px solid transparent;
     box-shadow: var(--shadow-card);
     transition:
+      border-color 0.16s ease,
+      background-color 0.16s ease,
       border-radius 0.28s ease,
       box-shadow 0.28s ease,
       transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
@@ -2543,6 +2963,14 @@
     transform: translateY(0);
   }
 
+  .input-box.drag-active {
+    border-color: color-mix(in srgb, var(--accent-primary) 50%, var(--border-default));
+    background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-surface));
+    box-shadow:
+      var(--shadow-card),
+      0 0 0 1px color-mix(in srgb, var(--accent-primary) 22%, transparent);
+  }
+
   .input-no-backend-hint {
     display: flex;
     align-items: center;
@@ -2550,6 +2978,10 @@
     padding: 12px;
     font-size: 14px;
     color: var(--text-tertiary);
+  }
+
+  .composer-file-input {
+    display: none;
   }
 
   .input-textarea {
@@ -2568,6 +3000,37 @@
 
   .input-textarea::placeholder {
     color: var(--text-muted);
+  }
+
+  .composer-attachments {
+    margin-top: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .composer-attachment-chip {
+    width: auto;
+    max-width: 100%;
+    padding: 8px 10px;
+    cursor: pointer;
+    transition: border-color 0.16s ease, transform 0.16s ease, background-color 0.16s ease;
+  }
+
+  .composer-attachment-chip:hover {
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+    transform: translateY(-1px);
+  }
+
+  .attachment-chip-remove {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    flex-shrink: 0;
   }
 
   .input-toolbar {
@@ -2827,6 +3290,10 @@
   }
 
   @media (max-width: 720px) {
+    .user-message-stack {
+      width: min(88%, 100%);
+    }
+
     .input-container.empty-mode {
       width: 100%;
       padding: 0 16px;

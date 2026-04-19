@@ -3,6 +3,7 @@
 mod tauri_commands;
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -532,6 +533,52 @@ async fn pick_allowlist_directory() -> Result<Option<String>, String> {
     pick_directory_with_system_dialog()
 }
 
+#[tauri::command]
+async fn path_is_directory(path: String) -> Result<bool, String> {
+    Ok(std::path::Path::new(&path).is_dir())
+}
+
+#[derive(serde::Serialize)]
+struct DroppedAttachmentFileResponse {
+    filename: String,
+    mime_type: String,
+    data_base64: String,
+    size_bytes: u64,
+}
+
+#[tauri::command]
+async fn read_dropped_attachment_file(
+    path: String,
+) -> Result<DroppedAttachmentFileResponse, String> {
+    let file_path = Path::new(&path);
+    if !file_path.is_file() {
+        return Err("Dropped path is not a file".to_string());
+    }
+
+    let bytes = tokio::fs::read(file_path)
+        .await
+        .map_err(|error| format!("Failed to read dropped file: {error}"))?;
+    let filename = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("attachment")
+        .to_string();
+    let mime_type = mime_guess::from_path(file_path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string();
+
+    use base64::Engine as _;
+
+    Ok(DroppedAttachmentFileResponse {
+        filename,
+        mime_type,
+        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes.as_slice()),
+        size_bytes: bytes.len() as u64,
+    })
+}
+
 fn main() {
     tauri::Builder::default()
         .manage(CodexLoginJobs(Arc::new(RwLock::new(HashMap::new()))))
@@ -541,6 +588,8 @@ fn main() {
             start_openai_codex_login,
             get_openai_codex_login_status,
             pick_allowlist_directory,
+            path_is_directory,
+            read_dropped_attachment_file,
             tauri_commands::get_settings,
             tauri_commands::patch_settings,
             tauri_commands::list_sessions,

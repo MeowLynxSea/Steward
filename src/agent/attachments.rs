@@ -8,6 +8,7 @@ use crate::llm::{ContentPart, ImageUrl};
 /// Result of processing attachments for the LLM pipeline.
 pub struct AugmentResult {
     /// Augmented text content with attachment metadata appended.
+    #[allow(dead_code)]
     pub text: String,
     /// Image content parts to include as multimodal input.
     pub image_parts: Vec<ContentPart>,

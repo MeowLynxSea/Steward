@@ -129,10 +129,23 @@ pub struct ThreadMessageResponse {
     pub kind: String,
     pub role: Option<String>,
     pub content: Option<String>,
+    pub attachments: Vec<ThreadMessageAttachmentResponse>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub turn_number: usize,
     pub turn_cost: Option<TurnCostResponse>,
     pub tool_call: Option<ThreadToolCallResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadMessageAttachmentResponse {
+    pub id: String,
+    pub kind: String,
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub workspace_uri: Option<String>,
+    pub extracted_text: Option<String>,
+    pub duration_secs: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,9 +167,18 @@ pub struct CreateSessionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct SendSessionMessageAttachmentRequest {
+    pub filename: String,
+    pub mime_type: Option<String>,
+    pub data_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SendSessionMessageRequest {
     pub content: String,
     pub mode: Option<String>,
+    #[serde(default)]
+    pub attachments: Vec<SendSessionMessageAttachmentRequest>,
 }
 
 #[derive(Debug, Serialize)]

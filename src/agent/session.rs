@@ -241,6 +241,37 @@ pub struct TimedUserMessageSegment {
     pub sent_at: DateTime<Utc>,
 }
 
+/// Lightweight persisted metadata for a user-message attachment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TurnUserAttachment {
+    pub id: String,
+    pub kind: crate::channels::AttachmentKind,
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u32>,
+}
+
+impl TurnUserAttachment {
+    pub fn from_incoming_attachment(attachment: &crate::channels::IncomingAttachment) -> Self {
+        Self {
+            id: attachment.id.clone(),
+            kind: attachment.kind.clone(),
+            mime_type: attachment.mime_type.clone(),
+            filename: attachment.filename.clone(),
+            size_bytes: attachment.size_bytes,
+            workspace_uri: attachment.storage_key.clone(),
+            extracted_text: attachment.extracted_text.clone(),
+            duration_secs: attachment.duration_secs,
+        }
+    }
+}
+
 /// A conversation thread within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thread {
@@ -501,6 +532,8 @@ impl Thread {
             } else {
                 turn.user_input.clone()
             };
+            let user_content =
+                format_user_content_with_attachments(user_content, &turn.user_attachments);
             if turn.image_content_parts.is_empty() {
                 messages.push(ChatMessage::user(user_content));
             } else {
@@ -683,6 +716,8 @@ impl Thread {
             }
 
             let mut turn = Turn::new_at(turn_number, &msg.content, msg.created_at);
+            turn.user_message_id = Some(msg.id);
+            turn.user_attachments = user_attachments_from_metadata(&msg.metadata);
             idx += 1;
 
             while idx < messages.len() {
@@ -903,6 +938,9 @@ pub struct Turn {
     /// Individual user-authored segments that were merged into this logical turn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub user_message_segments: Vec<TimedUserMessageSegment>,
+    /// Persisted attachments associated with the user message.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_attachments: Vec<TurnUserAttachment>,
     /// Transient image content parts for multimodal LLM input.
     /// Not serialized — images are only needed for the current LLM call.
     /// The text description in `user_input` persists for compaction/context.
@@ -941,6 +979,7 @@ impl Turn {
             assistant_segments: Vec::new(),
             cost_baseline: None,
             user_message_segments: Vec::new(),
+            user_attachments: Vec::new(),
             image_content_parts: Vec::new(),
             live_assistant_segment_index: None,
         }
@@ -1227,6 +1266,116 @@ fn format_user_message_segments_for_context(
         .join("\n")
 }
 
+fn user_attachments_from_metadata(metadata: &serde_json::Value) -> Vec<TurnUserAttachment> {
+    metadata
+        .get("attachments")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<Vec<TurnUserAttachment>>(value).ok())
+        .unwrap_or_default()
+}
+
+fn format_user_content_with_attachments(
+    content: String,
+    attachments: &[TurnUserAttachment],
+) -> String {
+    if attachments.is_empty() {
+        return content;
+    }
+
+    let mut text = content;
+    if !text.trim().is_empty() {
+        text.push_str("\n\n");
+    }
+    text.push_str("<attachments>");
+    for (index, attachment) in attachments.iter().enumerate() {
+        text.push('\n');
+        text.push_str(&format_turn_attachment(index + 1, attachment));
+    }
+    text.push_str("\n</attachments>");
+    text
+}
+
+fn format_turn_attachment(index: usize, attachment: &TurnUserAttachment) -> String {
+    let filename = escape_xml_attr(attachment.filename.as_deref().unwrap_or("unknown"));
+    let mime = escape_xml_attr(&attachment.mime_type);
+
+    match &attachment.kind {
+        crate::channels::AttachmentKind::Audio => {
+            let duration_attr = attachment
+                .duration_secs
+                .map(|secs| format!(" duration=\"{secs}s\""))
+                .unwrap_or_default();
+            let body = match attachment.extracted_text.as_deref() {
+                Some(text) => format!("Transcript: {}", escape_xml_text(text)),
+                None => "Audio transcript unavailable.".to_string(),
+            };
+
+            format!(
+                "<attachment index=\"{index}\" type=\"audio\" filename=\"{filename}\"{duration_attr}>\n\
+                 {body}\n\
+                 </attachment>"
+            )
+        }
+        crate::channels::AttachmentKind::Image => {
+            let size_attr = attachment
+                .size_bytes
+                .map(|size| format!(" size=\"{}\"", format_attachment_size(size)))
+                .unwrap_or_default();
+
+            format!(
+                "<attachment index=\"{index}\" type=\"image\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}>\n\
+                 [Image attached — sent as visual content]\n\
+                 </attachment>"
+            )
+        }
+        crate::channels::AttachmentKind::Document => {
+            let size_attr = attachment
+                .size_bytes
+                .map(|size| format!(" size=\"{}\"", format_attachment_size(size)))
+                .unwrap_or_default();
+
+            match attachment.extracted_text.as_deref() {
+                Some(text) => format!(
+                    "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}>\n\
+                     {}\n\
+                     </attachment>",
+                    escape_xml_text(text)
+                ),
+                None => format!(
+                    "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}>\n\
+                     [Document attached — text extraction unavailable]\n\
+                     </attachment>"
+                ),
+            }
+        }
+    }
+}
+
+fn escape_xml_attr(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn format_attachment_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{bytes}B")
+    } else if bytes < 1024 * 1024 {
+        format!("{}KB", bytes / 1024)
+    } else {
+        format!("{:.1}MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
 /// Record of a tool call made during a turn.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnToolCall {
@@ -1364,6 +1513,28 @@ mod tests {
         );
         assert!(messages[0].content.contains("第一条"));
         assert!(messages[0].content.contains("第二条"));
+    }
+
+    #[test]
+    fn test_messages_for_context_appends_attachment_context() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let turn = thread.start_turn("帮我总结附件");
+        turn.user_attachments = vec![TurnUserAttachment {
+            id: "att-1".to_string(),
+            kind: crate::channels::AttachmentKind::Document,
+            mime_type: "text/plain".to_string(),
+            filename: Some("notes.txt".to_string()),
+            size_bytes: Some(42),
+            workspace_uri: Some("workspace://default/attachments/notes.txt".to_string()),
+            extracted_text: Some("第一行\n第二行".to_string()),
+            duration_secs: None,
+        }];
+        thread.complete_turn("收到");
+
+        let messages = thread.messages();
+        assert!(messages[0].content.contains("<attachments>"));
+        assert!(messages[0].content.contains("filename=\"notes.txt\""));
+        assert!(messages[0].content.contains("第一行"));
     }
 
     #[test]
@@ -1538,6 +1709,40 @@ mod tests {
         assert_eq!(
             thread.turns[0].assistant_message_id,
             Some(second_assistant_id)
+        );
+    }
+
+    #[test]
+    fn test_restore_from_conversation_messages_restores_user_attachments() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        let message_id = Uuid::new_v4();
+        let db_messages = vec![crate::history::ConversationMessage {
+            id: message_id,
+            role: "user".to_string(),
+            content: "看看这个文件".to_string(),
+            metadata: serde_json::json!({
+                "attachments": [{
+                    "id": "att-1",
+                    "kind": "Document",
+                    "mime_type": "application/pdf",
+                    "filename": "report.pdf",
+                    "size_bytes": 2048,
+                    "workspace_uri": "workspace://default/attachments/report.pdf",
+                    "extracted_text": "Quarterly report",
+                    "duration_secs": null
+                }]
+            }),
+            created_at: Utc::now(),
+        }];
+
+        thread.restore_from_conversation_messages(&db_messages);
+
+        assert_eq!(thread.turns.len(), 1);
+        assert_eq!(thread.turns[0].user_message_id, Some(message_id));
+        assert_eq!(thread.turns[0].user_attachments.len(), 1);
+        assert_eq!(
+            thread.turns[0].user_attachments[0].filename.as_deref(),
+            Some("report.pdf")
         );
     }
 

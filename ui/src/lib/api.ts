@@ -31,8 +31,10 @@ import type {
   MemoryChangeSet,
   MemoryVersion,
   MemorySearchHit,
+  DroppedAttachmentFileResponse,
   SessionDetail,
   SendSessionMessageResponse,
+  SendSessionMessageAttachmentRequest,
   SessionSummary,
   SettingsResponse,
   TaskDetail,
@@ -89,12 +91,18 @@ export const apiClient = {
     return invoke<void>("delete_session", { id });
   },
 
-  sendSessionMessage(id: string, content: string, mode?: "ask" | "yolo") {
+  sendSessionMessage(
+    id: string,
+    content: string,
+    attachments: SendSessionMessageAttachmentRequest[] = [],
+    mode?: "ask" | "yolo"
+  ) {
     return invoke<SendSessionMessageResponse>("send_session_message", {
       id,
       payload: {
         content,
-        mode: mode ?? null
+        mode: mode ?? null,
+        attachments
       }
     });
   },
@@ -246,6 +254,10 @@ export const apiClient = {
       task_id: taskId,
       payload
     });
+  },
+
+  readDroppedAttachmentFile(path: string) {
+    return invoke<DroppedAttachmentFileResponse>("read_dropped_attachment_file", { path });
   },
 
   // -- Workspace --

@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use base64::Engine as _;
-use chrono::Utc;
+use chrono::{Datelike, Utc};
 use tauri::State;
 use uuid::Uuid;
 
@@ -41,6 +41,7 @@ use steward_core::tools::mcp::{
 };
 use steward_core::workspace::parse_allowlist_id;
 
+#[derive(Debug)]
 enum DesktopDispatchPlan {
     InjectOnly,
     QueueOnly,
@@ -72,10 +73,17 @@ fn mcp_health_check_key(server_name: &str) -> String {
 fn plan_desktop_message_dispatch(
     thread: &mut steward_core::agent::session::Thread,
     content: &str,
+    has_attachments: bool,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<DesktopDispatchPlan, String> {
     match thread.state {
         steward_core::agent::session::ThreadState::Processing => {
+            if has_attachments {
+                return Err(
+                    "Cannot queue messages with attachments while a turn is processing. Please resend after the current turn completes."
+                        .to_string(),
+                );
+            }
             if thread.queue_message(content.to_string(), received_at) {
                 Ok(DesktopDispatchPlan::QueueOnly)
             } else {
@@ -1746,6 +1754,158 @@ fn turn_cost_from_message_metadata(
     })
 }
 
+fn thread_message_attachment_response(
+    attachment: &steward_core::agent::session::TurnUserAttachment,
+) -> steward_core::ipc::ThreadMessageAttachmentResponse {
+    steward_core::ipc::ThreadMessageAttachmentResponse {
+        id: attachment.id.clone(),
+        kind: match &attachment.kind {
+            AttachmentKind::Audio => "audio".to_string(),
+            AttachmentKind::Image => "image".to_string(),
+            AttachmentKind::Document => "document".to_string(),
+        },
+        mime_type: attachment.mime_type.clone(),
+        filename: attachment.filename.clone(),
+        size_bytes: attachment.size_bytes,
+        workspace_uri: attachment.workspace_uri.clone(),
+        extracted_text: attachment.extracted_text.clone(),
+        duration_secs: attachment.duration_secs,
+    }
+}
+
+fn attachments_from_message_metadata(
+    metadata: &serde_json::Value,
+) -> Vec<steward_core::ipc::ThreadMessageAttachmentResponse> {
+    metadata
+        .get("attachments")
+        .cloned()
+        .and_then(|value| {
+            serde_json::from_value::<Vec<steward_core::agent::session::TurnUserAttachment>>(value)
+                .ok()
+        })
+        .map(|attachments| {
+            attachments
+                .iter()
+                .map(thread_message_attachment_response)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn sanitize_attachment_filename(filename: &str) -> String {
+    let raw = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("attachment");
+    let sanitized = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized
+        .trim_matches(|ch| ch == '.' || ch == '-')
+        .to_string();
+
+    if trimmed.is_empty() {
+        "attachment".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn attachment_title_summary(
+    content: &str,
+    attachments: &[steward_core::ipc::SendSessionMessageAttachmentRequest],
+) -> String {
+    let trimmed = content.trim();
+    let attachment_summary = attachments
+        .iter()
+        .map(|attachment| attachment.filename.trim().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    match (trimmed.is_empty(), attachment_summary.is_empty()) {
+        (false, false) => format!("{trimmed}\n附带文件：{attachment_summary}"),
+        (false, true) => trimmed.to_string(),
+        (true, false) => format!("请结合这些附件继续：{attachment_summary}"),
+        (true, true) => "用户: 继续对话".to_string(),
+    }
+}
+
+fn attachment_storage_path(now: chrono::DateTime<chrono::Utc>, filename: &str) -> String {
+    let safe_name = sanitize_attachment_filename(filename);
+    format!(
+        "attachments/{}/{:02}/{:02}/{}-{}",
+        now.format("%Y"),
+        now.month(),
+        now.day(),
+        Uuid::new_v4(),
+        safe_name,
+    )
+}
+
+async fn build_incoming_desktop_attachments(
+    state: &AppState,
+    uploads: &[steward_core::ipc::SendSessionMessageAttachmentRequest],
+) -> Result<Vec<IncomingAttachment>, String> {
+    if uploads.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let workspace = state
+        .workspace
+        .as_ref()
+        .ok_or_else(|| "Workspace not available".to_string())?;
+    let now = Utc::now();
+    let mut attachments = Vec::with_capacity(uploads.len());
+
+    for upload in uploads {
+        let mime = upload
+            .mime_type
+            .clone()
+            .unwrap_or_else(|| "application/octet-stream".to_string());
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(upload.data_base64.as_bytes())
+            .map_err(|error| {
+                format!("Failed to decode attachment '{}': {error}", upload.filename)
+            })?;
+        let relative_path = attachment_storage_path(now, &upload.filename);
+        let file = workspace
+            .write_allowlist_bytes(
+                steward_core::workspace::default_allowlist_uuid(),
+                &relative_path,
+                &data,
+            )
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to store attachment '{}' in workspace://default: {error}",
+                    upload.filename
+                )
+            })?;
+
+        attachments.push(IncomingAttachment {
+            id: Uuid::new_v4().to_string(),
+            kind: AttachmentKind::from_mime_type(&mime),
+            mime_type: mime.clone(),
+            filename: Some(upload.filename.clone()),
+            size_bytes: Some(data.len() as u64),
+            source_url: None,
+            storage_key: Some(file.uri),
+            extracted_text: text_from_blob_bytes(&mime, &data),
+            data,
+            duration_secs: None,
+        });
+    }
+
+    Ok(attachments)
+}
+
 #[derive(Debug, Clone)]
 struct DbReflectionTurn {
     user_content: String,
@@ -2026,6 +2186,7 @@ fn build_thread_messages_from_db_messages(
                     kind: "message".to_string(),
                     role: Some("user".to_string()),
                     content: Some(msg.content.clone()),
+                    attachments: attachments_from_message_metadata(&msg.metadata),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
@@ -2039,6 +2200,7 @@ fn build_thread_messages_from_db_messages(
                     kind: "thinking".to_string(),
                     role: None,
                     content: Some(msg.content.clone()),
+                    attachments: Vec::new(),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
@@ -2051,6 +2213,7 @@ fn build_thread_messages_from_db_messages(
                     kind: "message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(msg.content.clone()),
+                    attachments: Vec::new(),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: turn_cost_from_message_metadata(&msg.metadata),
@@ -2063,6 +2226,7 @@ fn build_thread_messages_from_db_messages(
                     kind: "reflection".to_string(),
                     role: None,
                     content: Some(clean_reflection_message_content(&msg.content)),
+                    attachments: Vec::new(),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
@@ -2080,6 +2244,7 @@ fn build_thread_messages_from_db_messages(
                     kind: "tool_call".to_string(),
                     role: None,
                     content: None,
+                    attachments: Vec::new(),
                     created_at: msg.created_at,
                     turn_number: active_turn_number,
                     turn_cost: None,
@@ -2113,6 +2278,7 @@ fn build_thread_messages_from_db_messages(
                         kind: "thinking".to_string(),
                         role: None,
                         content: Some(narrative),
+                        attachments: Vec::new(),
                         created_at: msg.created_at,
                         turn_number: active_turn_number,
                         turn_cost: None,
@@ -2144,6 +2310,7 @@ fn build_thread_messages_from_db_messages(
                         kind: "tool_call".to_string(),
                         role: None,
                         content: None,
+                        attachments: Vec::new(),
                         created_at: msg.created_at,
                         turn_number: active_turn_number,
                         turn_cost: None,
@@ -2194,10 +2361,15 @@ fn build_thread_messages(
         .flat_map(|turn| {
             let mut msgs = Vec::new();
             msgs.push(steward_core::ipc::ThreadMessageResponse {
-                id: Uuid::new_v4(),
+                id: turn.user_message_id.unwrap_or_else(Uuid::new_v4),
                 kind: "message".to_string(),
                 role: Some("user".to_string()),
                 content: Some(turn.user_input.clone()),
+                attachments: turn
+                    .user_attachments
+                    .iter()
+                    .map(thread_message_attachment_response)
+                    .collect(),
                 created_at: turn.started_at,
                 turn_number: turn.turn_number,
                 turn_cost: None,
@@ -2213,6 +2385,7 @@ fn build_thread_messages(
                     kind: "thinking".to_string(),
                     role: None,
                     content: Some(narrative.clone()),
+                    attachments: Vec::new(),
                     created_at: turn.started_at,
                     turn_number: turn.turn_number,
                     turn_cost: None,
@@ -2228,6 +2401,7 @@ fn build_thread_messages(
                     kind: "tool_call".to_string(),
                     role: None,
                     content: None,
+                    attachments: Vec::new(),
                     created_at: tool_call.started_at,
                     turn_number: turn.turn_number,
                     turn_cost: None,
@@ -2250,6 +2424,7 @@ fn build_thread_messages(
                     kind: "message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(segment.content.clone()),
+                    attachments: Vec::new(),
                     created_at: segment.created_at,
                     turn_number: turn.turn_number,
                     turn_cost: None,
@@ -2272,6 +2447,7 @@ fn build_thread_messages(
                     kind: "message".to_string(),
                     role: Some("assistant".to_string()),
                     content: Some(response.clone()),
+                    attachments: Vec::new(),
                     created_at: turn.completed_at.unwrap_or(turn.started_at),
                     turn_number: turn.turn_number,
                     turn_cost: turn.turn_cost.as_ref().map(turn_cost_response),
@@ -2570,7 +2746,18 @@ pub async fn send_session_message(
     id: Uuid,
     payload: SendSessionMessageRequest,
 ) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
-    tracing::info!(session_id = %id, content_len = payload.content.len(), "==> send_session_message CALLED");
+    let trimmed_content = payload.content.trim().to_string();
+    let has_attachments = !payload.attachments.is_empty();
+    if trimmed_content.is_empty() && !has_attachments {
+        return Err("Message content or attachments are required".to_string());
+    }
+
+    tracing::info!(
+        session_id = %id,
+        content_len = payload.content.len(),
+        attachment_count = payload.attachments.len(),
+        "==> send_session_message CALLED"
+    );
     let session_manager = &state.agent_session_manager;
 
     let session = session_manager
@@ -2624,8 +2811,10 @@ pub async fn send_session_message(
     tracing::info!(thread_id = %thread_id, state = ?thread.state, "Thread state checked, matching...");
 
     tracing::info!(thread_id = %thread_id, "About to match thread state");
-    let title_context = build_session_title_context(thread, payload.content.trim());
-    let dispatch_plan = plan_desktop_message_dispatch(thread, &payload.content, Utc::now())?;
+    let title_input = attachment_title_summary(&payload.content, &payload.attachments);
+    let title_context = build_session_title_context(thread, &title_input);
+    let dispatch_plan =
+        plan_desktop_message_dispatch(thread, &payload.content, has_attachments, Utc::now())?;
     let requested_mode = requested_task_mode(payload.mode.as_deref());
     drop(sess);
 
@@ -2662,9 +2851,12 @@ pub async fn send_session_message(
         }
         DesktopDispatchPlan::InjectOnly => {
             tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, injecting message");
+            let attachments =
+                build_incoming_desktop_attachments(&state, &payload.attachments).await?;
             let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
                 .with_thread(thread_id.to_string())
-                .with_metadata(desktop_message_metadata(id, thread_id, &state.owner_id));
+                .with_metadata(desktop_message_metadata(id, thread_id, &state.owner_id))
+                .with_attachments(attachments);
             tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
             state
                 .message_inject_tx
@@ -2859,7 +3051,7 @@ mod db_message_tests {
         let mut thread = Thread::new(Uuid::new_v4());
         assert_eq!(thread.state, ThreadState::Idle);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello", Utc::now()).unwrap();
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello", false, Utc::now()).unwrap();
 
         assert!(matches!(plan, DesktopDispatchPlan::InjectOnly));
         assert!(thread.pending_messages.is_empty());
@@ -2872,7 +3064,7 @@ mod db_message_tests {
         thread.start_turn("working");
         assert_eq!(thread.state, ThreadState::Processing);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello", Utc::now()).unwrap();
+        let plan = plan_desktop_message_dispatch(&mut thread, "hello", false, Utc::now()).unwrap();
 
         assert!(matches!(plan, DesktopDispatchPlan::QueueOnly));
         assert_eq!(thread.pending_messages.len(), 1);
@@ -2883,6 +3075,18 @@ mod db_message_tests {
                 .map(|msg| msg.content.as_str()),
             Some("hello")
         );
+    }
+
+    #[test]
+    fn processing_desktop_dispatch_rejects_attachments() {
+        let mut thread = Thread::new(Uuid::new_v4());
+        thread.start_turn("working");
+
+        let error =
+            plan_desktop_message_dispatch(&mut thread, "hello", true, Utc::now()).unwrap_err();
+
+        assert!(error.contains("attachments"));
+        assert!(thread.pending_messages.is_empty());
     }
 
     #[test]
@@ -4406,6 +4610,36 @@ mod tests {
         assert_eq!(turn_cost.input_tokens, 512);
         assert_eq!(turn_cost.output_tokens, 96);
         assert_eq!(turn_cost.cost_usd, "$0.0034");
+    }
+
+    #[test]
+    fn build_thread_messages_from_db_messages_restores_user_attachments() {
+        let created_at = Utc::now();
+        let messages = vec![steward_core::history::ConversationMessage {
+            id: Uuid::new_v4(),
+            role: "user".to_string(),
+            content: "附件在这里".to_string(),
+            metadata: serde_json::json!({
+                "attachments": [{
+                    "id": "att-1",
+                    "kind": "Document",
+                    "mime_type": "application/pdf",
+                    "filename": "report.pdf",
+                    "size_bytes": 4096,
+                    "workspace_uri": "workspace://default/attachments/report.pdf",
+                    "extracted_text": "Quarterly report",
+                    "duration_secs": null
+                }]
+            }),
+            created_at,
+        }];
+
+        let thread_messages = build_thread_messages_from_db_messages(&messages);
+        let user = thread_messages.first().expect("user message");
+
+        assert_eq!(user.role.as_deref(), Some("user"));
+        assert_eq!(user.attachments.len(), 1);
+        assert_eq!(user.attachments[0].filename.as_deref(), Some("report.pdf"));
     }
 
     #[test]

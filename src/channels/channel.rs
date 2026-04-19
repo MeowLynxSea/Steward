@@ -11,7 +11,7 @@ use uuid::Uuid;
 use crate::error::ChannelError;
 
 /// Kind of attachment carried on an incoming message.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum AttachmentKind {
     /// Audio content (voice notes, audio files).
     Audio,

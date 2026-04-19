@@ -585,12 +585,15 @@ impl Agent {
         }
 
         // Augment content with attachment context (transcripts, metadata, images)
-        let augmented =
-            crate::agent::attachments::augment_with_attachments(content, &message.attachments);
-        let (effective_content, image_parts) = match &augmented {
-            Some(result) => (result.text.as_str(), result.image_parts.clone()),
-            None => (content, Vec::new()),
-        };
+        let image_parts =
+            crate::agent::attachments::augment_with_attachments(content, &message.attachments)
+                .map(|result| result.image_parts)
+                .unwrap_or_default();
+        let user_attachments = message
+            .attachments
+            .iter()
+            .map(crate::agent::session::TurnUserAttachment::from_incoming_attachment)
+            .collect::<Vec<_>>();
         let cost_baseline = self.cost_guard().total_usage().await;
 
         // Start the turn and get messages
@@ -606,7 +609,7 @@ impl Agent {
                 .threads
                 .get_mut(&thread_id)
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
-            let turn = thread.start_turn_at(effective_content, message.received_at);
+            let turn = thread.start_turn_at(content, message.received_at);
             if let Some(ref queued_segments) = queued_segments {
                 turn.user_message_segments = queued_segments
                     .iter()
@@ -616,6 +619,7 @@ impl Agent {
                     })
                     .collect();
             }
+            turn.user_attachments = user_attachments.clone();
             turn.image_content_parts = image_parts;
             turn.cost_baseline = Some(cost_baseline);
             thread.messages_for_context(user_tz)
@@ -632,7 +636,8 @@ impl Agent {
             thread_id,
             &message.channel,
             &message.user_id,
-            effective_content,
+            content,
+            &user_attachments,
         )
         .await;
 
@@ -971,6 +976,7 @@ impl Agent {
         channel: &str,
         user_id: &str,
         user_input: &str,
+        attachments: &[crate::agent::session::TurnUserAttachment],
     ) {
         let store = match self.store() {
             Some(s) => Arc::clone(s),
@@ -989,6 +995,20 @@ impl Agent {
             .await
         {
             Ok(message_id) => {
+                if !attachments.is_empty() {
+                    let metadata = serde_json::json!({ "attachments": attachments });
+                    if let Err(error) = store
+                        .update_conversation_message_metadata(message_id, &metadata)
+                        .await
+                    {
+                        tracing::warn!(
+                            thread_id = %thread_id,
+                            message_id = %message_id,
+                            %error,
+                            "Failed to persist user attachment metadata"
+                        );
+                    }
+                }
                 let mut sess = session.lock().await;
                 if let Some(thread) = sess.threads.get_mut(&thread_id)
                     && let Some(turn) = thread.last_turn_mut()
@@ -3334,6 +3354,7 @@ mod tests {
                 "desktop",
                 user_id,
                 "resume after restart",
+                &[],
             )
             .await;
 

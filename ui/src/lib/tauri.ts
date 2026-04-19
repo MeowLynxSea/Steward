@@ -56,8 +56,71 @@ export async function listenForFolderDrops(
         };
       };
       if (payload.payload?.type === "drop" && payload.payload.paths?.[0]) {
-        void onDrop(payload.payload.paths[0]);
+        void (async () => {
+          const path = payload.payload?.paths?.[0];
+          if (!path) {
+            return;
+          }
+          if (!(await isDirectoryPath(path))) {
+            return;
+          }
+          await onDrop(path);
+        })();
       }
+    });
+
+    return () => {
+      unlisten();
+    };
+  } catch {
+    return () => {};
+  }
+}
+
+export interface WindowFileDropEvent {
+  type: "enter" | "over" | "drop" | "leave";
+  paths: string[];
+  position: {
+    x: number;
+    y: number;
+  } | null;
+}
+
+export async function listenForFileDrops(
+  onEvent: (event: WindowFileDropEvent) => Promise<void> | void
+): Promise<() => void> {
+  try {
+    const current = getCurrentWebviewWindow?.();
+    if (!current?.onDragDropEvent) {
+      return () => {};
+    }
+
+    const unlisten = await current.onDragDropEvent((event: unknown) => {
+      const payload = event as {
+        payload?: {
+          type?: "enter" | "over" | "drop" | "leave";
+          paths?: string[];
+          position?: {
+            x?: number;
+            y?: number;
+          };
+        };
+      };
+      const type = payload.payload?.type;
+      if (!type) {
+        return;
+      }
+
+      void onEvent({
+        type,
+        paths: payload.payload?.paths ?? [],
+        position: payload.payload?.position
+          ? {
+              x: payload.payload.position.x ?? 0,
+              y: payload.payload.position.y ?? 0
+            }
+          : null
+      });
     });
 
     return () => {
@@ -74,5 +137,13 @@ export async function pickDirectory(): Promise<string | null> {
     return selection ?? null;
   } catch {
     return null;
+  }
+}
+
+async function isDirectoryPath(path: string): Promise<boolean> {
+  try {
+    return await invoke<boolean>("path_is_directory", { path });
+  } catch {
+    return false;
   }
 }

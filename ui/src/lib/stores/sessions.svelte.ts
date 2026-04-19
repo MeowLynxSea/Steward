@@ -10,9 +10,12 @@ import type {
   SessionSummary,
   StreamEnvelope,
   StreamingState,
+  SendSessionMessageAttachmentRequest,
   TaskDetail,
   TaskMode,
   TaskRecord,
+  ThreadAttachmentKind,
+  ThreadMessageAttachment,
   TurnCostInfo,
   ToolDecision
 } from "../types";
@@ -91,6 +94,50 @@ function mergeStreamingChunk(existing: string, incoming: string): string {
   }
 
   return `${existing}${incoming}`;
+}
+
+function attachmentKindFromMimeType(mimeType: string | null | undefined): ThreadAttachmentKind {
+  if (!mimeType) {
+    return "document";
+  }
+  if (mimeType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (mimeType.startsWith("image/")) {
+    return "image";
+  }
+  return "document";
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fileToAttachmentRequest(file: File): Promise<SendSessionMessageAttachmentRequest> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  return {
+    filename: file.name,
+    mime_type: file.type || null,
+    data_base64: bytesToBase64(bytes)
+  };
+}
+
+function optimisticAttachment(file: File): ThreadMessageAttachment {
+  return {
+    id: crypto.randomUUID(),
+    kind: attachmentKindFromMimeType(file.type || null),
+    mime_type: file.type || "application/octet-stream",
+    filename: file.name,
+    size_bytes: Number.isFinite(file.size) ? file.size : null,
+    workspace_uri: null,
+    extracted_text: null,
+    duration_secs: null
+  };
 }
 
 function isSessionTitleUpdatePayload(payload: unknown): payload is SessionTitleUpdatePayload {
@@ -256,24 +303,33 @@ class SessionsState {
     }
   }
 
-  async sendMessage(content: string) {
+  async sendMessage(content: string, files: File[] = []) {
     const trimmedContent = content.trim();
-    if (!trimmedContent) return;
+    if (!trimmedContent && files.length === 0) return false;
 
     if (!this.activeId || !this.active) {
       await this.create("新会话");
     }
 
-    if (!this.activeId || !this.active) return;
+    if (!this.activeId || !this.active) return false;
 
     // Clear any previous error when sending a new message
     this.error = null;
+
+    let attachmentPayload: SendSessionMessageAttachmentRequest[] = [];
+    try {
+      attachmentPayload = await Promise.all(files.map((file) => fileToAttachmentRequest(file)));
+    } catch (error) {
+      this.error = error instanceof Error ? error.message : "Failed to read attachments";
+      return false;
+    }
 
     const optimistic = {
       id: crypto.randomUUID(),
       kind: "message" as const,
       role: "user",
-      content: trimmedContent,
+      content: trimmedContent || null,
+      attachments: files.map(optimisticAttachment),
       created_at: new Date().toISOString(),
       turn_number: this.#nextTurnNumber(),
       turn_cost: null,
@@ -308,7 +364,8 @@ class SessionsState {
     try {
       const response = await apiClient.sendSessionMessage(
         this.activeId,
-        trimmedContent,
+        content,
+        attachmentPayload,
         this.messageMode
       );
       this.active = {
@@ -325,6 +382,7 @@ class SessionsState {
       // Fallback only if live Tauri events never arrive. Delay it enough that a
       // healthy event stream is not replaced by a sudden full refresh.
       this.#startPollFallback();
+      return true;
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to send message";
       this.#applySessionTitleUpdate({
@@ -341,6 +399,13 @@ class SessionsState {
         thinkingMessageId: null,
         thinkingMessage: ""
       };
+      if (this.active) {
+        this.active = {
+          ...this.active,
+          thread_messages: this.active.thread_messages.filter((message) => message.id !== optimistic.id)
+        };
+      }
+      return false;
     }
   }
 
@@ -926,6 +991,7 @@ class SessionsState {
         kind: "thinking",
         role: null,
         content,
+        attachments: [],
         created_at: now,
         turn_number: turnNumber,
         turn_cost: null,
@@ -986,6 +1052,7 @@ class SessionsState {
         kind: "message",
         role: "assistant",
         content,
+        attachments: [],
         created_at: now,
         turn_number: turnNumber,
         turn_cost: null,
@@ -1051,6 +1118,7 @@ class SessionsState {
           kind: "message",
           role: "assistant",
           content: finalContent,
+          attachments: [],
           created_at: new Date().toISOString(),
           turn_number: turnNumber,
           turn_cost: null,
@@ -1070,6 +1138,7 @@ class SessionsState {
       kind: "tool_call",
       role: null,
       content: null,
+      attachments: [],
       created_at: tool.startedAt,
       turn_number: this.#ensureLiveTurnNumber(),
       turn_cost: null,
@@ -1084,6 +1153,7 @@ class SessionsState {
       kind: "reflection",
       role: null,
       content,
+      attachments: [],
       created_at: new Date().toISOString(),
       turn_number: this.#ensureLiveTurnNumber(),
       turn_cost: null,
