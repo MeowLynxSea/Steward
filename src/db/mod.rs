@@ -294,6 +294,11 @@ pub trait ConversationStore: Send + Sync {
         channel: &str,
         limit: i64,
     ) -> Result<Vec<ConversationSummary>, DatabaseError>;
+    async fn list_conversation_ids_for_channel(
+        &self,
+        user_id: &str,
+        channel: &str,
+    ) -> Result<Vec<Uuid>, DatabaseError>;
     async fn list_conversations_all_channels(
         &self,
         user_id: &str,

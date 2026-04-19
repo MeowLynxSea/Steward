@@ -5,7 +5,7 @@
 //! Persistence: sessions are saved to/loaded from the attached database store
 //! via the SettingsStore interface (key: "agent_sessions:<owner_id>").
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, RwLock};
@@ -94,6 +94,7 @@ impl SessionManager {
         *self.store.write().await = Some(store);
         *self.owner_id.write().await = Some(owner_id.to_string());
         self.load_sessions_from_db(owner_id).await;
+        self.prune_orphaned_desktop_conversations(owner_id).await;
     }
 
     /// Load sessions from the database for the given owner.
@@ -187,16 +188,107 @@ impl SessionManager {
         }
     }
 
+    async fn prune_orphaned_desktop_conversations(&self, owner_id: &str) {
+        let db = {
+            let store = self.store.read().await;
+            store.clone()
+        };
+        let Some(db) = db else {
+            return;
+        };
+
+        let known_thread_ids = {
+            let sessions = self.sessions.read().await;
+            sessions
+                .get(owner_id)
+                .into_iter()
+                .flat_map(|user_sessions| user_sessions.values())
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        let mut active_threads = HashSet::new();
+        for session in known_thread_ids {
+            let sess = session.lock().await;
+            active_threads.extend(sess.threads.keys().copied());
+        }
+
+        let conversation_ids = match db
+            .list_conversation_ids_for_channel(owner_id, "desktop")
+            .await
+        {
+            Ok(ids) => ids,
+            Err(error) => {
+                tracing::warn!(
+                    owner_id,
+                    %error,
+                    "Failed to list desktop conversations for orphan cleanup"
+                );
+                return;
+            }
+        };
+
+        let mut deleted = 0usize;
+        for conversation_id in conversation_ids {
+            if active_threads.contains(&conversation_id) {
+                continue;
+            }
+
+            match db.delete_conversation(conversation_id).await {
+                Ok(()) => deleted += 1,
+                Err(error) => {
+                    tracing::warn!(
+                        owner_id,
+                        %conversation_id,
+                        %error,
+                        "Failed to delete orphaned desktop conversation"
+                    );
+                }
+            }
+        }
+
+        if deleted > 0 {
+            tracing::info!(
+                owner_id,
+                deleted,
+                "Pruned orphaned desktop conversations left by older session deletes"
+            );
+        }
+    }
+
     /// Persist the current in-memory snapshot for a session.
     pub async fn persist_session_snapshot(&self, owner_id: &str, session: &Arc<Mutex<Session>>) {
         let session_data = session.lock().await.clone();
         self.save_session_to_db(owner_id, &session_data).await;
     }
 
-    /// Delete a session from the database.
-    async fn delete_session_from_db(&self, owner_id: &str, session_id: Uuid) {
+    /// Delete a session snapshot and its persisted conversation history.
+    async fn delete_session_from_db(&self, owner_id: &str, session_id: Uuid, thread_ids: &[Uuid]) {
         let store = self.store.read().await;
         if let Some(ref db) = *store {
+            for thread_id in thread_ids {
+                match db.conversation_belongs_to_user(*thread_id, owner_id).await {
+                    Ok(true) => {
+                        if let Err(e) = db.delete_conversation(*thread_id).await {
+                            tracing::error!(
+                                "Failed to delete persisted conversation {} for session {}: {}",
+                                thread_id,
+                                session_id,
+                                e
+                            );
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to verify ownership for conversation {} before session delete: {}",
+                            thread_id,
+                            e
+                        );
+                    }
+                }
+            }
+
             let key = format!("agent_sessions:{}", owner_id);
             let current: HashMap<Uuid, Session> = match db.get_setting(owner_id, &key).await {
                 Ok(Some(value)) => serde_json::from_value(value).unwrap_or_default(),
@@ -569,27 +661,20 @@ impl SessionManager {
     /// Delete a session by its UUID for the given owner.
     /// Returns true if the session was deleted.
     pub async fn delete_session_by_id(&self, owner_id: &str, session_id: Uuid) -> bool {
-        // Collect thread IDs to clean up
-        let thread_ids: Option<Vec<Uuid>> = {
+        let session = {
             let mut sessions = self.sessions.write().await;
             match sessions.get_mut(owner_id) {
-                Some(user_sessions) => {
-                    if let Some(session) = user_sessions.remove(&session_id) {
-                        Some(
-                            session
-                                .try_lock()
-                                .map(|s| s.threads.keys().copied().collect::<Vec<_>>())
-                                .unwrap_or_default(),
-                        )
-                    } else {
-                        None
-                    }
-                }
+                Some(user_sessions) => user_sessions.remove(&session_id),
                 None => None,
             }
         };
 
-        if let Some(ids) = thread_ids {
+        if let Some(session) = session {
+            let ids = {
+                let sess = session.lock().await;
+                sess.threads.keys().copied().collect::<Vec<_>>()
+            };
+
             // Remove from thread_map
             {
                 let mut thread_map = self.thread_map.write().await;
@@ -603,7 +688,8 @@ impl SessionManager {
                 }
             }
             // Delete from DB
-            self.delete_session_from_db(owner_id, session_id).await;
+            self.delete_session_from_db(owner_id, session_id, &ids)
+                .await;
             true
         } else {
             false
@@ -794,6 +880,91 @@ mod tests {
 
         assert_eq!(sess.active_thread, Some(thread_id));
         assert!(sess.threads.contains_key(&thread_id));
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_delete_session_removes_persisted_conversation_history() {
+        let (db, _dir) = crate::testing::test_db().await;
+        let manager = SessionManager::new();
+        manager.attach_store(Arc::clone(&db), "user-1").await;
+
+        let session = manager.create_new_session("user-1").await;
+        let (session_id, thread_id) = {
+            let mut sess = session.lock().await;
+            let thread_id = sess.create_thread().id;
+            (sess.id, thread_id)
+        };
+        manager.persist_session_snapshot("user-1", &session).await;
+
+        db.ensure_conversation(thread_id, "desktop", "user-1", Some(&thread_id.to_string()))
+            .await
+            .expect("ensure conversation");
+        db.add_conversation_message(thread_id, "user", "hello")
+            .await
+            .expect("persist user message");
+        db.add_conversation_message(thread_id, "assistant", "world")
+            .await
+            .expect("persist assistant message");
+
+        assert_eq!(
+            db.backfill_conversation_recall_for_user("user-1")
+                .await
+                .expect("backfill before delete"),
+            1
+        );
+
+        assert!(manager.delete_session_by_id("user-1", session_id).await);
+        assert!(
+            db.get_conversation_metadata(thread_id)
+                .await
+                .expect("get conversation metadata after delete")
+                .is_none()
+        );
+        assert_eq!(
+            db.backfill_conversation_recall_for_user("user-1")
+                .await
+                .expect("backfill after delete"),
+            0
+        );
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_attach_store_prunes_orphaned_desktop_conversations() {
+        let (db, _dir) = crate::testing::test_db().await;
+
+        let stale_thread_id = Uuid::new_v4();
+        db.ensure_conversation(
+            stale_thread_id,
+            "desktop",
+            "user-1",
+            Some(&stale_thread_id.to_string()),
+        )
+        .await
+        .expect("ensure stale conversation");
+        db.add_conversation_message(stale_thread_id, "user", "old hello")
+            .await
+            .expect("persist stale user message");
+        db.add_conversation_message(stale_thread_id, "assistant", "old world")
+            .await
+            .expect("persist stale assistant message");
+
+        let manager = SessionManager::new();
+        manager.attach_store(Arc::clone(&db), "user-1").await;
+
+        assert!(
+            db.get_conversation_metadata(stale_thread_id)
+                .await
+                .expect("get stale conversation metadata")
+                .is_none()
+        );
+        assert_eq!(
+            db.backfill_conversation_recall_for_user("user-1")
+                .await
+                .expect("backfill after orphan prune"),
+            0
+        );
     }
 
     #[cfg(feature = "libsql")]

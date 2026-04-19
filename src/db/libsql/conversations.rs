@@ -648,6 +648,31 @@ impl ConversationStore for LibSqlBackend {
         Ok(results)
     }
 
+    async fn list_conversation_ids_for_channel(
+        &self,
+        user_id: &str,
+        channel: &str,
+    ) -> Result<Vec<Uuid>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT id FROM conversations WHERE user_id = ?1 AND channel = ?2",
+                params![user_id, channel],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let mut ids = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+        {
+            ids.push(get_text(&row, 0).parse().unwrap_or_default());
+        }
+        Ok(ids)
+    }
+
     async fn list_conversations_all_channels(
         &self,
         user_id: &str,
@@ -1456,12 +1481,55 @@ impl ConversationStore for LibSqlBackend {
 
     async fn delete_conversation(&self, conversation_id: Uuid) -> Result<(), DatabaseError> {
         let conn = self.connect().await?;
-        conn.execute(
-            "DELETE FROM conversations WHERE id = ?1",
-            libsql::params![conversation_id.to_string()],
-        )
-        .await
-        .map_err(|e| DatabaseError::Query(e.to_string()))?;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+        let result = async {
+            conn.execute(
+                "DELETE FROM llm_calls WHERE conversation_id = ?1 AND job_id IS NULL",
+                libsql::params![conversation_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE llm_calls SET conversation_id = NULL WHERE conversation_id = ?1 AND job_id IS NOT NULL",
+                libsql::params![conversation_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            conn.execute(
+                "UPDATE agent_jobs SET conversation_id = NULL WHERE conversation_id = ?1",
+                libsql::params![conversation_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            conn.execute(
+                "DELETE FROM conversations WHERE id = ?1",
+                libsql::params![conversation_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?;
+
+            Ok::<_, DatabaseError>(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => {
+                conn.execute("COMMIT", ())
+                    .await
+                    .map_err(|e| DatabaseError::Query(e.to_string()))?;
+            }
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        }
+
         Ok(())
     }
 }
@@ -1469,8 +1537,11 @@ impl ConversationStore for LibSqlBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+    use crate::context::JobContext;
+    use crate::db::{Database, JobStore};
+    use crate::history::LlmCallRecord;
     use crate::retrieval::SearchConfig;
+    use rust_decimal::Decimal;
 
     fn tool_call_row(name: &str) -> String {
         serde_json::json!({
@@ -1813,6 +1884,103 @@ mod tests {
             hits.iter()
                 .any(|hit| hit.preview_text.contains("Launch readiness"))
         );
+    }
+
+    #[tokio::test]
+    async fn test_delete_conversation_handles_job_and_chat_foreign_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("delete_conversation_fk_cleanup.db");
+        let backend = LibSqlBackend::new_local(&db_path).await.expect("db");
+        backend.run_migrations().await.expect("migrations");
+
+        let conversation_id = backend
+            .create_conversation("desktop", "user-1", Some("thread-a"))
+            .await
+            .expect("conversation");
+        backend
+            .add_conversation_message(conversation_id, "user", "hello")
+            .await
+            .expect("user");
+        backend
+            .add_conversation_message(conversation_id, "assistant", "world")
+            .await
+            .expect("assistant");
+
+        let mut job = JobContext::with_user("user-1", "Cleanup test", "job linked to conversation");
+        job.conversation_id = Some(conversation_id);
+        backend.save_job(&job).await.expect("save job");
+
+        backend
+            .record_llm_call(&LlmCallRecord {
+                job_id: None,
+                conversation_id: Some(conversation_id),
+                provider: "test",
+                model: "stub",
+                input_tokens: 10,
+                output_tokens: 5,
+                cost: Decimal::new(15, 6),
+                purpose: Some("chat"),
+            })
+            .await
+            .expect("record chat llm call");
+
+        backend
+            .record_llm_call(&LlmCallRecord {
+                job_id: Some(job.job_id),
+                conversation_id: Some(conversation_id),
+                provider: "test",
+                model: "stub",
+                input_tokens: 20,
+                output_tokens: 10,
+                cost: Decimal::new(30, 6),
+                purpose: Some("job"),
+            })
+            .await
+            .expect("record job llm call");
+
+        backend
+            .delete_conversation(conversation_id)
+            .await
+            .expect("delete conversation");
+
+        assert!(
+            backend
+                .get_conversation_metadata(conversation_id)
+                .await
+                .expect("conversation metadata after delete")
+                .is_none()
+        );
+
+        let stored_job = backend
+            .get_job(job.job_id)
+            .await
+            .expect("get job after delete")
+            .expect("job should survive");
+        assert_eq!(stored_job.conversation_id, None);
+
+        let conn = backend.connect().await.expect("connect");
+        let mut rows = conn
+            .query(
+                "SELECT job_id, conversation_id, purpose FROM llm_calls ORDER BY purpose ASC",
+                (),
+            )
+            .await
+            .expect("query llm calls");
+
+        let mut seen = Vec::new();
+        while let Some(row) = rows.next().await.expect("next llm call row") {
+            seen.push((
+                get_opt_text(&row, 0),
+                get_opt_text(&row, 1),
+                get_opt_text(&row, 2),
+            ));
+        }
+
+        assert_eq!(seen.len(), 1, "chat-only llm call should be deleted");
+        let job_id_text = job.job_id.to_string();
+        assert_eq!(seen[0].0.as_deref(), Some(job_id_text.as_str()));
+        assert_eq!(seen[0].1, None, "job-linked llm call should be detached");
+        assert_eq!(seen[0].2.as_deref(), Some("job"));
     }
 
     #[tokio::test]
