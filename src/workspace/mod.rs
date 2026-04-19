@@ -2588,6 +2588,12 @@ mod seed_tests {
             !doc.content.is_empty(),
             "BOOTSTRAP.md should have been seeded"
         );
+
+        let agents = ws.read(paths::AGENTS).await.expect("read AGENTS");
+        assert!(
+            agents.content.contains("system://boot"),
+            "AGENTS.md seed should be written without injection false positives"
+        );
     }
 
     #[tokio::test]
