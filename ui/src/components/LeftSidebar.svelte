@@ -1,6 +1,5 @@
 <script lang="ts">
   import { List, LoaderCircle, Plus, Search, Settings, Trash2, Zap } from "lucide-svelte";
-  import StewardMark from "./brand/StewardMark.svelte";
   import type { SessionSummary } from "../lib/types";
 
   interface Props {
@@ -45,13 +44,6 @@
       </button>
     </div>
   {:else}
-    <div class="sidebar-brand">
-      <div class="brand-icon">
-        <StewardMark size={32} />
-      </div>
-      <span class="brand-name">Steward</span>
-    </div>
-
     <div class="action-row">
       <button class="new-chat-btn" onclick={onCreate}>
         <Plus size={16} strokeWidth={2} />
@@ -164,29 +156,6 @@
   .collapsed-emoji {
     font-size: 14px;
     line-height: 1;
-  }
-
-  .sidebar-brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 0 4px 20px;
-  }
-
-  .brand-icon {
-    width: 46px;
-    height: 46px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-  }
-
-  .brand-name {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--text-primary);
-    letter-spacing: -0.01em;
   }
 
   .action-row {

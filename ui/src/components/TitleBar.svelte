@@ -1,6 +1,6 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { AlignJustify, Check, ChevronDown, Minus, Moon, Settings, Square, Sun, X } from "lucide-svelte";
+  import { Check, ChevronDown, ChevronLeft, ChevronRight, Minus, Moon, Settings, Square, Sun, X } from "lucide-svelte";
   import type { SessionSummary } from "../lib/types";
   import { themeStore } from "../lib/stores/theme.svelte";
 
@@ -53,6 +53,23 @@
     await appWindow.close();
   }
 
+  function isInteractiveTitlebarTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false;
+
+    return Boolean(
+      target.closest(
+        "button, input, select, textarea, a, .model-selector, .model-dropdown, .window-controls"
+      )
+    );
+  }
+
+  async function handleTitlebarMouseDown(event: MouseEvent) {
+    if (event.button !== 0) return;
+    if (isInteractiveTitlebarTarget(event.target)) return;
+
+    await appWindow.startDragging();
+  }
+
   function toggleModelDropdown() {
     showModelDropdown = !showModelDropdown;
   }
@@ -86,7 +103,8 @@
   });
 </script>
 
-<header class="titlebar">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<header class="titlebar" onmousedown={handleTitlebarMouseDown}>
   <div class="titlebar-side titlebar-side-left">
     {#if isMac}
       <div class="traffic-lights">
@@ -97,7 +115,11 @@
     {/if}
 
     <button class="sidebar-toggle" onclick={onToggleLeft} aria-label={leftSidebarCollapsed ? "展开左侧边栏" : "收起左侧边栏"}>
-      <AlignJustify size={16} strokeWidth={2} />
+      {#if leftSidebarCollapsed}
+        <ChevronRight size={16} strokeWidth={2.25} />
+      {:else}
+        <ChevronLeft size={16} strokeWidth={2.25} />
+      {/if}
     </button>
 
     <div class="model-selector">
@@ -139,6 +161,8 @@
         </div>
       {/if}
     </div>
+
+    <div class="titlebar-drag-fill" aria-hidden="true"></div>
   </div>
 
   <div class="titlebar-center">
@@ -159,6 +183,8 @@
   </div>
 
   <div class="titlebar-side titlebar-side-right">
+    <div class="titlebar-drag-fill" aria-hidden="true"></div>
+
     <button
       class="titlebar-icon-button"
       onclick={toggleTheme}
@@ -172,7 +198,11 @@
     </button>
 
     <button class="sidebar-toggle" onclick={onToggleRight} aria-label={rightSidebarCollapsed ? "展开右侧边栏" : "收起右侧边栏"}>
-      <AlignJustify size={16} strokeWidth={2} />
+      {#if rightSidebarCollapsed}
+        <ChevronLeft size={16} strokeWidth={2.25} />
+      {:else}
+        <ChevronRight size={16} strokeWidth={2.25} />
+      {/if}
     </button>
 
     {#if !isMac}
@@ -219,6 +249,12 @@
     display: flex;
     justify-content: center;
     padding: 0 16px;
+  }
+
+  .titlebar-drag-fill {
+    flex: 1 1 auto;
+    min-width: 16px;
+    height: 100%;
   }
 
   .session-titlebar {
