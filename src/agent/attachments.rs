@@ -72,6 +72,11 @@ fn escape_xml_text(s: &str) -> String {
 fn format_attachment(index: usize, att: &IncomingAttachment) -> String {
     let filename = escape_xml_attr(att.filename.as_deref().unwrap_or("unknown"));
     let mime = escape_xml_attr(&att.mime_type);
+    let path_attr = att
+        .storage_key
+        .as_ref()
+        .map(|k| format!(" path=\"{}\"", escape_xml_attr(k)))
+        .unwrap_or_default();
 
     match &att.kind {
         AttachmentKind::Audio => {
@@ -86,7 +91,7 @@ fn format_attachment(index: usize, att: &IncomingAttachment) -> String {
             };
 
             format!(
-                "<attachment index=\"{index}\" type=\"audio\" filename=\"{filename}\"{duration_attr}>\n\
+                "<attachment index=\"{index}\" type=\"audio\" filename=\"{filename}\"{duration_attr}{path_attr}>\n\
                  {body}\n\
                  </attachment>"
             )
@@ -104,7 +109,7 @@ fn format_attachment(index: usize, att: &IncomingAttachment) -> String {
             };
 
             format!(
-                "<attachment index=\"{index}\" type=\"image\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}>\n\
+                "<attachment index=\"{index}\" type=\"image\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}{path_attr}>\n\
                  {body}\n\
                  </attachment>"
             )
@@ -118,7 +123,7 @@ fn format_attachment(index: usize, att: &IncomingAttachment) -> String {
                         .map(|s| format!(" size=\"{}\"", format_size(s)))
                         .unwrap_or_default();
                     return format!(
-                        "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_info}>\n\
+                        "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_info}{path_attr}>\n\
                          [Document attached — text extraction unavailable]\n\
                          </attachment>"
                     );
@@ -131,7 +136,7 @@ fn format_attachment(index: usize, att: &IncomingAttachment) -> String {
                 .unwrap_or_default();
 
             format!(
-                "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}>\n\
+                "<attachment index=\"{index}\" type=\"document\" filename=\"{filename}\" mime=\"{mime}\"{size_attr}{path_attr}>\n\
                  {body}\n\
                  </attachment>"
             )
@@ -304,5 +309,27 @@ mod tests {
 
         let result = augment_with_attachments(original, &[att]).unwrap();
         assert!(result.text.starts_with(original));
+    }
+
+    #[test]
+    fn storage_key_included_in_path_attribute() {
+        let mut att = make_attachment(AttachmentKind::Document);
+        att.filename = Some("report.pdf".to_string());
+        att.storage_key = Some("workspace://default/attachments/report.pdf".to_string());
+        att.extracted_text = Some("Important content".to_string());
+
+        let result = augment_with_attachments("review", &[att]).unwrap();
+        assert!(result.text.contains("path=\"workspace://default/attachments/report.pdf\""));
+    }
+
+    #[test]
+    fn no_path_attr_when_storage_key_none() {
+        let mut att = make_attachment(AttachmentKind::Image);
+        att.filename = Some("photo.jpg".to_string());
+        att.mime_type = "image/jpeg".to_string();
+        att.storage_key = None;
+
+        let result = augment_with_attachments("look", &[att]).unwrap();
+        assert!(!result.text.contains("path="));
     }
 }
