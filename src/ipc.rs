@@ -157,6 +157,17 @@ pub struct SessionDetailResponse {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SessionRuntimeStatusResponse {
+    pub session_id: Uuid,
+    pub active_thread_id: Option<Uuid>,
+    pub thread_state: Option<String>,
+    pub queued_message_count: usize,
+    pub has_pending_approval: bool,
+    pub has_pending_auth: bool,
+    pub task_status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct CreateSessionResponse {
     pub id: Uuid,
 }

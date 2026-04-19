@@ -5,6 +5,7 @@ import type {
   ActiveToolCall,
   ReflectionStatus,
   SessionDetail,
+  SessionRuntimeStatus,
   SessionTitleUpdatePayload,
   ThreadMessage,
   SessionSummary,
@@ -215,6 +216,7 @@ class SessionsState {
   list = $state<SessionSummary[]>([]);
   activeId = $state<string>("");
   active = $state<SessionDetail | null>(null);
+  runtimeStatus = $state<SessionRuntimeStatus | null>(null);
   activeTaskDetail = $state<TaskDetail | null>(null);
   activeTaskLoading = $state(false);
   messageMode = $state<"ask" | "yolo">("ask");
@@ -252,12 +254,14 @@ class SessionsState {
     this.loading = true;
     this.error = null;
     this.streaming = emptyStreamingState();
+    this.runtimeStatus = null;
     this.#streamingAssistantId = null;
     this.#streamingThinkingId = null;
     this.#liveTurnNumber = null;
     this.#seenEventKeys.clear();
     try {
       this.active = await apiClient.getSession(id);
+      await this.refreshRuntimeStatus();
       this.#syncMessageModeFromTask(this.active.active_thread_task);
       await this.refreshActiveTaskDetail();
       this.#restoreStreamingAnchors();
@@ -292,6 +296,7 @@ class SessionsState {
       if (this.activeId === id) {
         this.disconnect();
         this.active = null;
+        this.runtimeStatus = null;
         this.activeId = "";
       }
       await this.fetchList();
@@ -304,6 +309,72 @@ class SessionsState {
   }
 
   async sendMessage(content: string, files: File[] = []) {
+    return this.#sendMessage(content, files, "default", false);
+  }
+
+  async sendSheerMessage(content: string, files: File[] = []) {
+    return this.#sendMessage(content, files, "sheer", this.#isBusyRuntimeState());
+  }
+
+  async sendQueuedMessage(content: string, files: File[] = []) {
+    return this.#sendMessage(content, files, "queue", this.#isBusyRuntimeState());
+  }
+
+  async sendInterruptingMessage(content: string, files: File[] = []) {
+    if (this.#isBusyRuntimeState()) {
+      const interrupted = await this.interruptSession();
+      if (!interrupted) {
+        return false;
+      }
+    }
+    return this.#sendMessage(content, files, "default", false);
+  }
+
+  async interruptSession() {
+    if (!this.activeId) {
+      return false;
+    }
+
+    this.error = null;
+    try {
+      this.status = "Interrupting current run";
+      this.runtimeStatus = await apiClient.interruptSession(this.activeId);
+      await this.refreshActiveTaskDetail();
+      this.#finishStreamingFromTerminalState();
+      return true;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : "Failed to interrupt session";
+      return false;
+    } finally {
+      this.status = "";
+    }
+  }
+
+  async refreshRuntimeStatus() {
+    if (!this.activeId) {
+      this.runtimeStatus = null;
+      return;
+    }
+
+    const sessionId = this.activeId;
+    try {
+      const status = await apiClient.getSessionRuntimeStatus(sessionId);
+      if (this.activeId === sessionId) {
+        this.runtimeStatus = status;
+      }
+    } catch (e) {
+      if (this.activeId === sessionId) {
+        this.error = e instanceof Error ? e.message : "Failed to load session runtime status";
+      }
+    }
+  }
+
+  async #sendMessage(
+    content: string,
+    files: File[] = [],
+    strategy: "default" | "sheer" | "queue" = "default",
+    preserveStreaming = false
+  ) {
     const trimmedContent = content.trim();
     if (!trimmedContent && files.length === 0) return false;
 
@@ -335,9 +406,11 @@ class SessionsState {
       turn_cost: null,
       tool_call: null
     };
-    this.#liveTurnNumber = optimistic.turn_number;
-    this.#streamingAssistantId = null;
-    this.#streamingThinkingId = null;
+    if (!preserveStreaming) {
+      this.#liveTurnNumber = optimistic.turn_number;
+      this.#streamingAssistantId = null;
+      this.#streamingThinkingId = null;
+    }
     const lastActivity = optimistic.created_at;
     this.active = {
       ...this.active,
@@ -356,28 +429,51 @@ class SessionsState {
     });
 
     // Reset streaming state for new message — immediately show thinking
-    this.streaming = {
-      ...emptyStreamingState(),
-      isStreaming: true
-    };
+    if (!preserveStreaming) {
+      this.streaming = {
+        ...emptyStreamingState(),
+        isStreaming: true
+      };
+    }
 
     try {
-      const response = await apiClient.sendSessionMessage(
-        this.activeId,
-        content,
-        attachmentPayload,
-        this.messageMode
+      const response = await (
+        strategy === "sheer"
+          ? apiClient.sheerSessionMessage(
+            this.activeId,
+            content,
+            attachmentPayload,
+            this.messageMode
+          )
+          : strategy === "queue"
+            ? apiClient.queueSessionMessage(
+              this.activeId,
+              content,
+              attachmentPayload,
+              this.messageMode
+            )
+            : apiClient.sendSessionMessage(
+              this.activeId,
+              content,
+              attachmentPayload,
+              this.messageMode
+            )
       );
       this.active = {
         ...this.active,
         active_thread_id: response.active_thread_id,
         active_thread_task: response.active_thread_task ?? this.active.active_thread_task
       };
+      await this.refreshRuntimeStatus();
       this.#syncMessageModeFromTask(this.active.active_thread_task);
       await this.refreshActiveTaskDetail();
-      this.status = response.active_thread_task_id
-        ? `Message queued in ${this.messageMode} mode`
-        : "Message queued";
+      this.status = strategy === "sheer"
+        ? "Message sheered"
+        : strategy === "queue"
+          ? "Message queued"
+          : response.active_thread_task_id
+            ? `Message queued in ${this.messageMode} mode`
+            : "Message queued";
 
       // Fallback only if live Tauri events never arrive. Delay it enough that a
       // healthy event stream is not replaced by a sudden full refresh.
@@ -392,13 +488,15 @@ class SessionsState {
         pending: false
       });
       // Stop the thinking indicator on error
-      this.streaming = {
-        ...this.streaming,
-        isStreaming: false,
-        thinking: false,
-        thinkingMessageId: null,
-        thinkingMessage: ""
-      };
+      if (!preserveStreaming) {
+        this.streaming = {
+          ...this.streaming,
+          isStreaming: false,
+          thinking: false,
+          thinkingMessageId: null,
+          thinkingMessage: ""
+        };
+      }
       if (this.active) {
         this.active = {
           ...this.active,
@@ -443,6 +541,7 @@ class SessionsState {
 
   disconnect() {
     this.#stopPollFallback();
+    this.runtimeStatus = null;
     this.#streamingAssistantId = null;
     this.#streamingThinkingId = null;
     this.#liveTurnNumber = null;
@@ -638,6 +737,7 @@ class SessionsState {
         this.#streamingThinkingId = null;
         this.#finalizeAssistantMessage(content);
         this.#finishStreamingFromTerminalState();
+        void this.refreshRuntimeStatus();
         break;
       }
 
@@ -840,6 +940,7 @@ class SessionsState {
           description?: string;
         };
         this.status = `Approval needed: ${tool_name}`;
+        void this.refreshRuntimeStatus();
         void notify("Steward needs confirmation", `${tool_name}: ${summary ?? description ?? ""}`);
         break;
       }
@@ -855,6 +956,7 @@ class SessionsState {
           thinking: false,
           thinkingMessageId: null
         };
+        void this.refreshRuntimeStatus();
         break;
       }
 
@@ -864,6 +966,7 @@ class SessionsState {
         if (["Done", "Interrupted", "Rejected", "task.completed", "task.rejected", "task.cancelled", "task.failed"].includes(message)) {
           this.#finishStreamingFromTerminalState();
         }
+        void this.refreshRuntimeStatus();
         break;
       }
     }
@@ -912,6 +1015,11 @@ class SessionsState {
   #hasActiveTurn() {
     const status = this.active?.active_thread_task?.status;
     return !!status && !["completed", "failed", "cancelled", "rejected"].includes(status);
+  }
+
+  #isBusyRuntimeState() {
+    const state = this.runtimeStatus?.thread_state;
+    return state === "processing" || state === "awaiting_approval";
   }
 
   #restoreStreamingAnchors() {

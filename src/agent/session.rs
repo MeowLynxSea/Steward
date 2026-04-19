@@ -228,10 +228,53 @@ fn default_true() -> bool {
 
 /// A queued user message that arrived while a turn was still processing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingUserAttachment {
+    pub id: String,
+    pub kind: crate::channels::AttachmentKind,
+    pub mime_type: String,
+    pub filename: Option<String>,
+    pub size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_uri: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extracted_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u32>,
+}
+
+impl PendingUserAttachment {
+    pub fn from_incoming_attachment(attachment: &crate::channels::IncomingAttachment) -> Self {
+        Self {
+            id: attachment.id.clone(),
+            kind: attachment.kind.clone(),
+            mime_type: attachment.mime_type.clone(),
+            filename: attachment.filename.clone(),
+            size_bytes: attachment.size_bytes,
+            workspace_uri: attachment.storage_key.clone(),
+            extracted_text: attachment.extracted_text.clone(),
+            duration_secs: attachment.duration_secs,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingUserMessageDelivery {
+    #[default]
+    AfterTurn,
+    InjectNextOpportunity,
+}
+
+/// A queued user message that arrived while a turn was still processing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PendingUserMessage {
     pub content: String,
     #[serde(default = "Utc::now")]
     pub received_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<PendingUserAttachment>,
+    #[serde(default)]
+    pub delivery: PendingUserMessageDelivery,
 }
 
 /// A user-authored message segment that contributes to a single logical turn.
@@ -266,6 +309,19 @@ impl TurnUserAttachment {
             filename: attachment.filename.clone(),
             size_bytes: attachment.size_bytes,
             workspace_uri: attachment.storage_key.clone(),
+            extracted_text: attachment.extracted_text.clone(),
+            duration_secs: attachment.duration_secs,
+        }
+    }
+
+    pub fn from_pending_attachment(attachment: &PendingUserAttachment) -> Self {
+        Self {
+            id: attachment.id.clone(),
+            kind: attachment.kind.clone(),
+            mime_type: attachment.mime_type.clone(),
+            filename: attachment.filename.clone(),
+            size_bytes: attachment.size_bytes,
+            workspace_uri: attachment.workspace_uri.clone(),
             extracted_text: attachment.extracted_text.clone(),
             duration_secs: attachment.duration_secs,
         }
@@ -359,13 +415,67 @@ impl Thread {
     /// Queue a message for processing after the current turn completes.
     /// Returns `false` if the queue is at capacity ([`MAX_PENDING_MESSAGES`]).
     pub fn queue_message(&mut self, content: String, received_at: DateTime<Utc>) -> bool {
+        self.queue_pending_message_back(PendingUserMessage {
+            content,
+            received_at,
+            attachments: Vec::new(),
+            delivery: PendingUserMessageDelivery::AfterTurn,
+        })
+    }
+
+    /// Queue a message with attachments at the back of the queue.
+    pub fn queue_message_with_attachments(
+        &mut self,
+        content: String,
+        received_at: DateTime<Utc>,
+        attachments: Vec<PendingUserAttachment>,
+    ) -> bool {
+        self.queue_pending_message_back(PendingUserMessage {
+            content,
+            received_at,
+            attachments,
+            delivery: PendingUserMessageDelivery::AfterTurn,
+        })
+    }
+
+    /// Queue a pending message at the front of the queue.
+    pub fn queue_pending_message_front(&mut self, message: PendingUserMessage) -> bool {
         if self.pending_messages.len() >= MAX_PENDING_MESSAGES {
             return false;
         }
-        self.pending_messages.push_back(PendingUserMessage {
-            content,
-            received_at,
-        });
+        self.pending_messages.push_front(message);
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// Queue a pending message at the back of the queue.
+    pub fn queue_pending_message_back(&mut self, message: PendingUserMessage) -> bool {
+        if self.pending_messages.len() >= MAX_PENDING_MESSAGES {
+            return false;
+        }
+        self.pending_messages.push_back(message);
+        self.updated_at = Utc::now();
+        true
+    }
+
+    /// Queue an injectable pending message ahead of after-turn queue items while
+    /// preserving FIFO order among other injectable messages.
+    pub fn queue_pending_message_for_next_opportunity(
+        &mut self,
+        mut message: PendingUserMessage,
+    ) -> bool {
+        if self.pending_messages.len() >= MAX_PENDING_MESSAGES {
+            return false;
+        }
+        message.delivery = PendingUserMessageDelivery::InjectNextOpportunity;
+        let insert_at = self
+            .pending_messages
+            .iter()
+            .take_while(|pending| {
+                pending.delivery == PendingUserMessageDelivery::InjectNextOpportunity
+            })
+            .count();
+        self.pending_messages.insert(insert_at, message);
         self.updated_at = Utc::now();
         true
     }
@@ -373,6 +483,18 @@ impl Thread {
     /// Take the next pending message from the queue.
     pub fn take_pending_message(&mut self) -> Option<PendingUserMessage> {
         self.pending_messages.pop_front()
+    }
+
+    /// Take the next pending message that should be injected into the live loop.
+    pub fn take_next_injectable_message(&mut self) -> Option<PendingUserMessage> {
+        let position = self.pending_messages.iter().position(|message| {
+            message.delivery == PendingUserMessageDelivery::InjectNextOpportunity
+        })?;
+        let message = self.pending_messages.remove(position);
+        if message.is_some() {
+            self.updated_at = Utc::now();
+        }
+        message
     }
 
     /// Drain all pending messages from the queue.
@@ -1015,6 +1137,34 @@ impl Turn {
         }
     }
 
+    pub fn append_user_message_segment(
+        &mut self,
+        content: impl Into<String>,
+        sent_at: DateTime<Utc>,
+    ) {
+        let content = content.into();
+        if content.trim().is_empty() {
+            return;
+        }
+
+        if self.user_message_segments.is_empty() {
+            self.user_message_segments.push(TimedUserMessageSegment {
+                content: self.user_input.clone(),
+                sent_at: self.started_at,
+            });
+        }
+
+        self.user_message_segments
+            .push(TimedUserMessageSegment { content, sent_at });
+    }
+
+    pub fn append_user_attachments(
+        &mut self,
+        attachments: impl IntoIterator<Item = TurnUserAttachment>,
+    ) {
+        self.user_attachments.extend(attachments);
+    }
+
     /// Complete this turn.
     pub fn complete(&mut self, response: impl Into<String>) {
         let response = response.into();
@@ -1412,6 +1562,8 @@ mod tests {
         PendingUserMessage {
             content: content.to_string(),
             received_at: Utc::now(),
+            attachments: Vec::new(),
+            delivery: PendingUserMessageDelivery::AfterTurn,
         }
     }
 
@@ -2507,6 +2659,33 @@ mod tests {
             );
         }
         assert!(thread.take_pending_message().is_none());
+    }
+
+    #[test]
+    fn test_injectable_pending_messages_preempt_after_turn_queue() {
+        let mut thread = Thread::new(Uuid::new_v4());
+
+        assert!(thread.queue_message("queued-1".to_string(), Utc::now()));
+        assert!(thread.queue_pending_message_for_next_opportunity(queued_message("sheer-1")));
+        assert!(thread.queue_pending_message_for_next_opportunity(queued_message("sheer-2")));
+        assert!(thread.queue_message("queued-2".to_string(), Utc::now()));
+
+        assert_eq!(
+            thread.take_next_injectable_message().map(|msg| msg.content),
+            Some("sheer-1".to_string())
+        );
+        assert_eq!(
+            thread.take_next_injectable_message().map(|msg| msg.content),
+            Some("sheer-2".to_string())
+        );
+        assert_eq!(
+            thread.take_pending_message().map(|msg| msg.content),
+            Some("queued-1".to_string())
+        );
+        assert_eq!(
+            thread.take_pending_message().map(|msg| msg.content),
+            Some("queued-2".to_string())
+        );
     }
 
     #[test]

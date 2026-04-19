@@ -2158,9 +2158,8 @@ impl Agent {
                     .await;
 
                 // Drain any messages queued during processing.
-                // Messages are merged (newline-separated) so the LLM receives
-                // full context from rapid consecutive inputs instead of
-                // processing each as a separate turn with partial context (#259).
+                // Each queued message is replayed as its own follow-up turn so
+                // attachment context and queue ordering are preserved.
                 //
                 // Only `Response` continues the drain — the user got a normal
                 // reply and there may be more queued messages to process.
@@ -2174,25 +2173,21 @@ impl Agent {
                 //    would produce confusing interleaved output
                 // - `Err(_)`: hard error
                 while let Ok(SubmissionResult::Response { content: outgoing }) = &result {
-                    let merged = {
+                    let next_message = {
                         let mut sess = session.lock().await;
                         sess.threads
                             .get_mut(&thread_id)
-                            .and_then(|t| t.drain_pending_messages())
+                            .and_then(|t| t.take_pending_message())
                     };
-                    let Some(next_messages) = merged else {
+                    let Some(next_message) = next_message else {
                         break;
                     };
-                    let next_content = next_messages
-                        .iter()
-                        .map(|msg| msg.content.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n");
 
                     tracing::debug!(
                         thread_id = %thread_id,
-                        merged_len = next_content.len(),
-                        "Drain loop: processing merged queued messages"
+                        queued_len = next_message.content.len(),
+                        attachment_count = next_message.attachments.len(),
+                        "Drain loop: processing queued message"
                     );
 
                     // Send the completed turn's response before starting the next.
@@ -2226,21 +2221,23 @@ impl Agent {
                         }
                     }
 
-                    // Process merged queued messages as a single turn.
-                    // Use a message clone with cleared attachments so
-                    // augment_with_attachments doesn't re-apply the original
-                    // message's attachments to unrelated queued text.
+                    let restored_attachments =
+                        restore_pending_attachments(self.workspace(), &next_message.attachments)
+                            .await;
+
+                    // Process the queued message as its own turn.
                     let mut queued_msg = message.clone();
                     queued_msg.id = Uuid::new_v4();
-                    queued_msg.attachments.clear();
+                    queued_msg.received_at = next_message.received_at;
+                    queued_msg.attachments = restored_attachments;
                     result = self
                         .process_user_input_with_segments(
                             &queued_msg,
                             tenant.clone(),
                             session.clone(),
                             thread_id,
-                            &next_content,
-                            Some(next_messages.clone()),
+                            &next_message.content,
+                            Some(vec![next_message.clone()]),
                         )
                         .await;
 
@@ -2249,7 +2246,7 @@ impl Agent {
                     if !matches!(&result, Ok(SubmissionResult::Response { .. })) {
                         let mut sess = session.lock().await;
                         if let Some(thread) = sess.threads.get_mut(&thread_id) {
-                            thread.requeue_drained(next_messages);
+                            thread.requeue_drained(vec![next_message]);
                             tracing::debug!(
                                 thread_id = %thread_id,
                                 "Re-queued drained content after non-Response result"
@@ -2606,6 +2603,98 @@ fn should_store_extracted_document(attachment: &crate::channels::IncomingAttachm
         .storage_key
         .as_deref()
         .is_some_and(|uri| uri.starts_with("workspace://default/attachments/"))
+}
+
+pub(super) async fn restore_pending_attachment(
+    workspace: Option<&Arc<Workspace>>,
+    attachment: &crate::agent::session::PendingUserAttachment,
+) -> crate::channels::IncomingAttachment {
+    let data = if let Some(workspace_uri) = attachment.workspace_uri.as_deref() {
+        let Some(workspace) = workspace else {
+            tracing::warn!(
+                workspace_uri,
+                "Workspace not available for queued attachment restore; using metadata-only fallback"
+            );
+            return crate::channels::IncomingAttachment {
+                id: attachment.id.clone(),
+                kind: attachment.kind.clone(),
+                mime_type: attachment.mime_type.clone(),
+                filename: attachment.filename.clone(),
+                size_bytes: attachment.size_bytes,
+                source_url: None,
+                storage_key: attachment.workspace_uri.clone(),
+                extracted_text: attachment.extracted_text.clone(),
+                data: Vec::new(),
+                duration_secs: attachment.duration_secs,
+            };
+        };
+        match crate::workspace::WorkspaceUri::parse(workspace_uri) {
+            Ok(Some(crate::workspace::WorkspaceUri::AllowlistPath(allowlist_id, path))) => {
+                match workspace.read_allowlist_file(allowlist_id, &path).await {
+                    Ok(file) => match tokio::fs::read(&file.disk_path).await {
+                        Ok(data) => data,
+                        Err(error) => {
+                            tracing::warn!(
+                                workspace_uri,
+                                %error,
+                                "Failed to read queued attachment bytes; using metadata-only fallback"
+                            );
+                            Vec::new()
+                        }
+                    },
+                    Err(error) => {
+                        tracing::warn!(
+                            workspace_uri,
+                            %error,
+                            "Failed to resolve queued attachment file; using metadata-only fallback"
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    workspace_uri,
+                    "Queued attachment storage key is not a file workspace URI; using metadata-only fallback"
+                );
+                Vec::new()
+            }
+            Err(error) => {
+                tracing::warn!(
+                    workspace_uri,
+                    %error,
+                    "Failed to parse queued attachment workspace URI; using metadata-only fallback"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
+    crate::channels::IncomingAttachment {
+        id: attachment.id.clone(),
+        kind: attachment.kind.clone(),
+        mime_type: attachment.mime_type.clone(),
+        filename: attachment.filename.clone(),
+        size_bytes: attachment.size_bytes,
+        source_url: None,
+        storage_key: attachment.workspace_uri.clone(),
+        extracted_text: attachment.extracted_text.clone(),
+        data,
+        duration_secs: attachment.duration_secs,
+    }
+}
+
+pub(super) async fn restore_pending_attachments(
+    workspace: Option<&Arc<Workspace>>,
+    attachments: &[crate::agent::session::PendingUserAttachment],
+) -> Vec<crate::channels::IncomingAttachment> {
+    let mut restored = Vec::with_capacity(attachments.len());
+    for attachment in attachments {
+        restored.push(restore_pending_attachment(workspace, attachment).await);
+    }
+    restored
 }
 
 #[cfg(test)]

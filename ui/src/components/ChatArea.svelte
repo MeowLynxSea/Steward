@@ -1,10 +1,13 @@
 <script lang="ts">
   import { fade, fly } from "svelte/transition";
   import {
+    ArrowUp,
     ChevronRight,
+    CornerDownRight,
     FileText,
     Loader,
     Shield,
+    Square,
     Wrench,
     Zap,
     Image,
@@ -18,6 +21,7 @@
     ReflectionDetail,
     ReflectionStatus,
     SessionDetail,
+    SessionRuntimeStatus,
     ThreadMessage,
     ThreadMessageAttachment,
     StreamingState,
@@ -33,6 +37,7 @@
 
   interface Props {
     session: SessionDetail | null;
+    runtimeStatus: SessionRuntimeStatus | null;
     task: TaskRecord | null;
     messageMode: TaskMode;
     streaming: StreamingState;
@@ -41,6 +46,9 @@
     noBackend?: boolean;
     composerSeed?: { id: string; content: string } | null;
     onSendMessage: (content: string, files: File[]) => Promise<boolean>;
+    onSheerSendMessage: (content: string, files: File[]) => Promise<boolean>;
+    onQueueSendMessage: (content: string, files: File[]) => Promise<boolean>;
+    onInterruptSession: () => Promise<boolean>;
     onChangeMessageMode: (mode: TaskMode) => void;
     onSuggestionClick?: (suggestion: string) => void;
     onApproveTask: (task: TaskRecord) => void;
@@ -85,6 +93,7 @@
 
   let {
     session,
+    runtimeStatus,
     task,
     messageMode,
     streaming,
@@ -92,6 +101,9 @@
     emptyLayout = false,
     composerSeed = null,
     onSendMessage,
+    onSheerSendMessage,
+    onQueueSendMessage,
+    onInterruptSession,
     onChangeMessageMode,
     onSuggestionClick,
     onApproveTask,
@@ -108,6 +120,7 @@
   let messageListRef: HTMLDivElement | null = $state(null);
   let composerAttachments = $state<ComposerAttachment[]>([]);
   let dragOverComposer = $state(false);
+  let sendControlHovered = $state(false);
   let nativeFileDropBridgeActive = $state(false);
   let nativeDragInsideComposer = $state(false);
   let expandedToolCalls = $state<Set<string>>(new Set());
@@ -136,6 +149,9 @@
   const showEmptyLayout = $derived(!loading && emptyLayout);
   const isYoloMode = $derived(messageMode === "yolo");
   const canSubmit = $derived(draftMessage.trim().length > 0 || composerAttachments.length > 0);
+  const isBusySession = $derived(
+    runtimeStatus?.thread_state === "processing" || runtimeStatus?.thread_state === "awaiting_approval"
+  );
   const normalizedStreamingThinking = $derived.by(() => normalizeThinkingTranscript(streaming.thinkingMessage));
   const hasLiveStreamingSignal = $derived.by(() => {
     return Boolean(
@@ -717,14 +733,7 @@
     });
   }
 
-  async function handleSubmit() {
-    if (!canSubmit) return;
-    const files = composerAttachments.map((attachment) => attachment.file);
-    const sent = await onSendMessage(draftMessage, files);
-    if (!sent) {
-      return;
-    }
-
+  function clearComposerAfterSend() {
     draftMessage = "";
     composerAttachments = [];
 
@@ -733,9 +742,46 @@
     }
   }
 
+  async function submitComposer(
+    sender: (content: string, files: File[]) => Promise<boolean>
+  ) {
+    if (!canSubmit) return;
+    const files = composerAttachments.map((attachment) => attachment.file);
+    const sent = await sender(draftMessage, files);
+    if (!sent) {
+      return;
+    }
+
+    clearComposerAfterSend();
+  }
+
+  async function handleSubmit() {
+    await submitComposer(onSendMessage);
+  }
+
+  async function handleSheerSubmit() {
+    await submitComposer(onSheerSendMessage);
+  }
+
+  async function handleQueueSubmit() {
+    await submitComposer(onQueueSendMessage);
+  }
+
+  async function handleInterruptClick() {
+    sendControlHovered = false;
+    await onInterruptSession();
+  }
+
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
+      if (!canSubmit) {
+        return;
+      }
+      if (isBusySession) {
+        void handleSheerSubmit();
+        return;
+      }
       void handleSubmit();
     }
   }
@@ -1643,9 +1689,62 @@
           </div>
 
           <div class="input-actions-right">
-            <button class="send-btn {canSubmit ? 'active' : ''}" onclick={handleSubmit}>
-              ↑
-            </button>
+            {#if isBusySession && canSubmit}
+              <button
+                class="send-btn send-btn-stop active"
+                type="button"
+                onclick={handleInterruptClick}
+                title="停止当前运行"
+                aria-label="停止当前运行"
+              >
+                <Square size={15} strokeWidth={2.2} />
+              </button>
+              <button
+                class="send-btn send-btn-secondary active"
+                type="button"
+                onclick={handleSheerSubmit}
+                title="sheer 发送，插到队列最前"
+                aria-label="sheer 发送"
+              >
+                <ChevronRight size={16} strokeWidth={2.2} />
+              </button>
+              <button
+                class="send-btn send-btn-secondary active"
+                type="button"
+                onclick={handleQueueSubmit}
+                title="queue 发送，追加到队列末尾"
+                aria-label="queue 发送"
+              >
+                <CornerDownRight size={16} strokeWidth={2.2} />
+              </button>
+            {:else if isBusySession}
+              <button
+                class={`send-btn ${sendControlHovered ? "active send-btn-stop" : "send-btn-busy"}`}
+                type="button"
+                onmouseenter={() => sendControlHovered = true}
+                onmouseleave={() => sendControlHovered = false}
+                onclick={handleInterruptClick}
+                title={sendControlHovered ? "停止当前运行" : "当前正在运行"}
+                aria-label={sendControlHovered ? "停止当前运行" : "当前正在运行"}
+              >
+                {#if sendControlHovered}
+                  <Square size={15} strokeWidth={2.2} />
+                {:else}
+                  <Loader size={16} strokeWidth={2.2} class="spin" />
+                {/if}
+              </button>
+            {:else}
+              <button
+                class="send-btn {canSubmit ? 'active' : ''}"
+                type="button"
+                onclick={handleSubmit}
+                disabled={!canSubmit}
+                title={canSubmit ? "发送" : "请输入消息"}
+                aria-label={canSubmit ? "发送消息" : "请输入消息"}
+              >
+                <ArrowUp size={16} strokeWidth={2.2} />
+              </button>
+            {/if}
           </div>
         </div>
       {/if}
@@ -3194,9 +3293,39 @@
     transition: all 0.15s ease;
   }
 
+  .send-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
   .send-btn:hover,
   .send-btn.active {
     background: var(--accent-primary);
+  }
+
+  .send-btn-secondary {
+    background: color-mix(in srgb, var(--bg-elevated) 68%, var(--accent-primary) 32%);
+  }
+
+  .send-btn-busy {
+    background: color-mix(in srgb, var(--bg-elevated) 58%, var(--accent-primary) 42%);
+  }
+
+  .send-btn-stop {
+    background: color-mix(in srgb, var(--accent-danger, #d64545) 88%, var(--accent-primary) 12%);
+  }
+
+  .spin {
+    animation: send-btn-spin 0.9s linear infinite;
+  }
+
+  @keyframes send-btn-spin {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   @media (max-width: 720px) {

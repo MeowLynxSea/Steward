@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::agent::Agent;
-use crate::agent::session::{PendingApproval, Session, ThreadState};
+use crate::agent::session::{PendingApproval, Session, ThreadState, TurnState};
 use crate::channels::{IncomingMessage, StatusUpdate};
 use crate::context::JobContext;
 use crate::error::Error;
@@ -603,11 +603,70 @@ struct ChatDelegate<'a> {
 #[async_trait]
 impl<'a> LoopDelegate for ChatDelegate<'a> {
     async fn check_signals(&self) -> LoopSignal {
-        let sess = self.session.lock().await;
-        if let Some(thread) = sess.threads.get(&self.thread_id)
-            && thread.state == ThreadState::Interrupted
-        {
-            return LoopSignal::Stop;
+        let pending_message = {
+            let mut sess = self.session.lock().await;
+            let Some(thread) = sess.threads.get_mut(&self.thread_id) else {
+                return LoopSignal::Continue;
+            };
+            if thread.state == ThreadState::Interrupted {
+                return LoopSignal::Stop;
+            }
+
+            let pending_message = thread.take_next_injectable_message();
+            if let Some(pending_message) = pending_message.as_ref()
+                && let Some(turn) = thread.last_turn_mut()
+                && turn.state == TurnState::Processing
+            {
+                turn.append_user_message_segment(
+                    pending_message.content.clone(),
+                    pending_message.received_at,
+                );
+                turn.append_user_attachments(
+                    pending_message
+                        .attachments
+                        .iter()
+                        .map(crate::agent::session::TurnUserAttachment::from_pending_attachment),
+                );
+                thread.updated_at = chrono::Utc::now();
+            }
+            pending_message
+        };
+
+        if let Some(pending_message) = pending_message {
+            let turn_attachments = pending_message
+                .attachments
+                .iter()
+                .map(crate::agent::session::TurnUserAttachment::from_pending_attachment)
+                .collect::<Vec<_>>();
+            self.agent
+                .persist_user_message(
+                    &self.session,
+                    self.thread_id,
+                    &self.message.channel,
+                    &self.message.user_id,
+                    &pending_message.content,
+                    &turn_attachments,
+                )
+                .await;
+
+            let restored_attachments = crate::agent::agent_loop::restore_pending_attachments(
+                self.agent.workspace(),
+                &pending_message.attachments,
+            )
+            .await;
+            let augmented = crate::agent::attachments::augment_with_attachments(
+                &pending_message.content,
+                &restored_attachments,
+            );
+            let (content, content_parts) = match augmented {
+                Some(result) => (result.text, result.image_parts),
+                None => (pending_message.content, Vec::new()),
+            };
+
+            return LoopSignal::InjectMessage {
+                content,
+                content_parts,
+            };
         }
         LoopSignal::Continue
     }

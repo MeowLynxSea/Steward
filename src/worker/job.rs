@@ -1849,7 +1849,10 @@ impl<'a> LoopDelegate for JobDelegate<'a> {
         }
 
         if let Some(content) = first_user_message {
-            return LoopSignal::InjectMessage(content);
+            return LoopSignal::InjectMessage {
+                content,
+                content_parts: Vec::new(),
+            };
         }
 
         // Check for terminal or post-completion state. The loop should stop when the

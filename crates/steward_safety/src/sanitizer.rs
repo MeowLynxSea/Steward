@@ -55,7 +55,8 @@ struct RegexPattern {
 }
 
 fn role_marker_end(trimmed: &str, role: &str) -> Option<usize> {
-    if trimmed.len() < role.len() || !trimmed[..role.len()].eq_ignore_ascii_case(role) {
+    let prefix = trimmed.get(..role.len())?;
+    if !prefix.eq_ignore_ascii_case(role) {
         return None;
     }
 
@@ -320,9 +321,10 @@ impl Sanitizer {
             .into_iter()
             .map(|line| {
                 let trimmed = line.trim_start_matches([' ', '\t']);
-                let is_role_marker = ["system", "user", "assistant"]
-                    .into_iter()
-                    .any(|role| role_marker_end(trimmed, role).is_some() && !trimmed[role_marker_end(trimmed, role).unwrap()..].starts_with("//"));
+                let is_role_marker = ["system", "user", "assistant"].into_iter().any(|role| {
+                    role_marker_end(trimmed, role).is_some()
+                        && !trimmed[role_marker_end(trimmed, role).unwrap()..].starts_with("//")
+                });
                 if is_role_marker {
                     format!("[ESCAPED] {}", line)
                 } else {

@@ -33,6 +33,7 @@ import type {
   MemorySearchHit,
   DroppedAttachmentFileResponse,
   SessionDetail,
+  SessionRuntimeStatus,
   SendSessionMessageResponse,
   SendSessionMessageAttachmentRequest,
   SessionSummary,
@@ -80,6 +81,14 @@ export const apiClient = {
     return invoke<SessionDetail>("get_session", { id });
   },
 
+  getSessionRuntimeStatus(id: string) {
+    return invoke<SessionRuntimeStatus>("get_session_runtime_status", { id });
+  },
+
+  interruptSession(id: string) {
+    return invoke<SessionRuntimeStatus>("interrupt_session", { id });
+  },
+
   getReflectionDetails(threadId: string, assistantMessageId: string) {
     return invoke<ReflectionDetail>("get_reflection_details", {
       thread_id: threadId,
@@ -98,6 +107,38 @@ export const apiClient = {
     mode?: "ask" | "yolo"
   ) {
     return invoke<SendSessionMessageResponse>("send_session_message", {
+      id,
+      payload: {
+        content,
+        mode: mode ?? null,
+        attachments
+      }
+    });
+  },
+
+  sheerSessionMessage(
+    id: string,
+    content: string,
+    attachments: SendSessionMessageAttachmentRequest[] = [],
+    mode?: "ask" | "yolo"
+  ) {
+    return invoke<SendSessionMessageResponse>("sheer_session_message", {
+      id,
+      payload: {
+        content,
+        mode: mode ?? null,
+        attachments
+      }
+    });
+  },
+
+  queueSessionMessage(
+    id: string,
+    content: string,
+    attachments: SendSessionMessageAttachmentRequest[] = [],
+    mode?: "ask" | "yolo"
+  ) {
+    return invoke<SendSessionMessageResponse>("queue_session_message", {
       id,
       payload: {
         content,

@@ -158,6 +158,16 @@ export interface SessionDetail {
   active_thread_task: TaskRecord | null;
 }
 
+export interface SessionRuntimeStatus {
+  session_id: string;
+  active_thread_id: string | null;
+  thread_state: "idle" | "processing" | "awaiting_approval" | "completed" | "interrupted" | null;
+  queued_message_count: number;
+  has_pending_approval: boolean;
+  has_pending_auth: boolean;
+  task_status: TaskStatus | null;
+}
+
 export interface TaskOperation {
   kind: string;
   tool_name: string;

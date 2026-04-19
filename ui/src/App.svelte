@@ -106,6 +106,18 @@
     return sessionsStore.sendMessage(content, files);
   }
 
+  function handleSheerSendMessage(content: string, files: File[]) {
+    return sessionsStore.sendSheerMessage(content, files);
+  }
+
+  function handleQueueSendMessage(content: string, files: File[]) {
+    return sessionsStore.sendQueuedMessage(content, files);
+  }
+
+  function handleInterruptSession() {
+    return sessionsStore.interruptSession();
+  }
+
   function handleSuggestionClick(suggestion: string) {
     void sessionsStore.sendMessage(suggestion);
   }
@@ -366,6 +378,7 @@
       <div class="center-area">
         <ChatArea
           session={sessionsStore.active}
+          runtimeStatus={sessionsStore.runtimeStatus}
           task={sessionsStore.active?.active_thread_task ?? null}
           messageMode={sessionsStore.messageMode}
           streaming={sessionsStore.streaming}
@@ -374,6 +387,9 @@
           noBackend={noBackend}
           {composerSeed}
           onSendMessage={handleSendMessage}
+          onSheerSendMessage={handleSheerSendMessage}
+          onQueueSendMessage={handleQueueSendMessage}
+          onInterruptSession={handleInterruptSession}
           onChangeMessageMode={handleMessageModeChange}
           onSuggestionClick={handleSuggestionClick}
           onApproveTask={handleApproveTask}

@@ -41,10 +41,49 @@ use steward_core::tools::mcp::{
 };
 use steward_core::workspace::parse_allowlist_id;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+enum DesktopQueuePosition {
+    Front,
+    Back,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum DesktopDispatchPlan {
     InjectOnly,
-    QueueOnly,
+    QueueOnly(DesktopQueuePosition),
+}
+
+fn thread_state_label(state: steward_core::agent::session::ThreadState) -> &'static str {
+    match state {
+        steward_core::agent::session::ThreadState::Idle => "idle",
+        steward_core::agent::session::ThreadState::Processing => "processing",
+        steward_core::agent::session::ThreadState::AwaitingApproval => "awaiting_approval",
+        steward_core::agent::session::ThreadState::Completed => "completed",
+        steward_core::agent::session::ThreadState::Interrupted => "interrupted",
+    }
+}
+
+fn build_session_runtime_status_response(
+    session_id: Uuid,
+    active_thread_id: Option<Uuid>,
+    thread: Option<&steward_core::agent::session::Thread>,
+    active_thread_task: Option<&steward_core::ipc::TaskRecord>,
+) -> steward_core::ipc::SessionRuntimeStatusResponse {
+    steward_core::ipc::SessionRuntimeStatusResponse {
+        session_id,
+        active_thread_id,
+        thread_state: thread.map(|thread| thread_state_label(thread.state).to_string()),
+        queued_message_count: thread
+            .map(|thread| thread.pending_messages.len())
+            .unwrap_or(0),
+        has_pending_approval: thread
+            .and_then(|thread| thread.pending_approval.as_ref())
+            .is_some(),
+        has_pending_auth: thread
+            .and_then(|thread| thread.pending_auth.as_ref())
+            .is_some(),
+        task_status: active_thread_task.map(|task| task.status.as_str().to_string()),
+    }
 }
 
 fn parse_workspace_allowlist_id(id: &str) -> Result<Uuid, String> {
@@ -71,34 +110,210 @@ fn mcp_health_check_key(server_name: &str) -> String {
 }
 
 fn plan_desktop_message_dispatch(
-    thread: &mut steward_core::agent::session::Thread,
-    content: &str,
-    has_attachments: bool,
-    received_at: chrono::DateTime<chrono::Utc>,
+    thread: &steward_core::agent::session::Thread,
+    queue_position: DesktopQueuePosition,
 ) -> Result<DesktopDispatchPlan, String> {
     match thread.state {
-        steward_core::agent::session::ThreadState::Processing => {
-            if has_attachments {
-                return Err(
-                    "Cannot queue messages with attachments while a turn is processing. Please resend after the current turn completes."
-                        .to_string(),
-                );
-            }
-            if thread.queue_message(content.to_string(), received_at) {
-                Ok(DesktopDispatchPlan::QueueOnly)
-            } else {
-                Err("Message queue full".to_string())
-            }
+        steward_core::agent::session::ThreadState::Processing
+        | steward_core::agent::session::ThreadState::AwaitingApproval => {
+            Ok(DesktopDispatchPlan::QueueOnly(queue_position))
         }
         steward_core::agent::session::ThreadState::Idle
         | steward_core::agent::session::ThreadState::Interrupted => {
             Ok(DesktopDispatchPlan::InjectOnly)
         }
-        steward_core::agent::session::ThreadState::AwaitingApproval => {
-            Err("Thread is awaiting approval. Use /interrupt to cancel.".to_string())
-        }
         steward_core::agent::session::ThreadState::Completed => {
             Err("Thread completed. Use /thread new to start a new conversation.".to_string())
+        }
+    }
+}
+
+fn queue_desktop_message(
+    thread: &mut steward_core::agent::session::Thread,
+    content: &str,
+    received_at: chrono::DateTime<chrono::Utc>,
+    attachments: &[IncomingAttachment],
+    queue_position: DesktopQueuePosition,
+) -> Result<(), String> {
+    let pending = steward_core::agent::session::PendingUserMessage {
+        content: content.to_string(),
+        received_at,
+        attachments: attachments
+            .iter()
+            .map(steward_core::agent::session::PendingUserAttachment::from_incoming_attachment)
+            .collect(),
+        delivery: match queue_position {
+            DesktopQueuePosition::Front => {
+                steward_core::agent::session::PendingUserMessageDelivery::InjectNextOpportunity
+            }
+            DesktopQueuePosition::Back => {
+                steward_core::agent::session::PendingUserMessageDelivery::AfterTurn
+            }
+        },
+    };
+
+    let queued = match queue_position {
+        DesktopQueuePosition::Front => thread.queue_pending_message_for_next_opportunity(pending),
+        DesktopQueuePosition::Back => thread.queue_pending_message_back(pending),
+    };
+
+    if queued {
+        Ok(())
+    } else {
+        Err("Message queue full".to_string())
+    }
+}
+
+async fn send_desktop_session_message_impl(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: SendSessionMessageRequest,
+    queue_position: DesktopQueuePosition,
+) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
+    let trimmed_content = payload.content.trim().to_string();
+    let has_attachments = !payload.attachments.is_empty();
+    if trimmed_content.is_empty() && !has_attachments {
+        return Err("Message content or attachments are required".to_string());
+    }
+
+    let session_manager = &state.agent_session_manager;
+    let session = session_manager
+        .get_session_by_id(&state.owner_id, id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+
+    let (thread_id, created_thread) = {
+        let lock_result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+        if lock_result.is_err() {
+            tracing::error!("FIRST session.lock() TIMEOUT - session_id={}", id);
+            return Err("Session lock timeout".to_string());
+        }
+        let mut sess = lock_result.unwrap();
+        let tid = sess
+            .active_thread
+            .or_else(|| sess.threads.keys().copied().next());
+
+        match tid {
+            Some(id) => (id, false),
+            None => {
+                let new_thread = sess.create_thread();
+                (new_thread.id, true)
+            }
+        }
+    };
+
+    if created_thread {
+        session_manager
+            .persist_session_snapshot(&state.owner_id, &session)
+            .await;
+    }
+
+    let _ = reconcile_desktop_thread_state(&state, id, &session, thread_id).await?;
+
+    let built_attachments =
+        build_incoming_desktop_attachments(&state, &payload.attachments).await?;
+
+    let (dispatch_plan, title_context) = {
+        let sess_result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
+        if sess_result.is_err() {
+            tracing::error!("SECOND session.lock() TIMEOUT - thread_id={}", thread_id);
+            return Err("Session lock timeout".to_string());
+        }
+        let mut sess = sess_result.unwrap();
+        let thread = sess
+            .threads
+            .get_mut(&thread_id)
+            .ok_or_else(|| "Thread not found".to_string())?;
+        let title_input = attachment_title_summary(&payload.content, &payload.attachments);
+        let title_context = build_session_title_context(thread, &title_input);
+        let dispatch_plan = plan_desktop_message_dispatch(thread, queue_position)?;
+        if let DesktopDispatchPlan::QueueOnly(position) = dispatch_plan {
+            queue_desktop_message(
+                thread,
+                &payload.content,
+                Utc::now(),
+                &built_attachments,
+                position,
+            )?;
+        }
+        (dispatch_plan, title_context)
+    };
+
+    let requested_mode = requested_task_mode(payload.mode.as_deref());
+
+    match dispatch_plan {
+        DesktopDispatchPlan::QueueOnly(_) => {
+            let active_thread_task = if let Some(mode) = requested_mode {
+                if let Some(task) = state.task_runtime.toggle_mode(thread_id, mode).await {
+                    Some(task)
+                } else {
+                    state.task_runtime.get_task(thread_id).await
+                }
+            } else {
+                state.task_runtime.get_task(thread_id).await
+            };
+            let active_thread_task_id = active_thread_task.as_ref().map(|task| task.id);
+            let request_id =
+                mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
+            spawn_session_title_summary(
+                &state,
+                &state.owner_id,
+                id,
+                thread_id,
+                request_id,
+                title_context.clone(),
+                Arc::clone(&session),
+            );
+            Ok(steward_core::ipc::SendSessionMessageResponse {
+                accepted: true,
+                session_id: id,
+                active_thread_id: thread_id,
+                active_thread_task_id,
+                active_thread_task,
+            })
+        }
+        DesktopDispatchPlan::InjectOnly => {
+            let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
+                .with_thread(thread_id.to_string())
+                .with_metadata(desktop_message_metadata(id, thread_id, &state.owner_id))
+                .with_attachments(built_attachments);
+            state
+                .message_inject_tx
+                .send(msg.clone())
+                .await
+                .map_err(|e| format!("Failed to inject message: {}", e))?;
+            let active_thread_task = if let Some(mode) = requested_mode {
+                let _ = state.task_runtime.ensure_task(&msg, thread_id).await;
+                state
+                    .task_runtime
+                    .toggle_mode(thread_id, mode)
+                    .await
+                    .ok_or_else(|| "Failed to update task mode".to_string())?
+            } else {
+                state.task_runtime.ensure_task(&msg, thread_id).await
+            };
+            let active_thread_task_id = Some(active_thread_task.id);
+            let request_id =
+                mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
+            spawn_session_title_summary(
+                &state,
+                &state.owner_id,
+                id,
+                thread_id,
+                request_id,
+                title_context,
+                Arc::clone(&session),
+            );
+
+            Ok(steward_core::ipc::SendSessionMessageResponse {
+                accepted: true,
+                session_id: id,
+                active_thread_id: thread_id,
+                active_thread_task_id,
+                active_thread_task: Some(active_thread_task),
+            })
         }
     }
 }
@@ -1115,6 +1330,23 @@ fn emit_session_title_update(
                 title,
                 emoji,
                 pending,
+                thread_id: Some(thread_id.to_string()),
+            },
+        );
+    }
+}
+
+fn emit_session_status_update(
+    emitter: &Option<steward_core::desktop_runtime::TauriEventEmitterHandle>,
+    owner_id: &str,
+    thread_id: Uuid,
+    message: impl Into<String>,
+) {
+    if let Some(emitter) = emitter {
+        emitter.emit_for_user(
+            owner_id,
+            steward_common::AppEvent::Status {
+                message: message.into(),
                 thread_id: Some(thread_id.to_string()),
             },
         );
@@ -2592,6 +2824,118 @@ pub async fn get_session(
 }
 
 #[tauri::command]
+pub async fn get_session_runtime_status(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<steward_core::ipc::SessionRuntimeStatusResponse, String> {
+    let session = state
+        .agent_session_manager
+        .get_session_by_id(&state.owner_id, id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+
+    let active_thread_id = {
+        let sess = session.lock().await;
+        sess.active_thread
+            .or_else(|| sess.threads.keys().copied().next())
+    };
+
+    let Some(thread_id) = active_thread_id else {
+        return Ok(build_session_runtime_status_response(id, None, None, None));
+    };
+
+    let (thread, active_thread_task) =
+        reconcile_desktop_thread_state(&state, id, &session, thread_id).await?;
+
+    Ok(build_session_runtime_status_response(
+        id,
+        Some(thread_id),
+        Some(&thread),
+        active_thread_task.as_ref(),
+    ))
+}
+
+#[tauri::command]
+pub async fn interrupt_session(
+    state: State<'_, AppState>,
+    id: Uuid,
+) -> Result<steward_core::ipc::SessionRuntimeStatusResponse, String> {
+    let session = state
+        .agent_session_manager
+        .get_session_by_id(&state.owner_id, id)
+        .await
+        .ok_or_else(|| "Session not found".to_string())?;
+
+    let active_thread_id = {
+        let sess = session.lock().await;
+        sess.active_thread
+            .or_else(|| sess.threads.keys().copied().next())
+    };
+
+    let Some(thread_id) = active_thread_id else {
+        return Ok(build_session_runtime_status_response(id, None, None, None));
+    };
+
+    let should_interrupt = {
+        let mut sess = session.lock().await;
+        let thread = sess
+            .threads
+            .get_mut(&thread_id)
+            .ok_or_else(|| "Thread not found".to_string())?;
+        match thread.state {
+            steward_core::agent::session::ThreadState::Processing
+            | steward_core::agent::session::ThreadState::AwaitingApproval => {
+                thread.interrupt();
+                true
+            }
+            steward_core::agent::session::ThreadState::Idle
+            | steward_core::agent::session::ThreadState::Interrupted
+            | steward_core::agent::session::ThreadState::Completed => false,
+        }
+    };
+
+    if should_interrupt {
+        state
+            .agent_session_manager
+            .persist_session_snapshot(&state.owner_id, &session)
+            .await;
+
+        if let Some(task) = state.task_runtime.get_task(thread_id).await {
+            match task.status {
+                TaskStatus::Queued | TaskStatus::Running | TaskStatus::WaitingApproval => {
+                    state
+                        .task_runtime
+                        .mark_cancelled(thread_id, "Interrupted via IPC")
+                        .await;
+                }
+                TaskStatus::Completed
+                | TaskStatus::Failed
+                | TaskStatus::Cancelled
+                | TaskStatus::Rejected => {}
+            }
+        }
+
+        emit_session_status_update(&state.emitter, &state.owner_id, thread_id, "Interrupted");
+    }
+
+    let thread = {
+        let sess = session.lock().await;
+        sess.threads
+            .get(&thread_id)
+            .cloned()
+            .ok_or_else(|| "Thread not found".to_string())?
+    };
+    let active_thread_task = state.task_runtime.get_task(thread_id).await;
+
+    Ok(build_session_runtime_status_response(
+        id,
+        Some(thread_id),
+        Some(&thread),
+        active_thread_task.as_ref(),
+    ))
+}
+
+#[tauri::command]
 pub async fn get_reflection_details(
     state: State<'_, AppState>,
     thread_id: Uuid,
@@ -2717,157 +3061,43 @@ pub async fn send_session_message(
     id: Uuid,
     payload: SendSessionMessageRequest,
 ) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
-    let trimmed_content = payload.content.trim().to_string();
-    let has_attachments = !payload.attachments.is_empty();
-    if trimmed_content.is_empty() && !has_attachments {
-        return Err("Message content or attachments are required".to_string());
-    }
-
     tracing::info!(
         session_id = %id,
         content_len = payload.content.len(),
         attachment_count = payload.attachments.len(),
         "==> send_session_message CALLED"
     );
-    let session_manager = &state.agent_session_manager;
+    send_desktop_session_message_impl(state, id, payload, DesktopQueuePosition::Back).await
+}
 
-    let session = session_manager
-        .get_session_by_id(&state.owner_id, id)
-        .await
-        .ok_or_else(|| "Session not found".to_string())?;
-    tracing::info!(session_id = %id, "Got session, acquiring lock...");
+#[tauri::command]
+pub async fn sheer_session_message(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: SendSessionMessageRequest,
+) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
+    tracing::info!(
+        session_id = %id,
+        content_len = payload.content.len(),
+        attachment_count = payload.attachments.len(),
+        "==> sheer_session_message CALLED"
+    );
+    send_desktop_session_message_impl(state, id, payload, DesktopQueuePosition::Front).await
+}
 
-    // Get or create a thread if none exists
-    let (thread_id, created_thread) = {
-        let lock_result =
-            tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
-        if lock_result.is_err() {
-            tracing::error!("FIRST session.lock() TIMEOUT - session_id={}", id);
-            return Err("Session lock timeout".to_string());
-        }
-        let mut sess = lock_result.unwrap();
-        tracing::info!("FIRST session lock acquired");
-        let tid = sess
-            .active_thread
-            .or_else(|| sess.threads.keys().copied().next());
-
-        match tid {
-            Some(id) => (id, false),
-            None => {
-                let new_thread = sess.create_thread();
-                tracing::debug!("Created new thread {} for session", new_thread.id);
-                (new_thread.id, true)
-            }
-        }
-    };
-
-    if created_thread {
-        session_manager
-            .persist_session_snapshot(&state.owner_id, &session)
-            .await;
-    }
-
-    let _ = reconcile_desktop_thread_state(&state, id, &session, thread_id).await?;
-
-    let sess_result = tokio::time::timeout(std::time::Duration::from_secs(5), session.lock()).await;
-    if sess_result.is_err() {
-        tracing::error!("SECOND session.lock() TIMEOUT - thread_id={}", thread_id);
-        return Err("Session lock timeout".to_string());
-    }
-    let mut sess = sess_result.unwrap();
-    let thread = sess
-        .threads
-        .get_mut(&thread_id)
-        .ok_or_else(|| "Thread not found".to_string())?;
-    tracing::info!(thread_id = %thread_id, state = ?thread.state, "Thread state checked, matching...");
-
-    tracing::info!(thread_id = %thread_id, "About to match thread state");
-    let title_input = attachment_title_summary(&payload.content, &payload.attachments);
-    let title_context = build_session_title_context(thread, &title_input);
-    let dispatch_plan =
-        plan_desktop_message_dispatch(thread, &payload.content, has_attachments, Utc::now())?;
-    let requested_mode = requested_task_mode(payload.mode.as_deref());
-    drop(sess);
-
-    match dispatch_plan {
-        DesktopDispatchPlan::QueueOnly => {
-            let active_thread_task = if let Some(mode) = requested_mode {
-                if let Some(task) = state.task_runtime.toggle_mode(thread_id, mode).await {
-                    Some(task)
-                } else {
-                    state.task_runtime.get_task(thread_id).await
-                }
-            } else {
-                state.task_runtime.get_task(thread_id).await
-            };
-            let active_thread_task_id = active_thread_task.as_ref().map(|task| task.id);
-            let request_id =
-                mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
-            spawn_session_title_summary(
-                &state,
-                &state.owner_id,
-                id,
-                thread_id,
-                request_id,
-                title_context.clone(),
-                Arc::clone(&session),
-            );
-            Ok(steward_core::ipc::SendSessionMessageResponse {
-                accepted: true,
-                session_id: id,
-                active_thread_id: thread_id,
-                active_thread_task_id,
-                active_thread_task,
-            })
-        }
-        DesktopDispatchPlan::InjectOnly => {
-            tracing::info!(thread_id = %thread_id, "ENTERED Idle/Interrupted branch, injecting message");
-            let attachments =
-                build_incoming_desktop_attachments(&state, &payload.attachments).await?;
-            let msg = IncomingMessage::new("desktop", state.owner_id.clone(), payload.content)
-                .with_thread(thread_id.to_string())
-                .with_metadata(desktop_message_metadata(id, thread_id, &state.owner_id))
-                .with_attachments(attachments);
-            tracing::info!(message_id = %msg.id, thread_id = %thread_id, "Injecting message into agent stream");
-            state
-                .message_inject_tx
-                .send(msg.clone())
-                .await
-                .map_err(|e| format!("Failed to inject message: {}", e))?;
-            tracing::info!(thread_id = %thread_id, "Message injected successfully");
-            let active_thread_task = if let Some(mode) = requested_mode {
-                let _ = state.task_runtime.ensure_task(&msg, thread_id).await;
-                state
-                    .task_runtime
-                    .toggle_mode(thread_id, mode)
-                    .await
-                    .ok_or_else(|| "Failed to update task mode".to_string())?
-            } else {
-                state.task_runtime.ensure_task(&msg, thread_id).await
-            };
-            let active_thread_task_id = Some(active_thread_task.id);
-            let request_id =
-                mark_session_title_pending(&state, &state.owner_id, id, thread_id, &session).await;
-            spawn_session_title_summary(
-                &state,
-                &state.owner_id,
-                id,
-                thread_id,
-                request_id,
-                title_context,
-                Arc::clone(&session),
-            );
-
-            tracing::info!(thread_id = %thread_id, "==> send_session_message RETURNING OK");
-            Ok(steward_core::ipc::SendSessionMessageResponse {
-                accepted: true,
-                session_id: id,
-                active_thread_id: thread_id,
-                active_thread_task_id,
-                active_thread_task: Some(active_thread_task),
-            })
-        }
-    }
+#[tauri::command]
+pub async fn queue_session_message(
+    state: State<'_, AppState>,
+    id: Uuid,
+    payload: SendSessionMessageRequest,
+) -> Result<steward_core::ipc::SendSessionMessageResponse, String> {
+    tracing::info!(
+        session_id = %id,
+        content_len = payload.content.len(),
+        attachment_count = payload.attachments.len(),
+        "==> queue_session_message CALLED"
+    );
+    send_desktop_session_message_impl(state, id, payload, DesktopQueuePosition::Back).await
 }
 
 #[tauri::command]
@@ -3011,18 +3241,23 @@ mod db_message_tests {
     use chrono::Utc;
 
     use super::{
-        DesktopDispatchPlan, build_session_title_context, build_thread_messages,
-        desktop_message_metadata, parse_generated_session_title, plan_desktop_message_dispatch,
+        DesktopDispatchPlan, DesktopQueuePosition, build_session_runtime_status_response,
+        build_session_title_context, build_thread_messages, desktop_message_metadata,
+        parse_generated_session_title, plan_desktop_message_dispatch, queue_desktop_message,
     };
     use steward_core::agent::session::{Thread, ThreadState};
+    use steward_core::channels::IncomingAttachment;
+    use steward_core::task_runtime::{
+        TaskCurrentStep, TaskMode, TaskRecord, TaskRoute, TaskStatus,
+    };
     use uuid::Uuid;
 
     #[test]
     fn idle_desktop_dispatch_does_not_queue_message() {
-        let mut thread = Thread::new(Uuid::new_v4());
+        let thread = Thread::new(Uuid::new_v4());
         assert_eq!(thread.state, ThreadState::Idle);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello", false, Utc::now()).unwrap();
+        let plan = plan_desktop_message_dispatch(&thread, DesktopQueuePosition::Back).unwrap();
 
         assert!(matches!(plan, DesktopDispatchPlan::InjectOnly));
         assert!(thread.pending_messages.is_empty());
@@ -3035,29 +3270,45 @@ mod db_message_tests {
         thread.start_turn("working");
         assert_eq!(thread.state, ThreadState::Processing);
 
-        let plan = plan_desktop_message_dispatch(&mut thread, "hello", false, Utc::now()).unwrap();
+        let plan = plan_desktop_message_dispatch(&thread, DesktopQueuePosition::Back).unwrap();
 
-        assert!(matches!(plan, DesktopDispatchPlan::QueueOnly));
-        assert_eq!(thread.pending_messages.len(), 1);
-        assert_eq!(
-            thread
-                .pending_messages
-                .front()
-                .map(|msg| msg.content.as_str()),
-            Some("hello")
-        );
+        assert!(matches!(
+            plan,
+            DesktopDispatchPlan::QueueOnly(DesktopQueuePosition::Back)
+        ));
     }
 
     #[test]
-    fn processing_desktop_dispatch_rejects_attachments() {
+    fn queue_desktop_message_supports_front_and_back() {
         let mut thread = Thread::new(Uuid::new_v4());
-        thread.start_turn("working");
+        let attachments: Vec<IncomingAttachment> = Vec::new();
 
-        let error =
-            plan_desktop_message_dispatch(&mut thread, "hello", true, Utc::now()).unwrap_err();
+        queue_desktop_message(
+            &mut thread,
+            "queued",
+            chrono::Utc::now(),
+            &attachments,
+            DesktopQueuePosition::Back,
+        )
+        .unwrap();
+        queue_desktop_message(
+            &mut thread,
+            "sheer",
+            chrono::Utc::now(),
+            &attachments,
+            DesktopQueuePosition::Front,
+        )
+        .unwrap();
 
-        assert!(error.contains("attachments"));
-        assert!(thread.pending_messages.is_empty());
+        assert_eq!(thread.pending_messages.len(), 2);
+        assert_eq!(
+            thread.pending_messages.pop_front().map(|msg| msg.content),
+            Some("sheer".to_string())
+        );
+        assert_eq!(
+            thread.pending_messages.pop_front().map(|msg| msg.content),
+            Some("queued".to_string())
+        );
     }
 
     #[test]
@@ -3197,6 +3448,64 @@ mod db_message_tests {
                 .and_then(|value| value.as_str()),
             Some(thread_id_text.as_str())
         );
+    }
+
+    #[test]
+    fn session_runtime_status_reports_raw_thread_state() {
+        let session_id = Uuid::new_v4();
+        let mut thread = Thread::new(session_id);
+        thread.state = ThreadState::Idle;
+        thread.queue_message("follow-up".to_string(), Utc::now());
+
+        let task = TaskRecord {
+            id: thread.id,
+            correlation_id: thread.id.to_string(),
+            template_id: "legacy:session-thread".to_string(),
+            mode: TaskMode::Ask,
+            status: TaskStatus::Running,
+            title: "hello".to_string(),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            current_step: Some(TaskCurrentStep {
+                id: "run".to_string(),
+                kind: "log".to_string(),
+                title: "Running".to_string(),
+            }),
+            pending_approval: None,
+            route: TaskRoute::default(),
+            last_error: None,
+            result_metadata: None,
+        };
+
+        let status = build_session_runtime_status_response(
+            session_id,
+            Some(thread.id),
+            Some(&thread),
+            Some(&task),
+        );
+
+        assert_eq!(status.session_id, session_id);
+        assert_eq!(status.active_thread_id, Some(thread.id));
+        assert_eq!(status.thread_state.as_deref(), Some("idle"));
+        assert_eq!(status.task_status.as_deref(), Some("running"));
+        assert_eq!(status.queued_message_count, 1);
+        assert!(!status.has_pending_approval);
+        assert!(!status.has_pending_auth);
+    }
+
+    #[test]
+    fn session_runtime_status_handles_sessions_without_threads() {
+        let session_id = Uuid::new_v4();
+
+        let status = build_session_runtime_status_response(session_id, None, None, None);
+
+        assert_eq!(status.session_id, session_id);
+        assert_eq!(status.active_thread_id, None);
+        assert_eq!(status.thread_state, None);
+        assert_eq!(status.task_status, None);
+        assert_eq!(status.queued_message_count, 0);
+        assert!(!status.has_pending_approval);
+        assert!(!status.has_pending_auth);
     }
 }
 

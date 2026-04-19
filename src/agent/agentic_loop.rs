@@ -11,7 +11,8 @@ use std::borrow::Cow;
 use crate::agent::session::PendingApproval;
 use crate::error::Error;
 use crate::llm::{
-    ChatMessage, FinishReason, Reasoning, ReasoningContext, RespondResult, ResponseMetadata,
+    ChatMessage, ContentPart, FinishReason, Reasoning, ReasoningContext, RespondResult,
+    ResponseMetadata,
 };
 
 /// Signal from the delegate indicating how the loop should proceed.
@@ -21,7 +22,10 @@ pub enum LoopSignal {
     /// Stop the loop gracefully.
     Stop,
     /// Inject a user message into context and continue.
-    InjectMessage(String),
+    InjectMessage {
+        content: String,
+        content_parts: Vec<ContentPart>,
+    },
 }
 
 /// Outcome of a text response from the LLM.
@@ -150,8 +154,17 @@ pub async fn run_agentic_loop(
         match delegate.check_signals().await {
             LoopSignal::Continue => {}
             LoopSignal::Stop => return Ok(LoopOutcome::Stopped),
-            LoopSignal::InjectMessage(msg) => {
-                reason_ctx.messages.push(ChatMessage::user(&msg));
+            LoopSignal::InjectMessage {
+                content,
+                content_parts,
+            } => {
+                if content_parts.is_empty() {
+                    reason_ctx.messages.push(ChatMessage::user(content));
+                } else {
+                    reason_ctx
+                        .messages
+                        .push(ChatMessage::user_with_parts(content, content_parts));
+                }
             }
         }
 
@@ -503,8 +516,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_inject_message_adds_user_message() {
-        let delegate = MockDelegate::new(vec![text_output("Got it")])
-            .with_signal(LoopSignal::InjectMessage("injected prompt".to_string()));
+        let delegate =
+            MockDelegate::new(vec![text_output("Got it")]).with_signal(LoopSignal::InjectMessage {
+                content: "injected prompt".to_string(),
+                content_parts: Vec::new(),
+            });
         let reasoning = stub_reasoning();
         let mut ctx = ReasoningContext::new();
         let config = AgenticLoopConfig::default();

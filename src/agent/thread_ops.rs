@@ -384,15 +384,6 @@ impl Agent {
                     // Re-check state under lock — the turn may have completed
                     // between the snapshot read and this mutable lock acquisition.
                     if thread.state == ThreadState::Processing {
-                        // Reject messages with attachments — the queue stores
-                        // text only, so attachments would be silently dropped.
-                        if !message.attachments.is_empty() {
-                            return Ok(SubmissionResult::error(
-                                "Cannot queue messages with attachments while a turn is processing. \
-                                 Please resend after the current turn completes.",
-                            ));
-                        }
-
                         // Run the same safety checks that the normal path applies
                         // (validation, policy, secret scan) so that blocked content
                         // is never stored in pending_messages or serialized.
@@ -424,7 +415,17 @@ impl Agent {
                             return Ok(SubmissionResult::error(warning));
                         }
 
-                        if !thread.queue_message(content.to_string(), message.received_at) {
+                        let queued_attachments = message
+                            .attachments
+                            .iter()
+                            .map(crate::agent::session::PendingUserAttachment::from_incoming_attachment)
+                            .collect();
+
+                        if !thread.queue_message_with_attachments(
+                            content.to_string(),
+                            message.received_at,
+                            queued_attachments,
+                        ) {
                             return Ok(SubmissionResult::error(format!(
                                 "Message queue full ({MAX_PENDING_MESSAGES}). Wait for the current turn to complete.",
                             )));
