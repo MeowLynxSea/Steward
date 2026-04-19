@@ -34,7 +34,7 @@ function allowlistDisplayNameFromPath(path: string): string {
 }
 
 function supportsWorkspaceChanges(allowlist: Pick<WorkspaceAllowlistDetail["summary"]["allowlist"], "mount_kind">) {
-  return allowlist.mount_kind !== "skills";
+  return allowlist.mount_kind === "user";
 }
 
 function errorMessage(error: unknown, fallback: string): string {

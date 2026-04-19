@@ -53,8 +53,8 @@
     return false;
   }
 
-  function isSkillsAllowlist(group: WorkspaceChangeGroup): boolean {
-    return group.allowlist.summary.allowlist.mount_kind === "skills";
+  function supportsChangeTracking(group: WorkspaceChangeGroup): boolean {
+    return group.allowlist.summary.allowlist.mount_kind === "user";
   }
   type WorkspaceTab = "files" | "changes";
 
@@ -991,7 +991,7 @@
                     >
                       <Check size={14} strokeWidth={2.5} />
                     </button>
-                    {#if !isSkillsAllowlist(group)}
+                    {#if supportsChangeTracking(group)}
                     <button
                       class="header-icon-btn"
                       onclick={() => {

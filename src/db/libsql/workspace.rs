@@ -170,8 +170,12 @@ fn fixed_mount_kind_for_allowlist_id(allowlist_id: Uuid) -> Option<WorkspaceMoun
     }
 }
 
+fn mount_kind_supports_tracking(mount_kind: WorkspaceMountKind) -> bool {
+    mount_kind == WorkspaceMountKind::User
+}
+
 fn allowlist_supports_tracking(allowlist: &WorkspaceAllowlist) -> bool {
-    allowlist.mount_kind != WorkspaceMountKind::Skills
+    mount_kind_supports_tracking(allowlist.mount_kind)
 }
 
 fn scope_matches(path: &str, scope: Option<&str>) -> bool {
@@ -2206,7 +2210,7 @@ impl WorkspaceStore for LibSqlBackend {
                 })?;
                 existing_id
             };
-            if request.mount_kind != WorkspaceMountKind::Skills {
+            if mount_kind_supports_tracking(request.mount_kind) {
                 self.ensure_allowlist_initialized(&request.user_id, allowlist_id)
                     .await?;
             }
@@ -2233,7 +2237,7 @@ impl WorkspaceStore for LibSqlBackend {
         .map_err(|e| WorkspaceError::SearchFailed {
             reason: format!("allowlist insert failed: {e}"),
         })?;
-        if request.mount_kind != WorkspaceMountKind::Skills {
+        if mount_kind_supports_tracking(request.mount_kind) {
             self.ensure_allowlist_initialized(&request.user_id, requested_allowlist_id)
                 .await?;
         }
@@ -3931,9 +3935,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_default_allowlist_supports_tracking_state() {
+    async fn test_default_allowlist_rejects_diff_and_history() {
         let (backend, dir) = setup_backend().await;
-        let allowlist_root = dir.path().join("default-tracked-root");
+        let allowlist_root = dir.path().join("default-no-history-root");
         std::fs::create_dir_all(&allowlist_root).expect("create default root");
 
         let allowlist = backend
@@ -3965,19 +3969,32 @@ mod tests {
             detail.summary.allowlist.mount_kind,
             WorkspaceMountKind::Default
         );
-        assert!(detail.baseline_revision_id.is_some());
-        assert!(detail.head_revision_id.is_some());
+        assert_eq!(detail.open_change_count, 0);
+        assert_eq!(detail.summary.dirty_count, 0);
+        assert_eq!(detail.summary.conflict_count, 0);
+        assert_eq!(detail.summary.pending_delete_count, 0);
+        assert!(detail.baseline_revision_id.is_none());
+        assert!(detail.head_revision_id.is_none());
+        assert!(detail.checkpoints.is_empty());
 
-        let diff = backend
+        let diff_err = backend
             .diff_workspace_allowlist("default", allowlist.allowlist.id, None)
             .await
-            .expect("diff default allowlist");
-        assert!(
-            diff.entries
-                .iter()
-                .any(|entry| entry.path == "notes/welcome.md"),
-            "default allowlist should expose tracked changes"
-        );
+            .expect_err("default allowlist should not expose diff");
+        assert!(diff_err.to_string().contains("Default mounts"));
+
+        let history_err = backend
+            .list_workspace_allowlist_history(&WorkspaceAllowlistHistoryRequest {
+                user_id: "default".to_string(),
+                allowlist_id: allowlist.allowlist.id,
+                scope_path: None,
+                limit: 20,
+                since: None,
+                include_checkpoints: true,
+            })
+            .await
+            .expect_err("default allowlist should not expose history");
+        assert!(history_err.to_string().contains("Default mounts"));
     }
 
     #[tokio::test]
