@@ -898,42 +898,13 @@ fn extract_json_object_slice(raw: &str) -> Option<&str> {
     (start < end).then_some(&raw[start..=end])
 }
 
-fn is_cjk_char(ch: char) -> bool {
-    matches!(
-        ch as u32,
-        0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF
-    )
-}
-
 fn sanitize_generated_title(raw: &str) -> Option<String> {
     let trimmed = raw.trim().trim_matches(|ch| matches!(ch, '"' | '\'' | '`'));
     if trimmed.is_empty() {
         return None;
     }
 
-    let compact: String = trimmed
-        .chars()
-        .filter(|ch| !ch.is_whitespace() && !matches!(ch, '{' | '}' | '[' | ']' | ':' | ','))
-        .collect();
-
-    let looks_like_refusal = ["抱歉", "不能", "无法", "sorry", "cannot", "can't"]
-        .iter()
-        .any(|needle| compact.to_lowercase().contains(needle));
-    if looks_like_refusal {
-        return None;
-    }
-
-    let char_count = compact.chars().count();
-    if char_count < 4 {
-        return None;
-    }
-
-    let cjk_count = compact.chars().filter(|ch| is_cjk_char(*ch)).count();
-    if cjk_count < 2 {
-        return None;
-    }
-
-    Some(compact.chars().take(6).collect())
+    Some(trimmed.to_string())
 }
 
 fn parse_generated_session_title(raw: &str) -> Option<GeneratedSessionTitle> {
@@ -3098,9 +3069,21 @@ mod db_message_tests {
     }
 
     #[test]
-    fn parse_generated_session_title_rejects_refusal_like_output() {
-        let parsed = parse_generated_session_title(r#"{"emoji":"💬","title":"抱歉我不能"}"#);
-        assert!(parsed.is_none());
+    fn parse_generated_session_title_preserves_longer_title() {
+        let parsed = parse_generated_session_title(
+            r#"{"emoji":"💬","title":"这是一个超过六个字的会话标题"}"#,
+        )
+        .expect("longer title JSON should parse");
+        assert_eq!(parsed.emoji, "💬");
+        assert_eq!(parsed.title, "这是一个超过六个字的会话标题");
+    }
+
+    #[test]
+    fn parse_generated_session_title_preserves_shorter_title() {
+        let parsed = parse_generated_session_title(r#"{"emoji":"💬","title":"短标题"}"#)
+            .expect("shorter title JSON should parse");
+        assert_eq!(parsed.emoji, "💬");
+        assert_eq!(parsed.title, "短标题");
     }
 
     #[test]
