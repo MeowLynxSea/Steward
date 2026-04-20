@@ -4,6 +4,7 @@
 //! `Arc<dyn LlmProvider>` without changing any of the agent, reasoning, or tool code.
 
 use crate::llm::config::CacheRetention;
+use crate::llm::provider::ModelMetadata;
 use async_trait::async_trait;
 use futures::StreamExt;
 use rig::OneOrMany;
@@ -51,6 +52,9 @@ pub struct RigAdapter<M: CompletionModel> {
     unsupported_params: HashSet<String>,
     /// Whether tool schemas should be rewritten into OpenAI-style strict mode.
     strict_tool_schema: bool,
+    /// Manually specified context window size in tokens.
+    /// When `None`, the value is fetched from the provider's model metadata.
+    context_length: Option<u32>,
 }
 
 impl<M: CompletionModel> RigAdapter<M> {
@@ -67,6 +71,7 @@ impl<M: CompletionModel> RigAdapter<M> {
             cache_retention: CacheRetention::None,
             unsupported_params: HashSet::new(),
             strict_tool_schema: false,
+            context_length: None,
         }
     }
 
@@ -123,6 +128,14 @@ impl<M: CompletionModel> RigAdapter<M> {
     /// Strip unsupported fields from a `ToolCompletionRequest` in place.
     fn strip_unsupported_tool_params(&self, req: &mut ToolCompletionRequest) {
         strip_unsupported_tool_params(&self.unsupported_params, req);
+    }
+
+    /// Set a manual context window size in tokens.
+    ///
+    /// When set, this value takes precedence over the provider's model metadata.
+    pub fn with_context_length(mut self, context_length: Option<u32>) -> Self {
+        self.context_length = context_length;
+        self
     }
 }
 
@@ -936,6 +949,13 @@ where
             reason: "Runtime model switching not supported for rig-core providers. \
                      Restart with a different model configured."
                 .to_string(),
+        })
+    }
+
+    async fn model_metadata(&self) -> Result<ModelMetadata, LlmError> {
+        Ok(ModelMetadata {
+            id: self.model_name.clone(),
+            context_length: self.context_length,
         })
     }
 }

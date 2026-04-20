@@ -33,6 +33,7 @@ pub struct OpenAiCodexProvider {
     model: String,
     api_base_url: String,
     auth: RwLock<AuthState>,
+    context_length: Option<u32>,
 }
 
 impl OpenAiCodexProvider {
@@ -45,6 +46,7 @@ impl OpenAiCodexProvider {
         api_base_url: &str,
         token: &str,
         request_timeout_secs: u64,
+        context_length: Option<u32>,
     ) -> Result<Self, LlmError> {
         let account_id = extract_account_id(token)?;
         Ok(Self {
@@ -61,6 +63,7 @@ impl OpenAiCodexProvider {
                 token: token.to_string(),
                 account_id,
             }),
+            context_length,
         })
     }
 
@@ -331,10 +334,10 @@ impl LlmProvider for OpenAiCodexProvider {
         Ok(vec![])
     }
 
-    async fn model_metadata(&self) -> Result<ModelMetadata, LlmError> {
+        async fn model_metadata(&self) -> Result<ModelMetadata, LlmError> {
         Ok(ModelMetadata {
             id: self.model.clone(),
-            context_length: None,
+            context_length: self.context_length,
         })
     }
 
@@ -1019,6 +1022,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             "https://chatgpt.com/backend-api/codex",
             &jwt,
             300,
+            None,
         );
         assert!(provider.is_ok());
         let provider = provider.unwrap();
@@ -1035,6 +1039,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             "https://chatgpt.com/backend-api/codex",
             &jwt1,
             300,
+            None,
         )
         .unwrap();
 
@@ -1055,6 +1060,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             "https://chatgpt.com/backend-api/codex",
             &jwt,
             300,
+            None,
         )
         .unwrap();
 
@@ -1085,6 +1091,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             "https://chatgpt.com/backend-api/codex",
             &jwt,
             300,
+            None,
         )
         .unwrap();
 

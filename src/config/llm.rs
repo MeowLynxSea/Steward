@@ -178,6 +178,7 @@ fn resolve_registry_provider(
         cache_retention: CacheRetention::default(),
         unsupported_params: def.unsupported_params.clone(),
         api_format,
+        context_length: backend.context_length,
     })
 }
 
@@ -209,6 +210,7 @@ fn resolve_openai_codex(backend: &BackendInstance) -> Result<OpenAiCodexConfig, 
             "OPENAI_CODEX_TOKEN_REFRESH_MARGIN_SECS",
             300,
         )?,
+        context_length: backend.context_length,
     })
 }
 
@@ -233,6 +235,7 @@ mod tests {
             base_url: None,
             model: model.to_string(),
             request_format: request_format.map(str::to_string),
+            context_length: None,
         }
     }
 

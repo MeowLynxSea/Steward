@@ -79,6 +79,9 @@ pub struct RegistryProviderConfig {
     pub cache_retention: CacheRetention,
     pub unsupported_params: Vec<String>,
     pub api_format: OpenAiApiFormat,
+    /// Manually specified context window size in tokens.
+    /// When `None`, the value is fetched from the provider's model metadata.
+    pub context_length: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,6 +92,9 @@ pub struct OpenAiCodexConfig {
     pub client_id: String,
     pub session_path: PathBuf,
     pub token_refresh_margin_secs: u64,
+    /// Manually specified context window size in tokens.
+    /// When `None`, the value is fetched from the provider's model metadata.
+    pub context_length: Option<u32>,
 }
 
 impl Default for OpenAiCodexConfig {
@@ -100,6 +106,7 @@ impl Default for OpenAiCodexConfig {
             client_id: "app_EMoamEEZ73f0CkXaXp7hrann".to_string(),
             session_path: steward_base_dir().join("openai_codex_session.json"),
             token_refresh_margin_secs: 300,
+            context_length: None,
         }
     }
 }

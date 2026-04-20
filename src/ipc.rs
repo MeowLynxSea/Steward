@@ -154,6 +154,30 @@ pub struct SessionDetailResponse {
     pub active_thread_id: Uuid,
     pub thread_messages: Vec<ThreadMessageResponse>,
     pub active_thread_task: Option<crate::task_runtime::TaskRecord>,
+    pub context_stats: Option<ContextStatsResponse>,
+    pub model_context_length: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ContextStatsResponse {
+    /// Estimated tokens used by the system prompt.
+    pub system_prompt_tokens: u32,
+    /// Estimated tokens used by MCP resources.
+    pub mcp_tokens: u32,
+    /// Estimated tokens used by custom agents / persona.
+    pub custom_agents_tokens: u32,
+    /// Estimated tokens used by workspace memory.
+    pub memory_tokens: u32,
+    /// Estimated tokens used by skills.
+    pub skills_tokens: u32,
+    /// Estimated tokens used by the message history.
+    pub messages_tokens: u32,
+    /// Tokens reserved for the compact buffer (future compression feature).
+    pub compact_buffer_tokens: u32,
+    /// Estimated tokens in the current draft message.
+    pub draft_tokens: u32,
+    /// Free space remaining before hitting the context limit.
+    pub free_tokens: i32,
 }
 
 #[derive(Debug, Serialize)]

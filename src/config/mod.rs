@@ -643,6 +643,7 @@ mod tests {
                 base_url: None,
                 model: "gpt-4o".to_string(),
                 request_format: Some("chat_completions".to_string()),
+                context_length: None,
             }],
             ..Default::default()
         };
@@ -685,6 +686,7 @@ mod tests {
                 base_url: None,
                 model: "gpt-5-mini".to_string(),
                 request_format: Some("chat_completions".to_string()),
+                context_length: None,
             }],
             ..Default::default()
         };

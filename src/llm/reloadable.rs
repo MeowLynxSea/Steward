@@ -167,4 +167,9 @@ impl RuntimeLlmReloader {
         let settings = Settings::from_db_map(&map);
         self.reload_from_settings(&settings).await
     }
+
+    /// Returns the currently active LLM provider for context length queries.
+    pub fn current(&self) -> Arc<dyn LlmProvider> {
+        self.state.provider(ReloadableSlot::Primary)
+    }
 }

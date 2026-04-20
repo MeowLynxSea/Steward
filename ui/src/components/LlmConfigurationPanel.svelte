@@ -141,6 +141,7 @@
   let formBaseUrl = $state("");
   let formModel = $state("");
   let formRequestFormat = $state("chat_completions");
+  let formContextLength = $state("");
 
   // Onboarding state: local form values backed by a single Backend entry.
   // All onboarding input writes to these locals; on submit we upsert the Backend.
@@ -174,6 +175,7 @@
     formBaseUrl = "";
     formModel = "";
     formRequestFormat = "chat_completions";
+    formContextLength = "";
     showBackendForm = true;
   }
 
@@ -184,6 +186,7 @@
     formBaseUrl = backend.base_url ?? "";
     formModel = backend.model;
     formRequestFormat = backend.request_format ?? "chat_completions";
+    formContextLength = backend.context_length?.toString() ?? "";
     showBackendForm = true;
   }
 
@@ -207,7 +210,13 @@
       model: formModel.trim(),
       api_key: formApiKey.trim() || null,
       base_url: formBaseUrl.trim() || null,
-      request_format: provider.supportsFormat ? formRequestFormat : null
+      request_format: provider.supportsFormat ? formRequestFormat : null,
+      context_length: (() => {
+        const val = formContextLength;
+        if (val === null || val === undefined || val === "") return null;
+        const num = typeof val === "string" ? parseInt(val.trim(), 10) : parseInt(String(val), 10);
+        return isNaN(num) ? null : num;
+      })(),
     };
 
     if (editingBackendId === null) {
@@ -256,7 +265,8 @@
       model,
       api_key: onboardingApiKey.trim() || null,
       base_url: onboardingBaseUrl.trim() || null,
-      request_format: provider.supportsFormat ? onboardingRequestFormat : null
+      request_format: provider.supportsFormat ? onboardingRequestFormat : null,
+      context_length: null,
     };
     settingsStore.addBackend(newBackend);
     settingsStore.setMajorBackend(newBackend.id);
@@ -392,6 +402,16 @@
               type="text"
               placeholder={getSelectedProviderPreset()?.defaultModel ?? ""}
               bind:value={formModel}
+            />
+          </label>
+
+          <label class="field">
+            <span>Context Length</span>
+            <input
+              class="field-input"
+              type="number"
+              placeholder="Auto (from provider)"
+              bind:value={formContextLength}
             />
           </label>
 

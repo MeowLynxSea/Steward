@@ -34,6 +34,10 @@ pub struct BackendInstance {
     /// OpenAI-only request format (`chat_completions` or `responses`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_format: Option<String>,
+    /// Manually specified context window size in tokens.
+    /// When `None`, the value is fetched from the provider's model metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<u32>,
 }
 
 /// User settings persisted to disk and DB.
@@ -805,6 +809,7 @@ mod tests {
                 base_url: None,
                 model: "gpt-5-mini".to_string(),
                 request_format: Some("chat_completions".to_string()),
+                context_length: None,
             }],
             ..Default::default()
         };
@@ -840,6 +845,7 @@ mod tests {
                 base_url: Some("https://api.anthropic.com".to_string()),
                 model: "claude-sonnet-4-20250514".to_string(),
                 request_format: None,
+                context_length: None,
             }],
             major_backend_id: Some("major".to_string()),
             ..Default::default()

@@ -207,7 +207,8 @@ fn create_anthropic_from_registry(
         RigAdapter::new(client.completion_model(&config.model), &config.model)
             .with_cache_retention(config.cache_retention)
             .with_strict_tool_schema(false)
-            .with_unsupported_params(config.unsupported_params.clone()),
+            .with_unsupported_params(config.unsupported_params.clone())
+            .with_context_length(config.context_length),
     ))
 }
 
@@ -229,7 +230,8 @@ fn create_ollama_from_registry(
     Ok(Arc::new(
         RigAdapter::new(client.completion_model(&config.model), &config.model)
             .with_strict_tool_schema(false)
-            .with_unsupported_params(config.unsupported_params.clone()),
+            .with_unsupported_params(config.unsupported_params.clone())
+            .with_context_length(config.context_length),
     ))
 }
 
@@ -252,6 +254,7 @@ async fn create_openai_codex_provider(
         &codex.api_base_url,
         token.expose_secret(),
         config.request_timeout_secs,
+        codex.context_length,
     )?);
 
     Ok(Arc::new(TokenRefreshingProvider::new(
@@ -326,6 +329,7 @@ async fn create_provider_for_backend_instance(
         } else {
             OpenAiApiFormat::ChatCompletions
         },
+        context_length: backend.context_length,
     };
 
     create_registry_provider(&config)

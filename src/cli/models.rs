@@ -330,6 +330,7 @@ fn ensure_backend(
         base_url: None,
         model: default_model,
         request_format: (provider == "openai").then(|| "chat_completions".to_string()),
+        context_length: None,
     };
     let id = backend.id.clone();
     settings.backends.push(backend);

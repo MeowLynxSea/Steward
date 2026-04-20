@@ -15,9 +15,11 @@
     Sparkles,
     Music4,
     Paperclip,
-    X
+    X,
+    Circle
   } from "lucide-svelte";
   import type {
+    ContextStats,
     ReflectionDetail,
     ReflectionStatus,
     SessionDetail,
@@ -128,6 +130,7 @@
   let reflectionPanels = $state<Record<string, ReflectionPanelState>>({});
   let imagesExpanded = $state(false);
   let showYoloRiskModal = $state(false);
+  let showContextStatsModal = $state(false);
   let animatedAssistantId = $state<string | null>(null);
   let animatedAssistantText = $state("");
   let typingTimer: ReturnType<typeof setTimeout> | null = null;
@@ -146,6 +149,17 @@
   const hasStreamingContent = $derived(
     streaming.images.length > 0
   );
+  const contextStats = $derived(session?.context_stats ?? null);
+  const contextUsagePercent = $derived.by(() => {
+    const stats = contextStats;
+    const modelCtx = session?.model_context_length;
+    if (!stats || !modelCtx) return 0;
+    // Use model context length as total; messages_tokens is the estimated usage
+    const total = modelCtx;
+    const used = stats.messages_tokens + stats.compact_buffer_tokens;
+    if (total === 0) return 0;
+    return Math.round((used / total) * 100);
+  });
   const showEmptyLayout = $derived(!loading && emptyLayout);
   const isYoloMode = $derived(messageMode === "yolo");
   const canSubmit = $derived(draftMessage.trim().length > 0 || composerAttachments.length > 0);
@@ -729,7 +743,7 @@
         return true;
       }
       const hit = document.elementFromPoint(candidateX, candidateY);
-      return !!hit && (hit === inputBoxRef || inputBoxRef.contains(hit));
+      return !!hit && (hit === inputBoxRef || (inputBoxRef !== null && inputBoxRef.contains(hit)));
     });
   }
 
@@ -1689,6 +1703,34 @@
           </div>
 
           <div class="input-actions-right">
+            {#if contextStats}
+              <button
+                class="context-ring-btn"
+                type="button"
+                onclick={() => showContextStatsModal = true}
+                title="上下文统计"
+                aria-label="上下文统计"
+              >
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <!-- Background circle -->
+                  <circle cx="9" cy="9" r="7" stroke="var(--border)" stroke-width="2" fill="none" />
+                  <!-- Progress arc: circumference = 2 * pi * 7 ≈ 43.98 -->
+                  <circle
+                    cx="9"
+                    cy="9"
+                    r="7"
+                    stroke="var(--accent)"
+                    stroke-width="2"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-dasharray="43.98"
+                    stroke-dashoffset={43.98 * (1 - contextUsagePercent / 100)}
+                    transform="rotate(-90 9 9)"
+                  />
+                </svg>
+                <span class="context-ring-label">{contextUsagePercent}%</span>
+              </button>
+            {/if}
             {#if isBusySession && canSubmit}
               <button
                 class="send-btn send-btn-stop active"
@@ -1812,6 +1854,98 @@
           <button class="button button-primary mode-action-btn" type="button" onclick={confirmYoloMode}>
             继续开启
           </button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showContextStatsModal && contextStats}
+    <div
+      class="mode-modal-backdrop"
+      role="presentation"
+      tabindex="-1"
+      transition:fade={{ duration: 140 }}
+      onclick={() => showContextStatsModal = false}
+      onkeydown={(event) => {
+        if (event.key === "Escape" || event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          showContextStatsModal = false;
+        }
+      }}
+    >
+      <div
+        class="mode-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="上下文统计"
+        tabindex="-1"
+        transition:fly={{ y: 18, duration: 180 }}
+        onclick={(event) => event.stopPropagation()}
+        onkeydown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") {
+            event.preventDefault();
+            showContextStatsModal = false;
+          }
+        }}
+      >
+        <div class="mode-modal-head">
+          <div>
+            <p class="eyebrow">Context</p>
+            <h3>上下文统计</h3>
+          </div>
+          <button
+            class="mode-modal-close"
+            type="button"
+            aria-label="关闭"
+            onclick={() => showContextStatsModal = false}
+          >
+            <X size={16} strokeWidth={2.2} />
+          </button>
+        </div>
+
+        <div class="mode-modal-body">
+          <div class="context-stats-summary">
+            <span>模型上下文窗口: <strong>{session?.model_context_length?.toLocaleString() ?? 'N/A'} tokens</strong></span>
+          </div>
+          <div class="context-stats-grid">
+            <div class="context-stat-row">
+              <span class="context-stat-label">System Prompt</span>
+              <span class="context-stat-value">{contextStats.system_prompt_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">MCP</span>
+              <span class="context-stat-value">{contextStats.mcp_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Custom Agents</span>
+              <span class="context-stat-value">{contextStats.custom_agents_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Memory</span>
+              <span class="context-stat-value">{contextStats.memory_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Skills</span>
+              <span class="context-stat-value">{contextStats.skills_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Messages</span>
+              <span class="context-stat-value">{contextStats.messages_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Compact Buffer</span>
+              <span class="context-stat-value">{contextStats.compact_buffer_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Draft</span>
+              <span class="context-stat-value">{contextStats.draft_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row context-stat-free">
+              <span class="context-stat-label">Free Space</span>
+              <span class="context-stat-value" class:warning={contextStats.free_tokens < 0}>{contextStats.free_tokens.toLocaleString()} tokens</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -3488,4 +3622,70 @@
     }
   }
 
+  /* Context ring button */
+  .context-ring-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .context-ring-btn:hover {
+    color: var(--text-primary);
+  }
+  .context-ring-label {
+    position: absolute;
+    font-size: 8px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    pointer-events: none;
+  }
+
+  /* Context stats modal */
+  .context-stats-summary {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 4px 0 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .context-stats-summary strong {
+    color: var(--text-primary);
+  }
+  .context-stats-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .context-stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .context-stat-row:last-child {
+    border-bottom: none;
+  }
+  .context-stat-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .context-stat-value {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .context-stat-value.warning {
+    color: var(--status-error);
+  }
+  .context-stat-free {
+    padding-top: 8px;
+    border-top: 2px solid var(--border);
+  }
 </style>
