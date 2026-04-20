@@ -3032,6 +3032,7 @@
     display: flex;
     justify-content: center;
     text-align: center;
+    margin-bottom: 24px;
   }
 
   .empty-composer-title {
