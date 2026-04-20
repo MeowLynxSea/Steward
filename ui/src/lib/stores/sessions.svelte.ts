@@ -464,6 +464,16 @@ class SessionsState {
         active_thread_id: response.active_thread_id,
         active_thread_task: response.active_thread_task ?? this.active.active_thread_task
       };
+      // Optimistically set thread_state to "processing" so the stop button and busy
+      // indicators appear immediately. The SSE event will overwrite this with the real
+      // state if it fires before sendSessionMessage returns.
+      if (this.runtimeStatus && !this.#isBusyRuntimeState()) {
+        this.runtimeStatus = {
+          ...this.runtimeStatus,
+          active_thread_id: response.active_thread_id,
+          thread_state: "processing",
+        };
+      }
       await this.refreshRuntimeStatus();
       this.#syncMessageModeFromTask(this.active.active_thread_task);
       await this.refreshActiveTaskDetail();
@@ -496,6 +506,10 @@ class SessionsState {
           thinkingMessageId: null,
           thinkingMessage: ""
         };
+      }
+      // Clear the optimistic processing state so the UI doesn't incorrectly show busy
+      if (!preserveStreaming) {
+        this.runtimeStatus = null;
       }
       if (this.active) {
         this.active = {
@@ -790,6 +804,13 @@ class SessionsState {
           thinkingMessage: mergeStreamingChunk(this.streaming.thinkingMessage, message),
           isStreaming: true
         };
+        // Ensure thread_state reflects "processing" so the busy indicator stays visible.
+        // Without this, runtimeStatus may still be "idle" when the user sends a message
+        // before the agent loop starts and before the first refreshRuntimeStatus() call
+        // (which is common on the first message of a fresh session).
+        if (!this.#isBusyRuntimeState()) {
+          void this.refreshRuntimeStatus();
+        }
         break;
       }
 
@@ -829,6 +850,10 @@ class SessionsState {
           thinkingMessageId: null,
           thinkingMessage: this.streaming.thinkingMessage
         };
+        // Same reasoning as session.thinking: ensure thread_state is "processing".
+        if (!this.#isBusyRuntimeState()) {
+          void this.refreshRuntimeStatus();
+        }
         break;
       }
 
@@ -950,6 +975,7 @@ class SessionsState {
         this.error = message;
         this.#streamingAssistantId = null;
         this.#liveTurnNumber = null;
+        this.#stopPollFallback();
         this.streaming = {
           ...this.streaming,
           isStreaming: false,
