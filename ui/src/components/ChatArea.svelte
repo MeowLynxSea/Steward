@@ -154,9 +154,8 @@
     const stats = contextStats;
     const modelCtx = session?.model_context_length;
     if (!stats || !modelCtx) return 0;
-    // Use model context length as total; messages_tokens is the estimated usage
     const total = modelCtx;
-    const used = stats.messages_tokens + stats.compact_buffer_tokens;
+    const used = stats.system_prompt_tokens + stats.mcp_prompts_tokens + stats.skills_tokens + stats.messages_tokens + stats.compact_buffer_tokens;
     if (total === 0) return 0;
     return Math.round((used / total) * 100);
   });
@@ -1900,16 +1899,8 @@
               <span class="context-stat-value">{contextStats.system_prompt_tokens.toLocaleString()} tokens</span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">MCP</span>
-              <span class="context-stat-value">{contextStats.mcp_tokens.toLocaleString()} tokens</span>
-            </div>
-            <div class="context-stat-row">
-              <span class="context-stat-label">Custom Agents</span>
-              <span class="context-stat-value">{contextStats.custom_agents_tokens.toLocaleString()} tokens</span>
-            </div>
-            <div class="context-stat-row">
-              <span class="context-stat-label">Memory</span>
-              <span class="context-stat-value">{contextStats.memory_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label">MCP Prompts</span>
+              <span class="context-stat-value">{contextStats.mcp_prompts_tokens.toLocaleString()} tokens</span>
             </div>
             <div class="context-stat-row">
               <span class="context-stat-label">Skills</span>
@@ -1922,10 +1913,6 @@
             <div class="context-stat-row">
               <span class="context-stat-label">Compact Buffer</span>
               <span class="context-stat-value">{contextStats.compact_buffer_tokens.toLocaleString()} tokens</span>
-            </div>
-            <div class="context-stat-row">
-              <span class="context-stat-label">Draft</span>
-              <span class="context-stat-value">{contextStats.draft_tokens.toLocaleString()} tokens</span>
             </div>
             <div class="context-stat-row context-stat-free">
               <span class="context-stat-label">Free Space</span>

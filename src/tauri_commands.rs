@@ -2555,29 +2555,7 @@ fn tool_status(tool_call: &steward_core::agent::session::TurnToolCall) -> String
     }
 }
 
-fn estimate_thread_tokens(thread: &steward_core::agent::session::Thread) -> u32 {
-    // Rough estimation: ~4 characters per token for typical English text.
-    // This overestimates for CJK but is reasonable for display purposes.
-    const CHARS_PER_TOKEN: u32 = 4;
 
-    let mut total: u32 = 0;
-    for turn in &thread.turns {
-        total = total.saturating_add(turn.user_input.len() as u32 / CHARS_PER_TOKEN);
-        if let Some(narrative) = &turn.narrative {
-            total = total.saturating_add(narrative.len() as u32 / CHARS_PER_TOKEN);
-        }
-        for tc in &turn.tool_calls {
-            total = total.saturating_add(tc.name.len() as u32 / CHARS_PER_TOKEN);
-            // tc.parameters is a serde_json::Value
-            total = total.saturating_add(tc.parameters.to_string().len() as u32 / CHARS_PER_TOKEN);
-            // tc.result is Option<serde_json::Value>
-            if let Some(ref result) = tc.result {
-                total = total.saturating_add(result.to_string().len() as u32 / CHARS_PER_TOKEN);
-            }
-        }
-    }
-    total
-}
 
 fn build_thread_messages(
     thread: &steward_core::agent::session::Thread,
@@ -2848,10 +2826,11 @@ pub async fn get_session(
         .and_then(|m| m.context_length);
 
     // Estimate context usage from thread messages
-    let messages_tokens = estimate_thread_tokens(&thread);
+    let messages_tokens = thread.estimate_messages_tokens();
     let compact_buffer_tokens = 8192u32; // Reserve ~8k for compression buffer
+    let used_tokens = messages_tokens + compact_buffer_tokens;
     let free_tokens = model_context_length
-        .map(|ctx| ctx as i32 - messages_tokens as i32 - compact_buffer_tokens as i32)
+        .map(|ctx| ctx as i32 - used_tokens as i32)
         .unwrap_or(-1);
 
     Ok(steward_core::ipc::SessionDetailResponse {
@@ -2861,13 +2840,10 @@ pub async fn get_session(
         active_thread_task,
         context_stats: Some(steward_core::ipc::ContextStatsResponse {
             system_prompt_tokens: 0,
-            mcp_tokens: 0,
-            custom_agents_tokens: 0,
-            memory_tokens: 0,
+            mcp_prompts_tokens: 0,
             skills_tokens: 0,
             messages_tokens,
             compact_buffer_tokens,
-            draft_tokens: 0,
             free_tokens,
         }),
         model_context_length,

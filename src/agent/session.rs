@@ -497,6 +497,29 @@ impl Thread {
         message
     }
 
+    /// Estimate tokens for this thread's message history.
+    pub fn estimate_messages_tokens(&self) -> u32 {
+        const CHARS_PER_TOKEN: u32 = 4;
+        let mut total: u32 = 0;
+        for turn in &self.turns {
+            total = total.saturating_add(turn.user_input.len() as u32 / CHARS_PER_TOKEN);
+            if let Some(narrative) = &turn.narrative {
+                total = total.saturating_add(narrative.len() as u32 / CHARS_PER_TOKEN);
+            }
+            for tc in &turn.tool_calls {
+                total = total.saturating_add(tc.name.len() as u32 / CHARS_PER_TOKEN);
+                total = total.saturating_add(tc.parameters.to_string().len() as u32 / CHARS_PER_TOKEN);
+                if let Some(ref result) = tc.result {
+                    total = total.saturating_add(result.to_string().len() as u32 / CHARS_PER_TOKEN);
+                }
+            }
+            for segment in &turn.assistant_segments {
+                total = total.saturating_add(segment.content.len() as u32 / CHARS_PER_TOKEN);
+            }
+        }
+        total
+    }
+
     /// Drain all pending messages from the queue.
     /// Multiple messages are joined with newlines so the LLM receives
     /// full context from rapid consecutive inputs (#259).

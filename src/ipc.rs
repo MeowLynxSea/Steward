@@ -160,22 +160,16 @@ pub struct SessionDetailResponse {
 
 #[derive(Debug, Serialize)]
 pub struct ContextStatsResponse {
-    /// Estimated tokens used by the system prompt.
+    /// Estimated tokens used by the system prompt (workspace identity files + memory).
     pub system_prompt_tokens: u32,
-    /// Estimated tokens used by MCP resources.
-    pub mcp_tokens: u32,
-    /// Estimated tokens used by custom agents / persona.
-    pub custom_agents_tokens: u32,
-    /// Estimated tokens used by workspace memory.
-    pub memory_tokens: u32,
+    /// Estimated tokens used by MCP prompt resources.
+    pub mcp_prompts_tokens: u32,
     /// Estimated tokens used by skills.
     pub skills_tokens: u32,
     /// Estimated tokens used by the message history.
     pub messages_tokens: u32,
     /// Tokens reserved for the compact buffer (future compression feature).
     pub compact_buffer_tokens: u32,
-    /// Estimated tokens in the current draft message.
-    pub draft_tokens: u32,
     /// Free space remaining before hitting the context limit.
     pub free_tokens: i32,
 }
