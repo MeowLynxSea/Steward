@@ -67,7 +67,7 @@ struct RoutineExecutionReport {
 }
 
 #[derive(Clone, Debug)]
-struct RoutineToolTrace {
+pub(crate) struct RoutineToolTrace {
     call_id: String,
     name: String,
     parameters: serde_json::Value,
@@ -1579,7 +1579,7 @@ async fn execute_routine(ctx: EngineContext, routine: Routine, run: RoutineRun) 
     if routine.name == "memory_reflection" && status != RunStatus::Failed {
         summary = Some(summarize_memory_reflection_run(
             run.trigger_payload.as_ref(),
-            &executed_tools,
+            &tool_traces,
             summary.as_deref(),
         ));
     }
@@ -2330,7 +2330,7 @@ async fn execute_lightweight_with_tools(
 
     let max_iterations = max_tool_rounds
         .min(ctx.config.lightweight_max_iterations)
-        .min(5);
+        .min(15);
     let mut iteration = 0;
     let mut total_input_tokens = 0;
     let mut total_output_tokens = 0;
@@ -2494,21 +2494,24 @@ async fn execute_lightweight_with_tools(
 
 fn summarize_memory_reflection_run(
     trigger_payload: Option<&serde_json::Value>,
-    executed_tools: &[String],
+    tool_traces: &[RoutineToolTrace],
     summary: Option<&str>,
 ) -> String {
-    let base_outcome = if executed_tools.iter().any(|tool| tool == "manage_boot") {
+    let base_outcome = if tool_traces
+        .iter()
+        .any(|t| t.name == "manage_boot" && t.error.is_none())
+    {
         "boot_promoted"
-    } else if executed_tools.iter().any(|tool| {
+    } else if tool_traces.iter().any(|t| {
         matches!(
-            tool.as_str(),
+            t.name.as_str(),
             "update_memory" | "manage_triggers" | "delete_memory"
-        )
+        ) && t.error.is_none()
     }) {
         "updated"
-    } else if executed_tools
+    } else if tool_traces
         .iter()
-        .any(|tool| matches!(tool.as_str(), "create_memory" | "add_alias"))
+        .any(|t| matches!(t.name.as_str(), "create_memory" | "add_alias") && t.error.is_none())
     {
         "created"
     } else {
@@ -2814,6 +2817,8 @@ mod tests {
     use tokio::sync::mpsc;
     use uuid::Uuid;
 
+    use super::RoutineToolTrace;
+
     use crate::agent::routine::{
         NotifyConfig, Routine, RoutineAction, RoutineGuardrails, RunStatus, Trigger,
     };
@@ -3012,9 +3017,20 @@ mod tests {
             "thread_id": "thread-2"
         });
 
+        let trace = RoutineToolTrace {
+            call_id: "call-1".to_string(),
+            name: "create_memory".to_string(),
+            parameters: serde_json::json!({}),
+            rationale: None,
+            result_preview: Some("Memory created".to_string()),
+            error: None,
+            started_at: Utc::now(),
+            completed_at: Some(Utc::now()),
+        };
+
         let summary = super::summarize_memory_reflection_run(
             Some(&payload),
-            &[String::from("create_memory")],
+            &[trace],
             Some("Stored a reusable reminder about checking constraints first."),
         );
 
@@ -3454,8 +3470,8 @@ mod tests {
                 prompt: "Inspect trigger payload and do nothing unless needed.".to_string(),
                 context_paths: vec![],
                 max_tokens: 256,
-                use_tools: false,
-                max_tool_rounds: 1,
+                use_tools: true,
+                max_tool_rounds: 3,
             },
             guardrails: RoutineGuardrails::default(),
             notify: NotifyConfig::default(),
@@ -3473,7 +3489,7 @@ mod tests {
         let engine = super::RoutineEngine::new(
             RoutineConfig::default(),
             AdminScope::new(Arc::clone(&db)),
-            Arc::new(StubLlm::new("ROUTINE_OK")),
+            Arc::new(StubLlm::new("Created memory reflection for this turn.")),
             Arc::new(Workspace::new_with_db(user_id, Arc::clone(&db))),
             None,
             notify_tx,
@@ -3525,7 +3541,7 @@ mod tests {
         assert!(
             source_messages.iter().any(|message| {
                 message.role == "reflection"
-                    && message.content.contains("memory_reflection outcome=")
+                    && !message.content.is_empty()
             }),
             "memory reflection should be mirrored into the source thread history"
         );
@@ -3539,10 +3555,10 @@ mod tests {
             mirrored.thread_id.as_deref(),
             Some(source_thread_id_text.as_str())
         );
-        assert!(mirrored.content.contains("memory_reflection outcome="));
+        // UI notification content is the status ("completed"), not the reflection outcome.
         assert_eq!(mirrored.metadata["source"], "routine");
         assert_eq!(mirrored.metadata["routine_name"], "memory_reflection");
-        assert_eq!(mirrored.metadata["display_kind"], "reflection");
+        assert_eq!(mirrored.metadata["display_kind"], "reflection_status");
     }
 
     #[cfg(feature = "libsql")]

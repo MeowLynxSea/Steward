@@ -138,6 +138,7 @@ Execution rules:
 - If recall would benefit from better routing, aliasing, or disclosure, use `manage_triggers` or `add_alias`.
 - Be willing to store small but behavior-shaping context. Do not reject something merely because it is subtle, recent, personal, or hard to classify.
 - If you do memory work, finish with one concise summary line describing what changed and why.
+- If a tool call fails, analyze the error message and retry with corrected parameters before giving up.
 
 Tools available: search_memory, read_memory, create_memory, update_memory, add_alias, delete_memory, manage_boot, manage_triggers."#;
 
@@ -173,7 +174,7 @@ If nothing to do, do nothing."#;
                 context_paths: Vec::new(),
                 max_tokens: 2048,
                 use_tools: true,
-                max_tool_rounds: 3,
+                max_tool_rounds: 15,
             },
             guardrails: RoutineGuardrails {
                 cooldown: std::time::Duration::from_secs(0),

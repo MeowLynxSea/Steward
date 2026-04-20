@@ -1034,6 +1034,23 @@ impl ShellTool {
             return Ok(cmd.to_string());
         }
 
+        // Reject bare workspace:// root paths — they are not valid shell path targets.
+        // This prevents the error from propagating to the execution layer where it would
+        // produce a confusing "Unknown workspace:// path" message.
+        if cmd.starts_with("workspace://") {
+            let after_prefix = &cmd["workspace://".len()..];
+            let first_char = after_prefix.chars().next();
+            let is_bare_root = first_char.is_none()
+                || (first_char == Some('/'))
+                || first_char.map(|c| !is_workspace_id_char(c)).unwrap_or(false);
+            if is_bare_root {
+                return Err(ToolError::InvalidParameters(
+                    "workspace:// root path is not a valid shell command target. \
+                     Use a specific workspace path like workspace://<allowlist-id>/path".to_string(),
+                ));
+            }
+        }
+
         let mut rewritten = String::with_capacity(cmd.len());
         let mut index = 0;
         let workspace_roots = self.workspace_root_replacements(user_id).await?;
