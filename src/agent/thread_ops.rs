@@ -1090,9 +1090,10 @@ impl Agent {
         }
 
         for (index, segment) in assistant_segments.iter().enumerate() {
+            let clean_content = super::strip_suggestions(&segment.content);
             if let Some(message_id) = segment.conversation_message_id {
                 if let Err(error) = store
-                    .update_conversation_message_content(message_id, &segment.content)
+                    .update_conversation_message_content(message_id, &clean_content)
                     .await
                 {
                     tracing::warn!("Failed to update assistant message: {}", error);
@@ -1101,7 +1102,7 @@ impl Agent {
             }
 
             match store
-                .add_conversation_message(thread_id, "assistant", &segment.content)
+                .add_conversation_message(thread_id, "assistant", &clean_content)
                 .await
             {
                 Ok(message_id) => {

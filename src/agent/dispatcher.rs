@@ -1887,7 +1887,7 @@ pub(crate) fn extract_suggestions(text: &str) -> (String, Vec<String>) {
 ///
 /// Convenience wrapper around [`extract_suggestions`] for callers that don't
 /// need the parsed suggestion list (e.g. job worker, plan completion check).
-pub(crate) fn strip_suggestions(text: &str) -> String {
+pub fn strip_suggestions(text: &str) -> String {
     extract_suggestions(text).0
 }
 
