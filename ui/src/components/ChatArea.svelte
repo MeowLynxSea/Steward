@@ -1711,24 +1711,10 @@
                 title="上下文统计"
                 aria-label="上下文统计"
               >
-                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <!-- Background circle -->
-                  <circle cx="9" cy="9" r="7" stroke="var(--border)" stroke-width="2" fill="none" />
-                  <!-- Progress arc: circumference = 2 * pi * 7 ≈ 43.98 -->
-                  <circle
-                    cx="9"
-                    cy="9"
-                    r="7"
-                    stroke="var(--accent)"
-                    stroke-width="2"
-                    fill="none"
-                    stroke-linecap="round"
-                    stroke-dasharray="43.98"
-                    stroke-dashoffset={43.98 * (1 - contextUsagePercent / 100)}
-                    transform="rotate(-90 9 9)"
-                  />
+                <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="9" cy="9" r="7" stroke="var(--border-default)" stroke-width="2" fill="none" />
+                  <circle cx="9" cy="9" r="7" stroke="var(--accent-primary)" stroke-width="2" fill="none" stroke-linecap="round" stroke-dasharray="43.98" stroke-dashoffset={43.98 * (1 - contextUsagePercent / 100)} transform="rotate(-90 9 9)" />
                 </svg>
-                <span class="context-ring-label">{contextUsagePercent}%</span>
               </button>
             {/if}
             {#if isBusySession && canSubmit}
@@ -3637,13 +3623,6 @@
   }
   .context-ring-btn:hover {
     color: var(--text-primary);
-  }
-  .context-ring-label {
-    position: absolute;
-    font-size: 8px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    pointer-events: none;
   }
 
   /* Context stats modal */
