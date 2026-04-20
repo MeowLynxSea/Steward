@@ -89,6 +89,17 @@ pub struct ThreadToolCallResponse {
     pub rationale: Option<String>,
 }
 
+/// Persisted context stats captured after each turn.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedContextStats {
+    pub system_prompt_tokens: u32,
+    pub mcp_prompts_tokens: u32,
+    pub skills_tokens: u32,
+    pub messages_tokens: u32,
+    pub compact_buffer_tokens: u32,
+    pub total_estimate: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TurnCostResponse {
     pub input_tokens: u64,

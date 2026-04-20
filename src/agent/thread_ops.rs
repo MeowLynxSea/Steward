@@ -757,6 +757,23 @@ impl Agent {
                 )
                 .await;
 
+                // Persist calibrated context stats on the last turn for later retrieval.
+                {
+                    let mut sess = session.lock().await;
+                    if let Some(thread) = sess.threads.get_mut(&thread_id) {
+                        if let Some(turn) = thread.last_turn_mut() {
+                            turn.set_context_stats(crate::ipc::PersistedContextStats {
+                                system_prompt_tokens: context_stats.system_prompt_tokens,
+                                mcp_prompts_tokens: context_stats.mcp_prompts_tokens,
+                                skills_tokens: context_stats.skills_tokens,
+                                messages_tokens: context_stats.messages_tokens,
+                                compact_buffer_tokens: context_stats.compact_buffer_tokens,
+                                total_estimate: context_stats.total_estimate,
+                            });
+                        }
+                    }
+                }
+
                 // Nocturne-style memory growth: emit an internal system event after a completed turn
                 // so lightweight reflection routines can decide to CRUD memory conservatively.
                 self.emit_turn_completed_memory_event(

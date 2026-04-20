@@ -2829,7 +2829,19 @@ pub async fn get_session(
     let messages_tokens = thread.estimate_messages_tokens();
     let compact_buffer_tokens =
         ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
-    let used_tokens = messages_tokens + compact_buffer_tokens;
+
+    // Use persisted context stats from the last completed turn if available.
+    let (system_prompt_tokens, mcp_prompts_tokens, skills_tokens) = thread
+        .last_turn()
+        .and_then(|t| t.context_stats.as_ref())
+        .map(|s| (s.system_prompt_tokens, s.mcp_prompts_tokens, s.skills_tokens))
+        .unwrap_or((0, 0, 0));
+
+    let used_tokens = messages_tokens
+        .saturating_add(compact_buffer_tokens)
+        .saturating_add(system_prompt_tokens)
+        .saturating_add(mcp_prompts_tokens)
+        .saturating_add(skills_tokens);
     let free_tokens = model_context_length
         .map(|ctx| ctx as i32 - used_tokens as i32)
         .unwrap_or(-1);
@@ -2840,9 +2852,9 @@ pub async fn get_session(
         thread_messages,
         active_thread_task,
         context_stats: Some(steward_core::ipc::ContextStatsResponse {
-            system_prompt_tokens: 0,
-            mcp_prompts_tokens: 0,
-            skills_tokens: 0,
+            system_prompt_tokens,
+            mcp_prompts_tokens,
+            skills_tokens,
             messages_tokens,
             compact_buffer_tokens,
             free_tokens,

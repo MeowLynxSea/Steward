@@ -1065,6 +1065,9 @@ pub struct Turn {
     /// Persisted cost summary for this user-message turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_cost: Option<TurnCostInfo>,
+    /// Persisted calibrated context stats for this turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_stats: Option<crate::ipc::PersistedContextStats>,
     /// Persisted conversation row backing the user message in history.
     #[serde(skip)]
     pub user_message_id: Option<Uuid>,
@@ -1119,6 +1122,7 @@ impl Turn {
             error: None,
             narrative: None,
             turn_cost: None,
+            context_stats: None,
             user_message_id: None,
             assistant_message_id: None,
             assistant_segments: Vec::new(),
@@ -1273,6 +1277,11 @@ impl Turn {
             segment.conversation_message_id = Some(message_id);
             self.assistant_message_id = Some(message_id);
         }
+    }
+
+    /// Record calibrated context stats for this turn.
+    pub fn set_context_stats(&mut self, stats: crate::ipc::PersistedContextStats) {
+        self.context_stats = Some(stats);
     }
 
     /// Record a tool call.
