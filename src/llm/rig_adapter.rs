@@ -1136,6 +1136,7 @@ mod tests {
                     "query": {"type": "string"}
                 }
             }),
+            ..Default::default()
         }];
         let rig_tools = convert_tools(&tools, true);
         assert_eq!(rig_tools.len(), 1);
@@ -1159,6 +1160,7 @@ mod tests {
                 },
                 "required": ["parent_uri", "content", "priority"]
             }),
+            ..Default::default()
         }];
         let rig_tools = convert_tools(&tools, false);
         assert_eq!(
@@ -1190,6 +1192,7 @@ mod tests {
                 },
                 "required": ["parent_uri", "content", "priority"]
             }),
+            ..Default::default()
         }];
         let rig_tools = convert_tools(&tools, true);
         assert_eq!(

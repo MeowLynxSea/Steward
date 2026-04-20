@@ -7,6 +7,29 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Approximate context window statistics for real-time display.
+///
+/// This mirrors the fields in `steward_core::ipc::ContextStatsResponse`
+/// so that `steward_common` can emit the event without depending on the
+/// main crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextStats {
+    /// Total context window size in tokens (from model metadata).
+    pub model_context_length: u32,
+    /// Estimated tokens used by the system prompt.
+    pub system_prompt_tokens: u32,
+    /// Estimated tokens used by MCP prompt resources.
+    pub mcp_prompts_tokens: u32,
+    /// Estimated tokens used by skills.
+    pub skills_tokens: u32,
+    /// Estimated tokens used by the message history.
+    pub messages_tokens: u32,
+    /// Tokens reserved for the compact buffer.
+    pub compact_buffer_tokens: u32,
+    /// Free space remaining before hitting the context limit.
+    pub free_tokens: i32,
+}
+
 /// A single tool decision in a reasoning update (SSE DTO).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDecisionDto {
@@ -265,6 +288,14 @@ pub enum AppEvent {
         narrative: String,
         decisions: Vec<ToolDecisionDto>,
     },
+
+    /// Real-time context window statistics update.
+    #[serde(rename = "context_stats")]
+    ContextStats {
+        stats: ContextStats,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        thread_id: Option<String>,
+    },
 }
 
 impl AppEvent {
@@ -298,6 +329,7 @@ impl AppEvent {
             Self::ReasoningUpdate { .. } => "reasoning_update",
             Self::TitleUpdated { .. } => "title_updated",
             Self::JobReasoning { .. } => "job_reasoning",
+            Self::ContextStats { .. } => "context_stats",
         }
     }
 }
@@ -462,6 +494,18 @@ mod tests {
                 job_id: String::new(),
                 narrative: String::new(),
                 decisions: vec![],
+            },
+            AppEvent::ContextStats {
+                stats: ContextStats {
+                    model_context_length: 0,
+                    system_prompt_tokens: 0,
+                    mcp_prompts_tokens: 0,
+                    skills_tokens: 0,
+                    messages_tokens: 0,
+                    compact_buffer_tokens: 0,
+                    free_tokens: 0,
+                },
+                thread_id: None,
             },
         ];
 

@@ -262,6 +262,14 @@ pub struct ToolDiscoverySummary {
     pub examples: Vec<serde_json::Value>,
 }
 
+/// Kind of tool, used to separate MCP tools from built-in tools for token accounting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ToolKind {
+    #[default]
+    Builtin,
+    Mcp,
+}
+
 /// Trait for tools that the agent can use.
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -414,6 +422,13 @@ pub trait Tool: Send + Sync {
             description,
             parameters,
         }
+    }
+
+    /// The kind of this tool, used for separate token accounting (e.g. MCP vs built-in).
+    ///
+    /// Default: `None` (treated as built-in).
+    fn tool_kind(&self) -> Option<ToolKind> {
+        None
     }
 }
 

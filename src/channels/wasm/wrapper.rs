@@ -3889,8 +3889,10 @@ fn status_to_wit(
             },
             metadata_json,
         },
-        // Suggestions and turn cost are web-gateway-only; skip for WASM channels
-        StatusUpdate::Suggestions { .. } | StatusUpdate::TurnCost { .. } => return None,
+        // Suggestions, turn cost, and context stats are web-gateway-only; skip for WASM channels
+        StatusUpdate::Suggestions { .. }
+        | StatusUpdate::TurnCost { .. }
+        | StatusUpdate::ContextStats { .. } => return None,
         StatusUpdate::ReasoningUpdate {
             narrative,
             decisions,

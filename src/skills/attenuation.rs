@@ -126,6 +126,7 @@ mod tests {
             name: name.to_string(),
             description: format!("{} tool", name),
             parameters: serde_json::json!({}),
+            ..Default::default()
         }
     }
 

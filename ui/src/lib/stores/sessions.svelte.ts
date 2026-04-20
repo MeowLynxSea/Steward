@@ -949,6 +949,21 @@ class SessionsState {
         break;
       }
 
+      case "session.context_stats": {
+        const stats = event.payload as import("../types").ContextStats;
+        if (this.active) {
+          this.active = {
+            ...this.active,
+            session: {
+              ...this.active.session,
+              model_context_length: stats.model_context_length,
+              context_stats: stats
+            }
+          };
+        }
+        break;
+      }
+
       case "session.image_generated": {
         const { data_url, path } = event.payload as { data_url: string; path?: string };
         this.streaming = {

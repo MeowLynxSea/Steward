@@ -164,23 +164,17 @@ export interface SessionDetail {
 /** Approximate context window statistics for display. */
 export interface ContextStats {
   /** Total context window size in tokens (from model metadata or manual setting). */
-  total_tokens: number;
+  model_context_length: number;
   /** Estimated tokens used by system prompt. */
   system_prompt_tokens: number;
   /** Estimated tokens used by MCP resources. */
-  mcp_tokens: number;
-  /** Estimated tokens used by custom agents / persona. */
-  custom_agents_tokens: number;
-  /** Estimated tokens used by workspace memory. */
-  memory_tokens: number;
+  mcp_prompts_tokens: number;
   /** Estimated tokens used by skills. */
   skills_tokens: number;
   /** Estimated tokens used by the message history. */
   messages_tokens: number;
   /** Tokens reserved for the compact buffer (future compression feature). */
   compact_buffer_tokens: number;
-  /** Estimated tokens in the current draft message. */
-  draft_tokens: number;
   /** Free space remaining before hitting the context limit. */
   free_tokens: number;
 }

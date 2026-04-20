@@ -187,6 +187,17 @@ static PIPE_REASONING_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)<\|(/?)\s*(?:think(?:ing)?|thought|thoughts|antthinking|reasoning|reflection|scratchpad|inner_monologue)\|>").expect("PIPE_REASONING_TAG_RE") // safety: hardcoded literal
 });
 
+/// Local token estimate for each context component.
+#[derive(Debug, Clone, Default)]
+pub struct ContextTokenEstimate {
+    pub system_prompt_tokens: u32,
+    pub mcp_prompts_tokens: u32,
+    pub skills_tokens: u32,
+    pub messages_tokens: u32,
+    pub compact_buffer_tokens: u32,
+    pub total_estimate: u32,
+}
+
 /// Context for reasoning operations.
 pub struct ReasoningContext {
     /// Conversation history.
@@ -208,6 +219,8 @@ pub struct ReasoningContext {
     /// instead of calling `build_system_prompt_with_tools`. Allows callers to build
     /// the prompt once and reuse it across iterations.
     pub system_prompt: Option<String>,
+    /// Local token estimate for each context component.
+    pub context_estimate: ContextTokenEstimate,
     /// Per-user model override. When set, completion requests use this model
     /// instead of the provider's default. Only effective with providers that
     /// support per-request model overrides (e.g. NearAI).
@@ -225,6 +238,7 @@ impl ReasoningContext {
             metadata: std::collections::HashMap::new(),
             force_text: false,
             system_prompt: None,
+            context_estimate: ContextTokenEstimate::default(),
             model_override: None,
         }
     }
@@ -264,6 +278,70 @@ impl ReasoningContext {
     pub fn with_metadata(mut self, metadata: std::collections::HashMap<String, String>) -> Self {
         self.metadata = metadata;
         self
+    }
+
+    /// Set the local token estimate for each context component.
+    pub fn with_context_estimate(mut self, estimate: ContextTokenEstimate) -> Self {
+        self.context_estimate = estimate;
+        self
+    }
+
+    /// Estimate tokens for a string using char-based approximation (~4 chars per token).
+    pub fn estimate_tokens(text: &str) -> u32 {
+        (text.len() as u32 / 4).max(1)
+    }
+
+    /// Compute calibrated context stats by comparing local estimates against the
+    /// actual input token count returned by the LLM.
+    ///
+    /// The ratio `actual_input_tokens / total_estimate` gives us a per-char
+    /// correction factor that we distribute proportionally across each component.
+    pub fn compute_calibrated_stats(
+        &self,
+        actual_input_tokens: u32,
+        compact_buffer_tokens: u32,
+    ) -> ContextTokenEstimate {
+        let est = &self.context_estimate;
+        let total_estimate = est.total_estimate;
+
+        if total_estimate == 0 || actual_input_tokens == 0 {
+            return ContextTokenEstimate {
+                system_prompt_tokens: est.system_prompt_tokens,
+                mcp_prompts_tokens: est.mcp_prompts_tokens,
+                skills_tokens: est.skills_tokens,
+                messages_tokens: est.messages_tokens,
+                compact_buffer_tokens,
+                total_estimate: est.system_prompt_tokens
+                    .saturating_add(est.mcp_prompts_tokens)
+                    .saturating_add(est.skills_tokens)
+                    .saturating_add(est.messages_tokens)
+                    .saturating_add(compact_buffer_tokens),
+            };
+        }
+
+        let ratio = (actual_input_tokens as f64 / total_estimate as f64).min(3.0);
+
+        let system_prompt_tokens =
+            (est.system_prompt_tokens as f64 * ratio).round().max(0.0) as u32;
+        let mcp_prompts_tokens =
+            (est.mcp_prompts_tokens as f64 * ratio).round().max(0.0) as u32;
+        let skills_tokens =
+            (est.skills_tokens as f64 * ratio).round().max(0.0) as u32;
+        let messages_tokens =
+            (est.messages_tokens as f64 * ratio).round().max(0.0) as u32;
+
+        ContextTokenEstimate {
+            system_prompt_tokens,
+            mcp_prompts_tokens,
+            skills_tokens,
+            messages_tokens,
+            compact_buffer_tokens,
+            total_estimate: system_prompt_tokens
+                .saturating_add(mcp_prompts_tokens)
+                .saturating_add(skills_tokens)
+                .saturating_add(messages_tokens)
+                .saturating_add(compact_buffer_tokens),
+        }
     }
 }
 
@@ -2435,6 +2513,7 @@ That's my plan."#;
                 name: n.to_string(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
+                ..Default::default()
             })
             .collect()
     }
@@ -2562,6 +2641,7 @@ That's my plan."#;
             name: "echo".to_string(),
             description: "Echoes input".to_string(),
             parameters: serde_json::json!({}),
+            ..Default::default()
         }];
 
         let prompt = reasoning.build_system_prompt_with_tools(&tool_defs);
@@ -2582,6 +2662,7 @@ That's my plan."#;
             name: "tool_search".to_string(),
             description: "Search extensions".to_string(),
             parameters: serde_json::json!({}),
+            ..Default::default()
         }];
 
         let section = reasoning.build_extensions_section_for_tools(&tool_defs);
@@ -2768,6 +2849,7 @@ That's my plan."#;
             name: "echo".to_string(),
             description: "Echoes input".to_string(),
             parameters: serde_json::json!({}),
+            ..Default::default()
         }];
 
         let prompt = reasoning.build_system_prompt_with_tools(&tool_defs);
@@ -2788,6 +2870,7 @@ That's my plan."#;
             name: "echo".to_string(),
             description: "Echoes input".to_string(),
             parameters: serde_json::json!({}),
+            ..Default::default()
         }];
 
         let first = reasoning.build_system_prompt_with_tools(&tool_defs);
@@ -3228,6 +3311,7 @@ That's my plan."#;
                 name: "tool_list".to_string(),
                 description: "Lists tools".to_string(),
                 parameters: serde_json::json!({}),
+                ..Default::default()
             }]);
 
         let output = reasoning.respond_with_tools(&context).await.unwrap();
@@ -3294,6 +3378,7 @@ That's my plan."#;
                 name: "tool_list".to_string(),
                 description: "Lists tools".to_string(),
                 parameters: serde_json::json!({}),
+                ..Default::default()
             }]);
 
         let output = reasoning.respond_with_tools(&context).await.unwrap();
@@ -3424,6 +3509,7 @@ That's my plan."#;
                 name: "tool_list".to_string(),
                 description: "Lists tools".to_string(),
                 parameters: serde_json::json!({}),
+                ..Default::default()
             }]);
 
         let output = reasoning.respond_with_tools(&context).await.unwrap();
@@ -3457,6 +3543,7 @@ That's my plan."#;
                 name: "tool_list".to_string(),
                 description: "Lists tools".to_string(),
                 parameters: serde_json::json!({}),
+                ..Default::default()
             }]);
 
         let output = reasoning.respond_with_tools(&context).await.unwrap();
@@ -3646,6 +3733,7 @@ That's my plan."#;
             name: "workspace_write".to_string(),
             description: "Write to memory".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            ..Default::default()
         });
 
         let selections = reasoning.select_tools(&ctx).await.unwrap();
@@ -3667,6 +3755,7 @@ That's my plan."#;
             name: "workspace_write".to_string(),
             description: "Write to memory".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            ..Default::default()
         });
 
         let selections = reasoning.select_tools(&ctx).await.unwrap();

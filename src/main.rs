@@ -314,6 +314,17 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             } => {
                 serde_json::json!({ "job_id": job_id, "narrative": narrative, "decisions": decisions })
             }
+            steward_common::AppEvent::ContextStats { stats, .. } => {
+                serde_json::json!({
+                    "model_context_length": stats.model_context_length,
+                    "system_prompt_tokens": stats.system_prompt_tokens,
+                    "mcp_prompts_tokens": stats.mcp_prompts_tokens,
+                    "skills_tokens": stats.skills_tokens,
+                    "messages_tokens": stats.messages_tokens,
+                    "compact_buffer_tokens": stats.compact_buffer_tokens,
+                    "free_tokens": stats.free_tokens,
+                })
+            }
         };
 
         // Format to match frontend StreamEnvelope: { event, thread_id, payload, sequence, timestamp }

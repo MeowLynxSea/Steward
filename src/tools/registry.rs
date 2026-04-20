@@ -114,6 +114,7 @@ impl ToolRegistry {
             name: schema.name,
             description: schema.description,
             parameters: schema.parameters,
+            kind: tool.tool_kind(),
         }
     }
 

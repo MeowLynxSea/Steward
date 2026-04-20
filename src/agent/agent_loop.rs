@@ -2589,6 +2589,18 @@ fn status_update_to_app_event(
             title: title.clone(),
             browse_url: browse_url.clone(),
         }),
+        StatusUpdate::ContextStats { stats } => Some(steward_common::AppEvent::ContextStats {
+            stats: steward_common::ContextStats {
+                model_context_length: stats.model_context_length,
+                system_prompt_tokens: stats.system_prompt_tokens,
+                mcp_prompts_tokens: stats.mcp_prompts_tokens,
+                skills_tokens: stats.skills_tokens,
+                messages_tokens: stats.messages_tokens,
+                compact_buffer_tokens: stats.compact_buffer_tokens,
+                free_tokens: stats.free_tokens,
+            },
+            thread_id,
+        }),
     }
 }
 

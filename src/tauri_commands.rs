@@ -2827,7 +2827,8 @@ pub async fn get_session(
 
     // Estimate context usage from thread messages
     let messages_tokens = thread.estimate_messages_tokens();
-    let compact_buffer_tokens = 8192u32; // Reserve ~8k for compression buffer
+    let compact_buffer_tokens =
+        ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
     let used_tokens = messages_tokens + compact_buffer_tokens;
     let free_tokens = model_context_length
         .map(|ctx| ctx as i32 - used_tokens as i32)

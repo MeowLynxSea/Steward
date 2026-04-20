@@ -25,7 +25,7 @@ use crate::tools::mcp::protocol::{
 };
 use crate::tools::mcp::session::McpSessionManager;
 use crate::tools::mcp::transport::{McpInboundMessage, McpTransport};
-use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolOutput};
+use crate::tools::tool::{ApprovalRequirement, Tool, ToolError, ToolKind, ToolOutput};
 
 /// MCP client for communicating with MCP servers.
 ///
@@ -991,6 +991,10 @@ impl Tool for McpToolWrapper {
     }
     fn parameters_schema(&self) -> serde_json::Value {
         self.tool.input_schema.clone()
+    }
+
+    fn tool_kind(&self) -> Option<ToolKind> {
+        Some(ToolKind::Mcp)
     }
 
     async fn execute(

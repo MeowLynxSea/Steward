@@ -223,6 +223,22 @@ pub struct ToolDefinition {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
+    /// Kind of tool (MCP vs built-in), used for separate token accounting.
+    /// Skipped during deserialization so old serialized data remains compatible;
+    /// always defaults to `None` when constructing via `Default`.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::tools::tool::ToolKind>,
+}
+
+impl Default for ToolDefinition {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            description: String::new(),
+            parameters: serde_json::Value::Null,
+            kind: None,
+        }
+    }
 }
 
 /// A tool call requested by the LLM.

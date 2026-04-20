@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::llm::ChatMessage;
 use crate::tools::{prepare_tool_params, redact_params};
 use chrono::Utc;
-use steward_common::truncate_preview;
+use steward_common::{truncate_preview, ContextStats};
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 
@@ -676,7 +676,7 @@ impl Agent {
 
         // Complete, fail, or request approval
         match result {
-            Ok(AgenticLoopResult::Response(response)) => {
+            Ok(AgenticLoopResult::Response { text: response, context_stats }) => {
                 let (response, suggestions) = extract_suggestions(&response);
                 tracing::debug!(
                     thread_id = %thread_id,
@@ -708,7 +708,7 @@ impl Agent {
 
                 let (turn_number, tool_calls, narrative, cost_baseline) = {
                     thread.complete_turn(&response);
-                    let (turn_number, tool_calls, narrative, cost_baseline) = thread
+                    thread
                         .turns
                         .last()
                         .map(|t| {
@@ -719,8 +719,7 @@ impl Agent {
                                 t.cost_baseline.clone(),
                             )
                         })
-                        .unwrap_or_default();
-                    (turn_number, tool_calls, narrative, cost_baseline)
+                        .unwrap_or_default()
                 };
                 drop(sess);
                 let _ = self
@@ -788,6 +787,35 @@ impl Agent {
                     turn_cost
                 };
                 self.persist_turn_cost(&session, thread_id, &turn_cost)
+                    .await;
+
+                let model_context_length = self
+                    .deps
+                    .llm
+                    .model_metadata()
+                    .await
+                    .ok()
+                    .and_then(|m| m.context_length);
+                let free_tokens = model_context_length
+                    .map(|ctx| ctx as i32 - context_stats.total_estimate as i32)
+                    .unwrap_or(-1);
+                let _ = self
+                    .channels
+                    .send_status(
+                        &message.channel,
+                        StatusUpdate::ContextStats {
+                            stats: ContextStats {
+                                model_context_length: model_context_length.unwrap_or(0),
+                                system_prompt_tokens: context_stats.system_prompt_tokens,
+                                mcp_prompts_tokens: context_stats.mcp_prompts_tokens,
+                                skills_tokens: context_stats.skills_tokens,
+                                messages_tokens: context_stats.messages_tokens,
+                                compact_buffer_tokens: context_stats.compact_buffer_tokens,
+                                free_tokens,
+                            },
+                        },
+                        &message.metadata,
+                    )
                     .await;
 
                 if let Some(task_runtime) = self.task_runtime() {
@@ -2330,7 +2358,7 @@ impl Agent {
                 .ok_or_else(|| Error::from(crate::error::JobError::NotFound { id: thread_id }))?;
 
             match result {
-                Ok(AgenticLoopResult::Response(response)) => {
+                Ok(AgenticLoopResult::Response { text: response, .. }) => {
                     let (response, suggestions) = extract_suggestions(&response);
                     tracing::debug!(
                         thread_id = %thread_id,

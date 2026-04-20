@@ -688,6 +688,7 @@ mod tests {
             name: "search".to_string(),
             description: "Search files".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            ..Default::default()
         });
         let config = AgenticLoopConfig {
             max_iterations: 10,

@@ -19,9 +19,10 @@ use async_trait::async_trait;
 use crate::agent::agentic_loop::{
     AgenticLoopConfig, LoopDelegate, LoopOutcome, LoopSignal, TextAction,
 };
-use crate::llm::{ChatMessage, Reasoning, ReasoningContext};
+use crate::llm::{ChatMessage, ContextTokenEstimate, Reasoning, ReasoningContext};
 use crate::task_runtime::TaskMode;
 use crate::tools::redact_params;
+use crate::tools::tool::ToolKind;
 
 const MEMORY_WRITE_NUDGE_PROMPT: &str = r#"## Turn Memory Discipline
 
@@ -93,8 +94,13 @@ struct ThinkingTracker {
 
 /// Result of the agentic loop execution.
 pub(super) enum AgenticLoopResult {
-    /// Completed with a response.
-    Response(String),
+    /// Completed with a response and calibrated context stats.
+    Response {
+        /// The text response from the LLM.
+        text: String,
+        /// Calibrated context stats from the last LLM call.
+        context_stats: ContextTokenEstimate,
+    },
     /// A tool requires approval before continuing.
     NeedApproval {
         /// The pending approval request to store.
@@ -468,8 +474,8 @@ impl Agent {
         if let Some(prompt) = system_prompt {
             reasoning = reasoning.with_system_prompt(prompt);
         }
-        if let Some(ctx) = skill_context {
-            reasoning = reasoning.with_skill_context(ctx);
+        if let Some(ref ctx) = skill_context {
+            reasoning = reasoning.with_skill_context(ctx.clone());
         }
 
         // Create a JobContext for tool execution (chat doesn't have a real job)
@@ -489,8 +495,56 @@ impl Agent {
         } else {
             initial_tool_defs
         };
-        let cached_prompt = reasoning.build_system_prompt_with_tools(&initial_tool_defs);
+
+        // Separate non-MCP tools for dedicated MCP token tracking.
+        let non_mcp_tool_defs: Vec<_> = initial_tool_defs
+            .iter()
+            .filter(|t| t.kind != Some(ToolKind::Mcp))
+            .cloned()
+            .collect();
+
+        // Base system prompt (workspace + memory + skills + guidance, no tools).
         let cached_prompt_no_tools = reasoning.build_system_prompt_with_tools(&[]);
+        // Full system prompt including all tools.
+        let cached_prompt = reasoning.build_system_prompt_with_tools(&initial_tool_defs);
+        // Non-MCP system prompt (base + non-MCP tools only) for token accounting.
+        let non_mcp_system_prompt = reasoning.build_system_prompt_with_tools(&non_mcp_tool_defs);
+
+        // Build local context token estimates for calibration tracking (must be before delegate
+        // creation since cached_prompt is moved into the delegate).
+        let model_context_length = self
+            .deps
+            .llm
+            .model_metadata()
+            .await
+            .ok()
+            .and_then(|m| m.context_length);
+        let system_prompt_tokens = ReasoningContext::estimate_tokens(&non_mcp_system_prompt);
+        let mcp_prompts_tokens = ReasoningContext::estimate_tokens(&cached_prompt)
+            .saturating_sub(ReasoningContext::estimate_tokens(&non_mcp_system_prompt));
+        let skills_tokens = skill_context
+            .as_ref()
+            .map(|s| ReasoningContext::estimate_tokens(s))
+            .unwrap_or(0);
+        let messages_tokens = initial_messages
+            .iter()
+            .map(|m| ReasoningContext::estimate_tokens(&m.content))
+            .sum::<u32>();
+        let compact_buffer_tokens =
+            ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32;
+        let total_estimate = system_prompt_tokens
+            .saturating_add(mcp_prompts_tokens)
+            .saturating_add(skills_tokens)
+            .saturating_add(messages_tokens)
+            .saturating_add(compact_buffer_tokens);
+        let initial_estimate = ContextTokenEstimate {
+            system_prompt_tokens,
+            mcp_prompts_tokens,
+            skills_tokens,
+            messages_tokens,
+            compact_buffer_tokens,
+            total_estimate,
+        };
 
         let max_tool_iterations = self.config.max_tool_iterations;
         let force_text_at = max_tool_iterations;
@@ -516,6 +570,7 @@ impl Agent {
             .with_messages(initial_messages)
             .with_tools(initial_tool_defs)
             .with_system_prompt(delegate.cached_prompt.clone())
+            .with_context_estimate(initial_estimate)
             .with_metadata({
                 let mut m = std::collections::HashMap::new();
                 m.insert("thread_id".to_string(), thread_id.to_string());
@@ -547,7 +602,10 @@ impl Agent {
         }
 
         match outcome {
-            LoopOutcome::Response(text) => Ok(AgenticLoopResult::Response(text)),
+            LoopOutcome::Response(text) => Ok(AgenticLoopResult::Response {
+                text,
+                context_stats: reason_ctx.context_estimate.clone(),
+            }),
             LoopOutcome::Stopped => Err(crate::error::JobError::ContextError {
                 id: thread_id,
                 reason: "Interrupted".to_string(),
@@ -779,6 +837,13 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             }
             Err(e) => return Err(e.into()),
         };
+
+        // Compute calibrated context stats using actual input tokens from LLM response.
+        let compact_buffer_tokens =
+            ((self.agent.deps.llm.model_metadata().await.ok().and_then(|m| m.context_length).unwrap_or(0) as f32)
+                * 0.033) as u32;
+        reason_ctx.context_estimate =
+            reason_ctx.compute_calibrated_stats(output.usage.input_tokens, compact_buffer_tokens);
 
         // Record cost and track token usage (global + per-user).
         // Use the provider's effective_model_name so cost attribution matches
@@ -2732,6 +2797,7 @@ mod tests {
             name: "echo".to_string(),
             description: "Echo a message".to_string(),
             parameters: serde_json::json!({"type": "object", "properties": {"message": {"type": "string"}}}),
+            ..Default::default()
         };
 
         // Without force_text: provider returns tool calls.
@@ -3106,7 +3172,7 @@ mod tests {
 
         // Verify we got a text response.
         match inner.unwrap() {
-            super::AgenticLoopResult::Response(text) => {
+            super::AgenticLoopResult::Response { text, .. } => {
                 assert!(!text.is_empty(), "Expected non-empty forced text response");
             }
             super::AgenticLoopResult::NeedApproval { .. } => {

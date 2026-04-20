@@ -908,6 +908,7 @@ mod tests {
                     "x": { "type": "string" }
                 }
             }),
+            ..Default::default()
         };
         let json = convert_tool_definition(&tool);
         assert_eq!(json["type"], "function");
@@ -1100,6 +1101,7 @@ data: {"type":"response.output_text.delta","delta":" ignored"}
             name: "search".to_string(),
             description: "Search for things".to_string(),
             parameters: serde_json::json!({"type": "object"}),
+            ..Default::default()
         }];
 
         let body = provider.build_request_body(&messages, Some(&tools));
@@ -1163,6 +1165,7 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
             name: "mcp.server.search".to_string(),
             description: "Search".to_string(),
             parameters: serde_json::json!({"type": "object", "properties": {}}),
+            ..Default::default()
         };
         let json = super::convert_tool_definition(&tool);
         assert_eq!(json["name"], "mcp_server_search");
@@ -1193,11 +1196,13 @@ data: {"type":"response.completed","response":{"status":"completed","usage":{"in
                 name: "mcp.server.search".to_string(),
                 description: "Search".to_string(),
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
+                ..Default::default()
             },
             ToolDefinition {
                 name: "workspace_search".to_string(),
                 description: "Memory".to_string(),
                 parameters: serde_json::json!({"type": "object", "properties": {}}),
+                ..Default::default()
             },
         ];
 
