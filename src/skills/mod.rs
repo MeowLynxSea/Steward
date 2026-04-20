@@ -47,6 +47,11 @@ pub const MAX_PROMPT_FILE_SIZE: u64 = 64 * 1024;
 static SKILL_NAME_PATTERN: std::sync::LazyLock<Regex> =
     std::sync::LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$").unwrap()); // safety: hardcoded literal
 
+/// Regex used to rewrite the `name:` field inside a SKILL.md YAML frontmatter
+/// block.  Matches a `name:` key at the start of any line (multiline mode).
+pub static NAME_REWRITE_PATTERN: std::sync::LazyLock<Regex> =
+    std::sync::LazyLock::new(|| Regex::new(r"(?m)^name:.*$").unwrap()); // safety: hardcoded literal
+
 /// Validate a skill name against the allowed pattern.
 pub fn validate_skill_name(name: &str) -> bool {
     SKILL_NAME_PATTERN.is_match(name)

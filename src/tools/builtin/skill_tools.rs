@@ -320,7 +320,13 @@ impl Tool for SkillInstallTool {
             // Look up in catalog and fetch
             let download_url =
                 crate::skills::catalog::skill_download_url(self.catalog.registry_url(), name);
-            fetch_skill_content(&download_url).await?
+            let raw = fetch_skill_content(&download_url).await?;
+            // Catalog SKILL.md files may use a human-readable display name (e.g.
+            // "AI Researcher") in their frontmatter `name:` field, which fails
+            // the slug validation ([a-zA-Z0-9][a-zA-Z0-9._-]{0,63}).  Overwrite
+            // the frontmatter name with the slug the caller provided so the
+            // install proceeds correctly.
+            rewrite_frontmatter_name(&raw, name)
         };
 
         // Check for duplicates and get the shared skills root under a brief read lock.
@@ -384,6 +390,42 @@ impl Tool for SkillInstallTool {
     fn requires_approval(&self, _params: &serde_json::Value) -> ApprovalRequirement {
         ApprovalRequirement::UnlessAutoApproved
     }
+}
+
+/// Replace the `name:` field in a SKILL.md YAML frontmatter block with `slug`.
+///
+/// This is used when installing a skill from the catalog by slug: the remote
+/// SKILL.md may carry a human-readable display name (e.g. `name: AI Researcher`)
+/// that doesn't satisfy the filesystem-safe slug pattern.  Replacing it with the
+/// caller-supplied slug ensures the install pipeline can parse and store the skill
+/// without error, while keeping all other frontmatter fields intact.
+///
+/// Returns `content` unchanged if it doesn't contain a recognisable frontmatter
+/// block.
+fn rewrite_frontmatter_name(content: &str, slug: &str) -> String {
+    // Locate the opening `---` delimiter.
+    let Some(open) = content.find("---") else {
+        return content.to_string();
+    };
+    let after_open = &content[open + 3..];
+
+    // Locate the closing `---` delimiter (must start on a new line).
+    let Some(yaml_len) = after_open.find("\n---") else {
+        return content.to_string();
+    };
+
+    let yaml_block = &after_open[..yaml_len];
+
+    // Replace `name: <anything>` within the YAML block.
+    let new_yaml = crate::skills::NAME_REWRITE_PATTERN
+        .replace(yaml_block, &format!("name: {slug}"));
+
+    format!(
+        "{}---{}{}",
+        &content[..open],
+        new_yaml,
+        &after_open[yaml_len..],
+    )
 }
 
 /// Validate that a URL is safe to fetch (SSRF prevention).
@@ -1481,5 +1523,41 @@ mod tests {
             url.is_none(),
             "empty url string should be treated as absent"
         );
+    }
+
+    #[test]
+    fn test_rewrite_frontmatter_name_replaces_display_name() {
+        // Catalog SKILL.md files may carry a human-readable display name that
+        // contains spaces, which fails slug validation. The rewriter should
+        // replace it with the caller-supplied slug.
+        let content = "---\nname: AI Researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
+        let rewritten = rewrite_frontmatter_name(content, "ai-researcher");
+        assert!(
+            rewritten.contains("name: ai-researcher"),
+            "slug must appear in rewritten content, got:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("AI Researcher"),
+            "display name must be gone, got:\n{rewritten}"
+        );
+        // Non-name fields must survive unchanged.
+        assert!(rewritten.contains("description: Helps with research"));
+        assert!(rewritten.contains("Prompt body."));
+    }
+
+    #[test]
+    fn test_rewrite_frontmatter_name_noop_when_already_valid() {
+        // When the frontmatter already carries the slug, rewriting should leave
+        // the content identical.
+        let content = "---\nname: ai-researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
+        let rewritten = rewrite_frontmatter_name(content, "ai-researcher");
+        assert_eq!(rewritten, content);
+    }
+
+    #[test]
+    fn test_rewrite_frontmatter_name_returns_unchanged_without_frontmatter() {
+        let content = "No frontmatter here, just plain text.";
+        let rewritten = rewrite_frontmatter_name(content, "some-slug");
+        assert_eq!(rewritten, content);
     }
 }
