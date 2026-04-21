@@ -61,6 +61,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
             steward_common::AppEvent::TurnCost { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::ReasoningUpdate { thread_id, .. } => thread_id.clone(),
             steward_common::AppEvent::TitleUpdated { thread_id, .. } => thread_id.clone(),
+            steward_common::AppEvent::ContextStats { thread_id, .. } => thread_id.clone(),
             _ => None,
         };
 

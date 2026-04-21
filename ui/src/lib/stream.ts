@@ -52,18 +52,24 @@ export function createEventStream(
   const unlisteners: UnlistenFn[] = [];
   let closed = false;
 
-  function handlePayload(payload: unknown) {
+  function handlePayload(payload: unknown, eventType?: string) {
     try {
       const event = payload as StreamEnvelope;
+      if (eventType === 'session:context_stats') {
+        console.debug('[stream] context_stats event received:', JSON.stringify(event));
+      }
       onEvent(event);
-    } catch {
+    } catch (e) {
+      if (eventType === 'session:context_stats') {
+        console.error('[stream] context_stats parse error:', e);
+      }
       // Silently ignore malformed payloads so the stream stays alive.
     }
   }
 
   // Subscribe to all known event types.
   for (const type of STREAM_EVENT_TYPES) {
-    listen(type, (event) => handlePayload(event.payload)).then((unlisten) => {
+    listen(type, (event) => handlePayload(event.payload, type)).then((unlisten) => {
       if (closed) {
         unlisten();
         return;

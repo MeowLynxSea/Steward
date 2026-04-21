@@ -430,10 +430,29 @@ impl AgentChannels {
             .get("notify_thread_id")
             .and_then(|v| v.as_str())
             .map(String::from);
-        if let Some(event) = status_update_to_app_event(&status, thread_id) {
+
+        tracing::debug!(
+            channel = channel_name,
+            status_variant = ?status,
+            notify_user = user_id,
+            notify_thread_id = ?thread_id,
+            "AgentChannels::send_status called"
+        );
+
+        if let Some(event) = status_update_to_app_event(&status, thread_id.clone()) {
+            tracing::debug!(
+                event_type = %event.event_type(),
+                thread_id = ?thread_id,
+                "AgentChannels: converting StatusUpdate to AppEvent"
+            );
             if let Some(emitter) = self.emitter.as_ref() {
+                tracing::debug!("AgentChannels: emitter available, emitting for user {}", user_id);
                 emitter.emit_for_user(user_id, event);
+            } else {
+                tracing::debug!("AgentChannels: NO emitter available");
             }
+        } else {
+            tracing::debug!("AgentChannels: status_update_to_app_event returned None");
         }
         if let Some(transport) = self.transport.as_ref() {
             let _ = channel_name;

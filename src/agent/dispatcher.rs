@@ -736,6 +736,16 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
     ) -> Option<LoopOutcome> {
         self.thinking_tracker.lock().await.prefer_new_segment = true;
 
+        // Emit context stats update before LLM call
+        emit_context_stats_update_fn(
+            self.agent,
+            &self.message.channel,
+            self.thread_id,
+            &self.message.user_id,
+            reason_ctx,
+        )
+        .await;
+
         // Inject a nudge message when approaching the iteration limit so the
         // LLM is aware it should produce a final answer on the next turn.
         if iteration == self.nudge_at {
@@ -1504,7 +1514,82 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             return Ok(Some(LoopOutcome::NeedApproval(Box::new(pending))));
         }
 
+        // Emit context stats update after tool execution (messages have grown)
+        emit_context_stats_update_fn(
+            self.agent,
+            &self.message.channel,
+            self.thread_id,
+            &self.message.user_id,
+            reason_ctx,
+        )
+        .await;
+
         Ok(None)
+    }
+}
+
+/// Emit context stats update to the frontend via the Tauri event emitter.
+fn emit_context_stats_update_fn<'a>(
+    agent: &'a Agent,
+    channel_name: &'a str,
+    thread_id: Uuid,
+    user_id: &'a str,
+    reason_ctx: &'a mut ReasoningContext,
+) -> impl std::future::Future<Output = ()> + 'a {
+    async move {
+        // Re-estimate message tokens with current context (messages may have grown since last call)
+        let messages_tokens = reason_ctx
+            .messages
+            .iter()
+            .map(|m| ReasoningContext::estimate_tokens(&m.content))
+            .sum();
+
+        let mut stats = reason_ctx.context_estimate.clone();
+        stats.messages_tokens = messages_tokens;
+
+        let model_context_length = agent
+            .deps
+            .llm
+            .model_metadata()
+            .await
+            .ok()
+            .and_then(|m| m.context_length)
+            .unwrap_or(0);
+
+        let free_tokens = model_context_length as i32 - stats.total_estimate as i32;
+
+        let metadata = serde_json::json!({
+            "notify_user": user_id,
+            "notify_thread_id": thread_id.to_string(),
+        });
+
+        tracing::debug!(
+            thread_id = %thread_id,
+            user_id,
+            model_context_length,
+            messages_tokens,
+            free_tokens,
+            "EMIT_CONTEXT_STATS: sending to channel {}",
+            channel_name
+        );
+
+        let _ = agent
+            .send_channel_status(
+                channel_name,
+                StatusUpdate::ContextStats {
+                    stats: steward_common::ContextStats {
+                        model_context_length,
+                        system_prompt_tokens: stats.system_prompt_tokens,
+                        mcp_prompts_tokens: stats.mcp_prompts_tokens,
+                        skills_tokens: stats.skills_tokens,
+                        messages_tokens: stats.messages_tokens,
+                        compact_buffer_tokens: stats.compact_buffer_tokens,
+                        free_tokens,
+                    },
+                },
+                &metadata,
+            )
+            .await;
     }
 }
 

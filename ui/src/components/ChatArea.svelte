@@ -150,6 +150,11 @@
     streaming.images.length > 0
   );
   const contextStats = $derived(session?.context_stats ?? null);
+  $effect(() => {
+    if (contextStats) {
+      console.debug('[ChatArea] contextStats changed:', JSON.stringify(contextStats));
+    }
+  });
   const contextUsagePercent = $derived.by(() => {
     const stats = contextStats;
     const modelCtx = session?.model_context_length;

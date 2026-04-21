@@ -951,15 +951,19 @@ class SessionsState {
 
       case "session.context_stats": {
         const stats = event.payload as import("../types").ContextStats;
+        console.debug('[sessions] context_stats handler fired', {
+          threadId: event.thread_id,
+          stats,
+          activeSessionId: this.active?.session?.id,
+          activeThreadId: this.active?.active_thread_id,
+        });
         if (this.active) {
           this.active = {
             ...this.active,
-            session: {
-              ...this.active.session,
-              model_context_length: stats.model_context_length,
-              context_stats: stats
-            }
+            model_context_length: stats.model_context_length,
+            context_stats: stats
           };
+          console.debug('[sessions] context_stats updated, new value:', this.active.context_stats);
         }
         break;
       }
@@ -1020,7 +1024,8 @@ class SessionsState {
     if (!activeThreadId) {
       return true;
     }
-    if (!event.thread_id) {
+    // Treat empty string as "no thread id" (match all)
+    if (!event.thread_id || event.thread_id === "") {
       return false;
     }
     return event.thread_id === activeThreadId;
