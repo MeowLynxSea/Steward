@@ -9,6 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fluentui/font-icons-mdl2": "^8.5.72",
+    "@fontsource/noto-color-emoji": "^5.2.12",
+    "@fontsource/noto-emoji": "^5.2.11",
+    "@lobehub/fluent-emoji": "^4.1.0",
     "@tauri-apps/api": "^2.0.0",
     "dompurify": "^3.3.3",
     "highlight.js": "^11.11.1",

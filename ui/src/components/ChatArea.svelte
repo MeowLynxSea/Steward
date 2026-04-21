@@ -2201,6 +2201,7 @@
     line-height: 1.6;
     white-space: pre-wrap;
     word-break: break-word;
+    font-family: var(--font-emoji);
   }
 
   .user-message-stack {

@@ -278,6 +278,7 @@
   .session-emoji {
     font-size: 14px;
     line-height: 1;
+    font-family: var(--font-emoji);
   }
 
   .title-skeleton {

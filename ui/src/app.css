@@ -6,6 +6,9 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 
+  /* Emoji font stack — 内嵌 Noto Emoji 单色版 (Google, OFL) */
+  --font-emoji: "Noto Emoji", "Apple Color Emoji", "Segoe UI Emoji", "Twemoji", sans-serif;
+
   /* Color tokens — Light theme (default) */
   --bg-primary: #f5f0e8;
   --bg-sidebar: #faf8f5;
@@ -124,6 +127,7 @@ h3 {
   line-height: 1.2 !important;
   word-break: break-word;
   overflow-wrap: break-word;
+  font-family: var(--font-emoji);
 }
 
 .markdown-body p {

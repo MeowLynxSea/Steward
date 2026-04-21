@@ -297,6 +297,13 @@
   .session-emoji {
     font-size: 14px;
     line-height: 1;
+    font-family: var(--font-emoji);
+  }
+
+  .collapsed-emoji {
+    font-size: 13px;
+    line-height: 1;
+    font-family: var(--font-emoji);
   }
 
   .loading-icon {
