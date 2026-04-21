@@ -1898,34 +1898,55 @@
           <div class="context-stats-summary">
             <span>模型上下文窗口: <strong>{session?.model_context_length?.toLocaleString() ?? 'N/A'} tokens</strong></span>
           </div>
+          <div class="context-bar-wrap">
+            <div class="context-bar" title="上下文使用可视化">
+              {#each [
+                { label: 'System Prompt', value: contextStats.system_prompt_tokens, color: '#6366f1' },
+                { label: 'MCP Prompts', value: contextStats.mcp_prompts_tokens, color: '#8b5cf6' },
+                { label: 'Skills', value: contextStats.skills_tokens, color: '#f59e0b' },
+                { label: 'Messages', value: contextStats.messages_tokens, color: '#06b6d4' },
+                { label: 'Tool Use', value: contextStats.tool_use_tokens, color: '#f97316' },
+                { label: 'Compact Buffer', value: contextStats.compact_buffer_tokens, color: '#10b981' },
+              ] as seg}
+                {@const pct = session?.model_context_length ? Math.max(0, (seg.value / session.model_context_length) * 100) : 0}
+                {#if pct > 0}
+                  <div
+                    class="context-bar-seg"
+                    style="width: {pct}%; background: {seg.color};"
+                    title="{seg.label}: {seg.value.toLocaleString()} tokens ({pct.toFixed(1)}%)"
+                  ></div>
+                {/if}
+              {/each}
+            </div>
+          </div>
           <div class="context-stats-grid">
             <div class="context-stat-row">
-              <span class="context-stat-label">System Prompt</span>
-              <span class="context-stat-value">{contextStats.system_prompt_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #6366f1;"></span>System Prompt</span>
+              <span class="context-stat-value">{contextStats.system_prompt_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.system_prompt_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">MCP Prompts</span>
-              <span class="context-stat-value">{contextStats.mcp_prompts_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #8b5cf6;"></span>MCP Prompts</span>
+              <span class="context-stat-value">{contextStats.mcp_prompts_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.mcp_prompts_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">Skills</span>
-              <span class="context-stat-value">{contextStats.skills_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #f59e0b;"></span>Skills</span>
+              <span class="context-stat-value">{contextStats.skills_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.skills_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">Messages</span>
-              <span class="context-stat-value">{contextStats.messages_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #06b6d4;"></span>Messages</span>
+              <span class="context-stat-value">{contextStats.messages_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.messages_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">Tool Use</span>
-              <span class="context-stat-value">{contextStats.tool_use_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #f97316;"></span>Tool Use</span>
+              <span class="context-stat-value">{contextStats.tool_use_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.tool_use_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row">
-              <span class="context-stat-label">Compact Buffer</span>
-              <span class="context-stat-value">{contextStats.compact_buffer_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-label"><span class="stat-dot" style="background: #10b981;"></span>Compact Buffer</span>
+              <span class="context-stat-value">{contextStats.compact_buffer_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.compact_buffer_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
             <div class="context-stat-row context-stat-free">
               <span class="context-stat-label">Free Space</span>
-              <span class="context-stat-value" class:warning={contextStats.free_tokens < 0}>{contextStats.free_tokens.toLocaleString()} tokens</span>
+              <span class="context-stat-value" class:warning={contextStats.free_tokens < 0}>{contextStats.free_tokens.toLocaleString()} tokens <span class="stat-pct">({((contextStats.free_tokens / (session?.model_context_length ?? 1)) * 100).toFixed(1)}%)</span></span>
             </div>
           </div>
         </div>
@@ -3650,6 +3671,8 @@
   .context-stat-label {
     font-size: 13px;
     color: var(--text-secondary);
+    display: flex;
+    align-items: center;
   }
   .context-stat-value {
     font-size: 13px;
@@ -3662,5 +3685,36 @@
   .context-stat-free {
     padding-top: 8px;
     border-top: 2px solid var(--border);
+  }
+
+  /* Context bar */
+  .context-bar-wrap {
+    margin-bottom: 12px;
+  }
+  .context-bar {
+    display: flex;
+    height: 16px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+    gap: 1px;
+  }
+  .context-bar-seg {
+    height: 100%;
+    min-width: 2px;
+    transition: width 0.3s ease;
+  }
+  .stat-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+  .stat-pct {
+    color: var(--text-muted);
+    font-size: 12px;
   }
 </style>
