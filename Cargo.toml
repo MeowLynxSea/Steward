@@ -138,9 +138,6 @@ subtle = "2"  # Constant-time comparisons for token validation
 # Multi-provider LLM support
 rig-core = { version = "0.30", default-features = false, features = ["reqwest-rustls"] }
 
-# Docker sandbox
-bollard = "0.18"
-
 # Archive extraction for WASM extension bundles
 flate2 = "1"
 tar = "0.4"

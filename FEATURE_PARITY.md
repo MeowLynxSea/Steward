@@ -482,10 +482,10 @@ This document tracks feature parity between Steward (Rust implementation) and Op
 | SSRF IPv6 transition bypass block | ✅ | ❌ | Block IPv4-mapped IPv6 bypasses |
 | Cron webhook SSRF guard | ✅ | ❌ | SSRF checks on webhook delivery |
 | Loopback-first | ✅ | 🚧 | HTTP binds 0.0.0.0 |
-| Docker sandbox | ✅ | ✅ | Orchestrator/worker containers |
-| Podman support | ✅ | ❌ | Alternative to Docker |
+| Docker sandbox | ❌ | ❌ | Removed - WASM sandbox for tool isolation |
+| Podman support | ❌ | ❌ | |
 | WASM sandbox | ❌ | ✅ | Steward innovation |
-| Sandbox env sanitization | ✅ | 🚧 | Shell tool scrubs env vars (secret detection); docker container env sanitization partial |
+| Sandbox env sanitization | ✅ | ✅ | Shell tool scrubs env vars (secret detection) |
 | Tool policies | ✅ | ✅ | |
 | Elevated mode | ✅ | ❌ | |
 | Safe bins allowlist | ✅ | ❌ | Hardened path trust |

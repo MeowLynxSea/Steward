@@ -58,8 +58,8 @@ impl ContextManager {
     /// accepts an existing `job_id` so runtime components can persist job state
     /// before scheduling begins.
     ///
-    /// The job starts in `InProgress` state since the container is about to be
-    /// created. Counts against `max_jobs` like any other job.
+    /// The job starts in `InProgress` state since the worker is about to be
+    /// scheduled. Counts against `max_jobs` like any other job.
     pub async fn register_local_job(
         &self,
         job_id: Uuid,

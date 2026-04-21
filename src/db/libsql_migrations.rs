@@ -182,7 +182,7 @@ CREATE TABLE IF NOT EXISTS dynamic_tools (
     description TEXT NOT NULL,
     parameters_schema TEXT NOT NULL,
     code TEXT NOT NULL,
-    sandbox_config TEXT NOT NULL,
+    sandbox_config TEXT,
     created_by_job_id TEXT REFERENCES agent_jobs(id),
     success_count INTEGER NOT NULL DEFAULT 0,
     failure_count INTEGER NOT NULL DEFAULT 0,

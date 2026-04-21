@@ -1,9 +1,7 @@
 //! Unified agentic loop engine.
 //!
-//! Provides a single implementation of the core LLM call → tool execution →
-//! result processing → context update → repeat cycle. Three consumers
-//! (chat dispatcher, job worker, container runtime) customize behavior
-//! via the `LoopDelegate` trait.
+//! Provides a single implementation of the core LLM call → tool execution → result processing → context update → repeat cycle. Two consumers
+//! (chat dispatcher, job worker) customize behavior via the `LoopDelegate` trait.
 
 use async_trait::async_trait;
 use std::borrow::Cow;

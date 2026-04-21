@@ -100,16 +100,7 @@ src/
 │
 ├── observability/      # Pluggable event/metric recording (noop, log, multi)
 │
-├── orchestrator/       # Internal HTTP API for sandbox containers
-│   ├── api.rs          # Axum endpoints (LLM proxy, events, prompts)
-│   ├── auth.rs         # Per-job bearer token store
-│   └── job_manager.rs  # Container lifecycle (create, stop, cleanup)
-│
-├── worker/             # Runs inside Docker containers
-│   ├── container.rs    # Container worker runtime (ContainerDelegate + shared agentic loop)
-│   ├── job.rs          # Background job worker (JobDelegate + shared agentic loop)
-│   ├── claude_bridge.rs # Claude Code bridge (spawns claude CLI)
-│   └── proxy_llm.rs    # LlmProvider that proxies through orchestrator
+├── worker/             # Background job worker (JobDelegate + shared agentic loop)
 │
 ├── safety/             # Re-export shim for crates/steward_safety (see Extracted Crates)
 │
@@ -149,12 +140,6 @@ src/
 ├── context/            # Job context isolation (JobState, JobContext, ContextManager)
 ├── estimation/         # Cost/time/value estimation with EMA learning
 ├── evaluation/         # Success evaluation (rule-based, LLM-based)
-│
-├── sandbox/            # Docker execution sandbox
-│   ├── config.rs       # SandboxConfig, SandboxPolicy enum (ReadOnly/WorkspaceWrite/FullAccess)
-│   ├── manager.rs      # SandboxManager orchestration
-│   ├── container.rs    # ContainerRunner, Docker lifecycle
-│   └── proxy/          # Network proxy: domain allowlist, credential injection, CONNECT tunnel
 │
 ├── secrets/            # Secrets management (AES-256-GCM, OS keychain for master key)
 │

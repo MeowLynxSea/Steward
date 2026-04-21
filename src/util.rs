@@ -37,7 +37,7 @@ pub fn ensure_ends_with_user_message(messages: &mut Vec<ChatMessage>) {
 pub fn llm_signals_completion(response: &str) -> bool {
     let lower = response.to_lowercase();
 
-    // Superset of phrases from worker/job.rs and worker/container.rs.
+    // Superset of phrases from worker/job.rs.
     let positive_phrases = [
         "job is complete",
         "job is done",

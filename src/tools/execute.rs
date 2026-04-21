@@ -151,10 +151,10 @@ pub fn process_tool_result(
     (content, message)
 }
 
-/// Execute a tool with safety checks, returning a string error (for container runtime).
+/// Execute a tool with safety checks, returning a string error for simpler error handling.
 ///
 /// This is a thin wrapper around `execute_tool_with_safety` that converts
-/// `Error` to `String` for the container runtime's simpler error model.
+/// `Error` to `String` for callers that prefer a simpler error model.
 pub async fn execute_tool_simple(
     tools: &ToolRegistry,
     safety: &SafetyLayer,

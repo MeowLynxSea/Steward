@@ -2762,7 +2762,7 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Sanitize a summary string from job transitions before using in notifications.
 ///
-/// `last_reason` comes from untrusted container code, so we:
+/// `last_reason` comes from job output, so we:
 /// 1. Strip control characters (except newline) to prevent terminal injection
 /// 2. Strip HTML tags to prevent injection in web-rendered notifications
 /// 3. Collapse multiple whitespace/newlines to single spaces for cleaner output
