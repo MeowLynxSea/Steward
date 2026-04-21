@@ -604,6 +604,17 @@ impl Agent {
             let _ = handle.await;
         }
 
+        // Update context stats after the loop (includes any new assistant text messages added
+        // via handle_text_response during the run).
+        emit_context_stats_update_fn(
+            self,
+            &message.channel,
+            thread_id,
+            &message.user_id,
+            &mut reason_ctx,
+        )
+        .await;
+
         match outcome {
             LoopOutcome::Response(text) => Ok(AgenticLoopResult::Response {
                 text,
