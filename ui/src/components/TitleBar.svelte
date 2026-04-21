@@ -70,6 +70,10 @@
     await appWindow.startDragging();
   }
 
+  async function handleTitlebarDblClick() {
+    await appWindow.toggleMaximize();
+  }
+
   function toggleModelDropdown() {
     showModelDropdown = !showModelDropdown;
   }
@@ -104,7 +108,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<header class="titlebar" onmousedown={handleTitlebarMouseDown}>
+<header class="titlebar" onmousedown={handleTitlebarMouseDown} ondblclick={handleTitlebarDblClick}>
   <div class="titlebar-side titlebar-side-left">
     {#if isMac}
       <div class="traffic-lights">
