@@ -171,8 +171,10 @@ export interface ContextStats {
   mcp_prompts_tokens: number;
   /** Estimated tokens used by skills. */
   skills_tokens: number;
-  /** Estimated tokens used by the message history. */
+  /** Estimated tokens used by message history (user messages, text responses, thinking). */
   messages_tokens: number;
+  /** Estimated tokens used by tool calls and tool results. */
+  tool_use_tokens: number;
   /** Tokens reserved for the compact buffer (future compression feature). */
   compact_buffer_tokens: number;
   /** Free space remaining before hitting the context limit. */

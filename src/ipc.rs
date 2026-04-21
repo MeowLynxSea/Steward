@@ -96,6 +96,7 @@ pub struct PersistedContextStats {
     pub mcp_prompts_tokens: u32,
     pub skills_tokens: u32,
     pub messages_tokens: u32,
+    pub tool_use_tokens: u32,
     pub compact_buffer_tokens: u32,
     pub total_estimate: u32,
 }
@@ -177,8 +178,10 @@ pub struct ContextStatsResponse {
     pub mcp_prompts_tokens: u32,
     /// Estimated tokens used by skills.
     pub skills_tokens: u32,
-    /// Estimated tokens used by the message history.
+    /// Estimated tokens used by the message history (user messages, text responses, thinking).
     pub messages_tokens: u32,
+    /// Estimated tokens used by tool calls and tool results.
+    pub tool_use_tokens: u32,
     /// Tokens reserved for the compact buffer (future compression feature).
     pub compact_buffer_tokens: u32,
     /// Free space remaining before hitting the context limit.

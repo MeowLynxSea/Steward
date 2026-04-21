@@ -22,8 +22,10 @@ pub struct ContextStats {
     pub mcp_prompts_tokens: u32,
     /// Estimated tokens used by skills.
     pub skills_tokens: u32,
-    /// Estimated tokens used by the message history.
+    /// Estimated tokens used by the message history (user messages, text responses, thinking).
     pub messages_tokens: u32,
+    /// Estimated tokens used by tool calls and tool results.
+    pub tool_use_tokens: u32,
     /// Tokens reserved for the compact buffer.
     pub compact_buffer_tokens: u32,
     /// Free space remaining before hitting the context limit.
@@ -502,6 +504,7 @@ mod tests {
                     mcp_prompts_tokens: 0,
                     skills_tokens: 0,
                     messages_tokens: 0,
+                    tool_use_tokens: 0,
                     compact_buffer_tokens: 0,
                     free_tokens: 0,
                 },

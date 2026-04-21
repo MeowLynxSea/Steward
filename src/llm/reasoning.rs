@@ -193,7 +193,10 @@ pub struct ContextTokenEstimate {
     pub system_prompt_tokens: u32,
     pub mcp_prompts_tokens: u32,
     pub skills_tokens: u32,
+    /// Tokens used by user messages, assistant text responses, and thinking content.
     pub messages_tokens: u32,
+    /// Tokens used by tool calls (reasoning/rationale) and tool result messages.
+    pub tool_use_tokens: u32,
     pub compact_buffer_tokens: u32,
     pub total_estimate: u32,
 }
@@ -291,6 +294,22 @@ impl ReasoningContext {
         (text.len() as u32 / 4).max(1)
     }
 
+    /// Estimate tokens for a single ChatMessage, including:
+    /// - `content` (user text, assistant text, thinking content)
+    /// - `tool_calls` reasoning/rationale field
+    /// - tool result `content` (in `tool_call_id` messages)
+    pub fn estimate_message_tokens(msg: &ChatMessage) -> u32 {
+        let mut tokens = Self::estimate_tokens(&msg.content);
+        if let Some(ref calls) = msg.tool_calls {
+            for tc in calls {
+                if let Some(ref r) = tc.reasoning {
+                    tokens += Self::estimate_tokens(r);
+                }
+            }
+        }
+        tokens
+    }
+
     /// Compute calibrated context stats by comparing local estimates against the
     /// actual input token count returned by the LLM.
     ///
@@ -310,11 +329,13 @@ impl ReasoningContext {
                 mcp_prompts_tokens: est.mcp_prompts_tokens,
                 skills_tokens: est.skills_tokens,
                 messages_tokens: est.messages_tokens,
+                tool_use_tokens: est.tool_use_tokens,
                 compact_buffer_tokens,
                 total_estimate: est.system_prompt_tokens
                     .saturating_add(est.mcp_prompts_tokens)
                     .saturating_add(est.skills_tokens)
                     .saturating_add(est.messages_tokens)
+                    .saturating_add(est.tool_use_tokens)
                     .saturating_add(compact_buffer_tokens),
             };
         }
@@ -329,17 +350,21 @@ impl ReasoningContext {
             (est.skills_tokens as f64 * ratio).round().max(0.0) as u32;
         let messages_tokens =
             (est.messages_tokens as f64 * ratio).round().max(0.0) as u32;
+        let tool_use_tokens =
+            (est.tool_use_tokens as f64 * ratio).round().max(0.0) as u32;
 
         ContextTokenEstimate {
             system_prompt_tokens,
             mcp_prompts_tokens,
             skills_tokens,
             messages_tokens,
+            tool_use_tokens,
             compact_buffer_tokens,
             total_estimate: system_prompt_tokens
                 .saturating_add(mcp_prompts_tokens)
                 .saturating_add(skills_tokens)
                 .saturating_add(messages_tokens)
+                .saturating_add(tool_use_tokens)
                 .saturating_add(compact_buffer_tokens),
         }
     }

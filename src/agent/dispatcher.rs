@@ -528,20 +528,23 @@ impl Agent {
             .unwrap_or(0);
         let messages_tokens = initial_messages
             .iter()
-            .map(|m| ReasoningContext::estimate_tokens(&m.content))
+            .map(|m| ReasoningContext::estimate_message_tokens(m))
             .sum::<u32>();
+        let tool_use_tokens: u32 = 0;
         let compact_buffer_tokens =
             ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32;
         let total_estimate = system_prompt_tokens
             .saturating_add(mcp_prompts_tokens)
             .saturating_add(skills_tokens)
             .saturating_add(messages_tokens)
+            .saturating_add(tool_use_tokens)
             .saturating_add(compact_buffer_tokens);
         let initial_estimate = ContextTokenEstimate {
             system_prompt_tokens,
             mcp_prompts_tokens,
             skills_tokens,
             messages_tokens,
+            tool_use_tokens,
             compact_buffer_tokens,
             total_estimate,
         };
@@ -1537,15 +1540,62 @@ fn emit_context_stats_update_fn<'a>(
     reason_ctx: &'a mut ReasoningContext,
 ) -> impl std::future::Future<Output = ()> + 'a {
     async move {
-        // Re-estimate message tokens with current context (messages may have grown since last call)
-        let messages_tokens = reason_ctx
+        // Re-estimate message tokens with current context (messages may have grown since last call).
+        // messages_tokens = all message content (user text, assistant text, thinking in tool_calls reasoning).
+        // tool_use_tokens = tool result messages (identified by tool_call_id).
+        let (messages_tokens, tool_use_tokens) = reason_ctx
             .messages
             .iter()
-            .map(|m| ReasoningContext::estimate_tokens(&m.content))
-            .sum();
+            .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
+                if m.tool_call_id.is_some() {
+                    // Tool result messages → tool_use_tokens
+                    (msg_tok, tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)))
+                } else {
+                    // User/assistant messages (including thinking in tool_calls.reasoning) → messages_tokens
+                    (msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)), tool_tok)
+                }
+            });
 
-        let mut stats = reason_ctx.context_estimate.clone();
+        // Use compute_calibrated_stats to recalculate ALL fields consistently.
+        // The ratio is computed as: actual_total / context_estimate.total_estimate.
+        // We must recompute ALL fields with this ratio so that message tokens
+        // (counted from actual content) and other fields (kept calibrated) remain
+        // in correct proportion to each other and to the actual LLM input.
+        let compact_buffer_tokens = ((agent
+            .deps
+            .llm
+            .model_metadata()
+            .await
+            .ok()
+            .and_then(|m| m.context_length)
+            .unwrap_or(0)) as f32
+            * 0.033) as u32;
+
+        let mut stats = reason_ctx.compute_calibrated_stats(
+            reason_ctx
+                .context_estimate
+                .total_estimate
+                .saturating_sub(reason_ctx.context_estimate.messages_tokens)
+                .saturating_sub(reason_ctx.context_estimate.tool_use_tokens)
+                .saturating_add(messages_tokens)
+                .saturating_add(tool_use_tokens),
+            compact_buffer_tokens,
+        );
+
+        // Overwrite with actual counted values (not ratio-scaled estimates).
         stats.messages_tokens = messages_tokens;
+        stats.tool_use_tokens = tool_use_tokens;
+        stats.total_estimate = stats
+            .system_prompt_tokens
+            .saturating_add(stats.mcp_prompts_tokens)
+            .saturating_add(stats.skills_tokens)
+            .saturating_add(stats.messages_tokens)
+            .saturating_add(stats.tool_use_tokens)
+            .saturating_add(stats.compact_buffer_tokens);
+
+        // Write back so that context_estimate reflects actual message counts on
+        // subsequent uses (e.g., turn completion).
+        reason_ctx.context_estimate = stats.clone();
 
         let model_context_length = agent
             .deps
@@ -1568,6 +1618,7 @@ fn emit_context_stats_update_fn<'a>(
             user_id,
             model_context_length,
             messages_tokens,
+            tool_use_tokens,
             free_tokens,
             "EMIT_CONTEXT_STATS: sending to channel {}",
             channel_name
@@ -1583,6 +1634,7 @@ fn emit_context_stats_update_fn<'a>(
                         mcp_prompts_tokens: stats.mcp_prompts_tokens,
                         skills_tokens: stats.skills_tokens,
                         messages_tokens: stats.messages_tokens,
+                        tool_use_tokens: stats.tool_use_tokens,
                         compact_buffer_tokens: stats.compact_buffer_tokens,
                         free_tokens,
                     },

@@ -767,6 +767,7 @@ impl Agent {
                                 mcp_prompts_tokens: context_stats.mcp_prompts_tokens,
                                 skills_tokens: context_stats.skills_tokens,
                                 messages_tokens: context_stats.messages_tokens,
+                                tool_use_tokens: context_stats.tool_use_tokens,
                                 compact_buffer_tokens: context_stats.compact_buffer_tokens,
                                 total_estimate: context_stats.total_estimate,
                             });
@@ -820,13 +821,14 @@ impl Agent {
                     .channels
                     .send_status(
                         &message.channel,
-                        StatusUpdate::ContextStats {
+                StatusUpdate::ContextStats {
                             stats: ContextStats {
                                 model_context_length: model_context_length.unwrap_or(0),
                                 system_prompt_tokens: context_stats.system_prompt_tokens,
                                 mcp_prompts_tokens: context_stats.mcp_prompts_tokens,
                                 skills_tokens: context_stats.skills_tokens,
                                 messages_tokens: context_stats.messages_tokens,
+                                tool_use_tokens: context_stats.tool_use_tokens,
                                 compact_buffer_tokens: context_stats.compact_buffer_tokens,
                                 free_tokens,
                             },

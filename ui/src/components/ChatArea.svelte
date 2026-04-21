@@ -160,7 +160,7 @@
     const modelCtx = session?.model_context_length;
     if (!stats || !modelCtx) return 0;
     const total = modelCtx;
-    const used = stats.system_prompt_tokens + stats.mcp_prompts_tokens + stats.skills_tokens + stats.messages_tokens + stats.compact_buffer_tokens;
+    const used = stats.system_prompt_tokens + stats.mcp_prompts_tokens + stats.skills_tokens + stats.messages_tokens + stats.tool_use_tokens + stats.compact_buffer_tokens;
     if (total === 0) return 0;
     return Math.round((used / total) * 100);
   });
@@ -1914,6 +1914,10 @@
             <div class="context-stat-row">
               <span class="context-stat-label">Messages</span>
               <span class="context-stat-value">{contextStats.messages_tokens.toLocaleString()} tokens</span>
+            </div>
+            <div class="context-stat-row">
+              <span class="context-stat-label">Tool Use</span>
+              <span class="context-stat-value">{contextStats.tool_use_tokens.toLocaleString()} tokens</span>
             </div>
             <div class="context-stat-row">
               <span class="context-stat-label">Compact Buffer</span>

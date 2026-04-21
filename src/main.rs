@@ -322,6 +322,7 @@ impl RuntimeEventEmitter for TauriEventEmitter {
                     "mcp_prompts_tokens": stats.mcp_prompts_tokens,
                     "skills_tokens": stats.skills_tokens,
                     "messages_tokens": stats.messages_tokens,
+                    "tool_use_tokens": stats.tool_use_tokens,
                     "compact_buffer_tokens": stats.compact_buffer_tokens,
                     "free_tokens": stats.free_tokens,
                 })
