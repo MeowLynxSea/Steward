@@ -2825,24 +2825,34 @@ pub async fn get_session(
         .ok()
         .and_then(|m| m.context_length);
 
-    // Estimate context usage from thread messages
-    let messages_tokens = thread.estimate_messages_tokens();
+    // Use persisted context stats from the last completed turn if available.
+    // All fields — including messages_tokens — come from the same persisted source
+    // to ensure consistency with the streaming path (which uses emit_context_stats_update_fn
+    // to count tokens from reason_ctx.messages via estimate_message_tokens).
+    // Only fall back to estimate_messages_tokens() when no persisted stats exist yet.
+    let (messages_tokens, system_prompt_tokens, mcp_prompts_tokens, skills_tokens, tool_use_tokens) =
+        thread
+            .last_turn()
+            .and_then(|t| t.context_stats.as_ref())
+            .map(|s| {
+                (
+                    s.messages_tokens,
+                    s.system_prompt_tokens,
+                    s.mcp_prompts_tokens,
+                    s.skills_tokens,
+                    s.tool_use_tokens,
+                )
+            })
+            .unwrap_or((
+                thread.estimate_messages_tokens(),
+                0,
+                0,
+                0,
+                0,
+            ));
+
     let compact_buffer_tokens =
         ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
-
-    // Use persisted context stats from the last completed turn if available.
-    let (system_prompt_tokens, mcp_prompts_tokens, skills_tokens, tool_use_tokens) = thread
-        .last_turn()
-        .and_then(|t| t.context_stats.as_ref())
-        .map(|s| {
-            (
-                s.system_prompt_tokens,
-                s.mcp_prompts_tokens,
-                s.skills_tokens,
-                s.tool_use_tokens,
-            )
-        })
-        .unwrap_or((0, 0, 0, 0));
 
     let used_tokens = messages_tokens
         .saturating_add(compact_buffer_tokens)

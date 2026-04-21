@@ -733,8 +733,19 @@ impl Thread {
                     messages.push(ChatMessage::tool_result(call_id, &tc.name, content));
                 }
             }
+            // Merge thinking narrative with assistant response so both the initial
+            // estimate and the actual LLM input count the same tokens.
+            let assistant_content = turn.narrative.as_ref().map(|n| n.as_str()).unwrap_or("");
             if let Some(ref response) = turn.response {
-                messages.push(ChatMessage::assistant(response));
+                let combined = if assistant_content.is_empty() {
+                    response.clone()
+                } else {
+                    format!("{}\n\n{}", assistant_content, response)
+                };
+                messages.push(ChatMessage::assistant(combined));
+            } else if !assistant_content.is_empty() {
+                // Thinking without a final response (e.g., interrupted turn).
+                messages.push(ChatMessage::assistant(assistant_content));
             }
         }
         messages

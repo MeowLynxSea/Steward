@@ -935,7 +935,18 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         _metadata: crate::llm::ResponseMetadata,
         reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
-        reason_ctx.messages.push(ChatMessage::assistant(text));
+        // Merge thinking narrative into the assistant message so it is counted
+        // in messages_tokens alongside the final text.
+        let thinking: String = {
+            let tracker = self.thinking_tracker.lock().await;
+            tracker.segments.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>().join("")
+        };
+        let combined = if thinking.is_empty() {
+            text.to_string()
+        } else {
+            format!("{}\n\n{}", thinking, text)
+        };
+        reason_ctx.messages.push(ChatMessage::assistant(&combined));
         let sanitized = sanitize_user_visible_response(text);
         TextAction::Return(LoopOutcome::Response(sanitized))
     }
