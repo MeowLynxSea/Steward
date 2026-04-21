@@ -25,6 +25,9 @@ mod tests {
     #[test]
     fn resolve_falls_back_to_settings() {
         let _guard = lock_env();
+        // SAFETY: Under ENV_MUTEX, no concurrent env access.
+        unsafe { std::env::remove_var("SAFETY_MAX_OUTPUT_LENGTH") };
+        unsafe { std::env::remove_var("SAFETY_INJECTION_CHECK_ENABLED") };
         let mut settings = Settings::default();
         settings.safety.max_output_length = 42;
         settings.safety.injection_check_enabled = false;
