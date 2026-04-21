@@ -922,8 +922,9 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         &self,
         text: &str,
         _metadata: crate::llm::ResponseMetadata,
-        _reason_ctx: &mut ReasoningContext,
+        reason_ctx: &mut ReasoningContext,
     ) -> TextAction {
+        reason_ctx.messages.push(ChatMessage::assistant(text));
         let sanitized = sanitize_user_visible_response(text);
         TextAction::Return(LoopOutcome::Response(sanitized))
     }
