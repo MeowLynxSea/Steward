@@ -626,7 +626,7 @@
     gap: 10px;
     border-radius: 16px;
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
     font: inherit;
     font-weight: 600;
   }
@@ -700,7 +700,7 @@
 
   .modal-action.primary {
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
   }
 
   .modal-action.secondary {
@@ -778,7 +778,7 @@
 
   .btn-primary {
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
   }
 
   .btn-primary:hover {

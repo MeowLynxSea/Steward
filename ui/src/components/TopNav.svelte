@@ -29,6 +29,11 @@
 </header>
 
 <style>
+  [data-theme="dark"] .top-nav {
+    background: var(--bg-sidebar);
+    border-bottom-color: var(--border-default);
+  }
+
   .top-nav {
     display: flex;
     justify-content: space-between;
@@ -147,5 +152,32 @@
     width: 36px;
     height: 36px;
     padding: 0;
+  }
+
+  [data-theme="dark"] .model-badge {
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+  }
+
+  [data-theme="dark"] .session-title,
+  [data-theme="dark"] .menu-btn,
+  [data-theme="dark"] .app-name {
+    color: var(--text-primary);
+  }
+
+  [data-theme="dark"] .menu-btn:hover {
+    background: var(--bg-hover);
+  }
+
+  [data-theme="dark"] .status-text {
+    color: var(--text-secondary);
+  }
+
+  [data-theme="dark"] .btn-ghost {
+    color: var(--text-tertiary);
+  }
+
+  [data-theme="dark"] .btn-ghost:hover {
+    background: var(--bg-hover);
   }
 </style>

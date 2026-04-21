@@ -1061,7 +1061,7 @@
 
   .segment-button.active {
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
     box-shadow: var(--shadow-card);
   }
 
@@ -1126,7 +1126,7 @@
     padding: 0 18px;
     border-radius: 14px;
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
     font-size: 18px;
     font-weight: 700;
     letter-spacing: 0.16em;
@@ -1183,7 +1183,7 @@
     border: none;
     border-radius: 14px;
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
     font: inherit;
     font-weight: 600;
     cursor: pointer;

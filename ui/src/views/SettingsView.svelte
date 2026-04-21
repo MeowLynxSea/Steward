@@ -991,7 +991,7 @@
 
   .theme-option.active {
     background: var(--accent-primary);
-    color: var(--text-on-dark);
+    color: var(--text-on-accent);
     box-shadow: var(--shadow-card);
   }
 
