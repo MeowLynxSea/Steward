@@ -3352,9 +3352,21 @@
   }
 
   .mode-chip.active {
-    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-input));
+    background: color-mix(in srgb, var(--accent-gold) 12%, var(--bg-input));
     color: var(--text-primary);
-    border-color: color-mix(in srgb, var(--accent-primary) 42%, transparent);
+    border-color: color-mix(in srgb, var(--accent-gold) 35%, transparent);
+    animation: yolo-breathe 2.5s ease-in-out infinite;
+  }
+
+  @keyframes yolo-breathe {
+    0%, 100% {
+      box-shadow: 0 0 3px 0 rgba(255, 255, 255, 0.25),
+                  0 0 8px 1px rgba(255, 255, 255, 0.15);
+    }
+    50% {
+      box-shadow: 0 0 6px 1px rgba(255, 255, 255, 0.35),
+                  0 0 14px 3px rgba(255, 255, 255, 0.2);
+    }
   }
 
   .mode-modal-backdrop {
