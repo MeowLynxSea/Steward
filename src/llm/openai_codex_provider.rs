@@ -334,7 +334,7 @@ impl LlmProvider for OpenAiCodexProvider {
         Ok(vec![])
     }
 
-        async fn model_metadata(&self) -> Result<ModelMetadata, LlmError> {
+    async fn model_metadata(&self) -> Result<ModelMetadata, LlmError> {
         Ok(ModelMetadata {
             id: self.model.clone(),
             context_length: self.context_length,

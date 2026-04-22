@@ -23,7 +23,7 @@ use crate::error::Error;
 use crate::llm::ChatMessage;
 use crate::tools::{prepare_tool_params, redact_params};
 use chrono::Utc;
-use steward_common::{truncate_preview, ContextStats};
+use steward_common::{ContextStats, truncate_preview};
 
 const FORGED_THREAD_ID_ERROR: &str = "Invalid or unauthorized thread ID.";
 
@@ -676,7 +676,10 @@ impl Agent {
 
         // Complete, fail, or request approval
         match result {
-            Ok(AgenticLoopResult::Response { text: response, context_stats }) => {
+            Ok(AgenticLoopResult::Response {
+                text: response,
+                context_stats,
+            }) => {
                 let (response, suggestions) = extract_suggestions(&response);
                 tracing::debug!(
                     thread_id = %thread_id,
@@ -821,7 +824,7 @@ impl Agent {
                     .channels
                     .send_status(
                         &message.channel,
-                StatusUpdate::ContextStats {
+                        StatusUpdate::ContextStats {
                             stats: ContextStats {
                                 model_context_length: model_context_length.unwrap_or(0),
                                 system_prompt_tokens: context_stats.system_prompt_tokens,

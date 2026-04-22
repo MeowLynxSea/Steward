@@ -366,9 +366,7 @@ pub enum StatusUpdate {
         cost_usd: String,
     },
     /// Real-time context window statistics update.
-    ContextStats {
-        stats: steward_common::ContextStats,
-    },
+    ContextStats { stats: steward_common::ContextStats },
 }
 
 impl StatusUpdate {

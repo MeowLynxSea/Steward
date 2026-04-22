@@ -331,7 +331,8 @@ impl ReasoningContext {
                 messages_tokens: est.messages_tokens,
                 tool_use_tokens: est.tool_use_tokens,
                 compact_buffer_tokens,
-                total_estimate: est.system_prompt_tokens
+                total_estimate: est
+                    .system_prompt_tokens
                     .saturating_add(est.mcp_prompts_tokens)
                     .saturating_add(est.skills_tokens)
                     .saturating_add(est.messages_tokens)
@@ -344,14 +345,10 @@ impl ReasoningContext {
 
         let system_prompt_tokens =
             (est.system_prompt_tokens as f64 * ratio).round().max(0.0) as u32;
-        let mcp_prompts_tokens =
-            (est.mcp_prompts_tokens as f64 * ratio).round().max(0.0) as u32;
-        let skills_tokens =
-            (est.skills_tokens as f64 * ratio).round().max(0.0) as u32;
-        let messages_tokens =
-            (est.messages_tokens as f64 * ratio).round().max(0.0) as u32;
-        let tool_use_tokens =
-            (est.tool_use_tokens as f64 * ratio).round().max(0.0) as u32;
+        let mcp_prompts_tokens = (est.mcp_prompts_tokens as f64 * ratio).round().max(0.0) as u32;
+        let skills_tokens = (est.skills_tokens as f64 * ratio).round().max(0.0) as u32;
+        let messages_tokens = (est.messages_tokens as f64 * ratio).round().max(0.0) as u32;
+        let tool_use_tokens = (est.tool_use_tokens as f64 * ratio).round().max(0.0) as u32;
 
         ContextTokenEstimate {
             system_prompt_tokens,

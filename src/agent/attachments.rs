@@ -319,7 +319,11 @@ mod tests {
         att.extracted_text = Some("Important content".to_string());
 
         let result = augment_with_attachments("review", &[att]).unwrap();
-        assert!(result.text.contains("path=\"workspace://default/attachments/report.pdf\""));
+        assert!(
+            result
+                .text
+                .contains("path=\"workspace://default/attachments/report.pdf\"")
+        );
     }
 
     #[test]

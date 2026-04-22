@@ -508,7 +508,8 @@ impl Thread {
             }
             for tc in &turn.tool_calls {
                 total = total.saturating_add(tc.name.len() as u32 / CHARS_PER_TOKEN);
-                total = total.saturating_add(tc.parameters.to_string().len() as u32 / CHARS_PER_TOKEN);
+                total =
+                    total.saturating_add(tc.parameters.to_string().len() as u32 / CHARS_PER_TOKEN);
                 if let Some(ref result) = tc.result {
                     total = total.saturating_add(result.to_string().len() as u32 / CHARS_PER_TOKEN);
                 }

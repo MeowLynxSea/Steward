@@ -13,6 +13,7 @@ use tokio::fs;
 
 use crate::context::JobContext;
 use crate::tools::builtin::path_utils::validate_path;
+use crate::tools::builtin::sandbox::WorkspaceSandbox;
 use crate::tools::tool::{
     ApprovalRequirement, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
@@ -73,6 +74,7 @@ async fn refresh_workspace_path_metadata(
 pub struct ReadFileTool {
     base_dir: Option<PathBuf>,
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for ReadFileTool {
@@ -80,6 +82,7 @@ impl std::fmt::Debug for ReadFileTool {
         f.debug_struct("ReadFileTool")
             .field("base_dir", &self.base_dir)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -106,6 +109,11 @@ impl ReadFileTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -158,6 +166,14 @@ impl Tool for ReadFileTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        if let Some(ref sandbox) = self.sandbox {
+            if !sandbox.contains(&path) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Path escapes workspace sandbox: {}",
+                    path.display()
+                )));
+            }
+        }
         let allowlisted =
             resolve_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
                 .await?;
@@ -233,6 +249,7 @@ impl Tool for ReadFileTool {
 pub struct WriteFileTool {
     base_dir: Option<PathBuf>,
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for WriteFileTool {
@@ -240,6 +257,7 @@ impl std::fmt::Debug for WriteFileTool {
         f.debug_struct("WriteFileTool")
             .field("base_dir", &self.base_dir)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -266,6 +284,11 @@ impl WriteFileTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -330,6 +353,14 @@ impl Tool for WriteFileTool {
         }
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        if let Some(ref sandbox) = self.sandbox {
+            if !sandbox.contains(&path) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Path escapes workspace sandbox: {}",
+                    path.display()
+                )));
+            }
+        }
 
         // Create parent directories
         if let Some(parent) = path.parent() {
@@ -380,6 +411,7 @@ impl Tool for WriteFileTool {
 pub struct MoveFileTool {
     base_dir: Option<PathBuf>,
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for MoveFileTool {
@@ -387,6 +419,7 @@ impl std::fmt::Debug for MoveFileTool {
         f.debug_struct("MoveFileTool")
             .field("base_dir", &self.base_dir)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -413,6 +446,11 @@ impl MoveFileTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -462,6 +500,20 @@ impl Tool for MoveFileTool {
         let start = std::time::Instant::now();
         let source = validate_path(source_path, self.base_dir.as_deref())?;
         let destination = validate_path(destination_path, self.base_dir.as_deref())?;
+        if let Some(ref sandbox) = self.sandbox {
+            if !sandbox.contains(&source) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Source path escapes workspace sandbox: {}",
+                    source.display()
+                )));
+            }
+            if !sandbox.contains(&destination) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Destination path escapes workspace sandbox: {}",
+                    destination.display()
+                )));
+            }
+        }
 
         let metadata = fs::metadata(&source)
             .await
@@ -536,6 +588,7 @@ impl Tool for MoveFileTool {
 pub struct ListDirTool {
     base_dir: Option<PathBuf>,
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for ListDirTool {
@@ -543,6 +596,7 @@ impl std::fmt::Debug for ListDirTool {
         f.debug_struct("ListDirTool")
             .field("base_dir", &self.base_dir)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -569,6 +623,11 @@ impl ListDirTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -624,6 +683,14 @@ impl Tool for ListDirTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        if let Some(ref sandbox) = self.sandbox {
+            if !sandbox.contains(&path) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Path escapes workspace sandbox: {}",
+                    path.display()
+                )));
+            }
+        }
         let allowlisted =
             resolve_workspace_path_metadata(self.workspace_resolver.as_ref(), &ctx.user_id, &path)
                 .await?;
@@ -764,6 +831,7 @@ fn format_size(bytes: u64) -> String {
 pub struct ApplyPatchTool {
     base_dir: Option<PathBuf>,
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for ApplyPatchTool {
@@ -771,6 +839,7 @@ impl std::fmt::Debug for ApplyPatchTool {
         f.debug_struct("ApplyPatchTool")
             .field("base_dir", &self.base_dir)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -797,6 +866,11 @@ impl ApplyPatchTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -857,6 +931,14 @@ impl Tool for ApplyPatchTool {
         let start = std::time::Instant::now();
 
         let path = validate_path(path_str, self.base_dir.as_deref())?;
+        if let Some(ref sandbox) = self.sandbox {
+            if !sandbox.contains(&path) {
+                return Err(ToolError::NotAuthorized(format!(
+                    "Path escapes workspace sandbox: {}",
+                    path.display()
+                )));
+            }
+        }
 
         // Read current content
         let content = fs::read_to_string(&path)

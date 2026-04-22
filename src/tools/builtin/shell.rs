@@ -40,6 +40,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
 use crate::context::JobContext;
+use crate::tools::builtin::sandbox::WorkspaceSandbox;
 use crate::tools::tool::{
     ApprovalRequirement, RiskLevel, Tool, ToolDomain, ToolError, ToolOutput, require_str,
 };
@@ -346,7 +347,7 @@ fn matches_command_pattern(segment: &str, pattern: &str) -> bool {
 
 /// Classify a shell command into a [`RiskLevel`].
 ///
-/// The command is split on `|`, `&`, `;` and each segment is classified
+/// The command is split on `|`, `&`, `;`, `>`, `<` and each segment is classified
 /// independently; the overall risk is the **maximum** across all segments
 /// so a dangerous sub-command in a pipeline is never missed.
 ///
@@ -360,9 +361,9 @@ fn matches_command_pattern(segment: &str, pattern: &str) -> bool {
 /// prevent false positives like `"makeshutdownscript"` matching `"shutdown"` or
 /// `"lsblk"` matching `"ls"`.
 pub fn classify_command_risk(command: &str) -> RiskLevel {
-    // For pipelines/chains, take the maximum risk across all segments.
+    // For pipelines/chains/redirects, take the maximum risk across all segments.
     command
-        .split(['|', '&', ';'])
+        .split(['|', '&', ';', '>', '<'])
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|segment| {
@@ -576,6 +577,37 @@ fn is_shell_operator(ch: char) -> bool {
     matches!(ch, '|' | '&' | ';' | '<' | '>' | '(' | ')')
 }
 
+/// Scan a shell command for literal arguments that look like absolute paths.
+///
+/// This is a defense-in-depth check: after `workspace://` URIs have been
+/// rewritten to real disk paths, we walk the command tokens and flag any
+/// literal that starts with `/`. Variable expansions (`$()`, backticks) are
+/// skipped because they have already been rejected by injection detection.
+fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut index = 0;
+    while index < cmd.len() {
+        let Some(ch) = cmd[index..].chars().next() else {
+            break;
+        };
+        if ch.is_whitespace() || is_shell_operator(ch) {
+            index += ch.len_utf8();
+            continue;
+        }
+        match parse_shell_word(cmd, index) {
+            Some((end, Some(literal))) if literal.starts_with('/') => {
+                paths.push(literal);
+                index = end;
+            }
+            Some((end, _)) => {
+                index = end;
+            }
+            None => break,
+        }
+    }
+    paths
+}
+
 fn shell_quote_arg(arg: &str) -> String {
     if !arg.is_empty()
         && arg.chars().all(|ch| {
@@ -783,6 +815,8 @@ pub struct ShellTool {
     allow_dangerous: bool,
     /// Optional workspace resolver for translating `workspace://` workdirs.
     workspace_resolver: Option<Arc<dyn crate::tools::builtin::memory::WorkspaceResolver>>,
+    /// Optional workspace sandbox for confining filesystem access.
+    sandbox: Option<Arc<WorkspaceSandbox>>,
 }
 
 impl std::fmt::Debug for ShellTool {
@@ -792,6 +826,7 @@ impl std::fmt::Debug for ShellTool {
             .field("timeout", &self.timeout)
             .field("allow_dangerous", &self.allow_dangerous)
             .field("workspace_resolver", &self.workspace_resolver.is_some())
+            .field("sandbox", &self.sandbox.is_some())
             .finish()
     }
 }
@@ -804,6 +839,7 @@ impl ShellTool {
             timeout: DEFAULT_TIMEOUT,
             allow_dangerous: false,
             workspace_resolver: None,
+            sandbox: None,
         }
     }
 
@@ -819,6 +855,11 @@ impl ShellTool {
         Self::new().with_workspace_resolver(Arc::new(
             crate::tools::builtin::memory::FixedWorkspaceResolver::new(workspace),
         ))
+    }
+
+    pub fn with_sandbox(mut self, sandbox: Arc<WorkspaceSandbox>) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 
     /// Set the working directory.
@@ -974,12 +1015,34 @@ impl ShellTool {
         workdir: Option<&str>,
     ) -> Result<PathBuf, ToolError> {
         let Some(workdir) = workdir else {
-            return Ok(self.working_dir.clone().unwrap_or_else(|| {
-                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-            }));
+            let fallback = self
+                .working_dir
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            if let Some(ref sandbox) = self.sandbox {
+                if sandbox.contains(&fallback) {
+                    return Ok(fallback);
+                }
+                if let Some(first) = sandbox.first_root() {
+                    return Ok(first.to_path_buf());
+                }
+                return Err(ToolError::NotAuthorized(
+                    "No valid working directory inside workspace sandbox".to_string(),
+                ));
+            }
+            return Ok(fallback);
         };
         if !workdir.starts_with("workspace://") {
-            return Ok(PathBuf::from(workdir));
+            let path = PathBuf::from(workdir);
+            if let Some(ref sandbox) = self.sandbox {
+                if !sandbox.contains(&path) {
+                    return Err(ToolError::NotAuthorized(format!(
+                        "Working directory escapes workspace sandbox: {}",
+                        path.display()
+                    )));
+                }
+            }
+            return Ok(path);
         }
         self.resolve_workspace_path(user_id, workdir).await
     }
@@ -1036,11 +1099,14 @@ impl ShellTool {
             let first_char = after_prefix.chars().next();
             let is_bare_root = first_char.is_none()
                 || (first_char == Some('/'))
-                || first_char.map(|c| !is_workspace_id_char(c)).unwrap_or(false);
+                || first_char
+                    .map(|c| !is_workspace_id_char(c))
+                    .unwrap_or(false);
             if is_bare_root {
                 return Err(ToolError::InvalidParameters(
                     "workspace:// root path is not a valid shell command target. \
-                     Use a specific workspace path like workspace://<allowlist-id>/path".to_string(),
+                     Use a specific workspace path like workspace://<allowlist-id>/path"
+                        .to_string(),
                 ));
             }
         }
@@ -1174,6 +1240,19 @@ impl ShellTool {
         let timeout_duration = timeout.map(Duration::from_secs).unwrap_or(self.timeout);
         let rewritten_cmd = self.rewrite_workspace_uris_in_command(user_id, cmd).await?;
 
+        // Sandbox check: reject absolute path arguments outside workspace bounds
+        if let Some(ref sandbox) = self.sandbox {
+            for arg_literal in extract_absolute_path_literals(&rewritten_cmd) {
+                let arg_path = PathBuf::from(&arg_literal);
+                if !sandbox.contains(&arg_path) {
+                    return Err(ToolError::NotAuthorized(format!(
+                        "Shell argument escapes workspace sandbox: {}",
+                        arg_literal
+                    )));
+                }
+            }
+        }
+
         let (output, code) = self
             .execute_direct(&rewritten_cmd, &cwd, timeout_duration, extra_env)
             .await?;
@@ -1286,12 +1365,10 @@ impl Tool for ShellTool {
 
     fn requires_approval(&self, params: &serde_json::Value) -> ApprovalRequirement {
         match self.risk_level_for(params) {
-            // Low maps to UnlessAutoApproved rather than Never: shell redirections
-            // (e.g. `cat /etc/shadow > /tmp/out`) are not split on `>`, so a Low command
-            // with a redirect would bypass approval entirely with Never. Keeping
-            // UnlessAutoApproved preserves the graduated metadata for audit while
-            // ensuring approval policy stays conservative until redirect-aware parsing
-            // is in place.
+            // Low and Medium both map to UnlessAutoApproved. Even though redirects
+            // are now included in risk segmentation, shell is inherently powerful
+            // and we keep the conservative policy so that auto-approve must be
+            // explicitly granted rather than defaulting to silent execution.
             RiskLevel::Low => ApprovalRequirement::UnlessAutoApproved,
             RiskLevel::Medium => ApprovalRequirement::UnlessAutoApproved,
             RiskLevel::High => ApprovalRequirement::Always,

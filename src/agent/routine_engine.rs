@@ -3539,10 +3539,9 @@ mod tests {
             .await
             .expect("list source messages");
         assert!(
-            source_messages.iter().any(|message| {
-                message.role == "reflection"
-                    && !message.content.is_empty()
-            }),
+            source_messages
+                .iter()
+                .any(|message| { message.role == "reflection" && !message.content.is_empty() }),
             "memory reflection should be mirrored into the source thread history"
         );
 

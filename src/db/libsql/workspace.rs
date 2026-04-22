@@ -13,6 +13,7 @@ use super::{
 };
 use crate::db::WorkspaceStore;
 use crate::error::{DatabaseError, WorkspaceError};
+use crate::tools::builtin::path_utils::normalize_lexical;
 #[cfg(test)]
 use crate::workspace::WorkspaceAllowlistChangeKind;
 use crate::workspace::{
@@ -28,6 +29,29 @@ use crate::workspace::{
 };
 
 use chrono::Utc;
+
+/// Verify that `disk_path` (after canonicalization) still lives under `source_root`.
+/// This prevents symlink escapes from the allowlist boundary.
+fn ensure_allowlist_containment(
+    disk_path: &std::path::Path,
+    source_root: &str,
+) -> Result<(), WorkspaceError> {
+    let root = std::path::Path::new(source_root);
+    let canonical_root = root.canonicalize().map_err(|e| WorkspaceError::IoError {
+        reason: format!("failed to canonicalize allowlist root: {e}"),
+    })?;
+
+    let canonical_path = disk_path
+        .canonicalize()
+        .unwrap_or_else(|_| normalize_lexical(disk_path));
+
+    if !canonical_path.starts_with(&canonical_root) {
+        return Err(WorkspaceError::IoError {
+            reason: format!("path escapes allowlist: {}", disk_path.display()),
+        });
+    }
+    Ok(())
+}
 
 /// Resolve the embedding dimension from environment variables.
 ///
@@ -2348,6 +2372,7 @@ impl WorkspaceStore for LibSqlBackend {
         let normalized = normalize_allowlist_path(path)?;
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let disk_path = Path::new(&allowlist.source_root).join(&normalized);
+        ensure_allowlist_containment(&disk_path, &allowlist.source_root)?;
         let bytes = Self::read_disk_bytes(&disk_path).await?.ok_or_else(|| {
             WorkspaceError::AllowlistPathNotFound {
                 allowlist_id: allowlist_id.to_string(),
@@ -2391,6 +2416,7 @@ impl WorkspaceStore for LibSqlBackend {
         let normalized = normalize_allowlist_path(path)?;
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let disk_path = Path::new(&allowlist.source_root).join(&normalized);
+        ensure_allowlist_containment(&disk_path, &allowlist.source_root)?;
         if let Some(parent) = disk_path.parent() {
             tokio::fs::create_dir_all(parent)
                 .await
@@ -2431,6 +2457,7 @@ impl WorkspaceStore for LibSqlBackend {
         let normalized = normalize_allowlist_path(path)?;
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let disk_path = Path::new(&allowlist.source_root).join(&normalized);
+        ensure_allowlist_containment(&disk_path, &allowlist.source_root)?;
         let metadata = tokio::fs::metadata(&disk_path).await.map_err(|_| {
             WorkspaceError::AllowlistPathNotFound {
                 allowlist_id: allowlist_id.to_string(),
@@ -2893,6 +2920,8 @@ impl WorkspaceStore for LibSqlBackend {
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let source_disk_path = Path::new(&allowlist.source_root).join(&source_path);
         let destination_disk_path = Path::new(&allowlist.source_root).join(&destination_path);
+        ensure_allowlist_containment(&source_disk_path, &allowlist.source_root)?;
+        ensure_allowlist_containment(&destination_disk_path, &allowlist.source_root)?;
 
         let source_metadata = tokio::fs::metadata(&source_disk_path).await.map_err(|_| {
             WorkspaceError::AllowlistPathNotFound {
@@ -2968,6 +2997,7 @@ impl WorkspaceStore for LibSqlBackend {
         let normalized = normalize_allowlist_path(path)?;
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let disk_path = Path::new(&allowlist.source_root).join(&normalized);
+        ensure_allowlist_containment(&disk_path, &allowlist.source_root)?;
         match tokio::fs::metadata(&disk_path).await {
             Ok(metadata) => {
                 if !metadata.is_dir() {

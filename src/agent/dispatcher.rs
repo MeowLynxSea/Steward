@@ -531,8 +531,7 @@ impl Agent {
             .map(|m| ReasoningContext::estimate_message_tokens(m))
             .sum::<u32>();
         let tool_use_tokens: u32 = 0;
-        let compact_buffer_tokens =
-            ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32;
+        let compact_buffer_tokens = ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32;
         let total_estimate = system_prompt_tokens
             .saturating_add(mcp_prompts_tokens)
             .saturating_add(skills_tokens)
@@ -863,9 +862,16 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         };
 
         // Compute calibrated context stats using actual input tokens from LLM response.
-        let compact_buffer_tokens =
-            ((self.agent.deps.llm.model_metadata().await.ok().and_then(|m| m.context_length).unwrap_or(0) as f32)
-                * 0.033) as u32;
+        let compact_buffer_tokens = ((self
+            .agent
+            .deps
+            .llm
+            .model_metadata()
+            .await
+            .ok()
+            .and_then(|m| m.context_length)
+            .unwrap_or(0) as f32)
+            * 0.033) as u32;
         reason_ctx.context_estimate =
             reason_ctx.compute_calibrated_stats(output.usage.input_tokens, compact_buffer_tokens);
 
@@ -939,7 +945,12 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         // in messages_tokens alongside the final text.
         let thinking: String = {
             let tracker = self.thinking_tracker.lock().await;
-            tracker.segments.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>().join("")
+            tracker
+                .segments
+                .iter()
+                .map(|(_, s)| s.as_str())
+                .collect::<Vec<_>>()
+                .join("")
         };
         let combined = if thinking.is_empty() {
             text.to_string()
@@ -1566,18 +1577,25 @@ fn emit_context_stats_update_fn<'a>(
         // Re-estimate message tokens with current context (messages may have grown since last call).
         // messages_tokens = all message content (user text, assistant text, thinking in tool_calls reasoning).
         // tool_use_tokens = tool result messages (identified by tool_call_id).
-        let (messages_tokens, tool_use_tokens) = reason_ctx
-            .messages
-            .iter()
-            .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
-                if m.tool_call_id.is_some() {
-                    // Tool result messages → tool_use_tokens
-                    (msg_tok, tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)))
-                } else {
-                    // User/assistant messages (including thinking in tool_calls.reasoning) → messages_tokens
-                    (msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)), tool_tok)
-                }
-            });
+        let (messages_tokens, tool_use_tokens) =
+            reason_ctx
+                .messages
+                .iter()
+                .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
+                    if m.tool_call_id.is_some() {
+                        // Tool result messages → tool_use_tokens
+                        (
+                            msg_tok,
+                            tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)),
+                        )
+                    } else {
+                        // User/assistant messages (including thinking in tool_calls.reasoning) → messages_tokens
+                        (
+                            msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)),
+                            tool_tok,
+                        )
+                    }
+                });
 
         // Use compute_calibrated_stats to recalculate ALL fields consistently.
         // The ratio is computed as: actual_total / context_estimate.total_estimate.

@@ -544,7 +544,7 @@ impl AppBuilder {
                 );
             let ws = Arc::new(ws);
 
-            tools.register_workspace_tools(Arc::clone(&ws));
+            tools.register_workspace_tools(Arc::clone(&ws)).await;
 
             Some(ws)
         } else {

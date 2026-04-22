@@ -11,6 +11,7 @@ mod json;
 pub mod memory;
 pub mod path_utils;
 pub mod routine;
+pub mod sandbox;
 pub mod secrets_tools;
 pub(crate) mod shell;
 pub mod skill_tools;

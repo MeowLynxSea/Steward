@@ -446,7 +446,10 @@ impl AgentChannels {
                 "AgentChannels: converting StatusUpdate to AppEvent"
             );
             if let Some(emitter) = self.emitter.as_ref() {
-                tracing::debug!("AgentChannels: emitter available, emitting for user {}", user_id);
+                tracing::debug!(
+                    "AgentChannels: emitter available, emitting for user {}",
+                    user_id
+                );
                 emitter.emit_for_user(user_id, event);
             } else {
                 tracing::debug!("AgentChannels: NO emitter available");
@@ -602,9 +605,52 @@ impl Agent {
         roots
     }
 
-    async fn filesystem_paths_are_allowlisted(&self, user_id: &str, paths: &[PathBuf]) -> bool {
-        let _ = (user_id, paths);
-        false
+    async fn filesystem_paths_are_allowlisted(
+        &self,
+        _user_id: &str,
+        tool_name: &str,
+        paths: &[PathBuf],
+    ) -> bool {
+        let Some(workspace) = self.workspace() else {
+            return false;
+        };
+
+        let allowlists = match workspace.list_allowlists().await {
+            Ok(a) => a,
+            Err(_) => return false,
+        };
+
+        let require_write = matches!(tool_name, "write_file" | "apply_patch" | "move_file");
+        let require_read = matches!(tool_name, "read_file" | "list_dir" | "move_file");
+
+        for path in paths {
+            let canonical = path
+                .canonicalize()
+                .unwrap_or_else(|_| crate::tools::builtin::path_utils::normalize_lexical(path));
+
+            let covered = allowlists.iter().any(|summary| {
+                let root = PathBuf::from(&summary.allowlist.source_root);
+                let root_canonical = root.canonicalize().unwrap_or_else(|_| {
+                    crate::tools::builtin::path_utils::normalize_lexical(&root)
+                });
+                if !canonical.starts_with(&root_canonical) {
+                    return false;
+                }
+                if require_read && !summary.allowlist.bypass_read {
+                    return false;
+                }
+                if require_write && !summary.allowlist.bypass_write {
+                    return false;
+                }
+                true
+            });
+
+            if !covered {
+                return false;
+            }
+        }
+
+        true
     }
 
     async fn filesystem_access_is_preapproved(
@@ -629,7 +675,8 @@ impl Agent {
                 return true;
             }
         }
-        self.filesystem_paths_are_allowlisted(user_id, &paths).await
+        self.filesystem_paths_are_allowlisted(user_id, tool_name, &paths)
+            .await
     }
 
     pub(super) async fn allowlist_workspace_redirect_for_tool(

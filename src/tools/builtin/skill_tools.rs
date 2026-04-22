@@ -417,8 +417,8 @@ fn rewrite_frontmatter_name(content: &str, slug: &str) -> String {
     let yaml_block = &after_open[..yaml_len];
 
     // Replace `name: <anything>` within the YAML block.
-    let new_yaml = crate::skills::NAME_REWRITE_PATTERN
-        .replace(yaml_block, &format!("name: {slug}"));
+    let new_yaml =
+        crate::skills::NAME_REWRITE_PATTERN.replace(yaml_block, &format!("name: {slug}"));
 
     format!(
         "{}---{}{}",
@@ -1530,7 +1530,8 @@ mod tests {
         // Catalog SKILL.md files may carry a human-readable display name that
         // contains spaces, which fails slug validation. The rewriter should
         // replace it with the caller-supplied slug.
-        let content = "---\nname: AI Researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
+        let content =
+            "---\nname: AI Researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
         let rewritten = rewrite_frontmatter_name(content, "ai-researcher");
         assert!(
             rewritten.contains("name: ai-researcher"),
@@ -1549,7 +1550,8 @@ mod tests {
     fn test_rewrite_frontmatter_name_noop_when_already_valid() {
         // When the frontmatter already carries the slug, rewriting should leave
         // the content identical.
-        let content = "---\nname: ai-researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
+        let content =
+            "---\nname: ai-researcher\ndescription: Helps with research\n---\n\nPrompt body.\n";
         let rewritten = rewrite_frontmatter_name(content, "ai-researcher");
         assert_eq!(rewritten, content);
     }

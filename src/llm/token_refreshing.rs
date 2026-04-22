@@ -156,8 +156,14 @@ mod tests {
         let config = test_codex_config(dir.path().join("session.json"));
         let jwt = make_test_jwt("acct_test");
         let inner = Arc::new(
-            OpenAiCodexProvider::new(&config.model, &config.api_base_url, &jwt, 300, config.context_length)
-                .expect("provider creation should succeed"),
+            OpenAiCodexProvider::new(
+                &config.model,
+                &config.api_base_url,
+                &jwt,
+                300,
+                config.context_length,
+            )
+            .expect("provider creation should succeed"),
         );
         let session = Arc::new(OpenAiCodexSessionManager::new(config).unwrap());
         (TokenRefreshingProvider::new(inner, session), dir)

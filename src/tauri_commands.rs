@@ -2555,8 +2555,6 @@ fn tool_status(tool_call: &steward_core::agent::session::TurnToolCall) -> String
     }
 }
 
-
-
 fn build_thread_messages(
     thread: &steward_core::agent::session::Thread,
 ) -> Vec<steward_core::ipc::ThreadMessageResponse> {
@@ -2843,16 +2841,9 @@ pub async fn get_session(
                     s.tool_use_tokens,
                 )
             })
-            .unwrap_or((
-                thread.estimate_messages_tokens(),
-                0,
-                0,
-                0,
-                0,
-            ));
+            .unwrap_or((thread.estimate_messages_tokens(), 0, 0, 0, 0));
 
-    let compact_buffer_tokens =
-        ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
+    let compact_buffer_tokens = ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
 
     let used_tokens = messages_tokens
         .saturating_add(compact_buffer_tokens)
