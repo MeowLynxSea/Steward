@@ -1203,6 +1203,67 @@ impl Workspace {
             }
         }
 
+        // Inject workspace boundary awareness so the agent naturally confines
+        // file and shell operations to the registered allowlists.
+        match self.list_allowlists().await {
+            Ok(allowlists) if !allowlists.is_empty() => {
+                out.push_str("## Workspace Boundaries\n");
+                out.push_str(
+                    "You MUST keep all file read/write and shell operations inside the following \
+                     registered workspace directories. Do NOT attempt to access paths outside \
+                     these boundaries. Use `workspace://<allowlist-id>/...` URIs via workspace_ \
+                     tools whenever possible; raw filesystem tools will be rejected if they \
+                     escape these roots.\n\n",
+                );
+                const MAX_TREE_ENTRIES: usize = 15;
+                for summary in &allowlists {
+                    let name = &summary.allowlist.display_name;
+                    let root = &summary.allowlist.source_root;
+                    let id = encode_allowlist_id(summary.allowlist.id);
+                    out.push_str(&format!("- {name} (`workspace://{id}/`): `{root}`\n"));
+
+                    // Inject a short top-level directory summary when available.
+                    let uri = WorkspaceUri::allowlist_uri_with_mount_kind(
+                        summary.allowlist.id,
+                        summary.allowlist.mount_kind,
+                        None,
+                    );
+                    match self.list_tree(&uri).await {
+                        Ok(entries) if !entries.is_empty() => {
+                            out.push_str("  ```\n");
+                            for entry in entries.iter().take(MAX_TREE_ENTRIES) {
+                                let marker = if entry.is_directory { "📁" } else { "📄" };
+                                out.push_str(&format!("  {marker} {}\n", entry.name));
+                            }
+                            if entries.len() > MAX_TREE_ENTRIES {
+                                out.push_str("  ... (truncated)\n");
+                            }
+                            out.push_str("  ```\n");
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::debug!(
+                                allowlist_id = %summary.allowlist.id,
+                                "Skipping tree summary in system prompt: {e}"
+                            );
+                        }
+                    }
+                }
+                out.push('\n');
+            }
+            Ok(_) => {
+                out.push_str("## Workspace Boundaries\n");
+                out.push_str(
+                    "No workspace directories are currently registered. File and shell operations \
+                     are unrestricted, but you should still avoid touching system paths or user \
+                     home directories unless explicitly asked.\n\n",
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to list allowlists for system prompt: {e}");
+            }
+        }
+
         Ok(out)
     }
 

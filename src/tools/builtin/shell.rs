@@ -581,8 +581,8 @@ fn is_shell_operator(ch: char) -> bool {
 ///
 /// This is a defense-in-depth check: after `workspace://` URIs have been
 /// rewritten to real disk paths, we walk the command tokens and flag any
-/// literal that starts with `/`. Variable expansions (`$()`, backticks) are
-/// skipped because they have already been rejected by injection detection.
+/// literal that starts with `/` or `~`. Variable expansions (`$()`, backticks)
+/// are skipped because they have already been rejected by injection detection.
 fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut index = 0;
@@ -595,7 +595,9 @@ fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
             continue;
         }
         match parse_shell_word(cmd, index) {
-            Some((end, Some(literal))) if literal.starts_with('/') => {
+            Some((end, Some(literal)))
+                if literal.starts_with('/') || literal.starts_with('~') =>
+            {
                 paths.push(literal);
                 index = end;
             }
@@ -924,6 +926,14 @@ impl ShellTool {
             }
         }
 
+        // When a sandbox is active, redirect HOME so that `~` expansion stays
+        // within the workspace boundary rather than leaking to the real home.
+        if let Some(ref sandbox) = self.sandbox {
+            if let Some(root) = sandbox.first_root() {
+                command.env("HOME", root);
+            }
+        }
+
         // Inject explicitly provided extra environment variables on top of the
         // scrubbed base.
         command.envs(extra_env);
@@ -1243,7 +1253,25 @@ impl ShellTool {
         // Sandbox check: reject absolute path arguments outside workspace bounds
         if let Some(ref sandbox) = self.sandbox {
             for arg_literal in extract_absolute_path_literals(&rewritten_cmd) {
-                let arg_path = PathBuf::from(&arg_literal);
+                let arg_path = if arg_literal.starts_with('~') {
+                    // `~/...` expands to HOME inside the child process (which we override
+                    // to the sandbox root). `~user/...` is unpredictable, so reject it.
+                    if arg_literal.len() > 1 && !arg_literal.starts_with("~/") {
+                        return Err(ToolError::NotAuthorized(format!(
+                            "Shell argument with tilde-user is not allowed in sandbox mode: {}",
+                            arg_literal
+                        )));
+                    }
+                    let home = sandbox
+                        .first_root()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| {
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                        });
+                    home.join(&arg_literal[1..])
+                } else {
+                    PathBuf::from(&arg_literal)
+                };
                 if !sandbox.contains(&arg_path) {
                     return Err(ToolError::NotAuthorized(format!(
                         "Shell argument escapes workspace sandbox: {}",
