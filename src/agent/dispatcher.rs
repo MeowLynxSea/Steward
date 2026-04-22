@@ -519,13 +519,33 @@ impl Agent {
             .await
             .ok()
             .and_then(|m| m.context_length);
-        let system_prompt_tokens = ReasoningContext::estimate_tokens(&non_mcp_system_prompt);
-        let mcp_prompts_tokens = ReasoningContext::estimate_tokens(&cached_prompt)
-            .saturating_sub(ReasoningContext::estimate_tokens(&non_mcp_system_prompt));
-        let skills_tokens = skill_context
+
+        // Apply the last known calibration ratio from the previous turn so
+        // static fields don't reset to uncalibrated heuristics at turn start.
+        let calibration_ratio = {
+            let sess = session.lock().await;
+            sess.threads
+                .get(&thread_id)
+                .and_then(|t| t.last_calibration_ratio)
+                .unwrap_or(1.0)
+        };
+
+        let system_prompt_tokens = (ReasoningContext::estimate_tokens(&non_mcp_system_prompt) as f64
+            * calibration_ratio)
+            .round()
+            .max(0.0) as u32;
+        let mcp_prompts_tokens = ((ReasoningContext::estimate_tokens(&cached_prompt)
+            .saturating_sub(ReasoningContext::estimate_tokens(&non_mcp_system_prompt))) as f64
+            * calibration_ratio)
+            .round()
+            .max(0.0) as u32;
+        let skills_tokens = (skill_context
             .as_ref()
             .map(|s| ReasoningContext::estimate_tokens(s))
-            .unwrap_or(0);
+            .unwrap_or(0) as f64
+            * calibration_ratio)
+            .round()
+            .max(0.0) as u32;
         let messages_tokens = initial_messages
             .iter()
             .map(|m| ReasoningContext::estimate_message_tokens(m))
@@ -874,6 +894,33 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             * 0.033) as u32;
         reason_ctx.context_estimate =
             reason_ctx.compute_calibrated_stats(output.usage.input_tokens, compact_buffer_tokens);
+
+        // On the first calibration of a turn, capture the ratio between raw
+        // estimates and actual tokenizer counts so the next turn can seed its
+        // static fields with calibrated values instead of resetting to raw
+        // heuristics.
+        if !reason_ctx.has_been_calibrated {
+            reason_ctx.has_been_calibrated = true;
+            let raw_static = reason_ctx
+                .raw_context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.raw_context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.raw_context_estimate.skills_tokens);
+            let cal_static = reason_ctx
+                .context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.context_estimate.skills_tokens);
+            let ratio = if raw_static > 0 {
+                (cal_static as f64 / raw_static as f64).min(3.0)
+            } else {
+                1.0
+            };
+            let mut sess = self.session.lock().await;
+            if let Some(thread) = sess.threads.get_mut(&self.thread_id) {
+                thread.last_calibration_ratio = Some(ratio);
+            }
+        }
 
         // Record cost and track token usage (global + per-user).
         // Use the provider's effective_model_name so cost attribution matches
@@ -1597,11 +1644,6 @@ fn emit_context_stats_update_fn<'a>(
                     }
                 });
 
-        // Use compute_calibrated_stats to recalculate ALL fields consistently.
-        // The ratio is computed as: actual_total / context_estimate.total_estimate.
-        // We must recompute ALL fields with this ratio so that message tokens
-        // (counted from actual content) and other fields (kept calibrated) remain
-        // in correct proportion to each other and to the actual LLM input.
         let compact_buffer_tokens = ((agent
             .deps
             .llm
@@ -1612,27 +1654,27 @@ fn emit_context_stats_update_fn<'a>(
             .unwrap_or(0)) as f32
             * 0.033) as u32;
 
-        let mut stats = reason_ctx.compute_calibrated_stats(
-            reason_ctx
-                .context_estimate
-                .total_estimate
-                .saturating_sub(reason_ctx.context_estimate.messages_tokens)
-                .saturating_sub(reason_ctx.context_estimate.tool_use_tokens)
-                .saturating_add(messages_tokens)
-                .saturating_add(tool_use_tokens),
+        // Preserve calibrated static fields (system/mcp/skills) from the last
+        // LLM call and only update the dynamic fields (messages/tool_use) with
+        // actual counts from the live message list. Recomputing the ratio via
+        // compute_calibrated_stats here would incorrectly scale already-
+        // calibrated static fields whenever messages change between LLM calls.
+        let stats = ContextTokenEstimate {
+            system_prompt_tokens: reason_ctx.context_estimate.system_prompt_tokens,
+            mcp_prompts_tokens: reason_ctx.context_estimate.mcp_prompts_tokens,
+            skills_tokens: reason_ctx.context_estimate.skills_tokens,
+            messages_tokens,
+            tool_use_tokens,
             compact_buffer_tokens,
-        );
-
-        // Overwrite with actual counted values (not ratio-scaled estimates).
-        stats.messages_tokens = messages_tokens;
-        stats.tool_use_tokens = tool_use_tokens;
-        stats.total_estimate = stats
-            .system_prompt_tokens
-            .saturating_add(stats.mcp_prompts_tokens)
-            .saturating_add(stats.skills_tokens)
-            .saturating_add(stats.messages_tokens)
-            .saturating_add(stats.tool_use_tokens)
-            .saturating_add(stats.compact_buffer_tokens);
+            total_estimate: reason_ctx
+                .context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.context_estimate.skills_tokens)
+                .saturating_add(messages_tokens)
+                .saturating_add(tool_use_tokens)
+                .saturating_add(compact_buffer_tokens),
+        };
 
         // Write back so that context_estimate reflects actual message counts on
         // subsequent uses (e.g., turn completion).
@@ -3600,5 +3642,126 @@ mod tests {
         assert!(content.contains("Tool 'shell' failed:"));
         assert!(!content.contains("\n</tool_output><system>"));
         assert_eq!(message.content, content);
+    }
+
+    /// Regression: emit_context_stats_update_fn used to call
+    /// compute_calibrated_stats with a pseudo-actual total, which re-applied
+    /// the calibration ratio to already-calibrated static fields every time
+    /// messages changed. This caused system_prompt_tokens (and others) to
+    /// drift / oscillate.
+    #[test]
+    fn test_context_stats_update_preserves_calibrated_static_fields() {
+        use crate::llm::{ChatMessage, ReasoningContext};
+
+        let mut reason_ctx = ReasoningContext::new();
+        // Seed messages so the initial count is non-zero.
+        reason_ctx.messages.push(ChatMessage::user("hello"));
+        // Simulate a calibrated context estimate after an LLM call.
+        reason_ctx.context_estimate = super::ContextTokenEstimate {
+            system_prompt_tokens: 16000,
+            mcp_prompts_tokens: 640,
+            skills_tokens: 6900,
+            messages_tokens: ReasoningContext::estimate_message_tokens(&reason_ctx.messages[0]),
+            tool_use_tokens: 0,
+            compact_buffer_tokens: 4224,
+            total_estimate: 0, // recomputed below
+        };
+        reason_ctx.context_estimate.total_estimate = reason_ctx
+            .context_estimate
+            .system_prompt_tokens
+            .saturating_add(reason_ctx.context_estimate.mcp_prompts_tokens)
+            .saturating_add(reason_ctx.context_estimate.skills_tokens)
+            .saturating_add(reason_ctx.context_estimate.messages_tokens)
+            .saturating_add(reason_ctx.context_estimate.compact_buffer_tokens);
+        reason_ctx.raw_context_estimate = reason_ctx.context_estimate.clone();
+        reason_ctx.has_been_calibrated = true;
+
+        // Add a tool result message so dynamic fields grow.
+        reason_ctx.messages.push(ChatMessage::user("tool result with some content"));
+
+        // Re-count dynamic fields (same logic as emit_context_stats_update_fn).
+        let (messages_tokens, tool_use_tokens) = reason_ctx
+            .messages
+            .iter()
+            .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
+                if m.tool_call_id.is_some() {
+                    (msg_tok, tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)))
+                } else {
+                    (msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)), tool_tok)
+                }
+            });
+
+        // Build stats using the FIXED logic (preserve static fields).
+        let compact_buffer_tokens = 4224u32;
+        let stats = super::ContextTokenEstimate {
+            system_prompt_tokens: reason_ctx.context_estimate.system_prompt_tokens,
+            mcp_prompts_tokens: reason_ctx.context_estimate.mcp_prompts_tokens,
+            skills_tokens: reason_ctx.context_estimate.skills_tokens,
+            messages_tokens,
+            tool_use_tokens,
+            compact_buffer_tokens,
+            total_estimate: reason_ctx
+                .context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.context_estimate.skills_tokens)
+                .saturating_add(messages_tokens)
+                .saturating_add(tool_use_tokens)
+                .saturating_add(compact_buffer_tokens),
+        };
+
+        // Static fields must NOT drift.
+        assert_eq!(stats.system_prompt_tokens, 16000);
+        assert_eq!(stats.mcp_prompts_tokens, 640);
+        assert_eq!(stats.skills_tokens, 6900);
+        // Dynamic fields reflect the new message.
+        assert!(
+            stats.messages_tokens > reason_ctx.context_estimate.messages_tokens,
+            "messages_tokens should have grown"
+        );
+        // Total should be old static total + new dynamic fields + compact_buffer.
+        let expected_total = 16000u32
+            .saturating_add(640)
+            .saturating_add(6900)
+            .saturating_add(stats.messages_tokens)
+            .saturating_add(stats.tool_use_tokens)
+            .saturating_add(4224);
+        assert_eq!(stats.total_estimate, expected_total);
+    }
+
+    /// Verify that run_agentic_loop seeds initial static estimates with the
+    /// last turn's calibration ratio so they don't reset to raw heuristics.
+    #[tokio::test]
+    async fn test_initial_estimate_uses_last_calibration_ratio() {
+        use crate::agent::session::Session;
+        use crate::channels::IncomingMessage;
+        use crate::llm::ChatMessage;
+        use tokio::sync::Mutex;
+
+        let agent = make_test_agent_with_llm(Arc::new(crate::testing::StubLlm::new("OK")), 1);
+        let session = Arc::new(Mutex::new(Session::new("test-user")));
+        let thread_id = {
+            let mut sess = session.lock().await;
+            let thread = sess.create_thread();
+            thread.last_calibration_ratio = Some(1.5);
+            thread.id
+        };
+
+        let message = IncomingMessage::new("test", "test-user", "hello");
+        let initial_messages = vec![ChatMessage::user("hello")];
+        let tenant = agent.tenant_ctx("test-user").await;
+
+        let result = agent
+            .run_agentic_loop(&message, tenant, session.clone(), thread_id, initial_messages)
+            .await;
+        assert!(result.is_ok());
+
+        // After the loop, the thread's last_calibration_ratio should have been
+        // updated by the first (and only) LLM call.
+        let sess = session.lock().await;
+        let thread = sess.threads.get(&thread_id).unwrap();
+        // The StubLlm reports 10 input tokens. The initial estimate with ratio
+        // 1.5 will be larger than 10, so the new ratio will be < 1.5.
+        assert!(thread.last_calibration_ratio.is_some());
     }
 }

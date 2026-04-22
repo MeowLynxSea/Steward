@@ -188,7 +188,7 @@ static PIPE_REASONING_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// Local token estimate for each context component.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ContextTokenEstimate {
     pub system_prompt_tokens: u32,
     pub mcp_prompts_tokens: u32,
@@ -224,6 +224,12 @@ pub struct ReasoningContext {
     pub system_prompt: Option<String>,
     /// Local token estimate for each context component.
     pub context_estimate: ContextTokenEstimate,
+    /// The original uncalibrated estimate captured at turn start. Used to
+    /// compute the calibration ratio for persistence across turns.
+    pub raw_context_estimate: ContextTokenEstimate,
+    /// Whether `context_estimate` has already been calibrated against actual
+    /// LLM usage during this turn.
+    pub has_been_calibrated: bool,
     /// Per-user model override. When set, completion requests use this model
     /// instead of the provider's default. Only effective with providers that
     /// support per-request model overrides (e.g. NearAI).
@@ -242,6 +248,8 @@ impl ReasoningContext {
             force_text: false,
             system_prompt: None,
             context_estimate: ContextTokenEstimate::default(),
+            raw_context_estimate: ContextTokenEstimate::default(),
+            has_been_calibrated: false,
             model_override: None,
         }
     }
@@ -285,7 +293,8 @@ impl ReasoningContext {
 
     /// Set the local token estimate for each context component.
     pub fn with_context_estimate(mut self, estimate: ContextTokenEstimate) -> Self {
-        self.context_estimate = estimate;
+        self.context_estimate = estimate.clone();
+        self.raw_context_estimate = estimate;
         self
     }
 

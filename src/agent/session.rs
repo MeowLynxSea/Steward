@@ -354,6 +354,11 @@ pub struct Thread {
     /// Messages queued while the thread was processing a turn.
     #[serde(default, skip_serializing_if = "VecDeque::is_empty")]
     pub pending_messages: VecDeque<PendingUserMessage>,
+    /// Last calibration ratio from actual LLM usage, used to seed initial
+    /// estimates for subsequent turns so static fields don't reset to raw
+    /// heuristics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_calibration_ratio: Option<f64>,
 }
 
 /// Maximum number of messages that can be queued while a thread is processing.
@@ -377,6 +382,7 @@ impl Thread {
             pending_approval: None,
             pending_auth: None,
             pending_messages: VecDeque::new(),
+            last_calibration_ratio: None,
         }
     }
 
@@ -394,6 +400,7 @@ impl Thread {
             pending_approval: None,
             pending_auth: None,
             pending_messages: VecDeque::new(),
+            last_calibration_ratio: None,
         }
     }
 
