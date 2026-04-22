@@ -765,6 +765,17 @@ impl Agent {
                     let mut sess = session.lock().await;
                     if let Some(thread) = sess.threads.get_mut(&thread_id) {
                         if let Some(turn) = thread.last_turn_mut() {
+                            tracing::debug!(
+                                thread_id = %thread_id,
+                                system_prompt_tokens = context_stats.system_prompt_tokens,
+                                mcp_prompts_tokens = context_stats.mcp_prompts_tokens,
+                                skills_tokens = context_stats.skills_tokens,
+                                messages_tokens = context_stats.messages_tokens,
+                                tool_use_tokens = context_stats.tool_use_tokens,
+                                compact_buffer_tokens = context_stats.compact_buffer_tokens,
+                                total_estimate = context_stats.total_estimate,
+                                "PERSIST_CONTEXT_STATS: saving to turn"
+                            );
                             turn.set_context_stats(crate::ipc::PersistedContextStats {
                                 system_prompt_tokens: context_stats.system_prompt_tokens,
                                 mcp_prompts_tokens: context_stats.mcp_prompts_tokens,
@@ -820,6 +831,18 @@ impl Agent {
                 let free_tokens = model_context_length
                     .map(|ctx| ctx as i32 - context_stats.total_estimate as i32)
                     .unwrap_or(-1);
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    model_context_length = model_context_length.unwrap_or(0),
+                    system_prompt_tokens = context_stats.system_prompt_tokens,
+                    mcp_prompts_tokens = context_stats.mcp_prompts_tokens,
+                    skills_tokens = context_stats.skills_tokens,
+                    messages_tokens = context_stats.messages_tokens,
+                    tool_use_tokens = context_stats.tool_use_tokens,
+                    compact_buffer_tokens = context_stats.compact_buffer_tokens,
+                    free_tokens,
+                    "SEND_CONTEXT_STATS: emitting final context stats for turn"
+                );
                 let _ = self
                     .channels
                     .send_status(

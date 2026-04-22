@@ -2833,6 +2833,17 @@ pub async fn get_session(
             .last_turn()
             .and_then(|t| t.context_stats.as_ref())
             .map(|s| {
+                tracing::debug!(
+                    session_id = %id,
+                    thread_id = %thread_id,
+                    messages_tokens = s.messages_tokens,
+                    system_prompt_tokens = s.system_prompt_tokens,
+                    mcp_prompts_tokens = s.mcp_prompts_tokens,
+                    skills_tokens = s.skills_tokens,
+                    tool_use_tokens = s.tool_use_tokens,
+                    total_estimate = s.total_estimate,
+                    "LOAD_SESSION: restoring persisted context_stats"
+                );
                 (
                     s.messages_tokens,
                     s.system_prompt_tokens,
@@ -2841,7 +2852,16 @@ pub async fn get_session(
                     s.tool_use_tokens,
                 )
             })
-            .unwrap_or((thread.estimate_messages_tokens(), 0, 0, 0, 0));
+            .unwrap_or_else(|| {
+                let estimated = thread.estimate_messages_tokens();
+                tracing::debug!(
+                    session_id = %id,
+                    thread_id = %thread_id,
+                    estimated_messages_tokens = estimated,
+                    "LOAD_SESSION: no persisted context_stats, falling back to message estimate"
+                );
+                (estimated, 0, 0, 0, 0)
+            });
 
     let compact_buffer_tokens = ((model_context_length.unwrap_or(0) as f32) * 0.033) as u32; // 3.3% of context window
 

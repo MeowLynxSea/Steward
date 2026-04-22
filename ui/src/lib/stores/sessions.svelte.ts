@@ -951,19 +951,38 @@ class SessionsState {
 
       case "session.context_stats": {
         const stats = event.payload as import("../types").ContextStats;
+        const isForActiveThread = this.active?.active_thread_id === event.thread_id;
         console.debug('[sessions] context_stats handler fired', {
           threadId: event.thread_id,
+          sequence: event.sequence,
           stats,
           activeSessionId: this.active?.session?.id,
           activeThreadId: this.active?.active_thread_id,
+          isForActiveThread,
         });
-        if (this.active) {
+        if (this.active && isForActiveThread) {
+          const oldStats = this.active.context_stats;
+          if (oldStats) {
+            const deltas: Record<string, string> = {};
+            for (const key of Object.keys(stats) as Array<keyof typeof stats>) {
+              const oldVal = oldStats[key] ?? 0;
+              const newVal = stats[key] ?? 0;
+              if (oldVal !== newVal) {
+                deltas[key] = `${oldVal} → ${newVal}`;
+              }
+            }
+            if (Object.keys(deltas).length > 0) {
+              console.debug('[sessions] context_stats deltas:', deltas);
+            }
+          }
           this.active = {
             ...this.active,
             model_context_length: stats.model_context_length,
             context_stats: stats
           };
           console.debug('[sessions] context_stats updated, new value:', this.active.context_stats);
+        } else if (this.active && !isForActiveThread) {
+          console.debug('[sessions] context_stats ignored: thread_id mismatch');
         }
         break;
       }

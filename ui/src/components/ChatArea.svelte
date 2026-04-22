@@ -150,8 +150,22 @@
     streaming.images.length > 0
   );
   const contextStats = $derived(session?.context_stats ?? null);
+  let previousContextStats: typeof contextStats = null;
   $effect(() => {
     if (contextStats) {
+      const prev = previousContextStats;
+      if (prev) {
+        const diffKeys = [] as string[];
+        for (const key of Object.keys(contextStats) as Array<keyof typeof contextStats>) {
+          if ((contextStats[key] ?? 0) !== (prev[key] ?? 0)) {
+            diffKeys.push(`${key}: ${prev[key]} → ${contextStats[key]}`);
+          }
+        }
+        if (diffKeys.length > 0) {
+          console.debug('[ChatArea] contextStats delta:', diffKeys.join(', '));
+        }
+      }
+      previousContextStats = { ...contextStats };
       console.debug('[ChatArea] contextStats changed:', JSON.stringify(contextStats));
     }
   });

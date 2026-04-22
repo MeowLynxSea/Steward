@@ -595,9 +595,7 @@ fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
             continue;
         }
         match parse_shell_word(cmd, index) {
-            Some((end, Some(literal)))
-                if literal.starts_with('/') || literal.starts_with('~') =>
-            {
+            Some((end, Some(literal))) if literal.starts_with('/') || literal.starts_with('~') => {
                 paths.push(literal);
                 index = end;
             }

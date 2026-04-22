@@ -322,8 +322,11 @@ impl ReasoningContext {
     /// Compute calibrated context stats by comparing local estimates against the
     /// actual input token count returned by the LLM.
     ///
-    /// The ratio `actual_input_tokens / total_estimate` gives us a per-char
-    /// correction factor that we distribute proportionally across each component.
+    /// Only the *static* fields (system prompt, MCP prompts, skills) are scaled
+    /// by the calibration ratio. The *dynamic* fields (messages, tool_use) are
+    /// recounted directly from the live message list so they are not distorted
+    /// by the ratio. This prevents the calibrated static fields from being
+    /// compressed when the dynamic portion of the context grows.
     pub fn compute_calibrated_stats(
         &self,
         actual_input_tokens: u32,
@@ -333,6 +336,11 @@ impl ReasoningContext {
         let total_estimate = est.total_estimate;
 
         if total_estimate == 0 || actual_input_tokens == 0 {
+            tracing::debug!(
+                actual_input_tokens,
+                total_estimate,
+                "COMPUTE_CALIBRATED_STATS: early return (zero total_estimate or actual_input_tokens)"
+            );
             return ContextTokenEstimate {
                 system_prompt_tokens: est.system_prompt_tokens,
                 mcp_prompts_tokens: est.mcp_prompts_tokens,
@@ -350,27 +358,132 @@ impl ReasoningContext {
             };
         }
 
-        let ratio = (actual_input_tokens as f64 / total_estimate as f64).min(3.0);
+        // Recount dynamic fields from the live message list.
+        let (actual_messages_tokens, actual_tool_use_tokens) =
+            self.messages
+                .iter()
+                .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
+                    if m.tool_call_id.is_some() {
+                        (
+                            msg_tok,
+                            tool_tok.saturating_add(Self::estimate_tokens(&m.content)),
+                        )
+                    } else {
+                        (
+                            msg_tok.saturating_add(Self::estimate_message_tokens(m)),
+                            tool_tok,
+                        )
+                    }
+                });
 
-        let system_prompt_tokens =
-            (est.system_prompt_tokens as f64 * ratio).round().max(0.0) as u32;
-        let mcp_prompts_tokens = (est.mcp_prompts_tokens as f64 * ratio).round().max(0.0) as u32;
-        let skills_tokens = (est.skills_tokens as f64 * ratio).round().max(0.0) as u32;
-        let messages_tokens = (est.messages_tokens as f64 * ratio).round().max(0.0) as u32;
-        let tool_use_tokens = (est.tool_use_tokens as f64 * ratio).round().max(0.0) as u32;
+        // Use raw_context_estimate as the baseline so the ratio is stable across
+        // repeated calibrations within the same turn. If we used context_estimate
+        // (which may already have been scaled by a previous calibration) the ratio
+        // would drift downward every time compute_calibrated_stats is called.
+        let static_estimate = self
+            .raw_context_estimate
+            .system_prompt_tokens
+            .saturating_add(self.raw_context_estimate.mcp_prompts_tokens)
+            .saturating_add(self.raw_context_estimate.skills_tokens);
+
+        // Compute the ratio based solely on static fields so that growth in
+        // messages / tool_use does not compress the static portion.
+        let (ratio, used_fallback) = if static_estimate > 0 {
+            let actual_static = actual_input_tokens
+                .saturating_sub(actual_messages_tokens)
+                .saturating_sub(actual_tool_use_tokens)
+                .saturating_sub(compact_buffer_tokens);
+            if actual_static > 0 {
+                (
+                    (actual_static as f64 / static_estimate as f64).min(3.0),
+                    false,
+                )
+            } else {
+                // Fallback when dynamic fields alone already exceed actual
+                // input. This can happen when the LLM provider's input_tokens
+                // metric is unreliable (e.g. prompt caching, API bug, or
+                // provider-specific token counting). Preserve the last known
+                // good ratio instead of compressing statics with a bogus ratio.
+                let current_ratio = if self.raw_context_estimate.system_prompt_tokens > 0 {
+                    est.system_prompt_tokens as f64
+                        / self.raw_context_estimate.system_prompt_tokens as f64
+                } else {
+                    1.0
+                };
+                tracing::debug!(
+                    actual_input_tokens,
+                    actual_messages_tokens,
+                    actual_tool_use_tokens,
+                    compact_buffer_tokens,
+                    current_ratio,
+                    "COMPUTE_CALIBRATED_STATS: actual_static <= 0, preserving current_ratio"
+                );
+                (current_ratio.max(0.01).min(3.0), true)
+            }
+        } else {
+            (1.0, false)
+        };
+
+        // When the ratio is computed from raw_context_estimate, the static
+        // fields should also be derived from raw_context_estimate so they
+        // don't drift on repeated calibrations within the same turn.
+        // In the fallback path (unreliable input_tokens) we preserve the
+        // already-calibrated values from the last successful calibration.
+        let system_prompt_tokens = if used_fallback {
+            est.system_prompt_tokens
+        } else {
+            (self.raw_context_estimate.system_prompt_tokens as f64 * ratio)
+                .round()
+                .max(0.0) as u32
+        };
+        let mcp_prompts_tokens = if used_fallback {
+            est.mcp_prompts_tokens
+        } else {
+            (self.raw_context_estimate.mcp_prompts_tokens as f64 * ratio)
+                .round()
+                .max(0.0) as u32
+        };
+        let skills_tokens = if used_fallback {
+            est.skills_tokens
+        } else {
+            (self.raw_context_estimate.skills_tokens as f64 * ratio)
+                .round()
+                .max(0.0) as u32
+        };
+
+        tracing::debug!(
+            actual_input_tokens,
+            actual_messages_tokens,
+            actual_tool_use_tokens,
+            compact_buffer_tokens,
+            static_estimate,
+            total_estimate,
+            ratio,
+            used_fallback,
+            prev_system = est.system_prompt_tokens,
+            prev_mcp = est.mcp_prompts_tokens,
+            prev_skills = est.skills_tokens,
+            new_system = system_prompt_tokens,
+            new_mcp = mcp_prompts_tokens,
+            new_skills = skills_tokens,
+            raw_system = self.raw_context_estimate.system_prompt_tokens,
+            raw_mcp = self.raw_context_estimate.mcp_prompts_tokens,
+            raw_skills = self.raw_context_estimate.skills_tokens,
+            "COMPUTE_CALIBRATED_STATS: computed new calibrated stats"
+        );
 
         ContextTokenEstimate {
             system_prompt_tokens,
             mcp_prompts_tokens,
             skills_tokens,
-            messages_tokens,
-            tool_use_tokens,
+            messages_tokens: actual_messages_tokens,
+            tool_use_tokens: actual_tool_use_tokens,
             compact_buffer_tokens,
             total_estimate: system_prompt_tokens
                 .saturating_add(mcp_prompts_tokens)
                 .saturating_add(skills_tokens)
-                .saturating_add(messages_tokens)
-                .saturating_add(tool_use_tokens)
+                .saturating_add(actual_messages_tokens)
+                .saturating_add(actual_tool_use_tokens)
                 .saturating_add(compact_buffer_tokens),
         }
     }

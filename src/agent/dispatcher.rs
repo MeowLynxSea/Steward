@@ -530,12 +530,13 @@ impl Agent {
                 .unwrap_or(1.0)
         };
 
-        let system_prompt_tokens = (ReasoningContext::estimate_tokens(&non_mcp_system_prompt) as f64
-            * calibration_ratio)
-            .round()
-            .max(0.0) as u32;
+        let system_prompt_tokens =
+            (ReasoningContext::estimate_tokens(&non_mcp_system_prompt) as f64 * calibration_ratio)
+                .round()
+                .max(0.0) as u32;
         let mcp_prompts_tokens = ((ReasoningContext::estimate_tokens(&cached_prompt)
-            .saturating_sub(ReasoningContext::estimate_tokens(&non_mcp_system_prompt))) as f64
+            .saturating_sub(ReasoningContext::estimate_tokens(&non_mcp_system_prompt)))
+            as f64
             * calibration_ratio)
             .round()
             .max(0.0) as u32;
@@ -567,6 +568,19 @@ impl Agent {
             compact_buffer_tokens,
             total_estimate,
         };
+
+        tracing::debug!(
+            thread_id = %thread_id,
+            calibration_ratio,
+            system_prompt_tokens,
+            mcp_prompts_tokens,
+            skills_tokens,
+            messages_tokens,
+            tool_use_tokens,
+            compact_buffer_tokens,
+            total_estimate,
+            "INITIAL_ESTIMATE: built initial context estimate for turn"
+        );
 
         let max_tool_iterations = self.config.max_tool_iterations;
         let force_text_at = max_tool_iterations;
@@ -631,6 +645,7 @@ impl Agent {
             thread_id,
             &message.user_id,
             &mut reason_ctx,
+            "turn_completion",
         )
         .await;
 
@@ -776,6 +791,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             self.thread_id,
             &self.message.user_id,
             reason_ctx,
+            "before_llm_call",
         )
         .await;
 
@@ -820,6 +836,62 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
         } else {
             self.cached_prompt.clone()
         });
+
+        // When force_text is active the system prompt drops all tool
+        // definitions. If context_estimate still reflects the full-tools prompt,
+        // compute_calibrated_stats will see a large drop in actual input tokens
+        // and compress the static fields disproportionately.
+        //
+        // This guard runs whenever force_text is true AND the raw estimates
+        // haven't been switched to the no-tools prompt yet. It catches both
+        // the normal transition (before_llm_call sets force_text) and the
+        // truncation-escalation path where agentic_loop.rs sets force_text
+        // directly.
+        if force_text
+            && (reason_ctx.raw_context_estimate.mcp_prompts_tokens > 0
+                || reason_ctx.raw_context_estimate.system_prompt_tokens
+                    != ReasoningContext::estimate_tokens(&self.cached_prompt_no_tools))
+        {
+            let new_raw_system = ReasoningContext::estimate_tokens(&self.cached_prompt_no_tools);
+
+            let old_raw_static = reason_ctx
+                .raw_context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.raw_context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.raw_context_estimate.skills_tokens);
+            let old_cal_static = reason_ctx
+                .context_estimate
+                .system_prompt_tokens
+                .saturating_add(reason_ctx.context_estimate.mcp_prompts_tokens)
+                .saturating_add(reason_ctx.context_estimate.skills_tokens);
+
+            let overall_ratio = if old_raw_static > 0 {
+                old_cal_static as f64 / old_raw_static as f64
+            } else {
+                1.0
+            };
+
+            tracing::debug!(
+                iteration,
+                old_raw_static,
+                old_cal_static,
+                overall_ratio,
+                new_raw_system,
+                "FORCE_TEXT: updating raw_context_estimate from full-tools to no-tools"
+            );
+
+            reason_ctx.context_estimate.system_prompt_tokens =
+                (new_raw_system as f64 * overall_ratio).round().max(0.0) as u32;
+            reason_ctx.context_estimate.mcp_prompts_tokens = 0;
+            reason_ctx.context_estimate.skills_tokens =
+                (reason_ctx.raw_context_estimate.skills_tokens as f64 * overall_ratio)
+                    .round()
+                    .max(0.0) as u32;
+
+            reason_ctx.raw_context_estimate.system_prompt_tokens = new_raw_system;
+            reason_ctx.raw_context_estimate.mcp_prompts_tokens = 0;
+        }
+
         reason_ctx.force_text = force_text;
 
         if force_text {
@@ -881,7 +953,22 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             Err(e) => return Err(e.into()),
         };
 
+        let cache_read = output.usage.cache_read_input_tokens;
+        let cache_creation = output.usage.cache_creation_input_tokens;
+        tracing::debug!(
+            iteration,
+            input_tokens = output.usage.input_tokens,
+            output_tokens = output.usage.output_tokens,
+            cache_read_input_tokens = cache_read,
+            cache_creation_input_tokens = cache_creation,
+            "LLM_CALL: received usage"
+        );
+
         // Compute calibrated context stats using actual input tokens from LLM response.
+        // When prompt caching is active (e.g. Anthropic), cache_read_input_tokens holds
+        // the cached portion of the prompt that is NOT included in input_tokens. We must
+        // add it back to get the true total input size for ratio calculation, otherwise
+        // the static fields get compressed disproportionately.
         let compact_buffer_tokens = ((self
             .agent
             .deps
@@ -892,8 +979,15 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             .and_then(|m| m.context_length)
             .unwrap_or(0) as f32)
             * 0.033) as u32;
+        let effective_input_tokens = output.usage.input_tokens.saturating_add(cache_read);
+        tracing::debug!(
+            iteration,
+            effective_input_tokens,
+            "LLM_CALL: using effective input tokens for calibration (input_tokens + cache_read)"
+        );
+
         reason_ctx.context_estimate =
-            reason_ctx.compute_calibrated_stats(output.usage.input_tokens, compact_buffer_tokens);
+            reason_ctx.compute_calibrated_stats(effective_input_tokens, compact_buffer_tokens);
 
         // On the first calibration of a turn, capture the ratio between raw
         // estimates and actual tokenizer counts so the next turn can seed its
@@ -1605,6 +1699,7 @@ impl<'a> LoopDelegate for ChatDelegate<'a> {
             self.thread_id,
             &self.message.user_id,
             reason_ctx,
+            "after_tool_execution",
         )
         .await;
 
@@ -1619,6 +1714,7 @@ fn emit_context_stats_update_fn<'a>(
     thread_id: Uuid,
     user_id: &'a str,
     reason_ctx: &'a mut ReasoningContext,
+    source: &'a str,
 ) -> impl std::future::Future<Output = ()> + 'a {
     async move {
         // Re-estimate message tokens with current context (messages may have grown since last call).
@@ -1699,10 +1795,20 @@ fn emit_context_stats_update_fn<'a>(
         tracing::debug!(
             thread_id = %thread_id,
             user_id,
+            source,
             model_context_length,
+            system_prompt_tokens = stats.system_prompt_tokens,
+            mcp_prompts_tokens = stats.mcp_prompts_tokens,
+            skills_tokens = stats.skills_tokens,
             messages_tokens,
             tool_use_tokens,
+            total_estimate = stats.total_estimate,
             free_tokens,
+            raw_system = reason_ctx.raw_context_estimate.system_prompt_tokens,
+            raw_mcp = reason_ctx.raw_context_estimate.mcp_prompts_tokens,
+            raw_skills = reason_ctx.raw_context_estimate.skills_tokens,
+            has_been_calibrated = reason_ctx.has_been_calibrated,
+            message_count = reason_ctx.messages.len(),
             "EMIT_CONTEXT_STATS: sending to channel {}",
             channel_name
         );
@@ -3677,19 +3783,28 @@ mod tests {
         reason_ctx.has_been_calibrated = true;
 
         // Add a tool result message so dynamic fields grow.
-        reason_ctx.messages.push(ChatMessage::user("tool result with some content"));
+        reason_ctx
+            .messages
+            .push(ChatMessage::user("tool result with some content"));
 
         // Re-count dynamic fields (same logic as emit_context_stats_update_fn).
-        let (messages_tokens, tool_use_tokens) = reason_ctx
-            .messages
-            .iter()
-            .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
-                if m.tool_call_id.is_some() {
-                    (msg_tok, tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)))
-                } else {
-                    (msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)), tool_tok)
-                }
-            });
+        let (messages_tokens, tool_use_tokens) =
+            reason_ctx
+                .messages
+                .iter()
+                .fold((0u32, 0u32), |(msg_tok, tool_tok), m| {
+                    if m.tool_call_id.is_some() {
+                        (
+                            msg_tok,
+                            tool_tok.saturating_add(ReasoningContext::estimate_tokens(&m.content)),
+                        )
+                    } else {
+                        (
+                            msg_tok.saturating_add(ReasoningContext::estimate_message_tokens(m)),
+                            tool_tok,
+                        )
+                    }
+                });
 
         // Build stats using the FIXED logic (preserve static fields).
         let compact_buffer_tokens = 4224u32;
@@ -3752,7 +3867,13 @@ mod tests {
         let tenant = agent.tenant_ctx("test-user").await;
 
         let result = agent
-            .run_agentic_loop(&message, tenant, session.clone(), thread_id, initial_messages)
+            .run_agentic_loop(
+                &message,
+                tenant,
+                session.clone(),
+                thread_id,
+                initial_messages,
+            )
             .await;
         assert!(result.is_ok());
 

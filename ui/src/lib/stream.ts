@@ -56,7 +56,12 @@ export function createEventStream(
     try {
       const event = payload as StreamEnvelope;
       if (eventType === 'session:context_stats') {
-        console.debug('[stream] context_stats event received:', JSON.stringify(event));
+        console.debug('[stream] context_stats event received:', {
+          eventType,
+          threadId: event.thread_id,
+          sequence: event.sequence,
+          payload: event.payload,
+        });
       }
       onEvent(event);
     } catch (e) {
