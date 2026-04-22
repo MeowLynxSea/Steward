@@ -131,7 +131,7 @@ h3 {
   line-height: 1.2 !important;
   word-break: break-word;
   overflow-wrap: break-word;
-  font-family: var(--font-emoji);
+  /* Use standard text font — emoji font stack is only for elements that render emoji */
 }
 
 .markdown-body p {
