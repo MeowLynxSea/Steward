@@ -917,8 +917,8 @@ impl ShellTool {
     ) -> Result<(String, i32), ToolError> {
         // Build command
         let mut command = if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            c.args(["/C", cmd]);
+            let mut c = Command::new("powershell");
+            c.args(["-NoProfile", "-Command", cmd]);
             c
         } else {
             let mut c = Command::new("sh");
