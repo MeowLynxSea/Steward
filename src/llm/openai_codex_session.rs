@@ -626,6 +626,37 @@ impl OpenAiCodexSessionManager {
                     ))
                 })?;
         }
+        #[cfg(windows)]
+        {
+            let path = self.config.session_path.clone();
+            let username = std::env::var("USERNAME").unwrap_or_default();
+            if !username.is_empty() {
+                match tokio::process::Command::new("icacls")
+                    .arg(&path)
+                    .args(["/inheritance:r", "/grant:r", &format!("{}:(R,W)", username)])
+                    .output()
+                    .await
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => {
+                        tracing::warn!(
+                            target: "steward::llm::codex",
+                            "Failed to restrict session file permissions for {}: {}",
+                            path.display(),
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "steward::llm::codex",
+                            "Failed to run icacls for {}: {}",
+                            path.display(),
+                            e
+                        );
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

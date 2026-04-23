@@ -80,22 +80,56 @@ impl HttpTool {
     }
 }
 
-/// Validate and resolve a `save_to` path, ensuring it stays under `/tmp/`.
+/// Validate and resolve a `save_to` path, ensuring it stays under the system
+/// temporary directory.
 ///
-/// Uses `path_utils::validate_path` with `/tmp` as the base directory to catch
-/// traversal attacks like `/tmp/../../etc/passwd` and symlink escapes.
+/// On Unix, accepts both `/tmp/` and the platform temp dir (e.g. `/var/folders/...`)
+/// for backward compatibility. On Windows, only paths under the system temp dir
+/// (e.g. `C:\Users\...\AppData\Local\Temp`) are accepted.
+///
+/// Uses `path_utils::validate_path` to catch traversal attacks and symlink escapes.
 /// Creates parent directories only after validation succeeds.
 fn validate_save_to_path(save_to: &str) -> Result<std::path::PathBuf, ToolError> {
-    // Quick prefix check before doing any fs work
-    if !save_to.starts_with("/tmp/") {
+    let _path = std::path::PathBuf::from(save_to);
+
+    #[cfg(unix)]
+    let is_under_tmp = save_to.starts_with("/tmp/")
+        || crate::tools::builtin::path_utils::validate_path(
+            save_to,
+            Some(&std::env::temp_dir()),
+        )
+        .is_ok();
+    #[cfg(windows)]
+    let is_under_tmp = crate::tools::builtin::path_utils::validate_path(
+        save_to,
+        Some(&std::env::temp_dir()),
+    )
+    .is_ok();
+
+    if !is_under_tmp {
         return Err(ToolError::InvalidParameters(
-            "save_to path must be under /tmp/".to_string(),
+            "save_to path must be under the temporary directory".to_string(),
         ));
     }
-    // Validate path BEFORE creating directories to prevent traversal-based
-    // directory creation outside /tmp (e.g. `/tmp/../../etc/passwd`).
-    let tmp_base = std::path::Path::new("/tmp");
-    let validated = crate::tools::builtin::path_utils::validate_path(save_to, Some(tmp_base))?;
+
+    #[cfg(unix)]
+    let tmp_base = if save_to.starts_with("/tmp/") {
+        std::path::PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    };
+    #[cfg(windows)]
+    let tmp_base = std::env::temp_dir();
+
+    let validated =
+        crate::tools::builtin::path_utils::validate_path(save_to, Some(&tmp_base))?;
+
+    if validated == tmp_base {
+        return Err(ToolError::InvalidParameters(
+            "save_to path must be a file under the temporary directory".to_string(),
+        ));
+    }
+
     // Only create parent directories for the validated (safe) path
     if let Some(parent) = validated.parent() {
         std::fs::create_dir_all(parent).map_err(|e| {
@@ -389,7 +423,7 @@ impl Tool for HttpTool {
     fn description(&self) -> &str {
         "Make HTTP requests to external APIs. Supports GET, POST, PUT, DELETE methods. \
          Use save_to to download binary files (images, PDFs, etc.) to a local path, \
-         e.g. {\"method\":\"GET\",\"url\":\"https://picsum.photos/800/600\",\"save_to\":\"/tmp/photo.jpg\"}."
+         e.g. {\"method\":\"GET\",\"url\":\"https://picsum.photos/800/600\",\"save_to\":\"/tmp/photo.jpg\"} (Unix) or a path under the system temp directory (Windows)."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -427,7 +461,7 @@ impl Tool for HttpTool {
                 },
                 "save_to": {
                     "type": "string",
-                    "description": "Save response body as raw bytes to this file path instead of returning it. Use for binary downloads (images, PDFs, etc.). The path must be under /tmp/."
+                    "description": "Save response body as raw bytes to this file path instead of returning it. Use for binary downloads (images, PDFs, etc.). The path must be under the system temporary directory."
                 }
             },
             "required": ["url"]
@@ -1433,13 +1467,13 @@ mod tests {
     #[test]
     fn test_save_to_rejects_path_outside_tmp() {
         let err = validate_save_to_path("/etc/passwd").unwrap_err();
-        assert!(err.to_string().contains("must be under /tmp/"));
+        assert!(err.to_string().contains("temporary directory"));
     }
 
     #[test]
     fn test_save_to_rejects_home_dir() {
         let err = validate_save_to_path("/home/user/file.txt").unwrap_err();
-        assert!(err.to_string().contains("must be under /tmp/"));
+        assert!(err.to_string().contains("temporary directory"));
     }
 
     #[test]
@@ -1481,6 +1515,6 @@ mod tests {
     #[test]
     fn test_save_to_rejects_bare_tmp() {
         let err = validate_save_to_path("/tmp").unwrap_err();
-        assert!(err.to_string().contains("must be under /tmp/"));
+        assert!(err.to_string().contains("temporary directory"));
     }
 }

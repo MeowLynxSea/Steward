@@ -764,6 +764,31 @@ mod tests {
         assert!(loaded.is_empty());
     }
 
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_symlink_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let real_dir = dir.path().join("real-skill");
+        fs::create_dir(&real_dir).unwrap();
+        fs::write(
+            real_dir.join("SKILL.md"),
+            "---\nname: real-skill\n---\n\nTest.\n",
+        )
+        .unwrap();
+
+        let skills_dir = dir.path().join("skills");
+        fs::create_dir(&skills_dir).unwrap();
+        let link = skills_dir.join("linked-skill");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
+            eprintln!("Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.", e);
+            return;
+        }
+
+        let mut registry = SkillRegistry::new(skills_dir);
+        let loaded = registry.discover_all().await;
+        assert!(loaded.is_empty());
+    }
+
     #[tokio::test]
     async fn test_file_size_limit() {
         let dir = tempfile::tempdir().unwrap();
@@ -1151,6 +1176,37 @@ mod tests {
         let bundle = dir.path().join("bundle");
         fs::create_dir(&bundle).unwrap();
         std::os::unix::fs::symlink(&real_dir, bundle.join("linked-skill")).unwrap();
+
+        let mut registry = SkillRegistry::new(dir.path().to_path_buf());
+        let loaded = registry.discover_all().await;
+
+        // The real skill at top level is found, but the symlinked one inside bundle is rejected
+        assert_eq!(loaded, vec!["real-skill"]);
+        assert_eq!(registry.count(), 1);
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn test_symlink_rejected_in_nested_directory() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Real skill outside the bundle
+        let real_dir = dir.path().join("real-skill");
+        fs::create_dir(&real_dir).unwrap();
+        fs::write(
+            real_dir.join("SKILL.md"),
+            "---\nname: real-skill\n---\n\nReal prompt.\n",
+        )
+        .unwrap();
+
+        // Bundle directory with a symlink inside
+        let bundle = dir.path().join("bundle");
+        fs::create_dir(&bundle).unwrap();
+        let link = bundle.join("linked-skill");
+        if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
+            eprintln!("Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.", e);
+            return;
+        }
 
         let mut registry = SkillRegistry::new(dir.path().to_path_buf());
         let loaded = registry.discover_all().await;

@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::tools::builtin::path_utils::canonicalize_stripped;
 use crate::tools::tool::ToolError;
 use crate::workspace::Workspace;
 
@@ -32,8 +33,7 @@ impl WorkspaceSandbox {
         let mut roots = Vec::with_capacity(summaries.len());
         for summary in summaries {
             let root = PathBuf::from(&summary.allowlist.source_root);
-            let canonical = root
-                .canonicalize()
+            let canonical = canonicalize_stripped(&root)
                 .unwrap_or_else(|_| crate::tools::builtin::path_utils::normalize_lexical(&root));
             roots.push(canonical);
         }
@@ -47,7 +47,7 @@ impl WorkspaceSandbox {
         let roots = roots
             .into_iter()
             .map(|root| {
-                root.canonicalize()
+                canonicalize_stripped(&root)
                     .unwrap_or_else(|_| crate::tools::builtin::path_utils::normalize_lexical(&root))
             })
             .collect();
@@ -67,7 +67,7 @@ impl WorkspaceSandbox {
         }
 
         let canonical = if path.exists() {
-            path.canonicalize()
+            canonicalize_stripped(path)
                 .unwrap_or_else(|_| crate::tools::builtin::path_utils::normalize_lexical(path))
         } else {
             // Walk up to the nearest existing ancestor directory, canonicalize it
@@ -76,8 +76,7 @@ impl WorkspaceSandbox {
             let mut tail_parts: Vec<&std::ffi::OsStr> = Vec::new();
             loop {
                 if ancestor.exists() {
-                    let canonical_ancestor = ancestor
-                        .canonicalize()
+                    let canonical_ancestor = canonicalize_stripped(ancestor)
                         .unwrap_or_else(|_| ancestor.to_path_buf());
                     let mut result = canonical_ancestor;
                     for part in tail_parts.into_iter().rev() {

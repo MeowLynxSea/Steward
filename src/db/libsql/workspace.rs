@@ -13,7 +13,7 @@ use super::{
 };
 use crate::db::WorkspaceStore;
 use crate::error::{DatabaseError, WorkspaceError};
-use crate::tools::builtin::path_utils::normalize_lexical;
+use crate::tools::builtin::path_utils::{canonicalize_stripped, normalize_lexical};
 #[cfg(test)]
 use crate::workspace::WorkspaceAllowlistChangeKind;
 use crate::workspace::{
@@ -37,12 +37,11 @@ fn ensure_allowlist_containment(
     source_root: &str,
 ) -> Result<(), WorkspaceError> {
     let root = std::path::Path::new(source_root);
-    let canonical_root = root.canonicalize().map_err(|e| WorkspaceError::IoError {
+    let canonical_root = canonicalize_stripped(root).map_err(|e| WorkspaceError::IoError {
         reason: format!("failed to canonicalize allowlist root: {e}"),
     })?;
 
-    let canonical_path = disk_path
-        .canonicalize()
+    let canonical_path = canonicalize_stripped(disk_path)
         .unwrap_or_else(|_| normalize_lexical(disk_path));
 
     if !canonical_path.starts_with(&canonical_root) {

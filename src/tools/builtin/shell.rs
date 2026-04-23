@@ -504,6 +504,10 @@ fn contains_shell_pipe(lower: &str) -> bool {
         || has_pipe_to(lower, "dash")
         || has_pipe_to(lower, "/bin/sh")
         || has_pipe_to(lower, "/bin/bash")
+        || has_pipe_to(lower, "cmd")
+        || has_pipe_to(lower, "cmd.exe")
+        || has_pipe_to(lower, "powershell")
+        || has_pipe_to(lower, "powershell.exe")
 }
 
 /// Check if the command pipes to a specific interpreter, with word boundary
@@ -581,8 +585,9 @@ fn is_shell_operator(ch: char) -> bool {
 ///
 /// This is a defense-in-depth check: after `workspace://` URIs have been
 /// rewritten to real disk paths, we walk the command tokens and flag any
-/// literal that starts with `/` or `~`. Variable expansions (`$()`, backticks)
-/// are skipped because they have already been rejected by injection detection.
+/// literal that starts with `/`, `~`, or a Windows drive letter (`C:\`).
+/// Variable expansions (`$()`, backticks) are skipped because they have
+/// already been rejected by injection detection.
 fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
     let mut paths = Vec::new();
     let mut index = 0;
@@ -595,8 +600,15 @@ fn extract_absolute_path_literals(cmd: &str) -> Vec<String> {
             continue;
         }
         match parse_shell_word(cmd, index) {
-            Some((end, Some(literal))) if literal.starts_with('/') || literal.starts_with('~') => {
-                paths.push(literal);
+            Some((end, Some(literal))) => {
+                let is_unix_absolute = literal.starts_with('/') || literal.starts_with('~');
+                let is_windows_absolute = literal.len() >= 3
+                    && literal.as_bytes()[0].is_ascii_alphabetic()
+                    && literal.as_bytes()[1] == b':'
+                    && matches!(literal.as_bytes()[2], b'\\' | b'/');
+                if is_unix_absolute || is_windows_absolute {
+                    paths.push(literal);
+                }
                 index = end;
             }
             Some((end, _)) => {

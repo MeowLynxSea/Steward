@@ -3,6 +3,7 @@
 //! This module provides secure path validation to prevent directory traversal
 //! attacks and ensure paths stay within allowed sandboxes.
 
+use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::tools::tool::ToolError;
@@ -29,6 +30,15 @@ pub fn normalize_lexical(path: &Path) -> PathBuf {
         }
     }
     components.iter().collect()
+}
+
+/// Cross-platform canonicalization that strips the Windows `\\?\` UNC prefix.
+///
+/// `dunce::canonicalize` behaves like `std::fs::canonicalize` on Unix and returns
+/// a clean, prefix-free path on Windows. This ensures `starts_with` comparisons
+/// between canonicalized paths are consistent across platforms.
+pub fn canonicalize_stripped(path: &Path) -> Result<PathBuf, io::Error> {
+    dunce::canonicalize(path)
 }
 
 /// Validate that a path is safe (no traversal attacks).
@@ -60,12 +70,11 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
 
     // Resolve to absolute path
     let resolved = if path.is_absolute() {
-        path.canonicalize()
+        canonicalize_stripped(&path)
             .unwrap_or_else(|_| normalize_lexical(&path))
     } else if let Some(base) = base_dir {
         let joined = base.join(&path);
-        joined
-            .canonicalize()
+        canonicalize_stripped(&joined)
             .unwrap_or_else(|_| normalize_lexical(&joined))
     } else {
         let joined = std::env::current_dir()
@@ -76,15 +85,14 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
 
     // If base_dir is set, ensure the resolved path is within it
     if let Some(base) = base_dir {
-        let base_canonical = base
-            .canonicalize()
+        let base_canonical = canonicalize_stripped(base)
             .unwrap_or_else(|_| normalize_lexical(base));
 
         // For existing paths, canonicalize to resolve symlinks.
         // For non-existent paths, the lexical normalization above already removed
         // all `..` components, so starts_with is reliable.
         let check_path = if resolved.exists() {
-            resolved.canonicalize().unwrap_or_else(|_| resolved.clone())
+            canonicalize_stripped(&resolved).unwrap_or_else(|_| resolved.clone())
         } else {
             // Walk up to the nearest existing ancestor directory, canonicalize it,
             // then re-append the remaining tail. This handles the case where a
@@ -93,8 +101,7 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
             let mut tail_parts: Vec<&std::ffi::OsStr> = Vec::new();
             loop {
                 if ancestor.exists() {
-                    let canonical_ancestor = ancestor
-                        .canonicalize()
+                    let canonical_ancestor = canonicalize_stripped(ancestor)
                         .unwrap_or_else(|_| ancestor.to_path_buf());
                     let mut result = canonical_ancestor;
                     for part in tail_parts.into_iter().rev() {

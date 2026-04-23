@@ -101,7 +101,8 @@ const SYSTEM_PROMPT_FILES: &[&str] = &[
 
 fn normalize_host_path(path: &Path) -> PathBuf {
     if path.exists() {
-        return std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        return crate::tools::builtin::path_utils::canonicalize_stripped(path)
+            .unwrap_or_else(|_| path.to_path_buf());
     }
 
     let absolute = if path.is_absolute() {

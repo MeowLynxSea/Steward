@@ -258,7 +258,7 @@ pub fn upsert_bootstrap_var_to(
     Ok(())
 }
 
-/// Set restrictive file permissions (0o600) on Unix systems.
+/// Set restrictive file permissions (0o600 on Unix, current-user-only on Windows).
 ///
 /// The `.env` file may contain database credentials and API keys,
 /// so it should only be readable by the owner.
@@ -268,6 +268,35 @@ fn restrict_file_permissions(_path: &std::path::Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
         std::fs::set_permissions(_path, perms)?;
+    }
+    #[cfg(windows)]
+    {
+        let username = std::env::var("USERNAME").unwrap_or_default();
+        if !username.is_empty() {
+            match std::process::Command::new("icacls")
+                .arg(_path)
+                .args(["/inheritance:r", "/grant:r", &format!("{}:(R,W)", username)])
+                .output()
+            {
+                Ok(out) if out.status.success() => {}
+                Ok(out) => {
+                    tracing::warn!(
+                        target: "steward::bootstrap",
+                        "Failed to restrict file permissions for {}: {}",
+                        _path.display(),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "steward::bootstrap",
+                        "Failed to run icacls for {}: {}",
+                        _path.display(),
+                        e
+                    );
+                }
+            }
+        }
     }
     Ok(())
 }
