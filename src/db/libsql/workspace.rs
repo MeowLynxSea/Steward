@@ -185,14 +185,6 @@ fn fixed_allowlist_id_for_mount_kind(mount_kind: WorkspaceMountKind) -> Option<U
     }
 }
 
-fn fixed_mount_kind_for_allowlist_id(allowlist_id: Uuid) -> Option<WorkspaceMountKind> {
-    match allowlist_id {
-        id if id == crate::workspace::default_allowlist_uuid() => Some(WorkspaceMountKind::Default),
-        id if id == crate::workspace::skills_allowlist_uuid() => Some(WorkspaceMountKind::Skills),
-        _ => None,
-    }
-}
-
 fn mount_kind_supports_tracking(mount_kind: WorkspaceMountKind) -> bool {
     mount_kind == WorkspaceMountKind::User
 }
@@ -710,31 +702,12 @@ impl LibSqlBackend {
             .map_err(|e| WorkspaceError::SearchFailed {
                 reason: e.to_string(),
             })?;
-        let query = if fixed_mount_kind_for_allowlist_id(allowlist_id).is_some() {
-            "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
+        let query = "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
              FROM workspace_allowlists
-             WHERE user_id = ?1 AND (id = ?2 OR mount_kind = ?3)
-             ORDER BY CASE WHEN id = ?2 THEN 0 ELSE 1 END
-             LIMIT 1"
-        } else {
-            "SELECT id, user_id, display_name, mount_kind, source_root, bypass_read, bypass_write, created_at, updated_at
-             FROM workspace_allowlists
-             WHERE user_id = ?1 AND id = ?2"
-        };
-        let mut rows = if let Some(mount_kind) = fixed_mount_kind_for_allowlist_id(allowlist_id) {
-            conn.query(
-                query,
-                params![
-                    user_id,
-                    allowlist_id.to_string(),
-                    mount_kind_to_str(mount_kind)
-                ],
-            )
+             WHERE user_id = ?1 AND id = ?2";
+        let mut rows = conn
+            .query(query, params![user_id, allowlist_id.to_string()])
             .await
-        } else {
-            conn.query(query, params![user_id, allowlist_id.to_string()])
-                .await
-        }
         .map_err(|e| WorkspaceError::SearchFailed {
             reason: format!("allowlist query failed: {e}"),
         })?;
@@ -2141,7 +2114,7 @@ impl WorkspaceStore for LibSqlBackend {
         request: &CreateAllowlistRequest,
     ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
         let source_root =
-            std::fs::canonicalize(&request.source_root).map_err(|e| WorkspaceError::IoError {
+            canonicalize_stripped(Path::new(&request.source_root)).map_err(|e| WorkspaceError::IoError {
                 reason: format!("allowlist source is not accessible: {e}"),
             })?;
         if !source_root.is_dir() {

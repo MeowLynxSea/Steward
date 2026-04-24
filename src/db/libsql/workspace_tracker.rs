@@ -11,6 +11,7 @@ use uuid::Uuid;
 use super::{LibSqlBackend, fmt_ts, get_opt_text, get_opt_ts, get_text};
 use crate::bootstrap::steward_base_dir;
 use crate::error::WorkspaceError;
+use crate::tools::builtin::path_utils::canonicalize_stripped;
 use crate::workspace::{
     AllowlistedFileStatus, WorkspaceAllowlistChangeKind, WorkspaceAllowlistDiff,
     WorkspaceAllowlistDiffRequest, WorkspaceAllowlistRevisionKind,
@@ -581,11 +582,11 @@ impl LibSqlBackend {
             .to_string();
 
         let repo_root_path =
-            std::fs::canonicalize(&repo_root).map_err(|e| WorkspaceError::IoError {
+            canonicalize_stripped(Path::new(&repo_root)).map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to canonicalize repo root: {e}"),
             })?;
         let source_root_path =
-            std::fs::canonicalize(source_root).map_err(|e| WorkspaceError::IoError {
+            canonicalize_stripped(Path::new(source_root)).map_err(|e| WorkspaceError::IoError {
                 reason: format!("failed to canonicalize allowlist root: {e}"),
             })?;
         let allowlist_scope = source_root_path
@@ -1135,7 +1136,7 @@ impl LibSqlBackend {
 
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let source_root =
-            std::fs::canonicalize(&allowlist.source_root).map_err(|e| WorkspaceError::IoError {
+            canonicalize_stripped(Path::new(&allowlist.source_root)).map_err(|e| WorkspaceError::IoError {
                 reason: format!("allowlist source is not accessible: {e}"),
             })?;
 
