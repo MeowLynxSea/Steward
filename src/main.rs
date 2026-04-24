@@ -533,7 +533,15 @@ fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
         ])
         .output()
         .map_err(|error| error.to_string())?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // On Windows, System.Windows.Forms may print spurious "SharedMemory read faild"
+    // messages to stdout. We extract only the path by splitting at the first occurrence.
+    let path = stdout
+        .split("SharedMemory")
+        .next()
+        .unwrap_or(&stdout)
+        .trim()
+        .to_string();
     if path.is_empty() {
         Ok(None)
     } else {
