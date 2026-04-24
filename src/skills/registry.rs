@@ -780,7 +780,10 @@ mod tests {
         fs::create_dir(&skills_dir).unwrap();
         let link = skills_dir.join("linked-skill");
         if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
-            eprintln!("Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.", e);
+            eprintln!(
+                "Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.",
+                e
+            );
             return;
         }
 
@@ -1204,7 +1207,10 @@ mod tests {
         fs::create_dir(&bundle).unwrap();
         let link = bundle.join("linked-skill");
         if let Err(e) = std::os::windows::fs::symlink_dir(&real_dir, &link) {
-            eprintln!("Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.", e);
+            eprintln!(
+                "Skipping Windows symlink test: cannot create symlink ({}). Run with admin rights or enable Developer Mode.",
+                e
+            );
             return;
         }
 

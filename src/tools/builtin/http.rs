@@ -94,17 +94,12 @@ fn validate_save_to_path(save_to: &str) -> Result<std::path::PathBuf, ToolError>
 
     #[cfg(unix)]
     let is_under_tmp = save_to.starts_with("/tmp/")
-        || crate::tools::builtin::path_utils::validate_path(
-            save_to,
-            Some(&std::env::temp_dir()),
-        )
-        .is_ok();
+        || crate::tools::builtin::path_utils::validate_path(save_to, Some(&std::env::temp_dir()))
+            .is_ok();
     #[cfg(windows)]
-    let is_under_tmp = crate::tools::builtin::path_utils::validate_path(
-        save_to,
-        Some(&std::env::temp_dir()),
-    )
-    .is_ok();
+    let is_under_tmp =
+        crate::tools::builtin::path_utils::validate_path(save_to, Some(&std::env::temp_dir()))
+            .is_ok();
 
     if !is_under_tmp {
         return Err(ToolError::InvalidParameters(
@@ -121,8 +116,7 @@ fn validate_save_to_path(save_to: &str) -> Result<std::path::PathBuf, ToolError>
     #[cfg(windows)]
     let tmp_base = std::env::temp_dir();
 
-    let validated =
-        crate::tools::builtin::path_utils::validate_path(save_to, Some(&tmp_base))?;
+    let validated = crate::tools::builtin::path_utils::validate_path(save_to, Some(&tmp_base))?;
 
     if validated == tmp_base {
         return Err(ToolError::InvalidParameters(

@@ -1136,8 +1136,10 @@ impl LibSqlBackend {
 
         let allowlist = self.fetch_allowlist(user_id, allowlist_id).await?;
         let source_root =
-            canonicalize_stripped(Path::new(&allowlist.source_root)).map_err(|e| WorkspaceError::IoError {
-                reason: format!("allowlist source is not accessible: {e}"),
+            canonicalize_stripped(Path::new(&allowlist.source_root)).map_err(|e| {
+                WorkspaceError::IoError {
+                    reason: format!("allowlist source is not accessible: {e}"),
+                }
             })?;
 
         let mut tracker =

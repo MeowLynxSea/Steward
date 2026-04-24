@@ -76,8 +76,8 @@ impl WorkspaceSandbox {
             let mut tail_parts: Vec<&std::ffi::OsStr> = Vec::new();
             loop {
                 if ancestor.exists() {
-                    let canonical_ancestor = canonicalize_stripped(ancestor)
-                        .unwrap_or_else(|_| ancestor.to_path_buf());
+                    let canonical_ancestor =
+                        canonicalize_stripped(ancestor).unwrap_or_else(|_| ancestor.to_path_buf());
                     let mut result = canonical_ancestor;
                     for part in tail_parts.into_iter().rev() {
                         result = result.join(part);

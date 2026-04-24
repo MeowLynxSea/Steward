@@ -70,12 +70,10 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
 
     // Resolve to absolute path
     let resolved = if path.is_absolute() {
-        canonicalize_stripped(&path)
-            .unwrap_or_else(|_| normalize_lexical(&path))
+        canonicalize_stripped(&path).unwrap_or_else(|_| normalize_lexical(&path))
     } else if let Some(base) = base_dir {
         let joined = base.join(&path);
-        canonicalize_stripped(&joined)
-            .unwrap_or_else(|_| normalize_lexical(&joined))
+        canonicalize_stripped(&joined).unwrap_or_else(|_| normalize_lexical(&joined))
     } else {
         let joined = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -85,8 +83,8 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
 
     // If base_dir is set, ensure the resolved path is within it
     if let Some(base) = base_dir {
-        let base_canonical = canonicalize_stripped(base)
-            .unwrap_or_else(|_| normalize_lexical(base));
+        let base_canonical =
+            canonicalize_stripped(base).unwrap_or_else(|_| normalize_lexical(base));
 
         // For existing paths, canonicalize to resolve symlinks.
         // For non-existent paths, the lexical normalization above already removed
@@ -101,8 +99,8 @@ pub fn validate_path(path_str: &str, base_dir: Option<&Path>) -> Result<PathBuf,
             let mut tail_parts: Vec<&std::ffi::OsStr> = Vec::new();
             loop {
                 if ancestor.exists() {
-                    let canonical_ancestor = canonicalize_stripped(ancestor)
-                        .unwrap_or_else(|_| ancestor.to_path_buf());
+                    let canonical_ancestor =
+                        canonicalize_stripped(ancestor).unwrap_or_else(|_| ancestor.to_path_buf());
                     let mut result = canonical_ancestor;
                     for part in tail_parts.into_iter().rev() {
                         result = result.join(part);

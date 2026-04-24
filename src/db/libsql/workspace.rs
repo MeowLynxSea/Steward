@@ -41,8 +41,8 @@ fn ensure_allowlist_containment(
         reason: format!("failed to canonicalize allowlist root: {e}"),
     })?;
 
-    let canonical_path = canonicalize_stripped(disk_path)
-        .unwrap_or_else(|_| normalize_lexical(disk_path));
+    let canonical_path =
+        canonicalize_stripped(disk_path).unwrap_or_else(|_| normalize_lexical(disk_path));
 
     if !canonical_path.starts_with(&canonical_root) {
         return Err(WorkspaceError::IoError {
@@ -708,9 +708,9 @@ impl LibSqlBackend {
         let mut rows = conn
             .query(query, params![user_id, allowlist_id.to_string()])
             .await
-        .map_err(|e| WorkspaceError::SearchFailed {
-            reason: format!("allowlist query failed: {e}"),
-        })?;
+            .map_err(|e| WorkspaceError::SearchFailed {
+                reason: format!("allowlist query failed: {e}"),
+            })?;
         let Some(row) = rows
             .next()
             .await
@@ -2113,10 +2113,11 @@ impl WorkspaceStore for LibSqlBackend {
         &self,
         request: &CreateAllowlistRequest,
     ) -> Result<WorkspaceAllowlistSummary, WorkspaceError> {
-        let source_root =
-            canonicalize_stripped(Path::new(&request.source_root)).map_err(|e| WorkspaceError::IoError {
+        let source_root = canonicalize_stripped(Path::new(&request.source_root)).map_err(|e| {
+            WorkspaceError::IoError {
                 reason: format!("allowlist source is not accessible: {e}"),
-            })?;
+            }
+        })?;
         if !source_root.is_dir() {
             return Err(WorkspaceError::IoError {
                 reason: "allowlist source must be a directory".to_string(),
@@ -2153,6 +2154,12 @@ impl WorkspaceStore for LibSqlBackend {
                 Uuid::parse_str(&get_text(&row, 0)).map_err(|e| WorkspaceError::SearchFailed {
                     reason: format!("invalid allowlist id: {e}"),
                 })?;
+            // Explicitly drop the row (and its underlying statement clone) before
+            // executing the UPDATE so the read statement is fully released. This
+            // avoids subtle SQLite transaction-interaction issues on Windows where
+            // an outstanding read cursor can interfere with the implicit write
+            // transaction started by the UPDATE.
+            drop(row);
             drop(existing_rows);
             let allowlist_id = if fixed_allowlist_id_for_mount_kind(request.mount_kind).is_some()
                 && existing_id != requested_allowlist_id
@@ -2166,14 +2173,14 @@ impl WorkspaceStore for LibSqlBackend {
                 Self::rekey_allowlist_id(&tx, existing_id, requested_allowlist_id).await?;
                 tx.execute(
                     "UPDATE workspace_allowlists
-                     SET display_name = ?2, mount_kind = ?3, bypass_write = ?4, updated_at = ?5
-                     WHERE id = ?1",
+                     SET display_name = ?, mount_kind = ?, bypass_write = ?, updated_at = ?
+                     WHERE id = ?",
                     params![
-                        requested_allowlist_id.to_string(),
                         request.display_name.clone(),
                         mount_kind_to_str(request.mount_kind),
                         if request.bypass_write { 1 } else { 0 },
                         now.clone(),
+                        requested_allowlist_id.to_string(),
                     ],
                 )
                 .await
@@ -2187,23 +2194,32 @@ impl WorkspaceStore for LibSqlBackend {
                     })?;
                 requested_allowlist_id
             } else {
-                conn.execute(
-                    "UPDATE workspace_allowlists
-                     SET display_name = ?3, mount_kind = ?4, bypass_write = ?5, updated_at = ?6
-                     WHERE user_id = ?1 AND source_root = ?2",
-                    params![
-                        request.user_id.clone(),
-                        source_root_text,
-                        request.display_name.clone(),
-                        mount_kind_to_str(request.mount_kind),
-                        if request.bypass_write { 1 } else { 0 },
-                        now.clone(),
-                    ],
-                )
-                .await
-                .map_err(|e| WorkspaceError::SearchFailed {
-                    reason: format!("allowlist update failed: {e}"),
-                })?;
+                let rows_affected = conn
+                    .execute(
+                        "UPDATE workspace_allowlists
+                         SET display_name = ?, mount_kind = ?, bypass_write = ?, updated_at = ?
+                         WHERE user_id = ? AND source_root = ?",
+                        params![
+                            request.display_name.clone(),
+                            mount_kind_to_str(request.mount_kind),
+                            if request.bypass_write { 1 } else { 0 },
+                            now.clone(),
+                            request.user_id.clone(),
+                            source_root_text,
+                        ],
+                    )
+                    .await
+                    .map_err(|e| WorkspaceError::SearchFailed {
+                        reason: format!("allowlist update failed: {e}"),
+                    })?;
+                if rows_affected == 0 {
+                    return Err(WorkspaceError::SearchFailed {
+                        reason: format!(
+                            "allowlist update affected 0 rows: source_root={}",
+                            request.source_root
+                        ),
+                    });
+                }
                 existing_id
             };
             if mount_kind_supports_tracking(request.mount_kind) {
@@ -3772,6 +3788,50 @@ mod tests {
             })
             .collect();
         assert_eq!(skills_entries.len(), 1, "skills root should be idempotent");
+    }
+
+    #[tokio::test]
+    async fn test_user_allowlist_dedupes_source_root_and_updates_mount_kind() {
+        let (backend, dir) = setup_backend().await;
+        let allowlist_root = dir.path().join("user-dedup-root");
+        std::fs::create_dir_all(&allowlist_root).expect("create allowlist root");
+
+        let first = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: false,
+            })
+            .await
+            .expect("create user allowlist");
+
+        let second = backend
+            .create_workspace_allowlist(&CreateAllowlistRequest {
+                user_id: "default".to_string(),
+                display_name: "Renamed Project".to_string(),
+                mount_kind: WorkspaceMountKind::User,
+                source_root: allowlist_root.display().to_string(),
+                bypass_write: true,
+            })
+            .await
+            .expect("recreate user allowlist");
+
+        assert_eq!(
+            first.allowlist.id, second.allowlist.id,
+            "same source_root should reuse the existing allowlist"
+        );
+        assert_eq!(second.allowlist.mount_kind, WorkspaceMountKind::User);
+        assert!(second.allowlist.bypass_write);
+        assert_eq!(second.allowlist.display_name, "Renamed Project");
+
+        // diff should work because mount_kind is user
+        let diff = backend
+            .diff_workspace_allowlist("default", second.allowlist.id, None)
+            .await
+            .expect("diff should succeed for user allowlist");
+        assert_eq!(diff.allowlist_id, second.allowlist.id);
     }
 
     #[tokio::test]
