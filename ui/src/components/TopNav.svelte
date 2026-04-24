@@ -29,7 +29,7 @@
 </header>
 
 <style>
-  [data-theme="dark"] .top-nav {
+  :global([data-theme="dark"]) .top-nav {
     background: var(--bg-sidebar);
     border-bottom-color: var(--border-default);
   }
@@ -154,30 +154,30 @@
     padding: 0;
   }
 
-  [data-theme="dark"] .model-badge {
+  :global([data-theme="dark"]) .model-badge {
     background: var(--bg-elevated);
     color: var(--text-secondary);
   }
 
-  [data-theme="dark"] .session-title,
-  [data-theme="dark"] .menu-btn,
-  [data-theme="dark"] .app-name {
+  :global([data-theme="dark"]) .session-title,
+  :global([data-theme="dark"]) .menu-btn,
+  :global([data-theme="dark"]) .app-name {
     color: var(--text-primary);
   }
 
-  [data-theme="dark"] .menu-btn:hover {
+  :global([data-theme="dark"]) .menu-btn:hover {
     background: var(--bg-hover);
   }
 
-  [data-theme="dark"] .status-text {
+  :global([data-theme="dark"]) .status-text {
     color: var(--text-secondary);
   }
 
-  [data-theme="dark"] .btn-ghost {
+  :global([data-theme="dark"]) .btn-ghost {
     color: var(--text-tertiary);
   }
 
-  [data-theme="dark"] .btn-ghost:hover {
+  :global([data-theme="dark"]) .btn-ghost:hover {
     background: var(--bg-hover);
   }
 </style>
