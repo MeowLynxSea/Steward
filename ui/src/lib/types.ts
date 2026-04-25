@@ -387,6 +387,16 @@ export interface MemorySidebarSection {
   items: MemorySidebarItem[];
 }
 
+export interface MemoryChildEntry {
+  node_id: string;
+  uri: string;
+  title: string;
+  kind: MemoryNodeKind;
+  priority: number;
+  disclosure: string | null;
+  updated_at: string;
+}
+
 export interface MemoryTimelineEntry {
   node_id: string;
   route_id: string | null;

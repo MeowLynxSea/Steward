@@ -3917,6 +3917,22 @@ pub async fn get_memory_node(
 }
 
 #[tauri::command]
+pub async fn list_memory_children(
+    state: State<'_, AppState>,
+    key: String,
+) -> Result<steward_core::ipc::MemoryChildrenResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let children = memory
+        .children(&state.owner_id, None, &key, 50)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::MemoryChildrenResponse { children })
+}
+
+#[tauri::command]
 pub async fn search_memory_graph(
     state: State<'_, AppState>,
     payload: MemoryGraphSearchRequest,

@@ -369,6 +369,11 @@ pub struct MemoryVersionsResponse {
     pub versions: Vec<crate::memory::MemoryVersion>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct MemoryChildrenResponse {
+    pub children: Vec<crate::memory::MemoryChildEntry>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MemoryReviewActionRequest {
     pub action: String,

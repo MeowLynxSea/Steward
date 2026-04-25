@@ -619,6 +619,7 @@ fn main() {
             tauri_commands::search_workspace,
             tauri_commands::list_memory_sidebar,
             tauri_commands::get_memory_node,
+            tauri_commands::list_memory_children,
             tauri_commands::search_memory_graph,
             tauri_commands::list_memory_timeline,
             tauri_commands::list_memory_reviews,

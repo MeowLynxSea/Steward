@@ -416,6 +416,7 @@ pub struct MemoryIndexEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryChildEntry {
+    pub node_id: Uuid,
     pub uri: String,
     pub title: String,
     pub kind: MemoryNodeKind,

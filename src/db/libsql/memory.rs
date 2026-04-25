@@ -2437,6 +2437,7 @@ impl MemoryStore for LibSqlBackend {
             };
 
             out.push(MemoryChildEntry {
+                node_id: node_id.parse().unwrap_or_default(),
                 uri,
                 title: get_text(&row, 1),
                 kind: MemoryNodeKind::from_str(&get_text(&row, 2)),

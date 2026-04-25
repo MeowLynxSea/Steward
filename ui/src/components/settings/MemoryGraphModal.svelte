@@ -3,6 +3,7 @@
   import { X } from "lucide-svelte";
   import { apiClient } from "../../lib/api";
   import type {
+    MemoryChildEntry,
     MemoryNodeDetail,
     MemoryNodeKind,
     MemorySidebarItem,
@@ -500,10 +501,109 @@
     };
   }
 
-  function refreshGraph(sections: MemorySidebarSection[], details: Map<string, MemoryNodeDetail | null>) {
+  function buildChildNodes(
+    baseNodes: GraphNode[],
+    childrenMap: Map<string, MemoryChildEntry[]>
+  ): GraphNode[] {
+    const nodeIds = new Set(baseNodes.map((n) => n.id));
+    const childNodes: GraphNode[] = [];
+    let sortIndex = baseNodes.length;
+
+    for (const children of childrenMap.values()) {
+      for (const child of children) {
+        if (nodeIds.has(child.node_id)) {
+          continue;
+        }
+        nodeIds.add(child.node_id);
+        childNodes.push({
+          renderKey: `${child.node_id}:child:${sortIndex}`,
+          id: child.node_id,
+          key: child.uri ?? child.node_id,
+          kind: child.kind,
+          label: routeSegment(child.uri) ?? child.title,
+          subtitle: child.title,
+          sectionKey: "children",
+          sectionTitle: "Children",
+          uri: child.uri,
+          x: graphPaddingX,
+          y: graphPaddingY,
+          width: nodeWidth,
+          height: nodeHeight,
+          depth: 0,
+          detail: null
+        });
+        sortIndex += 1;
+      }
+    }
+
+    return childNodes;
+  }
+
+  function buildChildEdges(
+    baseNodes: GraphNode[],
+    childNodes: GraphNode[],
+    childrenMap: Map<string, MemoryChildEntry[]>
+  ): GraphEdgeRecord[] {
+    const baseNodeIds = new Set(baseNodes.map((n) => n.id));
+    const childNodeIds = new Set(childNodes.map((n) => n.id));
+    const dedupe = new Set<string>();
+    const edges: GraphEdgeRecord[] = [];
+
+    for (const [parentId, children] of childrenMap.entries()) {
+      if (!baseNodeIds.has(parentId)) {
+        continue;
+      }
+
+      for (const child of children) {
+        if (!childNodeIds.has(child.node_id)) {
+          continue;
+        }
+
+        const key = `${parentId}:${child.node_id}:contains`;
+        if (dedupe.has(key)) {
+          continue;
+        }
+        dedupe.add(key);
+        edges.push({
+          renderKey: `${key}:${edges.length}`,
+          id: key,
+          sourceId: parentId,
+          targetId: child.node_id,
+          relationKind: "contains",
+          visibility: "linked",
+          priority: child.priority,
+          triggerText: child.disclosure,
+          kind: "relation",
+          isTreePath: true
+        });
+      }
+    }
+
+    return edges;
+  }
+
+  function refreshGraph(
+    sections: MemorySidebarSection[],
+    details: Map<string, MemoryNodeDetail | null>,
+    childrenMap: Map<string, MemoryChildEntry[]>
+  ) {
     const baseNodes = buildBaseNodes(sections, details);
-    const baseEdges = buildEdges(baseNodes, details);
-    const layout = layoutTree(baseNodes, baseEdges);
+    const childNodes = buildChildNodes(baseNodes, childrenMap);
+    const allNodes = [...baseNodes, ...childNodes];
+    const baseEdges = buildEdges(allNodes, details);
+    const childEdges = buildChildEdges(baseNodes, childNodes, childrenMap);
+    const allEdges = [...baseEdges, ...childEdges];
+
+    const edgeByKey = new Map<string, GraphEdgeRecord>();
+    for (const edge of allEdges) {
+      const key = `${edge.sourceId}:${edge.targetId}:${edge.relationKind}`;
+      if (!edgeByKey.has(key)) {
+        edgeByKey.set(key, edge);
+      }
+    }
+    const dedupedEdges = [...edgeByKey.values()];
+
+    const layout = layoutTree(allNodes, dedupedEdges);
 
     graphNodes = layout.nodes;
     graphEdges = layout.edges;
@@ -751,7 +851,8 @@
         (item, index, array) => array.findIndex((candidate) => candidate.node_id === item.node_id) === index
       );
       const detailMap = new Map<string, MemoryNodeDetail | null>();
-      refreshGraph(sections, detailMap);
+      const childrenMap = new Map<string, MemoryChildEntry[]>();
+      refreshGraph(sections, detailMap, childrenMap);
 
       const failedKeys: string[] = [];
 
@@ -774,8 +875,30 @@
           detailMap.set(item.node_id, null);
         }
 
-        refreshGraph(sections, detailMap);
+        refreshGraph(sections, detailMap, childrenMap);
       }
+
+      // Load children for all visible nodes in parallel
+      const childrenResults = await Promise.all(
+        uniqueItems.map(async (item) => {
+          try {
+            const response = await apiClient.listMemoryChildren(item.uri ?? item.node_id);
+            return { nodeId: item.node_id, children: response.children };
+          } catch {
+            return { nodeId: item.node_id, children: [] as MemoryChildEntry[] };
+          }
+        })
+      );
+
+      if (requestToken !== token) {
+        return;
+      }
+
+      for (const { nodeId, children } of childrenResults) {
+        childrenMap.set(nodeId, children);
+      }
+
+      refreshGraph(sections, detailMap, childrenMap);
 
       if (failedKeys.length > 0) {
         graphNotice = `有 ${failedKeys.length} 个节点详情未加载，已先跳过。`;

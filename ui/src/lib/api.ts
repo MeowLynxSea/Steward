@@ -24,6 +24,7 @@ import type {
   McpTestResponse,
   McpToolListResponse,
   PatchSettingsRequest,
+  MemoryChildEntry,
   MemoryNodeDetail,
   MemorySidebarSection,
   MemoryTimelineEntry,
@@ -325,6 +326,10 @@ export const apiClient = {
 
   getMemoryNode(key: string) {
     return invoke<{ detail: MemoryNodeDetail | null }>("get_memory_node", { key });
+  },
+
+  listMemoryChildren(key: string) {
+    return invoke<{ children: MemoryChildEntry[] }>("list_memory_children", { key });
   },
 
   searchMemoryGraph(query: string, limit = 12, domains?: string[]) {
