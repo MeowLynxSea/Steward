@@ -181,6 +181,10 @@ objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 [target.'cfg(unix)'.dependencies]
 pty-process = { version = "0.5", features = ["async"] }
 
+# Native file dialogs on Windows (replaces slow powershell + .NET Forms)
+[target.'cfg(target_os = "windows")'.dependencies]
+rfd = "0.15"
+
 # Linux secret-service (GNOME Keyring, KWallet)
 [target.'cfg(target_os = "linux")'.dependencies]
 secret-service = { version = "4", features = ["rt-tokio-crypto-rust"] }

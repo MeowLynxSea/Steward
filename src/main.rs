@@ -519,39 +519,23 @@ fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
     }
 }
 
-#[cfg(target_os = "windows")]
-fn pick_directory_with_system_dialog() -> Result<Option<String>, String> {
-    let output = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "[void][System.Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms'); \
-             $dialog = New-Object System.Windows.Forms.FolderBrowserDialog; \
-             if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { \
-               Write-Output $dialog.SelectedPath \
-             }",
-        ])
-        .output()
-        .map_err(|error| error.to_string())?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // On Windows, System.Windows.Forms may print spurious "SharedMemory read faild"
-    // messages to stdout. We extract only the path by splitting at the first occurrence.
-    let path = stdout
-        .split("SharedMemory")
-        .next()
-        .unwrap_or(&stdout)
-        .trim()
-        .to_string();
-    if path.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(path))
-    }
-}
-
 #[tauri::command]
 async fn pick_allowlist_directory() -> Result<Option<String>, String> {
-    pick_directory_with_system_dialog()
+    #[cfg(target_os = "windows")]
+    {
+        let path = tauri::async_runtime::spawn_blocking(|| {
+            rfd::FileDialog::new().pick_folder()
+        })
+        .await
+        .map_err(|error| format!("Failed to pick folder: {error}"))?
+        .map(|p| p.to_string_lossy().to_string());
+        Ok(path)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        pick_directory_with_system_dialog()
+    }
 }
 
 #[tauri::command]

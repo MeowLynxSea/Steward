@@ -485,7 +485,7 @@
                 disabled={!selectedAllowlistPath || workspaceStore.loading}
               >
                 <FolderPlus size={16} strokeWidth={2} />
-                创建授权
+                {workspaceStore.loading ? "正在创建授权…" : "创建授权"}
               </button>
             </div>
 
