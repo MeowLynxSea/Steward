@@ -29,10 +29,16 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 /// Create a new `git` command with platform-specific flags.
 /// On Windows this sets `CREATE_NO_WINDOW` to prevent flashing console windows.
 fn new_git_command() -> Command {
-    let mut cmd = Command::new("git");
     #[cfg(windows)]
-    cmd.creation_flags(CREATE_NO_WINDOW);
-    cmd
+    {
+        let mut cmd = Command::new("git");
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("git")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
