@@ -1138,9 +1138,15 @@ impl ShellTool {
                 if let Some(first) = sandbox.first_root() {
                     return Ok(first.to_path_buf());
                 }
-                return Err(ToolError::NotAuthorized(
-                    "No valid working directory inside workspace sandbox".to_string(),
-                ));
+                // Sandbox exists but has no roots (e.g. workspace with no
+                // allowlists yet).  There is no boundary to enforce, so fall
+                // back to the process working directory rather than failing
+                // with a cryptic authorization error.
+                tracing::warn!(
+                    "Shell tool sandbox has no roots; using fallback working directory {}",
+                    fallback.display()
+                );
+                return Ok(fallback);
             }
             return Ok(fallback);
         };
@@ -2344,5 +2350,28 @@ mod tests {
         assert_eq!(r2, RiskLevel::High); // safety: test code
         let r3 = classify_command_risk("DROP table users;");
         assert_eq!(r3, RiskLevel::High); // safety: test code
+    }
+
+    #[tokio::test]
+    async fn test_empty_sandbox_uses_fallback_workdir() {
+        // Regression: when a workspace has no allowlists the sandbox has empty
+        // roots.  Shell commands without an explicit workdir should still run
+        // using the fallback working directory rather than failing with a
+        // cryptic authorization error.
+        let sandbox = Arc::new(crate::tools::builtin::sandbox::WorkspaceSandbox::from_roots(vec![]));
+        let tool = ShellTool::new().with_sandbox(sandbox);
+        let ctx = JobContext::default();
+
+        let result = tool
+            .execute(serde_json::json!({"command": "echo hello"}), &ctx)
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "Shell command should succeed when sandbox has no roots, got: {result:?}"
+        );
+        let tool_output = result.unwrap();
+        let output = tool_output.result.get("output").unwrap().as_str().unwrap();
+        assert!(output.contains("hello"));
     }
 }
