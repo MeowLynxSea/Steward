@@ -141,7 +141,7 @@ fn looks_like_filesystem_path(path: &str) -> bool {
 }
 
 fn is_legacy_memory_target(target: &str) -> bool {
-    matches!(target, "heartbeat") || target == paths::HEARTBEAT
+    matches!(target, "heartbeat" | "memory" | "daily_log") || target == paths::HEARTBEAT
 }
 
 fn is_workspace_allowlist_uri(path: &str) -> bool {

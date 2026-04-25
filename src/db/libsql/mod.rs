@@ -168,6 +168,19 @@ impl LibSqlBackend {
     }
 }
 
+impl Drop for LibSqlBackend {
+    fn drop(&mut self) {
+        // libSQL uses native components that may spawn background threads (e.g.
+        // WAL checkpointing). When tests create and drop many temporary databases
+        // rapidly, those background threads can still be touching the database
+        // file after the Rust-side handle has been dropped, leading to rare but
+        // reproducible SIGABRT/SIGSEGV crashes. A short sleep gives libSQL's
+        // internal threads time to wind down before the temp directory (and thus
+        // the database file) is deleted.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+}
+
 // ==================== Helper functions ====================
 
 /// Parse an ISO-8601 timestamp string from SQLite into DateTime<Utc>.

@@ -747,6 +747,8 @@ pub struct Workspace {
     allowlist_watch_started: std::sync::atomic::AtomicBool,
     /// Shutdown signal for the background watch loop.
     allowlist_watch_shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    /// Handle to the background watch loop so we can abort it on drop.
+    allowlist_watch_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl Workspace {
@@ -772,7 +774,7 @@ impl Workspace {
         let user_id = self.user_id.clone();
         let interval = self.allowlist_watch_interval;
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(interval);
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -813,6 +815,10 @@ impl Workspace {
                 }
             }
         });
+        *self
+            .allowlist_watch_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     /// Create a new workspace backed by any Database implementation.
@@ -836,6 +842,7 @@ impl Workspace {
             allowlist_watch_interval: Duration::from_millis(DEFAULT_ALLOWLIST_WATCH_INTERVAL_MS),
             allowlist_watch_started: std::sync::atomic::AtomicBool::new(false),
             allowlist_watch_shutdown: Mutex::new(None),
+            allowlist_watch_handle: Mutex::new(None),
         }
     }
 
@@ -1033,6 +1040,7 @@ impl Workspace {
             allowlist_watch_interval: self.allowlist_watch_interval,
             allowlist_watch_started: std::sync::atomic::AtomicBool::new(false),
             allowlist_watch_shutdown: Mutex::new(None),
+            allowlist_watch_handle: Mutex::new(None),
         }
     }
 
@@ -2060,6 +2068,14 @@ impl Drop for Workspace {
             .take()
         {
             let _ = shutdown.send(true);
+        }
+        if let Some(handle) = self
+            .allowlist_watch_handle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            handle.abort();
         }
     }
 }
