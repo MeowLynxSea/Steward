@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use chrono::Utc;
 use libsql::params;
 use serde_json::json;
@@ -19,6 +22,18 @@ use crate::workspace::{
 };
 
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Create a new `git` command with platform-specific flags.
+/// On Windows this sets `CREATE_NO_WINDOW` to prevent flashing console windows.
+fn new_git_command() -> Command {
+    let mut cmd = Command::new("git");
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AllowlistTrackerKind {
@@ -496,7 +511,7 @@ impl LibSqlBackend {
         tracker: &AllowlistTrackerRecord,
         index_path: Option<&Path>,
     ) -> Command {
-        let mut cmd = Command::new("git");
+        let mut cmd = new_git_command();
         cmd.current_dir(tracker.repo_root_path())
             .arg("-c")
             .arg("core.bare=false")
@@ -549,7 +564,7 @@ impl LibSqlBackend {
     async fn detect_external_git_tracker(
         source_root: &Path,
     ) -> Result<Option<ExternalGitDiscovery>, WorkspaceError> {
-        let top_output = Command::new("git")
+        let top_output = new_git_command()
             .arg("-C")
             .arg(source_root)
             .args(["rev-parse", "--show-toplevel"])
@@ -565,7 +580,7 @@ impl LibSqlBackend {
         let repo_root = String::from_utf8_lossy(&top_output.stdout)
             .trim()
             .to_string();
-        let git_dir_output = Command::new("git")
+        let git_dir_output = new_git_command()
             .arg("-C")
             .arg(source_root)
             .args(["rev-parse", "--absolute-git-dir"])
@@ -618,7 +633,7 @@ impl LibSqlBackend {
                 reason: format!("failed to create tracker directory: {e}"),
             })?;
         }
-        let output = Command::new("git")
+        let output = new_git_command()
             .args(["init", "--bare"])
             .arg(&git_dir)
             .output()
@@ -635,7 +650,7 @@ impl LibSqlBackend {
             });
         }
 
-        let config_output = Command::new("git")
+        let config_output = new_git_command()
             .arg("--git-dir")
             .arg(&git_dir)
             .args(["config", "advice.defaultBranchName", "false"])
