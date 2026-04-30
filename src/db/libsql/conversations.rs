@@ -413,7 +413,7 @@ impl LibSqlBackend {
             CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_thread
                 ON conversation_recall_docs(user_id, thread_id);
             CREATE INDEX IF NOT EXISTS idx_conversation_recall_docs_embedding
-                ON conversation_recall_docs(libsql_vector_idx(embedding));
+                ON conversation_recall_docs(libsql_vector_idx(embedding, 'metric=cosine'));
 
             CREATE VIRTUAL TABLE IF NOT EXISTS conversation_recall_docs_fts USING fts5(
                 user_text,

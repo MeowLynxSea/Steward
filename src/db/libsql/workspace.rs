@@ -1145,7 +1145,7 @@ impl LibSqlBackend {
         // 6. Recreate document index + vector index
         tx.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_memory_chunks_document ON memory_chunks(document_id);
-             CREATE INDEX IF NOT EXISTS idx_memory_chunks_embedding ON memory_chunks(libsql_vector_idx(embedding));",
+             CREATE INDEX IF NOT EXISTS idx_memory_chunks_embedding ON memory_chunks(libsql_vector_idx(embedding, 'metric=cosine'));",
         )
         .await
         .map_err(|e| {

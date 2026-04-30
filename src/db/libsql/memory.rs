@@ -2971,7 +2971,7 @@ impl LibSqlBackend {
         let conn = self.connect().await?;
         let current_dim = {
             let mut rows = conn
-                .query("SELECT name FROM _migrations WHERE version = -2", ())
+                .query("SELECT name FROM _migrations WHERE version = -4", ())
                 .await
                 .map_err(|e| {
                     DatabaseError::Migration(format!(
@@ -3042,7 +3042,7 @@ impl LibSqlBackend {
             CREATE INDEX IF NOT EXISTS idx_memory_search_docs_space_updated
                 ON memory_search_docs(space_id, updated_at DESC);
             CREATE INDEX IF NOT EXISTS idx_memory_search_docs_embedding
-                ON memory_search_docs(libsql_vector_idx(embedding));
+                ON memory_search_docs(libsql_vector_idx(embedding, 'metric=cosine'));
 
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_search_docs_fts USING fts5(
                 title,
@@ -3082,7 +3082,7 @@ impl LibSqlBackend {
         })?;
 
         tx.execute(
-            "INSERT INTO _migrations (version, name) VALUES (-2, ?1)
+            "INSERT INTO _migrations (version, name) VALUES (-4, ?1
              ON CONFLICT(version) DO UPDATE SET name = excluded.name, applied_at = (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
             params![dimension.to_string()],
         )

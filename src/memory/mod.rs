@@ -1960,8 +1960,12 @@ impl MemoryManager {
                 let content = if activation.final_score > self.brain_config.wm_full_injection_threshold {
                     detail.active_version.content.clone()
                 } else {
-                    let max_len = detail.active_version.content.len().min(500);
-                    format!("{}...", &detail.active_version.content[..max_len])
+                    let boundary = detail.active_version.content.floor_char_boundary(500);
+                    if boundary < detail.active_version.content.len() {
+                        format!("{}...", &detail.active_version.content[..boundary])
+                    } else {
+                        detail.active_version.content.clone()
+                    }
                 };
                 wm_candidates.push(crate::brain::working_memory::CandidateSlot {
                     node_id: activation.node_id,
