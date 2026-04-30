@@ -4048,16 +4048,16 @@ pub async fn rollback_memory_changeset(
 #[tauri::command]
 pub async fn get_brain_working_memory(
     state: State<'_, AppState>,
-    session_id: String,
+    sessionId: String,
 ) -> Result<steward_core::ipc::BrainWorkingMemoryResponse, String> {
     let memory = state
         .memory
         .as_ref()
         .ok_or_else(|| "Memory graph not available".to_string())?;
-    let formatted = memory.get_working_memory(&state.owner_id, None, &session_id);
-    let state_wm = memory.wm_manager().get_state(&state.owner_id, None, &session_id);
+    let formatted = memory.get_working_memory(&state.owner_id, None, &sessionId);
+    let state_wm = memory.wm_manager().get_state(&state.owner_id, None, &sessionId);
     Ok(steward_core::ipc::BrainWorkingMemoryResponse {
-        session_id,
+        session_id: sessionId,
         slots: state_wm.slots,
         formatted,
     })

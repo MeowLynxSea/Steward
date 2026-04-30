@@ -154,6 +154,14 @@
     memoryError = null;
   }
 
+  function openBrainModal() {
+    showBrainModal = true;
+  }
+
+  function closeBrainModal() {
+    showBrainModal = false;
+  }
+
   function openMemoryGraphModal() {
     memoryGraphDebug("openMemoryGraphModal()", {
       activeSection,

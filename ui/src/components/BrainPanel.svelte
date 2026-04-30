@@ -3,13 +3,13 @@
   import { apiClient } from "../lib/api";
   import type { WorkingMemorySlot, NodeActivation } from "../lib/types";
 
-  export let sessionId: string = "default";
+  let { sessionId = "default" }: { sessionId?: string } = $props();
 
-  let wmSlots: WorkingMemorySlot[] = [];
-  let topActivated: NodeActivation[] = [];
-  let loading = false;
-  let error = "";
-  let refreshInterval: ReturnType<typeof setInterval> | null = null;
+  let wmSlots = $state<WorkingMemorySlot[]>([]);
+  let topActivated = $state<NodeActivation[]>([]);
+  let loading = $state(false);
+  let error = $state("");
+  let refreshInterval = $state<ReturnType<typeof setInterval> | null>(null);
 
   async function loadBrainState() {
     loading = true;

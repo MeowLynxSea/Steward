@@ -364,7 +364,7 @@ export const apiClient = {
   },
 
   getBrainWorkingMemory(sessionId: string) {
-    return invoke<BrainWorkingMemoryResponse>("get_brain_working_memory", { session_id: sessionId });
+    return invoke<BrainWorkingMemoryResponse>("get_brain_working_memory", { sessionId });
   },
 
   getBrainTopActivated(limit = 20) {
