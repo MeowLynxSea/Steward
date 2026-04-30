@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    Brain,
     ChevronRight,
     Network,
     Search
@@ -8,11 +9,13 @@
   let {
     memoryError = null,
     onOpenGraph,
-    onOpenSearch
+    onOpenSearch,
+    onOpenBrain
   }: {
     memoryError?: string | null;
     onOpenGraph: () => Promise<void> | void;
     onOpenSearch: () => Promise<void> | void;
+    onOpenBrain: () => Promise<void> | void;
   } = $props();
 </script>
 
@@ -51,6 +54,21 @@
           <strong>记忆搜索</strong>
         </div>
         <p>按关键词搜索记忆内容。</p>
+      </div>
+      <div class="memory-row-tail">
+        <ChevronRight size={14} strokeWidth={2} />
+      </div>
+    </button>
+
+    <button class="memory-row" type="button" onclick={() => void onOpenBrain()}>
+      <div class="memory-row-icon">
+        <Brain size={15} strokeWidth={2} />
+      </div>
+      <div class="memory-row-main">
+        <div class="memory-row-head">
+          <strong>Brain Dashboard</strong>
+        </div>
+        <p>实时查看工作记忆与节点激活状态。</p>
       </div>
       <div class="memory-row-tail">
         <ChevronRight size={14} strokeWidth={2} />

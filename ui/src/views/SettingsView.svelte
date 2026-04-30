@@ -13,6 +13,7 @@
   } from "lucide-svelte";
   import { fade, fly } from "svelte/transition";
   import LlmConfigurationPanel from "../components/LlmConfigurationPanel.svelte";
+  import BrainModal from "../components/settings/BrainModal.svelte";
   import MemoryGraphModal from "../components/settings/MemoryGraphModal.svelte";
   import MemorySettingsDrawers from "../components/settings/MemorySettingsDrawers.svelte";
   import McpSettingsPanel from "../components/settings/McpSettingsPanel.svelte";
@@ -78,6 +79,7 @@
   let activeSection = $state<SettingsSection>("general");
   let showBackendDrawer = $state(false);
   let showMemoryGraphModal = $state(false);
+  let showBrainModal = $state(false);
   let showMemoryDrawer = $state(false);
   let memoryDrawerMode = $state<MemoryPanelMode>("node");
   let activeMemoryItem = $state<MemoryNavItem | null>(null);
@@ -486,6 +488,7 @@
         {memoryError}
         onOpenGraph={openMemoryGraphModal}
         onOpenSearch={openMemorySearchDrawer}
+        onOpenBrain={openBrainModal}
       />
     {:else if activeSection === "skills"}
       <section class="settings-section">
@@ -778,6 +781,12 @@
   <MemoryGraphModal
     {memorySections}
     onClose={closeMemoryGraphModal}
+  />
+{/if}
+
+{#if showBrainModal}
+  <BrainModal
+    onClose={closeBrainModal}
   />
 {/if}
 

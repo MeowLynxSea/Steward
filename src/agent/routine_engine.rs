@@ -2084,7 +2084,7 @@ async fn execute_lightweight(
     // Get system prompt
     let system_prompt = if let Some(memory) = ctx.memory.as_ref() {
         match memory
-            .build_prompt_context(ctx.workspace.user_id(), None, &full_prompt, false)
+            .build_prompt_context_with_session(ctx.workspace.user_id(), None, &full_prompt, false, Some(routine.id.to_string()))
             .await
         {
             Ok(prompt) => prompt,

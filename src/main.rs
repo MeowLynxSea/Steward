@@ -626,6 +626,8 @@ fn main() {
             tauri_commands::apply_memory_review,
             tauri_commands::rollback_memory_changeset,
             tauri_commands::get_memory_versions,
+            tauri_commands::get_brain_working_memory,
+            tauri_commands::get_brain_top_activated,
             tauri_commands::list_workspace_allowlists,
             tauri_commands::create_workspace_allowlist,
             tauri_commands::get_workspace_allowlist,

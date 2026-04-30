@@ -950,7 +950,7 @@ class SessionsState {
       }
 
       case "session.context_stats": {
-        const stats = event.payload as import("../types").ContextStats;
+        const stats = event.payload as unknown as import("../types").ContextStats;
         const isForActiveThread = this.active?.active_thread_id === event.thread_id;
         console.debug('[sessions] context_stats handler fired', {
           threadId: event.thread_id,

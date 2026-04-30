@@ -4042,6 +4042,48 @@ pub async fn rollback_memory_changeset(
 }
 
 // =============================================================================
+// Brain / Cognitive Memory (2 commands)
+// =============================================================================
+
+#[tauri::command]
+pub async fn get_brain_working_memory(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<steward_core::ipc::BrainWorkingMemoryResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let formatted = memory.get_working_memory(&state.owner_id, None, &session_id);
+    let state_wm = memory.wm_manager().get_state(&state.owner_id, None, &session_id);
+    Ok(steward_core::ipc::BrainWorkingMemoryResponse {
+        session_id,
+        slots: state_wm.slots,
+        formatted,
+    })
+}
+
+#[tauri::command]
+pub async fn get_brain_top_activated(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<steward_core::ipc::BrainTopActivatedResponse, String> {
+    let memory = state
+        .memory
+        .as_ref()
+        .ok_or_else(|| "Memory graph not available".to_string())?;
+    let space = memory
+        .ensure_primary_space(&state.owner_id, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let activations = memory
+        .list_top_activated(space.id, limit.unwrap_or(20))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(steward_core::ipc::BrainTopActivatedResponse { activations })
+}
+
+// =============================================================================
 // Workspace Allowlists (8 commands)
 // =============================================================================
 

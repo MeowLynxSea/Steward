@@ -34,10 +34,10 @@ use crate::history::{
     LlmCallRecord, LocalJobRecord, LocalJobSummary, SettingRow,
 };
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry,
-    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNodeDetail, MemorySearchDoc, MemorySearchHit,
-    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, NewMemoryNodeInput,
-    UpdateMemoryNodeInput,
+    AssociativeEdge, CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow,
+    MemoryChildEntry, MemoryEpisode, MemoryGlossaryEntry, MemoryIndexEntry, MemoryNodeDetail,
+    MemorySearchDoc, MemorySearchHit, MemorySidebarSection, MemorySpace, MemoryTimelineEntry,
+    MemoryVersion, NewMemoryNodeInput, NodeActivation, UpdateMemoryNodeInput, WmSnapshotEntry,
 };
 use crate::task_runtime::{TaskRecord, TaskTimelineEntry};
 use crate::task_templates::TaskTemplateRecord;
@@ -1211,6 +1211,87 @@ pub trait MemoryStore: Send + Sync {
         route_id: Uuid,
         embedding: &[f32],
     ) -> Result<(), DatabaseError>;
+
+    // ---- Brain: Node Activation ----
+    async fn upsert_node_activation(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        delta: f64,
+    ) -> Result<NodeActivation, DatabaseError>;
+
+    async fn decay_all_activations(
+        &self,
+        space_id: Uuid,
+        decay_factor: f64,
+    ) -> Result<(), DatabaseError>;
+
+    async fn list_top_activated(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<NodeActivation>, DatabaseError>;
+
+    async fn get_node_activation(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+    ) -> Result<Option<NodeActivation>, DatabaseError>;
+
+    // ---- Brain: Associative Edges ----
+    async fn create_associative_edge(
+        &self,
+        space_id: Uuid,
+        source_node_id: Uuid,
+        target_node_id: Uuid,
+        edge_type: &str,
+        weight: f64,
+        confidence: f64,
+        evidence: &[String],
+    ) -> Result<AssociativeEdge, DatabaseError>;
+
+    async fn reinforce_associative_edge(
+        &self,
+        space_id: Uuid,
+        source_node_id: Uuid,
+        target_node_id: Uuid,
+        edge_type: &str,
+        delta: f64,
+        boost: f64,
+        evidence: &str,
+    ) -> Result<AssociativeEdge, DatabaseError>;
+
+    async fn list_associative_neighbors(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<(AssociativeEdge, Uuid)>, DatabaseError>;
+
+    // ---- Brain: Episodes ----
+    async fn create_episode(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        episode_type: &str,
+        trigger_uri: Option<&str>,
+        trigger_text: Option<&str>,
+        working_memory_snapshot: &[WmSnapshotEntry],
+        activation_strength: f64,
+    ) -> Result<MemoryEpisode, DatabaseError>;
+
+    async fn list_episodes(
+        &self,
+        node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemoryEpisode>, DatabaseError>;
+
+    async fn list_recent_episodes(
+        &self,
+        space_id: Uuid,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<MemoryEpisode>, DatabaseError>;
+
 }
 
 #[async_trait]

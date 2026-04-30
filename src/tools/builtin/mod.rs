@@ -26,8 +26,9 @@ pub use extension_tools::{
 };
 pub use file::{ApplyPatchTool, ListDirTool, MoveFileTool, ReadFileTool, WriteFileTool};
 pub use graph_memory::{
-    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ExplainMemoryRecallTool, ManageBootTool,
-    ManageTriggersTool, ReadMemoryTool, SearchMemoryTool, UpdateMemoryTool,
+    AddAliasTool, CreateMemoryTool, DeleteMemoryTool, ExplainMemoryRecallTool, GetWorkingMemoryTool,
+    ManageBootTool, ManageTriggersTool, ProcessUtteranceTool, ReadMemoryTool, SearchMemoryTool,
+    SessionStartTool, UpdateMemoryTool,
 };
 pub use http::HttpTool;
 pub use job::{

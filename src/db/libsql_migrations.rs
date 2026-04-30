@@ -1360,6 +1360,67 @@ ALTER TABLE workspace_allowlists
     ADD COLUMN mount_kind TEXT NOT NULL DEFAULT 'user';
 "#,
     ),
+    (
+        28,
+        "brain_memory_system",
+        r#"
+-- ==================== Brain: Associative Edges ====================
+CREATE TABLE IF NOT EXISTS memory_associative_edges (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    source_node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    target_node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    edge_type TEXT NOT NULL DEFAULT 'association',
+    weight REAL NOT NULL DEFAULT 0.0,
+    confidence REAL NOT NULL DEFAULT 0.5,
+    evidence TEXT NOT NULL DEFAULT '[]',
+    activation_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (space_id, source_node_id, target_node_id, edge_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_assoc_edges_space_source
+    ON memory_associative_edges(space_id, source_node_id, weight DESC);
+CREATE INDEX IF NOT EXISTS idx_assoc_edges_space_target
+    ON memory_associative_edges(space_id, target_node_id, weight DESC);
+
+-- ==================== Brain: Node Activation ====================
+CREATE TABLE IF NOT EXISTS memory_node_activation (
+    node_id TEXT PRIMARY KEY REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    baseline_activation REAL NOT NULL DEFAULT 0.0,
+    current_activation REAL NOT NULL DEFAULT 0.0,
+    total_activation_count INTEGER NOT NULL DEFAULT 0,
+    last_activated_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_activation_space_current
+    ON memory_node_activation(space_id, current_activation DESC);
+
+-- ==================== Brain: Episodes ====================
+CREATE TABLE IF NOT EXISTS memory_episodes (
+    id TEXT PRIMARY KEY,
+    space_id TEXT NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+    node_id TEXT NOT NULL REFERENCES memory_nodes(id) ON DELETE CASCADE,
+    episode_type TEXT NOT NULL DEFAULT 'activation',
+    trigger_uri TEXT,
+    trigger_text TEXT,
+    working_memory_snapshot TEXT NOT NULL DEFAULT '[]',
+    embedding BLOB,
+    activation_strength REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_episodes_node_created
+    ON memory_episodes(node_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_episodes_space_created
+    ON memory_episodes(space_id, created_at DESC);
+
+
+"#,
+    ),
 ];
 
 async fn sqlite_object_exists(

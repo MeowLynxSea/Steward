@@ -374,6 +374,18 @@ pub struct MemoryChildrenResponse {
     pub children: Vec<crate::memory::MemoryChildEntry>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct BrainWorkingMemoryResponse {
+    pub session_id: String,
+    pub slots: Vec<crate::brain::WorkingMemorySlot>,
+    pub formatted: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BrainTopActivatedResponse {
+    pub activations: Vec<crate::memory::NodeActivation>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MemoryReviewActionRequest {
     pub action: String,

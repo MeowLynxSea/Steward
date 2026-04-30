@@ -157,9 +157,22 @@ impl Agent {
             None => None,
         };
 
+        // Run brain cognitive pipeline on user input before assembling prompt
+        if let Some(memory) = self.memory() {
+            let _ = memory
+                .process_utterance(
+                    &message.user_id,
+                    None,
+                    &thread_id.to_string(),
+                    &message.content,
+                    is_group_chat,
+                )
+                .await;
+        }
+
         let memory_prompt = if let Some(memory) = self.memory() {
             match memory
-                .build_prompt_context(&message.user_id, None, &message.content, is_group_chat)
+                .build_prompt_context_with_session(&message.user_id, None, &message.content, is_group_chat, Some(thread_id.to_string()))
                 .await
             {
                 Ok(prompt) if !prompt.is_empty() => Some(prompt),

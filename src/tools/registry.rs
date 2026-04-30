@@ -20,9 +20,10 @@ use crate::tools::builtin::sandbox::WorkspaceSandbox;
 use crate::tools::builtin::{
     AddAliasTool, ApplyPatchTool, BootstrapCompleteTool, CancelJobTool, CreateJobTool,
     CreateMemoryTool, DeleteMemoryTool, EchoTool, ExplainMemoryRecallTool, ExtensionInfoTool,
-    HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool, ListDirTool, ListJobsTool,
-    ManageBootTool, ManageTriggersTool, MoveFileTool, ReadConversationContextTool, ReadFileTool,
-    ReadMemoryTool, SearchConversationHistoryTool, SearchMemoryTool, ShellTool, SkillInstallTool,
+    GetWorkingMemoryTool, HttpTool, JobEventsTool, JobPromptTool, JobStatusTool, JsonTool,
+    ListDirTool, ListJobsTool, ManageBootTool, ManageTriggersTool, MoveFileTool,
+    ProcessUtteranceTool, ReadConversationContextTool, ReadFileTool, ReadMemoryTool,
+    SearchConversationHistoryTool, SearchMemoryTool, SessionStartTool, ShellTool, SkillInstallTool,
     SkillListTool, SkillRemoveTool, SkillSearchTool, TimeTool, ToolActivateTool, ToolAuthTool,
     ToolInstallTool, ToolListTool, ToolRemoveTool, ToolSearchTool, ToolUpgradeTool,
     UpdateMemoryTool, WorkspaceApplyPatchTool, WorkspaceBaselineSetTool,
@@ -557,9 +558,12 @@ impl ToolRegistry {
         self.register_sync(Arc::new(ManageBootTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(ManageTriggersTool::new(Arc::clone(&memory))));
         self.register_sync(Arc::new(ExplainMemoryRecallTool::new(Arc::clone(&memory))));
-        self.register_sync(Arc::new(AddAliasTool::new(memory)));
+        self.register_sync(Arc::new(AddAliasTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(ProcessUtteranceTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(GetWorkingMemoryTool::new(Arc::clone(&memory))));
+        self.register_sync(Arc::new(SessionStartTool::new(memory)));
 
-        tracing::debug!("Registered 9 graph-native memory tools");
+        tracing::debug!("Registered 12 graph-native memory tools");
     }
 
     /// Register conversation history recall tools backed by the derived recall index.

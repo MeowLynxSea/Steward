@@ -12,11 +12,12 @@ use crate::memory::search_terms::{
     build_search_terms, matched_keywords as collect_matched_keywords, sqlite_match_query,
 };
 use crate::memory::{
-    CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow, MemoryChildEntry, MemoryEdge,
-    MemoryGlossaryEntry, MemoryIndexEntry, MemoryNode, MemoryNodeDetail, MemoryNodeKind,
-    MemoryRelationKind, MemoryRoute, MemorySearchDoc, MemorySearchHit, MemorySidebarItem,
-    MemorySidebarSection, MemorySpace, MemoryTimelineEntry, MemoryVersion, MemoryVersionStatus,
-    MemoryVisibility, NewMemoryNodeInput, UpdateMemoryNodeInput,
+    AssociativeEdge, CreateMemoryAliasInput, MemoryChangeSet, MemoryChangeSetRow,
+    MemoryChildEntry, MemoryEdge, MemoryEpisode, MemoryGlossaryEntry, MemoryIndexEntry, MemoryNode,
+    MemoryNodeDetail, MemoryNodeKind, MemoryRelationKind, MemoryRoute, MemorySearchDoc,
+    MemorySearchHit, MemorySidebarItem, MemorySidebarSection, MemorySpace, MemoryTimelineEntry,
+    MemoryVersion, MemoryVersionStatus, MemoryVisibility, NewMemoryNodeInput, NodeActivation,
+    UpdateMemoryNodeInput, WmSnapshotEntry,
 };
 
 fn row_to_memory_space(row: &libsql::Row) -> MemorySpace {
@@ -78,9 +79,51 @@ fn row_to_memory_route(row: &libsql::Row) -> MemoryRoute {
         node_id: get_text(row, 3).parse().unwrap_or_default(),
         domain: get_text(row, 4),
         path: get_text(row, 5),
-        is_primary: row.get::<i64>(6).unwrap_or_default() != 0,
+        is_primary: row.get::<i64>(6).unwrap_or(0) != 0,
         created_at: get_ts(row, 7),
         updated_at: get_ts(row, 8),
+    }
+}
+
+fn row_to_node_activation(row: &libsql::Row) -> NodeActivation {
+    NodeActivation {
+        node_id: get_text(row, 0).parse().unwrap_or_default(),
+        space_id: get_text(row, 1).parse().unwrap_or_default(),
+        baseline_activation: row.get::<f64>(2).unwrap_or(0.0),
+        current_activation: row.get::<f64>(3).unwrap_or(0.0),
+        total_activation_count: row.get::<i64>(4).unwrap_or(0),
+        last_activated_at: get_opt_text(row, 5).and_then(|t| t.parse().ok()),
+    }
+}
+
+fn row_to_associative_edge(row: &libsql::Row) -> AssociativeEdge {
+    AssociativeEdge {
+        id: get_text(row, 0).parse().unwrap_or_default(),
+        space_id: get_text(row, 1).parse().unwrap_or_default(),
+        source_node_id: get_text(row, 2).parse().unwrap_or_default(),
+        target_node_id: get_text(row, 3).parse().unwrap_or_default(),
+        edge_type: get_text(row, 4),
+        weight: row.get::<f64>(5).unwrap_or(0.0),
+        confidence: row.get::<f64>(6).unwrap_or(0.5),
+        evidence: get_json(row, 7).as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default(),
+        activation_count: row.get::<i64>(8).unwrap_or(0),
+        created_at: get_ts(row, 9),
+        updated_at: get_ts(row, 10),
+    }
+}
+
+fn row_to_memory_episode(row: &libsql::Row) -> MemoryEpisode {
+    MemoryEpisode {
+        id: get_text(row, 0).parse().unwrap_or_default(),
+        space_id: get_text(row, 1).parse().unwrap_or_default(),
+        node_id: get_text(row, 2).parse().unwrap_or_default(),
+        episode_type: get_text(row, 3),
+        trigger_uri: get_opt_text(row, 4),
+        trigger_text: get_opt_text(row, 5),
+        working_memory_snapshot: serde_json::from_value(get_json(row, 6)).unwrap_or_default(),
+        embedding: None,
+        activation_strength: row.get::<f64>(8).unwrap_or(0.0),
+        created_at: get_ts(row, 9),
     }
 }
 
@@ -2520,6 +2563,399 @@ impl MemoryStore for LibSqlBackend {
         .map_err(|e| DatabaseError::Query(format!("failed to update memory embedding: {e}")))?;
         Ok(())
     }
+
+    // ---- Brain: Node Activation ----
+
+    async fn upsert_node_activation(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        delta: f64,
+    ) -> Result<NodeActivation, DatabaseError> {
+        let conn = self.connect().await?;
+        let now = Utc::now();
+        conn.execute(
+            r#"
+            INSERT INTO memory_node_activation (
+                node_id, space_id, baseline_activation, current_activation,
+                total_activation_count, last_activated_at, updated_at
+            ) VALUES (?1, ?2, 0.0, ?3, 1, ?4, ?4)
+            ON CONFLICT(node_id) DO UPDATE SET
+                current_activation = current_activation + excluded.current_activation,
+                total_activation_count = total_activation_count + 1,
+                last_activated_at = excluded.last_activated_at,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                node_id.to_string(),
+                space_id.to_string(),
+                delta,
+                fmt_ts(&now),
+            ],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("upsert_node_activation failed: {e}")))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT node_id, space_id, baseline_activation, current_activation,
+                        total_activation_count, last_activated_at
+                 FROM memory_node_activation WHERE node_id = ?1",
+                params![node_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("fetch activation failed: {e}")))?;
+
+        if let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            Ok(row_to_node_activation(&row))
+        } else {
+            Err(DatabaseError::NotFound {
+                entity: "node_activation".to_string(),
+                id: node_id.to_string(),
+            })
+        }
+    }
+
+    async fn decay_all_activations(
+        &self,
+        space_id: Uuid,
+        decay_factor: f64,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.connect().await?;
+        conn.execute(
+            "UPDATE memory_node_activation SET current_activation = current_activation * ?2,
+             updated_at = ?3 WHERE space_id = ?1",
+            params![space_id.to_string(), decay_factor, fmt_ts(&Utc::now())],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("decay_all_activations failed: {e}")))?;
+        Ok(())
+    }
+
+    async fn list_top_activated(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<NodeActivation>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT node_id, space_id, baseline_activation, current_activation,
+                        total_activation_count, last_activated_at
+                 FROM memory_node_activation
+                 WHERE space_id = ?1
+                 ORDER BY current_activation DESC
+                 LIMIT ?2",
+                params![space_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("list_top_activated failed: {e}")))?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            results.push(row_to_node_activation(&row));
+        }
+        Ok(results)
+    }
+
+    async fn get_node_activation(
+        &self,
+        _space_id: Uuid,
+        node_id: Uuid,
+    ) -> Result<Option<NodeActivation>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT node_id, space_id, baseline_activation, current_activation,
+                        total_activation_count, last_activated_at
+                 FROM memory_node_activation WHERE node_id = ?1",
+                params![node_id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("get_node_activation failed: {e}")))?;
+
+        Ok(rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::Query(e.to_string()))?
+            .map(|row| row_to_node_activation(&row)))
+    }
+
+    // ---- Brain: Associative Edges ----
+
+    async fn create_associative_edge(
+        &self,
+        space_id: Uuid,
+        source_node_id: Uuid,
+        target_node_id: Uuid,
+        edge_type: &str,
+        weight: f64,
+        confidence: f64,
+        evidence: &[String],
+    ) -> Result<AssociativeEdge, DatabaseError> {
+        let conn = self.connect().await?;
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let evidence_json = serde_json::to_string(evidence).unwrap_or_else(|_| "[]".to_string());
+
+        conn.execute(
+            r#"
+            INSERT INTO memory_associative_edges (
+                id, space_id, source_node_id, target_node_id, edge_type,
+                weight, confidence, evidence, activation_count, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?9)
+            ON CONFLICT(space_id, source_node_id, target_node_id, edge_type) DO UPDATE SET
+                weight = excluded.weight,
+                confidence = excluded.confidence,
+                evidence = excluded.evidence,
+                updated_at = excluded.updated_at
+            "#,
+            params![
+                id.to_string(),
+                space_id.to_string(),
+                source_node_id.to_string(),
+                target_node_id.to_string(),
+                edge_type,
+                weight,
+                confidence,
+                evidence_json,
+                fmt_ts(&now),
+            ],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("create_associative_edge failed: {e}")))?;
+
+        let mut rows = conn
+            .query(
+                "SELECT id, space_id, source_node_id, target_node_id, edge_type,
+                        weight, confidence, evidence, activation_count, created_at, updated_at
+                 FROM memory_associative_edges WHERE id = ?1",
+                params![id.to_string()],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("fetch associative edge failed: {e}")))?;
+
+        if let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            Ok(row_to_associative_edge(&row))
+        } else {
+            Err(DatabaseError::NotFound {
+                entity: "associative_edge".to_string(),
+                id: id.to_string(),
+            })
+        }
+    }
+
+    async fn reinforce_associative_edge(
+        &self,
+        space_id: Uuid,
+        source_node_id: Uuid,
+        target_node_id: Uuid,
+        edge_type: &str,
+        delta: f64,
+        boost: f64,
+        evidence: &str,
+    ) -> Result<AssociativeEdge, DatabaseError> {
+        let conn = self.connect().await?;
+        let now = Utc::now();
+
+        // First try to update existing edge
+        let updated = conn
+            .execute(
+                r#"
+                UPDATE memory_associative_edges SET
+                    weight = min(1.0, ((weight * activation_count) + ?6) / (activation_count + 1) + ?7),
+                    activation_count = activation_count + 1,
+                    evidence = json_insert(evidence, '$[#]', ?8),
+                    updated_at = ?9
+                WHERE space_id = ?1 AND source_node_id = ?2 AND target_node_id = ?3 AND edge_type = ?4
+                "#,
+                params![
+                    space_id.to_string(),
+                    source_node_id.to_string(),
+                    target_node_id.to_string(),
+                    edge_type,
+                    delta,
+                    boost,
+                    evidence,
+                    fmt_ts(&now),
+                ],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("reinforce_associative_edge update failed: {e}")))?;
+
+        if updated == 0 {
+            // Edge didn't exist, create it
+            return self
+                .create_associative_edge(
+                    space_id,
+                    source_node_id,
+                    target_node_id,
+                    edge_type,
+                    delta,
+                    0.5,
+                    &[evidence.to_string()],
+                )
+                .await;
+        }
+
+        let mut rows = conn
+            .query(
+                "SELECT id, space_id, source_node_id, target_node_id, edge_type,
+                        weight, confidence, evidence, activation_count, created_at, updated_at
+                 FROM memory_associative_edges
+                 WHERE space_id = ?1 AND source_node_id = ?2 AND target_node_id = ?3 AND edge_type = ?4",
+                params![
+                    space_id.to_string(),
+                    source_node_id.to_string(),
+                    target_node_id.to_string(),
+                    edge_type,
+                ],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("fetch reinforced edge failed: {e}")))?;
+
+        if let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            Ok(row_to_associative_edge(&row))
+        } else {
+            Err(DatabaseError::NotFound {
+                entity: "associative_edge".to_string(),
+                id: format!("{source_node_id}-{target_node_id}"),
+            })
+        }
+    }
+
+    async fn list_associative_neighbors(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<(AssociativeEdge, Uuid)>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                r#"
+                SELECT id, space_id, source_node_id, target_node_id, edge_type,
+                       weight, confidence, evidence, activation_count, created_at, updated_at,
+                       CASE WHEN source_node_id = ?2 THEN target_node_id ELSE source_node_id END as neighbor_id
+                FROM memory_associative_edges
+                WHERE space_id = ?1 AND (source_node_id = ?2 OR target_node_id = ?2)
+                ORDER BY weight DESC
+                LIMIT ?3
+                "#,
+                params![space_id.to_string(), node_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("list_associative_neighbors failed: {e}")))?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            let edge = row_to_associative_edge(&row);
+            let neighbor_id: Uuid = get_text(&row, 11).parse().unwrap_or_default();
+            results.push((edge, neighbor_id));
+        }
+        Ok(results)
+    }
+
+    // ---- Brain: Episodes ----
+
+    async fn create_episode(
+        &self,
+        space_id: Uuid,
+        node_id: Uuid,
+        episode_type: &str,
+        trigger_uri: Option<&str>,
+        trigger_text: Option<&str>,
+        working_memory_snapshot: &[WmSnapshotEntry],
+        activation_strength: f64,
+    ) -> Result<MemoryEpisode, DatabaseError> {
+        let conn = self.connect().await?;
+        let id = Uuid::new_v4();
+        let now = Utc::now();
+        let snapshot_json = serde_json::to_string(working_memory_snapshot)
+            .unwrap_or_else(|_| "[]".to_string());
+
+        conn.execute(
+            r#"
+            INSERT INTO memory_episodes (
+                id, space_id, node_id, episode_type, trigger_uri, trigger_text,
+                working_memory_snapshot, activation_strength, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+            params![
+                id.to_string(),
+                space_id.to_string(),
+                node_id.to_string(),
+                episode_type,
+                trigger_uri,
+                trigger_text,
+                snapshot_json,
+                activation_strength,
+                fmt_ts(&now),
+            ],
+        )
+        .await
+        .map_err(|e| DatabaseError::Query(format!("create_episode failed: {e}")))?;
+
+        Ok(MemoryEpisode {
+            id,
+            space_id,
+            node_id,
+            episode_type: episode_type.to_string(),
+            trigger_uri: trigger_uri.map(|s| s.to_string()),
+            trigger_text: trigger_text.map(|s| s.to_string()),
+            working_memory_snapshot: working_memory_snapshot.to_vec(),
+            embedding: None,
+            activation_strength,
+            created_at: now,
+        })
+    }
+
+    async fn list_episodes(
+        &self,
+        node_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<MemoryEpisode>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT id, space_id, node_id, episode_type, trigger_uri, trigger_text,
+                        working_memory_snapshot, embedding, activation_strength, created_at
+                 FROM memory_episodes WHERE node_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+                params![node_id.to_string(), limit as i64],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("list_episodes failed: {e}")))?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            results.push(row_to_memory_episode(&row));
+        }
+        Ok(results)
+    }
+
+    async fn list_recent_episodes(
+        &self,
+        space_id: Uuid,
+        since: chrono::DateTime<Utc>,
+    ) -> Result<Vec<MemoryEpisode>, DatabaseError> {
+        let conn = self.connect().await?;
+        let mut rows = conn
+            .query(
+                "SELECT id, space_id, node_id, episode_type, trigger_uri, trigger_text,
+                        working_memory_snapshot, embedding, activation_strength, created_at
+                 FROM memory_episodes WHERE space_id = ?1 AND created_at >= ?2 ORDER BY created_at DESC",
+                params![space_id.to_string(), fmt_ts(&since)],
+            )
+            .await
+            .map_err(|e| DatabaseError::Query(format!("list_recent_episodes failed: {e}")))?;
+
+        let mut results = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| DatabaseError::Query(e.to_string()))? {
+            results.push(row_to_memory_episode(&row));
+        }
+        Ok(results)
+    }
+
 }
 
 impl LibSqlBackend {

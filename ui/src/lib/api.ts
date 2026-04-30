@@ -32,6 +32,8 @@ import type {
   MemoryChangeSet,
   MemoryVersion,
   MemorySearchHit,
+  BrainWorkingMemoryResponse,
+  BrainTopActivatedResponse,
   DroppedAttachmentFileResponse,
   SessionDetail,
   SessionRuntimeStatus,
@@ -359,6 +361,14 @@ export const apiClient = {
 
   getMemoryVersions(key: string) {
     return invoke<{ versions: MemoryVersion[] }>("get_memory_versions", { key });
+  },
+
+  getBrainWorkingMemory(sessionId: string) {
+    return invoke<BrainWorkingMemoryResponse>("get_brain_working_memory", { session_id: sessionId });
+  },
+
+  getBrainTopActivated(limit = 20) {
+    return invoke<BrainTopActivatedResponse>("get_brain_top_activated", { limit });
   },
 
   createWorkspaceAllowlist(path: string, display_name?: string, bypass_write = true) {

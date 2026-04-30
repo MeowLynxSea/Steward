@@ -10,6 +10,7 @@
 //! `~/.steward/.env` (loaded via dotenvy early in startup).
 
 mod agent;
+mod brain;
 mod builder;
 mod channels;
 mod claude_code;
@@ -39,6 +40,7 @@ use crate::settings::Settings;
 
 // Re-export all public types so `crate::config::FooConfig` continues to work.
 pub use self::agent::AgentConfig;
+pub use self::brain::BrainConfig;
 pub use self::builder::BuilderModeConfig;
 pub use self::channels::{ChannelsConfig, DesktopConfig, WasmChannelsConfig};
 pub use self::claude_code::ClaudeCodeConfig;
@@ -105,6 +107,7 @@ pub struct Config {
     pub memory_recall: MemoryRecallConfig,
     pub conversation_recall: ConversationRecallConfig,
     pub workspace: WorkspaceConfig,
+    pub brain: BrainConfig,
     pub observability: crate::observability::ObservabilityConfig,
 }
 
@@ -168,6 +171,7 @@ impl Config {
             memory_recall: MemoryRecallConfig::default(),
             conversation_recall: ConversationRecallConfig::default(),
             workspace: WorkspaceConfig::default(),
+            brain: BrainConfig::default(),
             observability: crate::observability::ObservabilityConfig::default(),
         }
     }
@@ -358,6 +362,7 @@ impl Config {
             memory_recall: MemoryRecallConfig::resolve()?,
             conversation_recall: ConversationRecallConfig::resolve()?,
             workspace,
+            brain: BrainConfig::resolve()?,
             observability: crate::observability::ObservabilityConfig {
                 backend: std::env::var("OBSERVABILITY_BACKEND").unwrap_or_else(|_| "none".into()),
             },

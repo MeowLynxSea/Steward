@@ -406,6 +406,37 @@ export interface MemoryTimelineEntry {
   updated_at: string;
 }
 
+export interface WorkingMemorySlot {
+  node_id: string;
+  uri: string;
+  title: string;
+  content: string;
+  relevance: number;
+  source: string;
+  injection_depth: string;
+  inserted_at: string;
+  refresh_count: number;
+}
+
+export interface NodeActivation {
+  node_id: string;
+  space_id: string;
+  baseline_activation: number;
+  current_activation: number;
+  total_activation_count: number;
+  last_activated_at: string | null;
+}
+
+export interface BrainWorkingMemoryResponse {
+  session_id: string;
+  slots: WorkingMemorySlot[];
+  formatted: string;
+}
+
+export interface BrainTopActivatedResponse {
+  activations: NodeActivation[];
+}
+
 export interface MemoryChangeSet {
   id: string;
   space_id: string;

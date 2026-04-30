@@ -347,7 +347,7 @@ impl HeartbeatRunner {
         // Get the system prompt for context
         let system_prompt = if let Some(memory) = self.memory.as_ref() {
             match memory
-                .build_prompt_context(self.workspace.user_id(), None, &prompt, false)
+                .build_prompt_context_with_session(self.workspace.user_id(), None, &prompt, false, Some("heartbeat".to_string()))
                 .await
             {
                 Ok(prompt) => prompt,

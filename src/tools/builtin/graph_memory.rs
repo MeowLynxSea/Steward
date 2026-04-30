@@ -483,6 +483,53 @@ impl Tool for ReadMemoryTool {
             .map(|keyword| keyword.keyword.clone())
             .collect::<Vec<_>>();
 
+        // Auto-activate the node when read
+        let _ = self
+            .memory
+            .get_working_memory(&ctx.user_id, None, &ctx.job_id.to_string());
+
+        // Build glossary auto-links for content
+        let glossary = self
+            .memory
+            .glossary(&ctx.user_id, None)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("glossary load failed: {e}")))?;
+
+        let mut glossary_links = Vec::new();
+        if !detail.active_version.content.is_empty() && !glossary.is_empty() {
+            let glossary_keywords: Vec<String> = glossary
+                .iter()
+                .flat_map(|entry| {
+                    entry
+                        .uris
+                        .first()
+                        .map(|uri| (entry.keyword.clone(), uri.clone()))
+                })
+                .map(|(kw, _)| kw)
+                .collect();
+
+            if !glossary_keywords.is_empty() {
+                use aho_corasick::AhoCorasickBuilder;
+                let matcher = AhoCorasickBuilder::new()
+                    .ascii_case_insensitive(true)
+                    .build(&glossary_keywords)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("glossary matcher failed: {e}")))?;
+
+                for matched in matcher.find_iter(&detail.active_version.content) {
+                    let kw = &glossary_keywords[matched.pattern().as_usize()];
+                    if let Some(entry) = glossary.iter().find(|e| &e.keyword == kw) {
+                        if let Some(uri) = entry.uris.first() {
+                            glossary_links.push(json!({
+                                "keyword": kw,
+                                "uri": uri,
+                                "position": [matched.start(), matched.end()],
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(ToolOutput::success(
             json!({
                 "uri": canonical_uri,
@@ -497,6 +544,7 @@ impl Tool for ReadMemoryTool {
                 "routes": detail.routes,
                 "children": children,
                 "keywords": keywords,
+                "glossary_links": glossary_links,
             }),
             start.elapsed(),
         ))
@@ -1079,6 +1127,186 @@ pub struct ManageTriggersTool {
 impl ManageTriggersTool {
     pub fn new(memory: Arc<MemoryManager>) -> Self {
         Self { memory }
+    }
+}
+
+pub struct ProcessUtteranceTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl ProcessUtteranceTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for ProcessUtteranceTool {
+    fn name(&self) -> &str {
+        "process_utterance"
+    }
+
+    fn description(&self) -> &str {
+        "Process a user utterance through the brain's activation engine. Updates Working Memory, records episodes, and reinforces associative edges between co-activated nodes. Call this when you want the system to cognitively process what the user just said."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "The user's utterance to process." }
+            },
+            "required": ["text"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let text = require_str(&params, "text")?;
+        let session_id = ctx
+            .conversation_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| ctx.job_id.to_string());
+
+        let events = self
+            .memory
+            .process_utterance(&ctx.user_id, None, &session_id, text, false)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("process_utterance failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            json!({
+                "processed": true,
+                "session_id": session_id,
+                "events": events.len(),
+                "event_summary": events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>(),
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct GetWorkingMemoryTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl GetWorkingMemoryTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for GetWorkingMemoryTool {
+    fn name(&self) -> &str {
+        "get_working_memory"
+    }
+
+    fn description(&self) -> &str {
+        "Retrieve the current Working Memory state. Returns the actively held memory slots with their relevance scores and sources."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        _params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let session_id = ctx
+            .conversation_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| ctx.job_id.to_string());
+
+        let wm = self.memory.get_working_memory(&ctx.user_id, None, &session_id);
+
+        Ok(ToolOutput::success(
+            json!({
+                "working_memory": wm,
+                "session_id": session_id,
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
+    }
+}
+
+pub struct SessionStartTool {
+    memory: Arc<MemoryManager>,
+}
+
+impl SessionStartTool {
+    pub fn new(memory: Arc<MemoryManager>) -> Self {
+        Self { memory }
+    }
+}
+
+#[async_trait]
+impl Tool for SessionStartTool {
+    fn name(&self) -> &str {
+        "session_start"
+    }
+
+    fn description(&self) -> &str {
+        "Initialize a new cognitive session. Loads boot memories into Working Memory so the agent starts with the right context. Call this at the beginning of a new conversation."
+    }
+
+    fn parameters_schema(&self) -> serde_json::Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    async fn execute(
+        &self,
+        _params: serde_json::Value,
+        ctx: &JobContext,
+    ) -> Result<ToolOutput, ToolError> {
+        let start = Instant::now();
+        let session_id = ctx
+            .conversation_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| ctx.job_id.to_string());
+
+        let events = self
+            .memory
+            .session_start(&ctx.user_id, None, &session_id)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("session_start failed: {e}")))?;
+
+        Ok(ToolOutput::success(
+            json!({
+                "initialized": true,
+                "session_id": session_id,
+                "boot_slots_injected": events.len(),
+            }),
+            start.elapsed(),
+        ))
+    }
+
+    fn requires_sanitization(&self) -> bool {
+        false
     }
 }
 

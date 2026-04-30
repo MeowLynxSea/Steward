@@ -471,6 +471,55 @@ pub struct MemoryRecallExplanationEntry {
     pub matched_keywords: Vec<String>,
 }
 
+// ==================== Brain Memory System ====================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssociativeEdge {
+    pub id: Uuid,
+    pub space_id: Uuid,
+    pub source_node_id: Uuid,
+    pub target_node_id: Uuid,
+    pub edge_type: String,
+    pub weight: f64,
+    pub confidence: f64,
+    pub evidence: Vec<String>,
+    pub activation_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeActivation {
+    pub node_id: Uuid,
+    pub space_id: Uuid,
+    pub baseline_activation: f64,
+    pub current_activation: f64,
+    pub total_activation_count: i64,
+    pub last_activated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WmSnapshotEntry {
+    pub node_id: Uuid,
+    pub uri: String,
+    pub title: String,
+    pub relevance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryEpisode {
+    pub id: Uuid,
+    pub space_id: Uuid,
+    pub node_id: Uuid,
+    pub episode_type: String,
+    pub trigger_uri: Option<String>,
+    pub trigger_text: Option<String>,
+    pub working_memory_snapshot: Vec<WmSnapshotEntry>,
+    pub embedding: Option<Vec<f32>>,
+    pub activation_strength: f64,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewMemoryNodeInput {
     pub space_id: Uuid,
@@ -520,14 +569,26 @@ pub struct MemoryManager {
     db: Arc<dyn Database>,
     embeddings: Arc<RwLock<Option<Arc<dyn EmbeddingProvider>>>>,
     recall_config: MemoryRecallConfig,
+    brain_config: crate::config::BrainConfig,
+    wm_manager: crate::brain::WorkingMemoryManager,
+    activation_engine: crate::brain::ActivationEngine,
+    associative_network: crate::brain::AssociativeNetwork,
 }
 
 impl MemoryManager {
     pub fn new(db: Arc<dyn Database>) -> Self {
+        let brain_config = crate::config::BrainConfig::default();
+        let wm_manager = crate::brain::WorkingMemoryManager::new(brain_config.clone());
+        let activation_engine = crate::brain::ActivationEngine::new(db.clone(), brain_config.clone());
+        let associative_network = crate::brain::AssociativeNetwork::new(db.clone(), brain_config.clone());
         Self {
             db,
             embeddings: Arc::new(RwLock::new(None)),
             recall_config: MemoryRecallConfig::default(),
+            brain_config,
+            wm_manager,
+            activation_engine,
+            associative_network,
         }
     }
 
@@ -538,6 +599,14 @@ impl MemoryManager {
 
     pub fn with_recall_config(mut self, config: MemoryRecallConfig) -> Self {
         self.recall_config = config;
+        self
+    }
+
+    pub fn with_brain_config(mut self, config: crate::config::BrainConfig) -> Self {
+        self.brain_config = config.clone();
+        self.wm_manager = crate::brain::WorkingMemoryManager::new(config.clone());
+        self.activation_engine = crate::brain::ActivationEngine::new(self.db.clone(), config.clone());
+        self.associative_network = crate::brain::AssociativeNetwork::new(self.db.clone(), config);
         self
     }
 
@@ -1796,6 +1865,172 @@ impl MemoryManager {
         }
     }
 
+    // ---- Brain Integration ----
+
+    /// Initialize Working Memory with boot nodes at session start.
+    pub async fn session_start(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        session_id: &str,
+    ) -> Result<Vec<crate::brain::events::BrainEvent>, DatabaseError> {
+        let boot_nodes = self.boot_set(owner_id, agent_id, None).await?;
+        let mut events = Vec::new();
+        for node in boot_nodes {
+            let uri = node
+                .selected_route
+                .as_ref()
+                .or(node.primary_route.as_ref())
+                .or_else(|| node.routes.first())
+                .map(|r| r.uri())
+                .unwrap_or_else(|| format!("node://{}", node.node.id));
+
+            let content = if node.active_version.content.len() > 500 {
+                format!("{}...", &node.active_version.content[..500])
+            } else {
+                node.active_version.content.clone()
+            };
+
+            let candidate = crate::brain::working_memory::CandidateSlot {
+                node_id: node.node.id,
+                uri: uri.clone(),
+                title: node.node.title.clone(),
+                content,
+                relevance: 1.0,
+                source: "boot".to_string(),
+            };
+            events.extend(self.wm_manager.inject(owner_id, agent_id, session_id, candidate));
+        }
+        Ok(events)
+    }
+
+    /// Process a user utterance: activate nodes, update WM, record episodes, reinforce edges.
+    pub async fn process_utterance(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        session_id: &str,
+        user_input: &str,
+        is_group_chat: bool,
+    ) -> Result<Vec<crate::brain::events::BrainEvent>, DatabaseError> {
+        let space = self.ensure_primary_space(owner_id, agent_id).await?;
+
+        // 1. Build recall plan (semantic + triggered + boot)
+        let plan = self
+            .build_recall_plan(owner_id, agent_id, user_input, is_group_chat)
+            .await?;
+
+        // Collect semantic hits from relevant + expanded + triggered
+        let mut semantic_hits: Vec<MemorySearchHit> = Vec::new();
+        let mut keyword_hits: Vec<(String, Vec<String>)> = Vec::new();
+        for candidate in &plan.relevant {
+            semantic_hits.push(candidate.hit.clone());
+        }
+        for candidate in &plan.expanded {
+            semantic_hits.push(candidate.hit.clone());
+        }
+        for candidate in &plan.triggered {
+            keyword_hits.push((candidate.hit.uri.clone(), candidate.hit.matched_keywords.clone()));
+            semantic_hits.push(candidate.hit.clone());
+        }
+
+        // 2. Compute activations
+        let activations = self
+            .activation_engine
+            .compute_activations(
+                space.id,
+                user_input,
+                &semantic_hits,
+                &keyword_hits,
+                self.current_embeddings(),
+            )
+            .await?;
+
+        // 3. Update node activations in DB
+        for activation in &activations {
+            self.db
+                .upsert_node_activation(space.id, activation.node_id, activation.final_score)
+                .await?;
+        }
+
+        // 4. Build WM candidates from top activations
+        let mut wm_candidates = Vec::new();
+        for activation in &activations {
+            if let Some(detail) = self.get_node(owner_id, agent_id, &activation.uri).await? {
+                let content = if activation.final_score > self.brain_config.wm_full_injection_threshold {
+                    detail.active_version.content.clone()
+                } else {
+                    let max_len = detail.active_version.content.len().min(500);
+                    format!("{}...", &detail.active_version.content[..max_len])
+                };
+                wm_candidates.push(crate::brain::working_memory::CandidateSlot {
+                    node_id: activation.node_id,
+                    uri: activation.uri.clone(),
+                    title: activation.title.clone(),
+                    content,
+                    relevance: activation.final_score,
+                    source: "activation".to_string(),
+                });
+            }
+        }
+
+        // 5. Update Working Memory
+        let events = self.wm_manager.update(owner_id, agent_id, session_id, wm_candidates);
+
+        // 6. Record episodes for top node
+        if let Some(top) = activations.first() {
+            let wm_state = self.wm_manager.get_state(owner_id, agent_id, session_id);
+            self.db
+                .create_episode(
+                    space.id,
+                    top.node_id,
+                    "activation",
+                    Some(&top.uri),
+                    Some(user_input),
+                    &wm_state.to_snapshot(),
+                    top.final_score,
+                )
+                .await?;
+        }
+
+        // 7. Reinforce associative edges for WM co-occurrences
+        let wm_state = self.wm_manager.get_state(owner_id, agent_id, session_id);
+        let wm_node_ids: Vec<Uuid> = wm_state.slots.iter().map(|s| s.node_id).collect();
+        if wm_node_ids.len() >= 2 {
+            let _ = self
+                .associative_network
+                .reinforce_all_pairs(space.id, &wm_node_ids, user_input)
+                .await;
+        }
+
+        Ok(events)
+    }
+
+    /// Get the current Working Memory formatted for prompts.
+    pub fn get_working_memory(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        session_id: &str,
+    ) -> String {
+        let state = self.wm_manager.get_state(owner_id, agent_id, session_id);
+        state.format_for_prompt()
+    }
+
+    /// Access the Working Memory manager directly (for advanced introspection).
+    pub fn wm_manager(&self) -> &crate::brain::WorkingMemoryManager {
+        &self.wm_manager
+    }
+
+    /// List top activated nodes for the brain dashboard.
+    pub async fn list_top_activated(
+        &self,
+        space_id: Uuid,
+        limit: usize,
+    ) -> Result<Vec<NodeActivation>, DatabaseError> {
+        self.db.list_top_activated(space_id, limit).await
+    }
+
     pub async fn build_prompt_context(
         &self,
         owner_id: &str,
@@ -1803,11 +2038,32 @@ impl MemoryManager {
         user_input: &str,
         is_group_chat: bool,
     ) -> Result<String, DatabaseError> {
+        self.build_prompt_context_with_session(owner_id, agent_id, user_input, is_group_chat, None)
+            .await
+    }
+
+    pub async fn build_prompt_context_with_session(
+        &self,
+        owner_id: &str,
+        agent_id: Option<Uuid>,
+        user_input: &str,
+        is_group_chat: bool,
+        session_id: Option<String>,
+    ) -> Result<String, DatabaseError> {
         let plan = self
             .build_recall_plan(owner_id, agent_id, user_input, is_group_chat)
             .await?;
 
         let mut parts = Vec::new();
+
+        // Prepend Working Memory if available
+        if let Some(session_id) = session_id {
+            let wm_prompt = self.get_working_memory(owner_id, agent_id, &session_id);
+            if !wm_prompt.is_empty() {
+                parts.push(wm_prompt);
+            }
+        }
+
         if plan.boot.is_empty() {
             parts.push(NOCTURNE_NATIVE_SYSTEM_PROMPT.trim().to_string());
         } else {
