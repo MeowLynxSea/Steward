@@ -16,6 +16,7 @@
 ## Runtime Role
 
 - Agent prompt assembly should prefer `MemoryManager::build_prompt_context(...)`.
+- Automatic recall uses **progressive disclosure**: only boot nodes are loaded with full content; triggered, relevant, and recent memories are surfaced as a directory (URI + priority + disclosure). The agent must call `read_memory` to load content on demand, matching human-like recall.
 - Compaction and heartbeat should write episodic/procedural findings here instead of appending to workspace markdown files.
 - Built-in graph-native tools (`search_memory`, `read_memory`, `create_memory`, `update_memory`, `add_alias`, `delete_memory`) should target this subsystem.
 

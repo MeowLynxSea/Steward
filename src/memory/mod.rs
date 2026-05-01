@@ -2092,46 +2092,52 @@ impl MemoryManager {
             parts.push(format!("## system://boot\n\n{block}"));
         }
 
+        // Progressive disclosure: triggered memories are shown as a directory
+        // with URI, priority, and disclosure only. The AI must use read_memory
+        // to load content on demand, matching human-like recall.
         if !plan.triggered.is_empty() {
-            let block = plan
+            let lines = plan
                 .triggered
                 .iter()
                 .map(|candidate| {
-                    let trigger = candidate
+                    let disclosure = candidate
                         .hit
                         .trigger_text
                         .as_deref()
-                        .map(|text| format!("\nDisclosure: {text}"))
-                        .unwrap_or_default();
-                    let matched_keywords = if candidate.hit.matched_keywords.is_empty() {
+                        .unwrap_or("No disclosure condition set");
+                    let keywords = if candidate.hit.matched_keywords.is_empty() {
                         String::new()
                     } else {
                         format!(
-                            "\nMatched Keywords: {}",
+                            "\n  Matched keywords: {}",
                             candidate.hit.matched_keywords.join(", ")
                         )
                     };
                     format!(
-                        "### {}\nURI: {}\nReason: {}\n{}{}{}",
-                        candidate.hit.title,
-                        candidate.hit.uri,
-                        candidate.reason,
-                        candidate.hit.content_snippet,
-                        trigger,
-                        matched_keywords
+                        "- URI: {} [★{}]\n  When to recall: {}{}",
+                        candidate.hit.uri, candidate.hit.priority, disclosure, keywords
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            parts.push(format!("## Triggered Recall\n\n{block}"));
+            parts.push(format!(
+                "## Memory Directory — Triggered\n\n\
+                The following memories have recall conditions that match the current conversation. \
+                Use `read_memory` with the URI to access the full content when relevant.\n\n{lines}"
+            ));
         }
 
         let mut relevant = plan.relevant;
         relevant.extend(plan.expanded);
         if !relevant.is_empty() {
-            let block = relevant
+            let lines = relevant
                 .iter()
                 .map(|candidate| {
+                    let disclosure = candidate
+                        .hit
+                        .trigger_text
+                        .as_deref()
+                        .unwrap_or("No disclosure condition set");
                     let retrieval = match (candidate.hit.fts_rank, candidate.hit.vector_rank) {
                         (Some(fts), Some(vector)) => {
                             format!(
@@ -2148,31 +2154,40 @@ impl MemoryManager {
                         (None, None) => format!("score {:.3}", candidate.hit.score),
                     };
                     format!(
-                        "### {}\nURI: {}\nReason: {}\nRetrieval: {}\n{}",
-                        candidate.hit.title,
+                        "- URI: {} [★{}]\n  When to recall: {}\n  Retrieval: {} — {}",
                         candidate.hit.uri,
+                        candidate.hit.priority,
+                        disclosure,
                         candidate.reason,
-                        retrieval,
-                        candidate.hit.content_snippet
+                        retrieval
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            parts.push(format!("## Relevant Memory Recall\n\n{block}"));
+            parts.push(format!(
+                "## Memory Directory — Relevant\n\n\
+                Memories retrieved by semantic or lexical search. \
+                Use `read_memory` with the URI to access the full content when relevant.\n\n{lines}"
+            ));
         }
+
         if !plan.recent.is_empty() {
-            let block = plan
+            let lines = plan
                 .recent
                 .iter()
                 .map(|item| {
+                    let uri = item.uri.as_deref().unwrap_or("—");
                     format!(
-                        "### {}\n{}\n{}",
-                        item.title, item.updated_at, item.content_snippet
+                        "- URI: {}\n  Title: {}\n  Updated: {}",
+                        uri, item.title, item.updated_at
                     )
                 })
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            parts.push(format!("## Recent Episodes\n\n{block}"));
+            parts.push(format!(
+                "## Memory Directory — Recent Episodes\n\n\
+                Recent timeline entries. Use `read_memory` with the URI to review full details.\n\n{lines}"
+            ));
         }
 
         Ok(parts.join("\n\n"))
